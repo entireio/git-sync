@@ -110,6 +110,25 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	if !ok || len(plans) == 0 {
 		t.Fatalf("expected plan entries, got %#v", result["plans"])
 	}
+	plan0, ok := plans[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected first plan entry: %#v", plans[0])
+	}
+	if plan0["source_hash"] == nil || plan0["target_hash"] == nil {
+		t.Fatalf("expected string hash fields in plan entry, got %#v", plan0)
+	}
+	if _, ok := plan0["source_hash"].(string); !ok {
+		t.Fatalf("expected source_hash string, got %#v", plan0["source_hash"])
+	}
+	if _, ok := plan0["target_hash"].(string); !ok {
+		t.Fatalf("expected target_hash string, got %#v", plan0["target_hash"])
+	}
+	if _, ok := plan0["source_ref"].(string); !ok {
+		t.Fatalf("expected source_ref string, got %#v", plan0["source_ref"])
+	}
+	if _, ok := plan0["target_ref"].(string); !ok {
+		t.Fatalf("expected target_ref string, got %#v", plan0["target_ref"])
+	}
 	if result["pushed"] != float64(0) {
 		t.Fatalf("expected pushed=0, got %#v", result["pushed"])
 	}

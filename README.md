@@ -112,9 +112,11 @@ Add `--json` to `probe`, `fetch`, `plan`, or `sync` to emit machine-readable out
 The JSON interface is intentionally stable:
 
 - keys use `snake_case`
+- refs and hashes are serialized as strings, not raw byte arrays
 - `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
 - `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
 - `plan` and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
+- each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
 
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
 
