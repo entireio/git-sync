@@ -151,7 +151,7 @@ go run ./cmd/git-sync fetch \
 Dry run:
 
 ```bash
-go run ./cmd/git-sync sync --dry-run --stats <source-url> <target-url>
+go run ./cmd/git-sync plan --stats <source-url> <target-url>
 ```
 
 ## Auth
@@ -180,7 +180,7 @@ Bearer auth is also available:
 - Branches are updated only when the target tip is an ancestor of the source tip, unless `--force` is set.
 - Tags are immutable by default. Retargeting an existing tag requires `--force`.
 - If `--prune` is set, managed target refs that are absent on source are deleted.
-- If any ref would be blocked and `--dry-run` is not set, the command exits non-zero before pushing anything.
+- `plan` never pushes. If `sync` finds blocked refs, it exits non-zero before pushing anything.
 - `--stats` adds per-service request, byte, want, have, and command counters to the output.
 
 ## Why Push Stays V1
