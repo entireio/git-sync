@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -46,6 +47,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 
 	cfg := syncer.Config{DryRun: dryRun}
 	var mappings multiStringFlag
+	var jsonOutput bool
 
 	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&cfg.Target.URL, "target-url", "", "target repository URL")
@@ -64,6 +66,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	fs.BoolVar(&cfg.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
 	fs.BoolVar(&cfg.Prune, "prune", false, "delete managed target refs that no longer exist on source")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
 
@@ -101,10 +104,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	if err != nil {
 		return err
 	}
-
-	for _, line := range result.Lines() {
-		fmt.Println(line)
-	}
+	printOutput(jsonOutput, result)
 
 	if !dryRun && result.Blocked > 0 {
 		return errors.New("one or more branches were skipped because the target was not fast-forwardable")
@@ -117,6 +117,7 @@ func runProbe(ctx context.Context, args []string) error {
 	fs.SetOutput(os.Stderr)
 
 	cfg := syncer.Config{}
+	var jsonOutput bool
 	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&cfg.Target.URL, "target-url", "", "optional target repository URL")
 	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
@@ -128,6 +129,7 @@ func runProbe(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tag ref prefixes in probe")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -151,9 +153,7 @@ func runProbe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, line := range result.Lines() {
-		fmt.Println(line)
-	}
+	printOutput(jsonOutput, result)
 	return nil
 }
 
@@ -164,6 +164,7 @@ func runFetch(ctx context.Context, args []string) error {
 	cfg := syncer.Config{}
 	var haveRefs multiStringFlag
 	var haveHashesRaw multiStringFlag
+	var jsonOutput bool
 
 	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
@@ -173,6 +174,7 @@ func runFetch(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tags in the fetch request")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.Var(&haveRefs, "have-ref", "source ref name to advertise as have; short names map to branches")
 	fs.Var(&haveHashesRaw, "have", "explicit object hash to advertise as have")
 
@@ -207,10 +209,28 @@ func runFetch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, line := range result.Lines() {
+	printOutput(jsonOutput, result)
+	return nil
+}
+
+func printOutput(jsonOutput bool, value interface{ Lines() []string }) {
+	if jsonOutput {
+		data, err := marshalOutput(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: encode JSON output: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(data))
+		return
+	}
+
+	for _, line := range value.Lines() {
 		fmt.Println(line)
 	}
-	return nil
+}
+
+func marshalOutput(value interface{}) ([]byte, error) {
+	return json.MarshalIndent(value, "", "  ")
 }
 
 type multiStringFlag []string
@@ -258,7 +278,7 @@ func envOr(key, fallback string) string {
 }
 
 func usageError(message string) error {
-	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n"
+	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n"
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}

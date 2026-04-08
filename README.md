@@ -26,6 +26,7 @@ The command surface is:
 - Optional forced retargeting with `--force`
 - Optional managed-ref deletion with `--prune`
 - Optional transfer stats output with `--stats`
+- Optional machine-readable output with `--json`
 - Optional source-side Git protocol v2 for `ls-refs` and `fetch`
 
 ## Limits
@@ -105,6 +106,8 @@ go run ./cmd/git-sync probe \
   --protocol auto \
   <source-url>
 ```
+
+Add `--json` to `probe`, `fetch`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
 
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
 

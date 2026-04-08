@@ -36,7 +36,7 @@ go.work.sum
 # .vscode/
 
 # Binary output (only in root)
-git-sync
+/git-sync
 
 # worktrees
 .worktrees/
