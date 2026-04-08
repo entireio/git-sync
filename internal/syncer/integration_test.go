@@ -176,6 +176,47 @@ func TestRun_IntegrationBranchMappingAndStats(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationDryRunPlansWithoutPush(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		DryRun:       true,
+		ShowStats:    true,
+	})
+	if err != nil {
+		t.Fatalf("dry-run plan failed: %v", err)
+	}
+	if !result.DryRun {
+		t.Fatalf("expected dry-run result")
+	}
+	if result.Pushed != 0 {
+		t.Fatalf("expected no pushed refs, got %+v", result)
+	}
+	if len(result.Plans) == 0 {
+		t.Fatalf("expected at least one plan")
+	}
+	if targetServer.Count(serviceReceivePack, metricPack) != 0 {
+		t.Fatalf("expected no receive-pack POSTs during dry-run, got %d", targetServer.Count(serviceReceivePack, metricPack))
+	}
+	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected target branch to remain absent, got %v", err)
+	}
+}
+
 func TestRun_IntegrationProtocolV2Source(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)
