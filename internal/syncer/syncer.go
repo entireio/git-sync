@@ -1,0 +1,1042 @@
+package syncer
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v5/plumbing/revlist"
+	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/go-git/go-git/v5/utils/ioutil"
+)
+
+const (
+	sourceRemoteName = "source"
+	protocolModeAuto = "auto"
+	protocolModeV1   = "v1"
+)
+
+type Endpoint struct {
+	URL         string
+	Username    string
+	Token       string
+	BearerToken string
+}
+
+type RefMapping struct {
+	Source string
+	Target string
+}
+
+type Config struct {
+	Source       Endpoint
+	Target       Endpoint
+	Branches     []string
+	Mappings     []RefMapping
+	IncludeTags  bool
+	DryRun       bool
+	Verbose      bool
+	ShowStats    bool
+	Force        bool
+	Prune        bool
+	ProtocolMode string
+}
+
+type RefKind string
+
+const (
+	RefKindBranch RefKind = "branch"
+	RefKindTag    RefKind = "tag"
+)
+
+type BranchPlan struct {
+	Branch     string
+	SourceRef  plumbing.ReferenceName
+	TargetRef  plumbing.ReferenceName
+	SourceHash plumbing.Hash
+	TargetHash plumbing.Hash
+	Kind       RefKind
+	Action     Action
+	Reason     string
+}
+
+type Action string
+
+const (
+	ActionCreate Action = "create"
+	ActionUpdate Action = "update"
+	ActionDelete Action = "delete"
+	ActionSkip   Action = "skip"
+	ActionBlock  Action = "block"
+)
+
+type Result struct {
+	Plans    []BranchPlan
+	Pushed   int
+	Skipped  int
+	Blocked  int
+	Deleted  int
+	DryRun   bool
+	Stats    Stats
+	Protocol string
+}
+
+type Stats struct {
+	Enabled bool
+	Items   map[string]*ServiceStats
+}
+
+type ServiceStats struct {
+	Name          string
+	Requests      int
+	RequestBytes  int64
+	ResponseBytes int64
+	Wants         int
+	Haves         int
+	Commands      int
+}
+
+func (r Result) Lines() []string {
+	lines := make([]string, 0, len(r.Plans)+8)
+	for _, plan := range r.Plans {
+		label := plan.Branch
+		if plan.TargetRef != "" {
+			label = plan.TargetRef.String()
+		}
+		line := fmt.Sprintf("%s %s", strings.ToUpper(string(plan.Action)), label)
+		if plan.Reason != "" {
+			line += " - " + plan.Reason
+		}
+		lines = append(lines, line)
+	}
+
+	summary := fmt.Sprintf(
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol,
+	)
+	if r.DryRun {
+		summary += " dry-run=true"
+	}
+	lines = append(lines, summary)
+
+	if r.Stats.Enabled {
+		keys := make([]string, 0, len(r.Stats.Items))
+		for key := range r.Stats.Items {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := r.Stats.Items[key]
+			lines = append(lines, fmt.Sprintf(
+				"stats: %s requests=%d request-bytes=%d response-bytes=%d wants=%d haves=%d commands=%d",
+				item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
+			))
+		}
+	}
+
+	return lines
+}
+
+func Run(ctx context.Context, cfg Config) (Result, error) {
+	if cfg.ProtocolMode == "" {
+		cfg.ProtocolMode = protocolModeAuto
+	}
+	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 {
+		return Result{}, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
+	}
+
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
+	}
+
+	stats := newStats(cfg.ShowStats)
+	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	if err != nil {
+		return Result{}, fmt.Errorf("create source transport: %w", err)
+	}
+	targetConn, err := newTransportConn(cfg.Target, "target", stats)
+	if err != nil {
+		return Result{}, fmt.Errorf("create target transport: %w", err)
+	}
+
+	sourceAdv, err := advertisedRefs(ctx, sourceConn, transport.UploadPackServiceName)
+	if err != nil {
+		return Result{}, fmt.Errorf("list source refs: %w", err)
+	}
+	targetAdv, err := advertisedRefs(ctx, targetConn, transport.ReceivePackServiceName)
+	if err != nil {
+		return Result{}, fmt.Errorf("list target refs: %w", err)
+	}
+
+	sourceRefs, err := advertisedReferences(sourceAdv)
+	if err != nil {
+		return Result{}, fmt.Errorf("decode source refs: %w", err)
+	}
+	targetRefs, err := advertisedReferences(targetAdv)
+	if err != nil {
+		return Result{}, fmt.Errorf("decode target refs: %w", err)
+	}
+
+	sourceRefMap := refHashMap(sourceRefs)
+	targetRefMap := refHashMap(targetRefs)
+
+	desiredRefs, managedTargets, err := buildDesiredRefs(sourceRefMap, cfg)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(desiredRefs) == 0 {
+		return Result{}, fmt.Errorf("no source refs matched")
+	}
+
+	if err := fetchSourceRefsWithHaves(ctx, repo, sourceConn, sourceAdv, desiredRefs, targetRefMap); err != nil {
+		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return Result{}, err
+		}
+	}
+
+	plans, err := buildPlans(repo, desiredRefs, targetRefMap, managedTargets, cfg)
+	if err != nil {
+		return Result{}, err
+	}
+
+	result := Result{
+		Plans:    plans,
+		DryRun:   cfg.DryRun,
+		Stats:    stats.snapshot(),
+		Protocol: protocolModeV1,
+	}
+
+	pushPlans := make([]BranchPlan, 0, len(plans))
+	for _, plan := range plans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			if cfg.DryRun {
+				result.Skipped++
+				continue
+			}
+			pushPlans = append(pushPlans, plan)
+		case ActionDelete:
+			if cfg.DryRun {
+				result.Skipped++
+				continue
+			}
+			pushPlans = append(pushPlans, plan)
+		case ActionSkip:
+			result.Skipped++
+		case ActionBlock:
+			result.Blocked++
+		}
+	}
+
+	if !cfg.DryRun && result.Blocked > 0 {
+		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
+	}
+
+	if !cfg.DryRun && len(pushPlans) > 0 {
+		if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
+			return result, fmt.Errorf("push target refs: %w", err)
+		}
+	}
+
+	for _, plan := range pushPlans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			result.Pushed++
+		case ActionDelete:
+			result.Deleted++
+		}
+	}
+
+	result.Stats = stats.snapshot()
+	return result, nil
+}
+
+func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {
+	if len(requested) == 0 {
+		return source
+	}
+
+	selected := make(map[string]plumbing.Hash, len(requested))
+	for _, branch := range requested {
+		if hash, ok := source[branch]; ok {
+			selected[branch] = hash
+		}
+	}
+	return selected
+}
+
+func buildDesiredRefs(sourceRefs map[plumbing.ReferenceName]plumbing.Hash, cfg Config) (map[plumbing.ReferenceName]desiredRef, map[plumbing.ReferenceName]managedTarget, error) {
+	desired := make(map[plumbing.ReferenceName]desiredRef)
+	managed := make(map[plumbing.ReferenceName]managedTarget)
+
+	addManaged := func(sourceRef, targetRef plumbing.ReferenceName, kind RefKind, hash plumbing.Hash) error {
+		if hash.IsZero() {
+			return fmt.Errorf("source ref %s not found", sourceRef)
+		}
+		short := targetRef.Short()
+		desired[targetRef] = desiredRef{
+			Kind:       kind,
+			Label:      short,
+			SourceRef:  sourceRef,
+			TargetRef:  targetRef,
+			SourceHash: hash,
+		}
+		managed[targetRef] = managedTarget{Kind: kind, Label: short}
+		return nil
+	}
+
+	if len(cfg.Mappings) > 0 {
+		for _, mapping := range cfg.Mappings {
+			sourceRef, targetRef, kind, err := normalizeMapping(mapping)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := addManaged(sourceRef, targetRef, kind, sourceRefs[sourceRef]); err != nil {
+				return nil, nil, err
+			}
+		}
+	} else {
+		branches := branchMapFromRefHashMap(sourceRefs)
+		selected := selectBranches(branches, cfg.Branches)
+		for branch, hash := range selected {
+			refName := plumbing.NewBranchReferenceName(branch)
+			if err := addManaged(refName, refName, RefKindBranch, hash); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	if cfg.IncludeTags {
+		for refName, hash := range sourceRefs {
+			if !refName.IsTag() {
+				continue
+			}
+			if err := addManaged(refName, refName, RefKindTag, hash); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	return desired, managed, nil
+}
+
+func normalizeMapping(mapping RefMapping) (plumbing.ReferenceName, plumbing.ReferenceName, RefKind, error) {
+	src := strings.TrimSpace(mapping.Source)
+	dst := strings.TrimSpace(mapping.Target)
+	if src == "" || dst == "" {
+		return "", "", "", fmt.Errorf("invalid mapping %q:%q", mapping.Source, mapping.Target)
+	}
+
+	if strings.HasPrefix(src, "refs/") || strings.HasPrefix(dst, "refs/") {
+		sourceRef := plumbing.ReferenceName(src)
+		targetRef := plumbing.ReferenceName(dst)
+		kind := refKindFromName(targetRef)
+		if kind == "" {
+			return "", "", "", fmt.Errorf("unsupported mapped ref kind: %s -> %s", src, dst)
+		}
+		return sourceRef, targetRef, kind, nil
+	}
+
+	return plumbing.NewBranchReferenceName(src), plumbing.NewBranchReferenceName(dst), RefKindBranch, nil
+}
+
+func refKindFromName(name plumbing.ReferenceName) RefKind {
+	switch {
+	case name.IsBranch():
+		return RefKindBranch
+	case name.IsTag():
+		return RefKindTag
+	default:
+		return ""
+	}
+}
+
+type desiredRef struct {
+	Kind       RefKind
+	Label      string
+	SourceRef  plumbing.ReferenceName
+	TargetRef  plumbing.ReferenceName
+	SourceHash plumbing.Hash
+}
+
+type managedTarget struct {
+	Kind  RefKind
+	Label string
+}
+
+func buildPlans(
+	repo *git.Repository,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	managed map[plumbing.ReferenceName]managedTarget,
+	cfg Config,
+) ([]BranchPlan, error) {
+	if cfg.Prune {
+		for targetRef := range targetRefs {
+			if _, ok := managed[targetRef]; ok {
+				continue
+			}
+			switch {
+			case targetRef.IsTag() && cfg.IncludeTags:
+				managed[targetRef] = managedTarget{Kind: RefKindTag, Label: targetRef.Short()}
+			case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
+				managed[targetRef] = managedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
+			}
+		}
+	}
+
+	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
+	for name := range managed {
+		targetNames = append(targetNames, name)
+	}
+	sort.Slice(targetNames, func(i, j int) bool { return targetNames[i] < targetNames[j] })
+
+	plans := make([]BranchPlan, 0, len(targetNames)+8)
+	for _, targetRef := range targetNames {
+		info := managed[targetRef]
+		want, existsInDesired := desired[targetRef]
+		targetHash, existsOnTarget := targetRefs[targetRef]
+
+		if !existsInDesired {
+			if cfg.Prune && existsOnTarget {
+				plans = append(plans, BranchPlan{
+					Branch:     info.Label,
+					TargetRef:  targetRef,
+					TargetHash: targetHash,
+					Kind:       info.Kind,
+					Action:     ActionDelete,
+					Reason:     fmt.Sprintf("%s -> <deleted>", shortHash(targetHash)),
+				})
+			}
+			continue
+		}
+
+		if !existsOnTarget {
+			plans = append(plans, BranchPlan{
+				Branch:     want.Label,
+				SourceRef:  want.SourceRef,
+				TargetRef:  want.TargetRef,
+				SourceHash: want.SourceHash,
+				Kind:       want.Kind,
+				Action:     ActionCreate,
+				Reason:     fmt.Sprintf("%s -> <new>", shortHash(want.SourceHash)),
+			})
+			continue
+		}
+
+		plan, err := planRef(repo, want, targetHash, cfg.Force)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
+	}
+
+	sort.Slice(plans, func(i, j int) bool {
+		return plans[i].TargetRef.String() < plans[j].TargetRef.String()
+	})
+	return plans, nil
+}
+
+func planRef(repo *git.Repository, want desiredRef, targetHash plumbing.Hash, force bool) (BranchPlan, error) {
+	plan := BranchPlan{
+		Branch:     want.Label,
+		SourceRef:  want.SourceRef,
+		TargetRef:  want.TargetRef,
+		SourceHash: want.SourceHash,
+		TargetHash: targetHash,
+		Kind:       want.Kind,
+	}
+
+	if want.SourceHash == targetHash {
+		plan.Action = ActionSkip
+		plan.Reason = fmt.Sprintf("%s already current", shortHash(want.SourceHash))
+		return plan, nil
+	}
+
+	if want.Kind == RefKindTag {
+		if force {
+			plan.Action = ActionUpdate
+			plan.Reason = fmt.Sprintf("%s -> %s (force tag update)", shortHash(targetHash), shortHash(want.SourceHash))
+			return plan, nil
+		}
+		plan.Action = ActionBlock
+		plan.Reason = fmt.Sprintf("%s differs from %s; use --force to retarget tag", shortHash(targetHash), shortHash(want.SourceHash))
+		return plan, nil
+	}
+
+	sourceCommit, err := repo.CommitObject(want.SourceHash)
+	if err != nil {
+		return plan, fmt.Errorf("load source commit for %s: %w", want.TargetRef, err)
+	}
+
+	isFF, err := reachesCommitHash(repo.Storer, sourceCommit, targetHash)
+	if err != nil {
+		return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, err)
+	}
+	if isFF {
+		plan.Action = ActionUpdate
+		plan.Reason = fmt.Sprintf("%s -> %s", shortHash(targetHash), shortHash(want.SourceHash))
+		return plan, nil
+	}
+
+	if force {
+		plan.Action = ActionUpdate
+		plan.Reason = fmt.Sprintf("%s -> %s (force)", shortHash(targetHash), shortHash(want.SourceHash))
+		return plan, nil
+	}
+
+	plan.Action = ActionBlock
+	plan.Reason = fmt.Sprintf("%s is not an ancestor of %s", shortHash(targetHash), shortHash(want.SourceHash))
+	return plan, nil
+}
+
+func planBranch(repo *git.Repository, branch string, sourceHash, targetHash plumbing.Hash) (BranchPlan, error) {
+	return planRef(repo, desiredRef{
+		Kind:       RefKindBranch,
+		Label:      branch,
+		SourceRef:  plumbing.NewBranchReferenceName(branch),
+		TargetRef:  plumbing.NewBranchReferenceName(branch),
+		SourceHash: sourceHash,
+	}, targetHash, false)
+}
+
+func fetchSourceRefsWithHaves(
+	ctx context.Context,
+	repo *git.Repository,
+	conn *transportConn,
+	sourceAdv *packp.AdvRefs,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) error {
+	session, err := conn.transport.NewUploadPackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return fmt.Errorf("open source upload-pack session: %w", err)
+	}
+	defer session.Close()
+
+	req := packp.NewUploadPackRequestFromCapabilities(sourceAdv.Capabilities)
+	for _, ref := range desired {
+		req.Wants = append(req.Wants, ref.SourceHash)
+	}
+	req.Wants = sortedUniqueHashes(req.Wants)
+	req.Haves = sortedUniqueHashes(mapsRefValues(targetRefs))
+	if len(req.Wants) == 0 {
+		return git.NoErrAlreadyUpToDate
+	}
+	if sourceAdv.Capabilities.Supports(capability.NoProgress) {
+		_ = req.Capabilities.Set(capability.NoProgress)
+	}
+	conn.stats.addWantsHaves("source upload-pack", len(req.Wants), len(req.Haves))
+
+	reader, err := session.UploadPack(ctx, req)
+	if err != nil {
+		if errors.Is(err, transport.ErrEmptyUploadPackRequest) {
+			return git.NoErrAlreadyUpToDate
+		}
+		return fmt.Errorf("source upload-pack: %w", err)
+	}
+	defer ioutil.CheckClose(reader, &err)
+
+	if err := packfile.UpdateObjectStorage(repo.Storer, buildSidebandIfSupported(req.Capabilities, reader, nil)); err != nil {
+		return fmt.Errorf("store source packfile: %w", err)
+	}
+
+	for _, ref := range desired {
+		localRef := plumbing.ReferenceName(localBranchRef(sourceRemoteName, ref.TargetRef.Short()))
+		if ref.Kind == RefKindTag {
+			localRef = plumbing.ReferenceName("refs/remotes/" + sourceRemoteName + "/tags/" + ref.TargetRef.Short())
+		}
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(localRef, ref.SourceHash)); err != nil {
+			return fmt.Errorf("set local source ref %s: %w", ref.SourceRef, err)
+		}
+	}
+
+	return nil
+}
+
+func pushToTarget(
+	ctx context.Context,
+	repo *git.Repository,
+	conn *transportConn,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	verbose bool,
+) error {
+	session, err := conn.transport.NewReceivePackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return fmt.Errorf("open target receive-pack session: %w", err)
+	}
+	defer session.Close()
+
+	req := packp.NewReferenceUpdateRequestFromCapabilities(targetAdv.Capabilities)
+	req.Progress = progressWriter(verbose)
+	if targetAdv.Capabilities.Supports(capability.Sideband64k) {
+		_ = req.Capabilities.Set(capability.Sideband64k)
+	} else if targetAdv.Capabilities.Supports(capability.Sideband) {
+		_ = req.Capabilities.Set(capability.Sideband)
+	}
+
+	commands := make([]*packp.Command, 0, len(plans))
+	objects := make([]plumbing.Hash, 0, len(plans))
+	hasDelete := false
+	hasUpdates := false
+	for _, plan := range plans {
+		cmd := &packp.Command{
+			Name: plan.TargetRef,
+			Old:  targetRefs[plan.TargetRef],
+		}
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			cmd.New = plan.SourceHash
+			objects = append(objects, plan.SourceHash)
+			hasUpdates = true
+		case ActionDelete:
+			cmd.New = plumbing.ZeroHash
+			hasDelete = true
+		}
+		commands = append(commands, cmd)
+	}
+	req.Commands = commands
+	conn.stats.addCommands("target receive-pack", len(commands))
+	if hasDelete {
+		if !targetAdv.Capabilities.Supports(capability.DeleteRefs) {
+			return fmt.Errorf("target does not support delete-refs")
+		}
+		_ = req.Capabilities.Set(capability.DeleteRefs)
+	}
+
+	hashesToPush, err := objectsToPush(repo.Storer, objects, targetRefs)
+	if err != nil {
+		return fmt.Errorf("compute objects to push: %w", err)
+	}
+
+	report, err := receivePack(ctx, session, repo.Storer, req, hashesToPush, hasUpdates, !targetAdv.Capabilities.Supports(capability.OFSDelta))
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		if err := report.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func receivePack(
+	ctx context.Context,
+	session transport.ReceivePackSession,
+	store storer.Storer,
+	req *packp.ReferenceUpdateRequest,
+	hashes []plumbing.Hash,
+	sendPack bool,
+	useRefDeltas bool,
+) (*packp.ReportStatus, error) {
+	if !sendPack {
+		return session.ReceivePack(ctx, req)
+	}
+
+	rd, wr := io.Pipe()
+	req.Packfile = rd
+	done := make(chan error, 1)
+
+	go func() {
+		enc := packfile.NewEncoder(wr, store, useRefDeltas)
+		if _, err := enc.Encode(hashes, 10); err != nil {
+			done <- wr.CloseWithError(err)
+			return
+		}
+		done <- wr.Close()
+	}()
+
+	report, err := session.ReceivePack(ctx, req)
+	if err != nil {
+		_ = rd.Close()
+		return nil, err
+	}
+	if err := <-done; err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+func objectsToPush(store storer.Storer, wants []plumbing.Hash, targetRefs map[plumbing.ReferenceName]plumbing.Hash) ([]plumbing.Hash, error) {
+	haves := sortedUniqueHashes(mapsRefValues(targetRefs))
+	if len(wants) == 0 {
+		return nil, nil
+	}
+
+	haveSet := make(map[plumbing.Hash]struct{}, len(haves))
+	for _, hash := range haves {
+		haveSet[hash] = struct{}{}
+	}
+
+	filteredWants := make([]plumbing.Hash, 0, len(wants))
+	for _, hash := range sortedUniqueHashes(wants) {
+		if _, ok := haveSet[hash]; ok {
+			continue
+		}
+		filteredWants = append(filteredWants, hash)
+	}
+	if len(filteredWants) == 0 {
+		return nil, nil
+	}
+
+	return revlist.Objects(store, filteredWants, haves)
+}
+
+func branchMapFromRefHashMap(refs map[plumbing.ReferenceName]plumbing.Hash) map[string]plumbing.Hash {
+	branches := make(map[string]plumbing.Hash)
+	for name, hash := range refs {
+		if name.IsBranch() {
+			branches[name.Short()] = hash
+		}
+	}
+	return branches
+}
+
+func refHashMap(refs []*plumbing.Reference) map[plumbing.ReferenceName]plumbing.Hash {
+	out := make(map[plumbing.ReferenceName]plumbing.Hash)
+	for _, ref := range refs {
+		if ref.Type() == plumbing.HashReference {
+			out[ref.Name()] = ref.Hash()
+		}
+	}
+	return out
+}
+
+func advertisedReferences(ar *packp.AdvRefs) ([]*plumbing.Reference, error) {
+	refs, err := ar.AllReferences()
+	if err != nil {
+		return nil, err
+	}
+
+	iter, err := refs.IterReferences()
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var out []*plumbing.Reference
+	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		out = append(out, ref)
+		return nil
+	})
+	return out, err
+}
+
+type transportConn struct {
+	label     string
+	endpoint  *transport.Endpoint
+	transport transport.Transport
+	http      *http.Client
+	raw       Endpoint
+	stats     *statsCollector
+}
+
+func newTransportConn(raw Endpoint, label string, stats *statsCollector) (*transportConn, error) {
+	ep, err := transport.NewEndpoint(raw.URL)
+	if err != nil {
+		return nil, err
+	}
+
+	httpClient := &http.Client{
+		Transport: &countingRoundTripper{
+			base:  http.DefaultTransport,
+			label: label,
+			stats: stats,
+		},
+	}
+
+	return &transportConn{
+		label:     label,
+		endpoint:  ep,
+		transport: transporthttp.NewClient(httpClient),
+		http:      httpClient,
+		raw:       raw,
+		stats:     stats,
+	}, nil
+}
+
+func (c *transportConn) authMethod() transport.AuthMethod {
+	return c.raw.authMethod()
+}
+
+func advertisedRefs(ctx context.Context, conn *transportConn, service string) (*packp.AdvRefs, error) {
+	url := fmt.Sprintf("%s/info/refs?service=%s", conn.endpoint.String(), service)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("User-Agent", capability.DefaultAgent())
+	applyAuth(req, conn.raw)
+
+	res, err := conn.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if err := transporthttp.NewErr(res); err != nil {
+		return nil, err
+	}
+
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	ar := packp.NewAdvRefs()
+	if err := ar.Decode(bytes.NewReader(data)); err != nil {
+		if err == packp.ErrEmptyAdvRefs {
+			return nil, transport.ErrEmptyRemoteRepository
+		}
+		return nil, err
+	}
+	return ar, nil
+}
+
+func applyAuth(req *http.Request, endpoint Endpoint) {
+	switch auth := endpoint.authMethod().(type) {
+	case *transporthttp.BasicAuth:
+		auth.SetAuth(req)
+	case *transporthttp.TokenAuth:
+		auth.SetAuth(req)
+	}
+}
+
+func reachesCommitHash(store storer.EncodedObjectStorer, start *object.Commit, target plumbing.Hash) (bool, error) {
+	if start.Hash == target {
+		return true, nil
+	}
+
+	seen := map[plumbing.Hash]bool{}
+	stack := []*object.Commit{start}
+
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[current.Hash] {
+			continue
+		}
+		seen[current.Hash] = true
+
+		for _, parentHash := range current.ParentHashes {
+			if parentHash == target {
+				return true, nil
+			}
+			if seen[parentHash] {
+				continue
+			}
+			parent, err := object.GetCommit(store, parentHash)
+			if err != nil {
+				if errors.Is(err, plumbing.ErrObjectNotFound) {
+					continue
+				}
+				return false, err
+			}
+			stack = append(stack, parent)
+		}
+	}
+
+	return false, nil
+}
+
+func mapsRefValues(input map[plumbing.ReferenceName]plumbing.Hash) []plumbing.Hash {
+	out := make([]plumbing.Hash, 0, len(input))
+	for _, hash := range input {
+		if !hash.IsZero() {
+			out = append(out, hash)
+		}
+	}
+	return out
+}
+
+func sortedUniqueHashes(input []plumbing.Hash) []plumbing.Hash {
+	seen := make(map[plumbing.Hash]bool, len(input))
+	out := make([]plumbing.Hash, 0, len(input))
+	for _, hash := range input {
+		if seen[hash] {
+			continue
+		}
+		seen[hash] = true
+		out = append(out, hash)
+	}
+	plumbing.HashesSort(out)
+	return out
+}
+
+func localBranchRef(remoteName, branch string) string {
+	return plumbing.NewRemoteReferenceName(remoteName, branch).String()
+}
+
+func shortHash(hash plumbing.Hash) string {
+	if hash.IsZero() {
+		return "<zero>"
+	}
+	value := hash.String()
+	if len(value) > 8 {
+		return value[:8]
+	}
+	return value
+}
+
+func progressWriter(verbose bool) io.Writer {
+	if !verbose {
+		return nil
+	}
+	return os.Stderr
+}
+
+func (e Endpoint) authMethod() transport.AuthMethod {
+	if e.BearerToken != "" {
+		return &transporthttp.TokenAuth{Token: e.BearerToken}
+	}
+	if e.Token != "" {
+		username := e.Username
+		if username == "" {
+			username = "git"
+		}
+		return &transporthttp.BasicAuth{Username: username, Password: e.Token}
+	}
+	return nil
+}
+
+func buildSidebandIfSupported(l *capability.List, reader io.Reader, p sideband.Progress) io.Reader {
+	var t sideband.Type
+	switch {
+	case l.Supports(capability.Sideband):
+		t = sideband.Sideband
+	case l.Supports(capability.Sideband64k):
+		t = sideband.Sideband64k
+	default:
+		return reader
+	}
+
+	d := sideband.NewDemuxer(t, reader)
+	d.Progress = p
+	return d
+}
+
+type statsCollector struct {
+	enabled bool
+	items   map[string]*ServiceStats
+}
+
+func newStats(enabled bool) *statsCollector {
+	return &statsCollector{enabled: enabled, items: map[string]*ServiceStats{}}
+}
+
+func (s *statsCollector) ensure(name string) *ServiceStats {
+	item, ok := s.items[name]
+	if !ok {
+		item = &ServiceStats{Name: name}
+		s.items[name] = item
+	}
+	return item
+}
+
+func (s *statsCollector) addWantsHaves(name string, wants, haves int) {
+	if !s.enabled {
+		return
+	}
+	item := s.ensure(name)
+	item.Wants += wants
+	item.Haves += haves
+}
+
+func (s *statsCollector) addCommands(name string, commands int) {
+	if !s.enabled {
+		return
+	}
+	item := s.ensure(name)
+	item.Commands += commands
+}
+
+func (s *statsCollector) recordRoundTrip(name string, requestBytes, responseBytes int64) {
+	if !s.enabled {
+		return
+	}
+	item := s.ensure(name)
+	item.Requests++
+	item.RequestBytes += requestBytes
+	item.ResponseBytes += responseBytes
+}
+
+func (s *statsCollector) snapshot() Stats {
+	out := Stats{Enabled: s.enabled, Items: map[string]*ServiceStats{}}
+	for key, item := range s.items {
+		copyItem := *item
+		out.Items[key] = &copyItem
+	}
+	return out
+}
+
+type countingRoundTripper struct {
+	base  http.RoundTripper
+	label string
+	stats *statsCollector
+}
+
+func (rt *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	res, err := rt.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	serviceName := req.URL.Query().Get("service")
+	if serviceName == "" {
+		serviceName = strings.TrimPrefix(req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:], "/")
+	}
+	name := strings.TrimSpace(rt.label + " " + serviceName)
+	requestBytes := req.ContentLength
+	if requestBytes < 0 {
+		requestBytes = 0
+	}
+
+	res.Body = &countingReadCloser{
+		ReadCloser: res.Body,
+		onClose: func(n int64) {
+			rt.stats.recordRoundTrip(name, requestBytes, n)
+		},
+	}
+	return res, nil
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	n       int64
+	onClose func(int64)
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error {
+	err := c.ReadCloser.Close()
+	if c.onClose != nil {
+		c.onClose(c.n)
+		c.onClose = nil
+	}
+	return err
+}
