@@ -118,9 +118,13 @@ func runProbe(ctx context.Context, args []string) error {
 
 	cfg := syncer.Config{}
 	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
+	fs.StringVar(&cfg.Target.URL, "target-url", "", "optional target repository URL")
 	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
+	fs.StringVar(&cfg.Target.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
 	fs.StringVar(&cfg.Source.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
+	fs.StringVar(&cfg.Target.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
 	fs.StringVar(&cfg.Source.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
+	fs.StringVar(&cfg.Target.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tag ref prefixes in probe")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
@@ -133,7 +137,10 @@ func runProbe(ctx context.Context, args []string) error {
 	if cfg.Source.URL == "" && len(positional) > 0 {
 		cfg.Source.URL = positional[0]
 	}
-	if len(positional) > 1 {
+	if cfg.Target.URL == "" && len(positional) > 1 {
+		cfg.Target.URL = positional[1]
+	}
+	if len(positional) > 2 {
 		return usageError("too many positional arguments")
 	}
 	if cfg.Source.URL == "" {
@@ -251,7 +258,7 @@ func envOr(key, fallback string) string {
 }
 
 func usageError(message string) error {
-	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url>\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n"
+	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n"
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}

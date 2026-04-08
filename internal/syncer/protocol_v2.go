@@ -298,6 +298,26 @@ func sourceCapabilities(s *sourceRefService) []string {
 	}
 }
 
+func advCapabilities(adv *packp.AdvRefs) []string {
+	if adv == nil || adv.Capabilities == nil {
+		return nil
+	}
+	all := adv.Capabilities.All()
+	items := make([]string, 0, len(all))
+	for _, cap := range all {
+		values := adv.Capabilities.Get(cap)
+		if len(values) == 0 {
+			items = append(items, string(cap))
+			continue
+		}
+		for _, value := range values {
+			items = append(items, string(cap)+"="+value)
+		}
+	}
+	sort.Strings(items)
+	return items
+}
+
 func listSourceRefsV1(ctx context.Context, conn *transportConn) (*packp.AdvRefs, []*plumbing.Reference, error) {
 	adv, err := advertisedRefsV1(ctx, conn, transport.UploadPackServiceName)
 	if err != nil {

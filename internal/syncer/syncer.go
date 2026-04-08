@@ -99,10 +99,12 @@ type Result struct {
 
 type ProbeResult struct {
 	SourceURL     string
+	TargetURL     string
 	RequestedMode string
 	Protocol      string
 	RefPrefixes   []string
 	Capabilities  []string
+	TargetCaps    []string
 	Refs          []RefInfo
 	Stats         Stats
 }
@@ -189,7 +191,13 @@ func (r ProbeResult) Lines() []string {
 		lines = append(lines, "ref-prefixes: "+strings.Join(r.RefPrefixes, ", "))
 	}
 	if len(r.Capabilities) > 0 {
-		lines = append(lines, "capabilities: "+strings.Join(r.Capabilities, ", "))
+		lines = append(lines, "source-capabilities: "+strings.Join(r.Capabilities, ", "))
+	}
+	if r.TargetURL != "" {
+		lines = append(lines, "target: "+r.TargetURL)
+	}
+	if len(r.TargetCaps) > 0 {
+		lines = append(lines, "target-capabilities: "+strings.Join(r.TargetCaps, ", "))
 	}
 
 	lines = append(lines, fmt.Sprintf("refs: %d", len(r.Refs)))
@@ -393,7 +401,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		return refInfos[i].Name < refInfos[j].Name
 	})
 
-	return ProbeResult{
+	result := ProbeResult{
 		SourceURL:     cfg.Source.URL,
 		RequestedMode: cfg.ProtocolMode,
 		Protocol:      service.protocol,
@@ -401,7 +409,23 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		Capabilities:  sourceCapabilities(service),
 		Refs:          refInfos,
 		Stats:         stats.snapshot(),
-	}, nil
+	}
+
+	if cfg.Target.URL != "" {
+		targetConn, err := newTransportConn(cfg.Target, "target", stats)
+		if err != nil {
+			return ProbeResult{}, fmt.Errorf("create target transport: %w", err)
+		}
+		targetAdv, err := advertisedRefsV1(ctx, targetConn, transport.ReceivePackServiceName)
+		if err != nil {
+			return ProbeResult{}, fmt.Errorf("list target refs: %w", err)
+		}
+		result.TargetURL = cfg.Target.URL
+		result.TargetCaps = advCapabilities(targetAdv)
+		result.Stats = stats.snapshot()
+	}
+
+	return result, nil
 }
 
 func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plumbing.Hash) (FetchResult, error) {

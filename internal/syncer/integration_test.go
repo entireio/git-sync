@@ -264,6 +264,37 @@ func TestProbe_IntegrationProtocolV2Source(t *testing.T) {
 	}
 }
 
+func TestProbe_IntegrationTargetCapabilities(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Probe(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		ShowStats:    true,
+	})
+	if err != nil {
+		t.Fatalf("probe with target failed: %v", err)
+	}
+	if result.TargetURL != targetServer.RepoURL() {
+		t.Fatalf("unexpected target url %q", result.TargetURL)
+	}
+	if len(result.TargetCaps) == 0 {
+		t.Fatalf("expected target capabilities")
+	}
+}
+
 func TestFetch_IntegrationProtocolV2Source(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)

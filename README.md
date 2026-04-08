@@ -10,7 +10,7 @@ That keeps the target side incremental without fetching target objects into the 
 
 The command surface is:
 
-- `git-sync probe`: inspect a source remote
+- `git-sync probe`: inspect a source remote, and optionally a target remote
 - `git-sync fetch`: exercise source-side fetch negotiation without pushing
 - `git-sync plan`: compute source-to-target ref actions without pushing
 - `git-sync sync`: execute the planned changes against the target
@@ -104,6 +104,15 @@ go run ./cmd/git-sync probe \
   --tags \
   --protocol auto \
   <source-url>
+```
+
+Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
+
+```bash
+go run ./cmd/git-sync probe \
+  --stats \
+  <source-url> \
+  <target-url>
 ```
 
 Fetch from a source remote into memory without pushing anywhere:
