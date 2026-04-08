@@ -8,6 +8,13 @@
 
 That keeps the target side incremental without fetching target objects into the local process first.
 
+The command surface is:
+
+- `git-sync probe`: inspect a source remote
+- `git-sync fetch`: exercise source-side fetch negotiation without pushing
+- `git-sync plan`: compute source-to-target ref actions without pushing
+- `git-sync sync`: execute the planned changes against the target
+
 ## Current scope
 
 - Smart HTTP only
@@ -37,6 +44,15 @@ That keeps the target side incremental without fetching target objects into the 
 go run ./cmd/git-sync sync \
   --source-token "$GITSYNC_SOURCE_TOKEN" \
   --target-token "$GITSYNC_TARGET_TOKEN" \
+  https://github.com/source-org/source-repo.git \
+  https://github.com/target-org/target-repo.git
+```
+
+Plan a sync without pushing anything:
+
+```bash
+go run ./cmd/git-sync plan \
+  --stats \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
 ```
