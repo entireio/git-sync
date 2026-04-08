@@ -97,6 +97,21 @@ type Result struct {
 	Protocol string
 }
 
+type ProbeResult struct {
+	SourceURL     string
+	RequestedMode string
+	Protocol      string
+	RefPrefixes   []string
+	Capabilities  []string
+	Refs          []RefInfo
+	Stats         Stats
+}
+
+type RefInfo struct {
+	Name string
+	Hash plumbing.Hash
+}
+
 type Stats struct {
 	Enabled bool
 	Items   map[string]*ServiceStats
@@ -134,6 +149,43 @@ func (r Result) Lines() []string {
 		summary += " dry-run=true"
 	}
 	lines = append(lines, summary)
+
+	if r.Stats.Enabled {
+		keys := make([]string, 0, len(r.Stats.Items))
+		for key := range r.Stats.Items {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := r.Stats.Items[key]
+			lines = append(lines, fmt.Sprintf(
+				"stats: %s requests=%d request-bytes=%d response-bytes=%d wants=%d haves=%d commands=%d",
+				item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
+			))
+		}
+	}
+
+	return lines
+}
+
+func (r ProbeResult) Lines() []string {
+	lines := []string{
+		fmt.Sprintf("source: %s", r.SourceURL),
+		fmt.Sprintf("requested-protocol: %s", r.RequestedMode),
+		fmt.Sprintf("negotiated-protocol: %s", r.Protocol),
+	}
+
+	if len(r.RefPrefixes) > 0 {
+		lines = append(lines, "ref-prefixes: "+strings.Join(r.RefPrefixes, ", "))
+	}
+	if len(r.Capabilities) > 0 {
+		lines = append(lines, "capabilities: "+strings.Join(r.Capabilities, ", "))
+	}
+
+	lines = append(lines, fmt.Sprintf("refs: %d", len(r.Refs)))
+	for _, ref := range r.Refs {
+		lines = append(lines, fmt.Sprintf("ref: %s %s", ref.Hash.String(), ref.Name))
+	}
 
 	if r.Stats.Enabled {
 		keys := make([]string, 0, len(r.Stats.Items))
@@ -261,6 +313,53 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	result.Stats = stats.snapshot()
 	return result, nil
+}
+
+func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
+	if cfg.ProtocolMode == "" {
+		cfg.ProtocolMode = protocolModeAuto
+	}
+	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 && cfg.ProtocolMode != protocolModeV2 {
+		return ProbeResult{}, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
+	}
+	if cfg.Source.URL == "" {
+		return ProbeResult{}, fmt.Errorf("source repository URL is required")
+	}
+
+	stats := newStats(cfg.ShowStats)
+	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("create source transport: %w", err)
+	}
+
+	refs, service, err := listSourceRefs(ctx, sourceConn, cfg)
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("list source refs: %w", err)
+	}
+
+	refInfos := make([]RefInfo, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Type() != plumbing.HashReference {
+			continue
+		}
+		refInfos = append(refInfos, RefInfo{
+			Name: ref.Name().String(),
+			Hash: ref.Hash(),
+		})
+	}
+	sort.Slice(refInfos, func(i, j int) bool {
+		return refInfos[i].Name < refInfos[j].Name
+	})
+
+	return ProbeResult{
+		SourceURL:     cfg.Source.URL,
+		RequestedMode: cfg.ProtocolMode,
+		Protocol:      service.protocol,
+		RefPrefixes:   sourceRefPrefixes(cfg),
+		Capabilities:  sourceCapabilities(service),
+		Refs:          refInfos,
+		Stats:         stats.snapshot(),
+	}, nil
 }
 
 func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {

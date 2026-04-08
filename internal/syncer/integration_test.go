@@ -223,6 +223,47 @@ func TestRun_IntegrationProtocolV2Source(t *testing.T) {
 	}
 }
 
+func TestProbe_IntegrationProtocolV2Source(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1"), head.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	defer sourceServer.Close()
+
+	result, err := Probe(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+		IncludeTags:  true,
+		ShowStats:    true,
+	})
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+
+	if result.Protocol != protocolModeV2 {
+		t.Fatalf("expected protocol v2, got %s", result.Protocol)
+	}
+	if len(result.RefPrefixes) != 2 || result.RefPrefixes[0] != "refs/heads/" || result.RefPrefixes[1] != "refs/tags/" {
+		t.Fatalf("unexpected ref prefixes: %#v", result.RefPrefixes)
+	}
+	if len(result.Capabilities) == 0 {
+		t.Fatalf("expected capabilities")
+	}
+	if len(result.Refs) < 2 {
+		t.Fatalf("expected refs, got %#v", result.Refs)
+	}
+	if !result.Stats.Enabled || len(result.Stats.Items) == 0 {
+		t.Fatalf("expected stats")
+	}
+}
+
 func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)

@@ -80,6 +80,16 @@ go run ./cmd/git-sync sync \
   <target-url>
 ```
 
+Probe a source remote without pushing anything:
+
+```bash
+go run ./cmd/git-sync probe \
+  --stats \
+  --tags \
+  --protocol auto \
+  <source-url>
+```
+
 Dry run:
 
 ```bash

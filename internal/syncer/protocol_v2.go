@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	git "github.com/go-git/go-git/v5"
@@ -130,12 +131,29 @@ func asciiHexToByte(b byte) (byte, error) {
 func decodeV2CapabilityAdvertisement(r io.Reader) (*v2CapabilityAdvertisement, error) {
 	reader := newPacketReader(r)
 
-	kind, payload, err := reader.ReadPacket()
-	if err != nil {
-		return nil, err
-	}
-	if kind != packetTypeData || string(payload) != "version 2\n" {
-		return nil, fmt.Errorf("unexpected protocol advertisement %q", payload)
+	var (
+		kind    packetType
+		payload []byte
+		err     error
+	)
+	for {
+		kind, payload, err = reader.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+		if kind == packetTypeFlush {
+			continue
+		}
+		if kind != packetTypeData {
+			return nil, fmt.Errorf("unexpected packet type %v before protocol advertisement", kind)
+		}
+		if strings.HasPrefix(string(payload), "# service=") {
+			continue
+		}
+		if string(payload) != "version 2\n" {
+			return nil, fmt.Errorf("unexpected protocol advertisement %q", payload)
+		}
+		break
 	}
 
 	adv := &v2CapabilityAdvertisement{Capabilities: map[string]string{}}
@@ -241,6 +259,42 @@ func (s *sourceRefService) Fetch(ctx context.Context, repo *git.Repository, conn
 		return fetchSourceRefsWithHavesV1(ctx, repo, conn, s.v1, desired, targetRefs)
 	default:
 		return fmt.Errorf("unsupported source protocol %q", s.protocol)
+	}
+}
+
+func sourceCapabilities(s *sourceRefService) []string {
+	switch s.protocol {
+	case protocolModeV2:
+		keys := make([]string, 0, len(s.v2.Capabilities))
+		for key, value := range s.v2.Capabilities {
+			if value == "" {
+				keys = append(keys, key)
+				continue
+			}
+			keys = append(keys, key+"="+value)
+		}
+		sort.Strings(keys)
+		return keys
+	case protocolModeV1:
+		if s.v1 == nil || s.v1.Capabilities == nil {
+			return nil
+		}
+		all := s.v1.Capabilities.All()
+		items := make([]string, 0, len(all))
+		for _, cap := range all {
+			values := s.v1.Capabilities.Get(cap)
+			if len(values) == 0 {
+				items = append(items, string(cap))
+				continue
+			}
+			for _, value := range values {
+				items = append(items, string(cap)+"="+value)
+			}
+		}
+		sort.Strings(items)
+		return items
+	default:
+		return nil
 	}
 }
 
@@ -425,6 +479,7 @@ func sourceRefPrefixes(cfg Config) []string {
 	for prefix := range prefixSet {
 		prefixes = append(prefixes, prefix)
 	}
+	sort.Strings(prefixes)
 	return prefixes
 }
 
