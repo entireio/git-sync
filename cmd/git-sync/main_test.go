@@ -17,6 +17,7 @@ import (
 	billy "github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
@@ -35,6 +36,8 @@ func TestMarshalOutput_JSONShape(t *testing.T) {
 		SourceURL:      "https://example.com/source.git",
 		RequestedMode:  "auto",
 		Protocol:       "v2",
+		Wants:          []syncer.RefInfo{{Name: "refs/heads/main", Hash: plumbing.NewHash("1111111111111111111111111111111111111111")}},
+		Haves:          []plumbing.Hash{plumbing.NewHash("2222222222222222222222222222222222222222")},
 		FetchedObjects: 42,
 	})
 	if err != nil {
@@ -46,14 +49,26 @@ func TestMarshalOutput_JSONShape(t *testing.T) {
 		t.Fatalf("unmarshal marshaled output: %v", err)
 	}
 
-	if got := decoded["SourceURL"]; got != "https://example.com/source.git" {
-		t.Fatalf("unexpected SourceURL: %#v", got)
+	if got := decoded["source_url"]; got != "https://example.com/source.git" {
+		t.Fatalf("unexpected source_url: %#v", got)
 	}
-	if got := decoded["Protocol"]; got != "v2" {
-		t.Fatalf("unexpected Protocol: %#v", got)
+	if got := decoded["protocol"]; got != "v2" {
+		t.Fatalf("unexpected protocol: %#v", got)
 	}
-	if got := decoded["FetchedObjects"]; got != float64(42) {
-		t.Fatalf("unexpected FetchedObjects: %#v", got)
+	if got := decoded["fetched_objects"]; got != float64(42) {
+		t.Fatalf("unexpected fetched_objects: %#v", got)
+	}
+	wants, ok := decoded["wants"].([]any)
+	if !ok || len(wants) != 1 {
+		t.Fatalf("unexpected wants: %#v", decoded["wants"])
+	}
+	want0, ok := wants[0].(map[string]any)
+	if !ok || want0["hash"] != "1111111111111111111111111111111111111111" {
+		t.Fatalf("unexpected want hash: %#v", wants[0])
+	}
+	haves, ok := decoded["haves"].([]any)
+	if !ok || len(haves) != 1 || haves[0] != "2222222222222222222222222222222222222222" {
+		t.Fatalf("unexpected haves: %#v", decoded["haves"])
 	}
 }
 
@@ -84,18 +99,19 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 		t.Fatalf("run plan: %v", err)
 	}
 
-	var result syncer.Result
+	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("decode plan json: %v\noutput=%s", err, output)
 	}
-	if !result.DryRun {
-		t.Fatalf("expected dry-run result")
+	if result["dry_run"] != true {
+		t.Fatalf("expected dry_run=true, got %#v", result["dry_run"])
 	}
-	if len(result.Plans) == 0 {
-		t.Fatalf("expected plan entries")
+	plans, ok := result["plans"].([]any)
+	if !ok || len(plans) == 0 {
+		t.Fatalf("expected plan entries, got %#v", result["plans"])
 	}
-	if result.Pushed != 0 {
-		t.Fatalf("expected no pushed refs, got %+v", result)
+	if result["pushed"] != float64(0) {
+		t.Fatalf("expected pushed=0, got %#v", result["pushed"])
 	}
 	if targetServer.Count("git-receive-pack") != 0 {
 		t.Fatalf("expected no receive-pack POSTs, got %d", targetServer.Count("git-receive-pack"))

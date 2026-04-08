@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -66,14 +67,14 @@ const (
 )
 
 type BranchPlan struct {
-	Branch     string
-	SourceRef  plumbing.ReferenceName
-	TargetRef  plumbing.ReferenceName
-	SourceHash plumbing.Hash
-	TargetHash plumbing.Hash
-	Kind       RefKind
-	Action     Action
-	Reason     string
+	Branch     string                 `json:"branch"`
+	SourceRef  plumbing.ReferenceName `json:"source_ref"`
+	TargetRef  plumbing.ReferenceName `json:"target_ref"`
+	SourceHash plumbing.Hash          `json:"source_hash"`
+	TargetHash plumbing.Hash          `json:"target_hash"`
+	Kind       RefKind                `json:"kind"`
+	Action     Action                 `json:"action"`
+	Reason     string                 `json:"reason"`
 }
 
 type Action string
@@ -87,56 +88,115 @@ const (
 )
 
 type Result struct {
-	Plans    []BranchPlan
-	Pushed   int
-	Skipped  int
-	Blocked  int
-	Deleted  int
-	DryRun   bool
-	Stats    Stats
-	Protocol string
+	Plans    []BranchPlan `json:"plans"`
+	Pushed   int          `json:"pushed"`
+	Skipped  int          `json:"skipped"`
+	Blocked  int          `json:"blocked"`
+	Deleted  int          `json:"deleted"`
+	DryRun   bool         `json:"dry_run"`
+	Stats    Stats        `json:"stats"`
+	Protocol string       `json:"protocol"`
 }
 
 type ProbeResult struct {
-	SourceURL     string
-	TargetURL     string
-	RequestedMode string
-	Protocol      string
-	RefPrefixes   []string
-	Capabilities  []string
-	TargetCaps    []string
-	Refs          []RefInfo
-	Stats         Stats
+	SourceURL     string    `json:"source_url"`
+	TargetURL     string    `json:"target_url,omitempty"`
+	RequestedMode string    `json:"requested_mode"`
+	Protocol      string    `json:"protocol"`
+	RefPrefixes   []string  `json:"ref_prefixes"`
+	Capabilities  []string  `json:"source_capabilities"`
+	TargetCaps    []string  `json:"target_capabilities,omitempty"`
+	Refs          []RefInfo `json:"refs"`
+	Stats         Stats     `json:"stats"`
 }
 
 type RefInfo struct {
-	Name string
-	Hash plumbing.Hash
+	Name string        `json:"name"`
+	Hash plumbing.Hash `json:"hash"`
 }
 
 type FetchResult struct {
-	SourceURL      string
-	RequestedMode  string
-	Protocol       string
-	Wants          []RefInfo
-	Haves          []plumbing.Hash
-	FetchedObjects int
-	Stats          Stats
+	SourceURL      string          `json:"source_url"`
+	RequestedMode  string          `json:"requested_mode"`
+	Protocol       string          `json:"protocol"`
+	Wants          []RefInfo       `json:"wants"`
+	Haves          []plumbing.Hash `json:"haves"`
+	FetchedObjects int             `json:"fetched_objects"`
+	Stats          Stats           `json:"stats"`
 }
 
 type Stats struct {
-	Enabled bool
-	Items   map[string]*ServiceStats
+	Enabled bool                     `json:"enabled"`
+	Items   map[string]*ServiceStats `json:"items"`
 }
 
 type ServiceStats struct {
-	Name          string
-	Requests      int
-	RequestBytes  int64
-	ResponseBytes int64
-	Wants         int
-	Haves         int
-	Commands      int
+	Name          string `json:"name"`
+	Requests      int    `json:"requests"`
+	RequestBytes  int64  `json:"request_bytes"`
+	ResponseBytes int64  `json:"response_bytes"`
+	Wants         int    `json:"wants"`
+	Haves         int    `json:"haves"`
+	Commands      int    `json:"commands"`
+}
+
+func (p BranchPlan) MarshalJSON() ([]byte, error) {
+	type branchPlanJSON struct {
+		Branch     string  `json:"branch"`
+		SourceRef  string  `json:"source_ref"`
+		TargetRef  string  `json:"target_ref"`
+		SourceHash string  `json:"source_hash"`
+		TargetHash string  `json:"target_hash"`
+		Kind       RefKind `json:"kind"`
+		Action     Action  `json:"action"`
+		Reason     string  `json:"reason"`
+	}
+	return json.Marshal(branchPlanJSON{
+		Branch:     p.Branch,
+		SourceRef:  p.SourceRef.String(),
+		TargetRef:  p.TargetRef.String(),
+		SourceHash: p.SourceHash.String(),
+		TargetHash: p.TargetHash.String(),
+		Kind:       p.Kind,
+		Action:     p.Action,
+		Reason:     p.Reason,
+	})
+}
+
+func (r RefInfo) MarshalJSON() ([]byte, error) {
+	type refInfoJSON struct {
+		Name string `json:"name"`
+		Hash string `json:"hash"`
+	}
+	return json.Marshal(refInfoJSON{
+		Name: r.Name,
+		Hash: r.Hash.String(),
+	})
+}
+
+func (r FetchResult) MarshalJSON() ([]byte, error) {
+	type fetchResultJSON struct {
+		SourceURL      string    `json:"source_url"`
+		RequestedMode  string    `json:"requested_mode"`
+		Protocol       string    `json:"protocol"`
+		Wants          []RefInfo `json:"wants"`
+		Haves          []string  `json:"haves"`
+		FetchedObjects int       `json:"fetched_objects"`
+		Stats          Stats     `json:"stats"`
+	}
+	haves := make([]string, 0, len(r.Haves))
+	for _, hash := range r.Haves {
+		haves = append(haves, hash.String())
+	}
+	return json.Marshal(fetchResultJSON{
+		SourceURL:      r.SourceURL,
+		RequestedMode:  r.RequestedMode,
+		Protocol:       r.Protocol,
+		Wants:          r.Wants,
+		Haves:          haves,
+		FetchedObjects: r.FetchedObjects,
+		Stats:          r.Stats,
+	})
 }
 
 func (r Result) Lines() []string {
