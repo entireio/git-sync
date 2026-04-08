@@ -264,6 +264,53 @@ func TestProbe_IntegrationProtocolV2Source(t *testing.T) {
 	}
 }
 
+func TestFetch_IntegrationProtocolV2Source(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 4)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	defer sourceServer.Close()
+
+	result, err := Fetch(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+		Branches:     []string{testBranch},
+		ShowStats:    true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+	if result.Protocol != protocolModeV2 {
+		t.Fatalf("expected protocol v2, got %s", result.Protocol)
+	}
+	if len(result.Wants) != 1 {
+		t.Fatalf("expected one wanted ref, got %#v", result.Wants)
+	}
+	if result.FetchedObjects == 0 {
+		t.Fatalf("expected fetched objects")
+	}
+	if !result.Stats.Enabled || len(result.Stats.Items) == 0 {
+		t.Fatalf("expected stats")
+	}
+
+	sourceServer.ResetMetrics()
+	result, err = Fetch(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+		Branches:     []string{testBranch},
+		ShowStats:    true,
+	}, []string{testBranch}, nil)
+	if err != nil {
+		t.Fatalf("fetch with haves failed: %v", err)
+	}
+	if len(result.Haves) != 1 {
+		t.Fatalf("expected one have, got %#v", result.Haves)
+	}
+	if sourceServer.Haves(serviceUploadPack, metricPack) == 0 {
+		t.Fatalf("expected source fetch to advertise haves")
+	}
+}
+
 func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)

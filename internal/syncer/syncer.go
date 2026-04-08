@@ -112,6 +112,16 @@ type RefInfo struct {
 	Hash plumbing.Hash
 }
 
+type FetchResult struct {
+	SourceURL      string
+	RequestedMode  string
+	Protocol       string
+	Wants          []RefInfo
+	Haves          []plumbing.Hash
+	FetchedObjects int
+	Stats          Stats
+}
+
 type Stats struct {
 	Enabled bool
 	Items   map[string]*ServiceStats
@@ -202,6 +212,38 @@ func (r ProbeResult) Lines() []string {
 		}
 	}
 
+	return lines
+}
+
+func (r FetchResult) Lines() []string {
+	lines := []string{
+		fmt.Sprintf("source: %s", r.SourceURL),
+		fmt.Sprintf("requested-protocol: %s", r.RequestedMode),
+		fmt.Sprintf("negotiated-protocol: %s", r.Protocol),
+		fmt.Sprintf("wants: %d", len(r.Wants)),
+		fmt.Sprintf("haves: %d", len(r.Haves)),
+		fmt.Sprintf("fetched-objects: %d", r.FetchedObjects),
+	}
+	for _, want := range r.Wants {
+		lines = append(lines, fmt.Sprintf("want: %s %s", want.Hash.String(), want.Name))
+	}
+	for _, have := range r.Haves {
+		lines = append(lines, fmt.Sprintf("have: %s", have.String()))
+	}
+	if r.Stats.Enabled {
+		keys := make([]string, 0, len(r.Stats.Items))
+		for key := range r.Stats.Items {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := r.Stats.Items[key]
+			lines = append(lines, fmt.Sprintf(
+				"stats: %s requests=%d request-bytes=%d response-bytes=%d wants=%d haves=%d commands=%d",
+				item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
+			))
+		}
+	}
 	return lines
 }
 
@@ -359,6 +401,83 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		Capabilities:  sourceCapabilities(service),
 		Refs:          refInfos,
 		Stats:         stats.snapshot(),
+	}, nil
+}
+
+func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plumbing.Hash) (FetchResult, error) {
+	if cfg.ProtocolMode == "" {
+		cfg.ProtocolMode = protocolModeAuto
+	}
+	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 && cfg.ProtocolMode != protocolModeV2 {
+		return FetchResult{}, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
+	}
+	if cfg.Source.URL == "" {
+		return FetchResult{}, fmt.Errorf("source repository URL is required")
+	}
+
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		return FetchResult{}, fmt.Errorf("init in-memory repository: %w", err)
+	}
+
+	stats := newStats(cfg.ShowStats)
+	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	if err != nil {
+		return FetchResult{}, fmt.Errorf("create source transport: %w", err)
+	}
+
+	sourceRefs, sourceService, err := listSourceRefs(ctx, sourceConn, cfg)
+	if err != nil {
+		return FetchResult{}, fmt.Errorf("list source refs: %w", err)
+	}
+	sourceRefMap := refHashMap(sourceRefs)
+
+	desiredRefs, _, err := buildDesiredRefs(sourceRefMap, cfg)
+	if err != nil {
+		return FetchResult{}, err
+	}
+	if len(desiredRefs) == 0 {
+		return FetchResult{}, fmt.Errorf("no source refs matched")
+	}
+
+	targetRefMap := make(map[plumbing.ReferenceName]plumbing.Hash)
+	for _, raw := range haveRefs {
+		name := parseHaveRef(raw)
+		hash, ok := sourceRefMap[name]
+		if !ok {
+			return FetchResult{}, fmt.Errorf("have-ref %q not found on source", raw)
+		}
+		targetRefMap[name] = hash
+	}
+	for idx, hash := range haveHashes {
+		targetRefMap[plumbing.ReferenceName(fmt.Sprintf("refs/haves/%d", idx))] = hash
+	}
+
+	if err := sourceService.Fetch(ctx, repo, sourceConn, desiredRefs, targetRefMap); err != nil {
+		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return FetchResult{}, err
+		}
+	}
+
+	wants := make([]RefInfo, 0, len(desiredRefs))
+	for _, ref := range desiredRefs {
+		wants = append(wants, RefInfo{Name: ref.SourceRef.String(), Hash: ref.SourceHash})
+	}
+	sort.Slice(wants, func(i, j int) bool { return wants[i].Name < wants[j].Name })
+
+	objectCount, err := countObjects(repo.Storer)
+	if err != nil {
+		return FetchResult{}, fmt.Errorf("count fetched objects: %w", err)
+	}
+
+	return FetchResult{
+		SourceURL:      cfg.Source.URL,
+		RequestedMode:  cfg.ProtocolMode,
+		Protocol:       sourceService.protocol,
+		Wants:          wants,
+		Haves:          sortedUniqueHashes(mapsRefValues(targetRefMap)),
+		FetchedObjects: objectCount,
+		Stats:          stats.snapshot(),
 	}, nil
 }
 
@@ -948,6 +1067,21 @@ func sortedUniqueHashes(input []plumbing.Hash) []plumbing.Hash {
 	return out
 }
 
+func countObjects(store storer.EncodedObjectStorer) (int, error) {
+	iter, err := store.IterEncodedObjects(plumbing.AnyObject)
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+
+	count := 0
+	err = iter.ForEach(func(obj plumbing.EncodedObject) error {
+		count++
+		return nil
+	})
+	return count, err
+}
+
 func localBranchRef(remoteName, branch string) string {
 	return plumbing.NewRemoteReferenceName(remoteName, branch).String()
 }
@@ -961,6 +1095,14 @@ func shortHash(hash plumbing.Hash) string {
 		return value[:8]
 	}
 	return value
+}
+
+func parseHaveRef(raw string) plumbing.ReferenceName {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "refs/") {
+		return plumbing.ReferenceName(raw)
+	}
+	return plumbing.NewBranchReferenceName(raw)
 }
 
 func progressWriter(verbose bool) io.Writer {

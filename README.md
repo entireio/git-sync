@@ -90,6 +90,27 @@ go run ./cmd/git-sync probe \
   <source-url>
 ```
 
+Fetch from a source remote into memory without pushing anywhere:
+
+```bash
+go run ./cmd/git-sync fetch \
+  --stats \
+  --protocol auto \
+  --branch main \
+  <source-url>
+```
+
+Advertise an existing source ref as a synthetic `have` to exercise incremental negotiation:
+
+```bash
+go run ./cmd/git-sync fetch \
+  --stats \
+  --protocol auto \
+  --branch main \
+  --have-ref main \
+  <source-url>
+```
+
 Dry run:
 
 ```bash
