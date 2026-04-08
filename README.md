@@ -114,3 +114,14 @@ Bearer auth is also available:
 - If `--prune` is set, managed target refs that are absent on source are deleted.
 - If any ref would be blocked and `--dry-run` is not set, the command exits non-zero before pushing anything.
 - `--stats` adds per-service request, byte, want, have, and command counters to the output.
+
+## Why Push Stays V1
+
+Protocol v2 is used where it materially improves this tool: source-side ref discovery and source-side object download.
+
+Push remains on the existing low-level `receive-pack` path for two reasons:
+
+- The tool already builds exact ref update commands and streams the outgoing packfile directly, so push-side control was already good before v2 support.
+- The main transfer and negotiation win is on the source side. That is where `ls-refs` and `fetch` reduce unnecessary work.
+
+In other words, this project uses protocol v2 where it changes the fetch/list behavior in a useful way, and keeps the current push path where switching protocols would mostly add complexity without a comparable payoff.
