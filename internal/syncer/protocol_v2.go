@@ -26,6 +26,7 @@ import (
 const (
 	delimPkt       = "0001"
 	responseEndPkt = "0002"
+	statsPhaseHdr  = "X-Git-Sync-Stats-Phase"
 )
 
 type packetType int
@@ -341,7 +342,7 @@ func listSourceRefsV2(ctx context.Context, conn *transportConn, adv *v2Capabilit
 		return nil, err
 	}
 
-	data, err := postRPC(ctx, conn, transport.UploadPackServiceName, body, true)
+	data, err := postRPCWithPhase(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack ls-refs")
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +383,7 @@ func fetchSourceRefsV2(
 		return err
 	}
 
-	reader, err := postRPCStream(ctx, conn, transport.UploadPackServiceName, body, true)
+	reader, err := postRPCStreamWithPhase(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
 	if err != nil {
 		return err
 	}
@@ -532,6 +533,7 @@ func requestInfoRefs(ctx context.Context, conn *transportConn, service, gitProto
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set(statsPhaseHdr, service+" info-refs")
 	if gitProtocol != "" {
 		req.Header.Set("Git-Protocol", gitProtocol)
 	}
@@ -576,7 +578,20 @@ func postRPC(ctx context.Context, conn *transportConn, service string, body []by
 	return io.ReadAll(reader)
 }
 
+func postRPCWithPhase(ctx context.Context, conn *transportConn, service string, body []byte, gitProtocolV2 bool, phase string) ([]byte, error) {
+	reader, err := postRPCStreamWithPhase(ctx, conn, service, body, gitProtocolV2, phase)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
 func postRPCStream(ctx context.Context, conn *transportConn, service string, body []byte, gitProtocolV2 bool) (io.ReadCloser, error) {
+	return postRPCStreamWithPhase(ctx, conn, service, body, gitProtocolV2, service)
+}
+
+func postRPCStreamWithPhase(ctx context.Context, conn *transportConn, service string, body []byte, gitProtocolV2 bool, phase string) (io.ReadCloser, error) {
 	url := fmt.Sprintf("%s/%s", conn.endpoint.String(), service)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -585,6 +600,7 @@ func postRPCStream(ctx context.Context, conn *transportConn, service string, bod
 	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
 	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
 	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set(statsPhaseHdr, phase)
 	if gitProtocolV2 {
 		req.Header.Set("Git-Protocol", "version=2")
 	}

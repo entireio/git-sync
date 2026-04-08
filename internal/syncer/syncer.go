@@ -1232,9 +1232,12 @@ func (rt *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 		return nil, err
 	}
 
-	serviceName := req.URL.Query().Get("service")
+	serviceName := req.Header.Get(statsPhaseHdr)
 	if serviceName == "" {
-		serviceName = strings.TrimPrefix(req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:], "/")
+		serviceName = req.URL.Query().Get("service")
+		if serviceName == "" {
+			serviceName = strings.TrimPrefix(req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:], "/")
+		}
 	}
 	name := strings.TrimSpace(rt.label + " " + serviceName)
 	requestBytes := req.ContentLength
