@@ -19,10 +19,14 @@ That keeps the target side incremental without fetching target objects into the 
 - Optional forced retargeting with `--force`
 - Optional managed-ref deletion with `--prune`
 - Optional transfer stats output with `--stats`
+- Optional source-side Git protocol v2 for `ls-refs` and `fetch`
 
 ## Limits
 
-- Protocol v2 is not implemented yet. `--protocol auto` currently resolves to v1.
+- Push still uses the existing v1-style `receive-pack` path.
+- Protocol v2 support currently covers source discovery and source fetch only.
+- `--protocol auto` tries source-side v2 first and falls back to v1.
+- `--protocol v2` requires the source remote to negotiate v2.
 - Ref mapping is explicit, not wildcard-based.
 - Only smart HTTP remotes are supported.
 - Objects are kept in memory for the duration of the run.
@@ -67,6 +71,15 @@ go run ./cmd/git-sync sync \
   <target-url>
 ```
 
+Force source-side protocol v2:
+
+```bash
+go run ./cmd/git-sync sync \
+  --protocol v2 \
+  <source-url> \
+  <target-url>
+```
+
 Dry run:
 
 ```bash
@@ -90,8 +103,10 @@ Bearer auth is also available:
 ## Behavior
 
 - Source refs are listed with `GET /info/refs?service=git-upload-pack`.
+- When the source supports it, the client can negotiate protocol v2 with `Git-Protocol: version=2`, then use `ls-refs` and `fetch`.
 - Target refs are listed with `GET /info/refs?service=git-receive-pack`.
 - The source fetch advertises current target tip hashes as `have`, so reruns download less when source and target already share history.
+- Target push stays on the current `receive-pack` path.
 - If a target ref does not exist, it is created.
 - If a target ref already matches the source, it is skipped.
 - Branches are updated only when the target tip is an ancestor of the source tip, unless `--force` is set.
