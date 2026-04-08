@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -17,9 +18,11 @@ import (
 	"github.com/go-git/go-billy/v5/memfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/revlist"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -170,6 +173,53 @@ func TestRun_IntegrationBranchMappingAndStats(t *testing.T) {
 	}
 	if !result.Stats.Enabled || len(result.Stats.Items) == 0 {
 		t.Fatalf("expected stats to be populated")
+	}
+}
+
+func TestRun_IntegrationProtocolV2Source(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 4)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+	})
+	if err != nil {
+		t.Fatalf("initial v2 sync failed: %v", err)
+	}
+	if result.Protocol != protocolModeV2 {
+		t.Fatalf("expected protocol v2, got %s", result.Protocol)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+
+	sourceServer.ResetMetrics()
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	result, err = Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+	})
+	if err != nil {
+		t.Fatalf("resync v2 failed: %v", err)
+	}
+	if result.Protocol != protocolModeV2 {
+		t.Fatalf("expected protocol v2 on resync, got %s", result.Protocol)
+	}
+	if sourceServer.Haves(serviceUploadPack, metricPack) == 0 {
+		t.Fatalf("expected protocol v2 fetch to advertise haves on resync")
 	}
 }
 
@@ -339,6 +389,7 @@ type smartHTTPRepoServer struct {
 	server   *httptest.Server
 	repo     *git.Repository
 	repoPath string
+	v2       bool
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -353,6 +404,14 @@ func newSmartHTTPRepoServer(t *testing.T, repo *git.Repository) *smartHTTPRepoSe
 		repoPath: "/repo.git",
 	}
 	s.server = httptest.NewServer(http.HandlerFunc(s.handle))
+	return s
+}
+
+func newSmartHTTPRepoServerV2(t *testing.T, repo *git.Repository) *smartHTTPRepoServer {
+	t.Helper()
+
+	s := newSmartHTTPRepoServer(t, repo)
+	s.v2 = true
 	return s
 }
 
@@ -449,6 +508,10 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "missing service", http.StatusBadRequest)
 		return
 	}
+	if s.v2 && service == serviceUploadPack && strings.Contains(r.Header.Get("Git-Protocol"), "version=2") {
+		s.handleInfoRefsV2(w, r)
+		return
+	}
 
 	session, err := s.newSession(service)
 	if err != nil {
@@ -487,6 +550,34 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 	s.recordMetric(service, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
 }
 
+func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Request) {
+	var buf bytes.Buffer
+	enc := pktline.NewEncoder(&buf)
+	lines := []string{
+		"version 2\n",
+		"ls-refs=unborn\n",
+		"fetch=thin-pack\n",
+		"agent=test-server\n",
+	}
+	for _, line := range lines {
+		if err := enc.EncodeString(line); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := enc.Flush(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", serviceUploadPack))
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.t.Fatalf("write v2 advertised refs: %v", err)
+	}
+
+	s.recordMetric(serviceUploadPack, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
+}
+
 func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -494,6 +585,10 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer r.Body.Close()
+	if s.v2 && strings.Contains(r.Header.Get("Git-Protocol"), "version=2") {
+		s.handleUploadPackV2(w, r, body)
+		return
+	}
 
 	session, err := s.newSession(serviceUploadPack)
 	if err != nil {
@@ -525,6 +620,113 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), len(req.Wants), strings.Count(string(body), "have "))
+}
+
+func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, r *http.Request, body []byte) {
+	req, err := decodeV2TestCommandRequest(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	switch req.Command {
+	case "ls-refs":
+		s.handleUploadPackV2LSRefs(w, req, body)
+	case "fetch":
+		s.handleUploadPackV2Fetch(w, req, body)
+	default:
+		http.Error(w, "unsupported v2 command", http.StatusBadRequest)
+	}
+}
+
+func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
+	prefixes := make([]string, 0, len(req.Args))
+	for _, arg := range req.Args {
+		if strings.HasPrefix(arg, "ref-prefix ") {
+			prefixes = append(prefixes, strings.TrimPrefix(arg, "ref-prefix "))
+		}
+	}
+
+	refs, err := s.refsMatchingPrefixes(prefixes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var buf bytes.Buffer
+	enc := pktline.NewEncoder(&buf)
+	for _, ref := range refs {
+		if err := enc.EncodeString(ref.Hash().String() + " " + ref.Name().String() + "\n"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := enc.Flush(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.t.Fatalf("write v2 ls-refs response: %v", err)
+	}
+
+	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+}
+
+func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
+	var wants []plumbing.Hash
+	var haves []plumbing.Hash
+	for _, arg := range req.Args {
+		switch {
+		case strings.HasPrefix(arg, "want "):
+			wants = append(wants, plumbing.NewHash(strings.TrimPrefix(arg, "want ")))
+		case strings.HasPrefix(arg, "have "):
+			haves = append(haves, plumbing.NewHash(strings.TrimPrefix(arg, "have ")))
+		}
+	}
+
+	hashes, err := revlist.Objects(s.repo.Storer, wants, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var pack bytes.Buffer
+	enc := packfile.NewEncoder(&pack, s.repo.Storer, false)
+	if _, err := enc.Encode(hashes, 10); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var buf bytes.Buffer
+	pkt := pktline.NewEncoder(&buf)
+	if err := pkt.EncodeString("packfile\n"); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for offset := 0; offset < pack.Len(); offset += 65515 {
+		end := offset + 65515
+		if end > pack.Len() {
+			end = pack.Len()
+		}
+		payload := append([]byte{1}, pack.Bytes()[offset:end]...)
+		if err := pkt.Encode(payload); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := pkt.Flush(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.t.Fatalf("write v2 fetch response: %v", err)
+	}
+
+	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), len(wants), len(haves))
 }
 
 func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.Request) {
@@ -599,6 +801,78 @@ func (s *smartHTTPRepoServer) recordMetric(service string, kind metricKind, in, 
 		wants:   wants,
 		haves:   haves,
 	})
+}
+
+func (s *smartHTTPRepoServer) refsMatchingPrefixes(prefixes []string) ([]*plumbing.Reference, error) {
+	iter, err := s.repo.Storer.IterReferences()
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var refs []*plumbing.Reference
+	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Type() != plumbing.HashReference {
+			return nil
+		}
+		if len(prefixes) > 0 {
+			matched := false
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(ref.Name().String(), prefix) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil
+			}
+		}
+		refs = append(refs, ref)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(refs, func(i, j int) bool {
+		return refs[i].Name().String() < refs[j].Name().String()
+	})
+	return refs, nil
+}
+
+type v2TestCommandRequest struct {
+	Command string
+	Args    []string
+}
+
+func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
+	reader := newPacketReader(bytes.NewReader(body))
+	req := v2TestCommandRequest{}
+	inArgs := false
+
+	for {
+		kind, payload, err := reader.ReadPacket()
+		if err != nil {
+			return req, err
+		}
+		switch kind {
+		case packetTypeFlush:
+			return req, nil
+		case packetTypeDelim:
+			inArgs = true
+		case packetTypeData:
+			line := strings.TrimSuffix(string(payload), "\n")
+			if strings.HasPrefix(line, "command=") {
+				req.Command = strings.TrimPrefix(line, "command=")
+				continue
+			}
+			if inArgs {
+				req.Args = append(req.Args, line)
+			}
+		default:
+			return req, fmt.Errorf("unexpected packet type %v", kind)
+		}
+	}
 }
 
 func TestMain(m *testing.M) {

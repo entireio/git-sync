@@ -1,7 +1,6 @@
 package syncer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +29,7 @@ const (
 	sourceRemoteName = "source"
 	protocolModeAuto = "auto"
 	protocolModeV1   = "v1"
+	protocolModeV2   = "v2"
 )
 
 type Endpoint struct {
@@ -157,7 +157,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
-	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 {
+	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 && cfg.ProtocolMode != protocolModeV2 {
 		return Result{}, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
 	}
 
@@ -176,18 +176,13 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("create target transport: %w", err)
 	}
 
-	sourceAdv, err := advertisedRefs(ctx, sourceConn, transport.UploadPackServiceName)
+	sourceRefs, sourceService, err := listSourceRefs(ctx, sourceConn, cfg)
 	if err != nil {
 		return Result{}, fmt.Errorf("list source refs: %w", err)
 	}
-	targetAdv, err := advertisedRefs(ctx, targetConn, transport.ReceivePackServiceName)
+	targetAdv, err := advertisedRefsV1(ctx, targetConn, transport.ReceivePackServiceName)
 	if err != nil {
 		return Result{}, fmt.Errorf("list target refs: %w", err)
-	}
-
-	sourceRefs, err := advertisedReferences(sourceAdv)
-	if err != nil {
-		return Result{}, fmt.Errorf("decode source refs: %w", err)
 	}
 	targetRefs, err := advertisedReferences(targetAdv)
 	if err != nil {
@@ -205,7 +200,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
 
-	if err := fetchSourceRefsWithHaves(ctx, repo, sourceConn, sourceAdv, desiredRefs, targetRefMap); err != nil {
+	if err := sourceService.Fetch(ctx, repo, sourceConn, desiredRefs, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return Result{}, err
 		}
@@ -220,7 +215,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		Plans:    plans,
 		DryRun:   cfg.DryRun,
 		Stats:    stats.snapshot(),
-		Protocol: protocolModeV1,
+		Protocol: sourceService.protocol,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -517,7 +512,7 @@ func planBranch(repo *git.Repository, branch string, sourceHash, targetHash plum
 	}, targetHash, false)
 }
 
-func fetchSourceRefsWithHaves(
+func fetchSourceRefsWithHavesV1(
 	ctx context.Context,
 	repo *git.Repository,
 	conn *transportConn,
@@ -567,7 +562,6 @@ func fetchSourceRefsWithHaves(
 			return fmt.Errorf("set local source ref %s: %w", ref.SourceRef, err)
 		}
 	}
-
 	return nil
 }
 
@@ -678,13 +672,19 @@ func receivePack(
 }
 
 func objectsToPush(store storer.Storer, wants []plumbing.Hash, targetRefs map[plumbing.ReferenceName]plumbing.Hash) ([]plumbing.Hash, error) {
-	haves := sortedUniqueHashes(mapsRefValues(targetRefs))
+	targetHaves := sortedUniqueHashes(mapsRefValues(targetRefs))
+	haves := make([]plumbing.Hash, 0, len(targetHaves))
+	for _, hash := range targetHaves {
+		if _, err := store.EncodedObject(plumbing.AnyObject, hash); err == nil {
+			haves = append(haves, hash)
+		}
+	}
 	if len(wants) == 0 {
 		return nil, nil
 	}
 
-	haveSet := make(map[plumbing.Hash]struct{}, len(haves))
-	for _, hash := range haves {
+	haveSet := make(map[plumbing.Hash]struct{}, len(targetHaves))
+	for _, hash := range targetHaves {
 		haveSet[hash] = struct{}{}
 	}
 
@@ -777,40 +777,6 @@ func newTransportConn(raw Endpoint, label string, stats *statsCollector) (*trans
 
 func (c *transportConn) authMethod() transport.AuthMethod {
 	return c.raw.authMethod()
-}
-
-func advertisedRefs(ctx context.Context, conn *transportConn, service string) (*packp.AdvRefs, error) {
-	url := fmt.Sprintf("%s/info/refs?service=%s", conn.endpoint.String(), service)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", capability.DefaultAgent())
-	applyAuth(req, conn.raw)
-
-	res, err := conn.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if err := transporthttp.NewErr(res); err != nil {
-		return nil, err
-	}
-
-	data, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	ar := packp.NewAdvRefs()
-	if err := ar.Decode(bytes.NewReader(data)); err != nil {
-		if err == packp.ErrEmptyAdvRefs {
-			return nil, transport.ErrEmptyRemoteRepository
-		}
-		return nil, err
-	}
-	return ar, nil
 }
 
 func applyAuth(req *http.Request, endpoint Endpoint) {

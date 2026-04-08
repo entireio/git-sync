@@ -3,11 +3,23 @@ package syncer
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/utils/ioutil"
 )
 
 const (
@@ -170,4 +182,346 @@ func encodeV2CommandRequest(command string, capabilityArgs []string, commandArgs
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+type sourceRefService struct {
+	protocol string
+	v1       *packp.AdvRefs
+	v2       *v2CapabilityAdvertisement
+}
+
+func listSourceRefs(ctx context.Context, conn *transportConn, cfg Config) ([]*plumbing.Reference, *sourceRefService, error) {
+	switch cfg.ProtocolMode {
+	case protocolModeV1:
+		adv, refs, err := listSourceRefsV1(ctx, conn)
+		if err != nil {
+			return nil, nil, err
+		}
+		return refs, &sourceRefService{protocol: protocolModeV1, v1: adv}, nil
+	case protocolModeAuto, protocolModeV2:
+		data, err := requestInfoRefs(ctx, conn, transport.UploadPackServiceName, "version=2")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if adv, err := decodeV2CapabilityAdvertisement(bytes.NewReader(data)); err == nil {
+			if !adv.Supports("ls-refs") || !adv.Supports("fetch") {
+				return nil, nil, fmt.Errorf("source does not advertise required protocol v2 commands")
+			}
+			refs, err := listSourceRefsV2(ctx, conn, adv, cfg)
+			if err != nil {
+				return nil, nil, err
+			}
+			return refs, &sourceRefService{protocol: protocolModeV2, v2: adv}, nil
+		}
+
+		if cfg.ProtocolMode == protocolModeV2 {
+			return nil, nil, fmt.Errorf("source did not negotiate protocol v2")
+		}
+
+		adv, err := decodeV1AdvertisedRefs(data)
+		if err != nil {
+			return nil, nil, err
+		}
+		refs, err := advertisedReferences(adv)
+		if err != nil {
+			return nil, nil, err
+		}
+		return refs, &sourceRefService{protocol: protocolModeV1, v1: adv}, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
+	}
+}
+
+func (s *sourceRefService) Fetch(ctx context.Context, repo *git.Repository, conn *transportConn, desired map[plumbing.ReferenceName]desiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) error {
+	switch s.protocol {
+	case protocolModeV2:
+		return fetchSourceRefsV2(ctx, repo, conn, s.v2, desired, targetRefs)
+	case protocolModeV1:
+		return fetchSourceRefsWithHavesV1(ctx, repo, conn, s.v1, desired, targetRefs)
+	default:
+		return fmt.Errorf("unsupported source protocol %q", s.protocol)
+	}
+}
+
+func listSourceRefsV1(ctx context.Context, conn *transportConn) (*packp.AdvRefs, []*plumbing.Reference, error) {
+	adv, err := advertisedRefsV1(ctx, conn, transport.UploadPackServiceName)
+	if err != nil {
+		return nil, nil, err
+	}
+	refs, err := advertisedReferences(adv)
+	if err != nil {
+		return nil, nil, err
+	}
+	return adv, refs, nil
+}
+
+func listSourceRefsV2(ctx context.Context, conn *transportConn, adv *v2CapabilityAdvertisement, cfg Config) ([]*plumbing.Reference, error) {
+	args := []string{"peel"}
+	for _, prefix := range sourceRefPrefixes(cfg) {
+		args = append(args, "ref-prefix "+prefix)
+	}
+
+	body, err := encodeV2CommandRequest("ls-refs", v2RequestCapabilities(adv), args)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := postRPC(ctx, conn, transport.UploadPackServiceName, body, true)
+	if err != nil {
+		return nil, err
+	}
+	return decodeV2LSRefs(bytes.NewReader(data))
+}
+
+func fetchSourceRefsV2(
+	ctx context.Context,
+	repo *git.Repository,
+	conn *transportConn,
+	adv *v2CapabilityAdvertisement,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) error {
+	wants := make([]plumbing.Hash, 0, len(desired))
+	for _, ref := range desired {
+		wants = append(wants, ref.SourceHash)
+	}
+	wants = sortedUniqueHashes(wants)
+	haves := sortedUniqueHashes(mapsRefValues(targetRefs))
+	if len(wants) == 0 {
+		return git.NoErrAlreadyUpToDate
+	}
+
+	commandArgs := make([]string, 0, len(wants)+len(haves)+4)
+	commandArgs = append(commandArgs, "ofs-delta", "no-progress")
+	for _, hash := range wants {
+		commandArgs = append(commandArgs, "want "+hash.String())
+	}
+	for _, hash := range haves {
+		commandArgs = append(commandArgs, "have "+hash.String())
+	}
+	commandArgs = append(commandArgs, "done")
+	conn.stats.addWantsHaves("source upload-pack", len(wants), len(haves))
+
+	body, err := encodeV2CommandRequest("fetch", v2RequestCapabilities(adv), commandArgs)
+	if err != nil {
+		return err
+	}
+
+	reader, err := postRPCStream(ctx, conn, transport.UploadPackServiceName, body, true)
+	if err != nil {
+		return err
+	}
+	defer ioutil.CheckClose(reader, &err)
+
+	if err := storeV2FetchPack(repo, reader); err != nil {
+		return err
+	}
+
+	return storeFetchedSourceRefs(repo, desired)
+}
+
+func storeV2FetchPack(repo *git.Repository, r io.Reader) error {
+	reader := newPacketReader(r)
+	for {
+		kind, payload, err := reader.ReadPacket()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("decode protocol v2 fetch response: %w", err)
+		}
+
+		switch kind {
+		case packetTypeFlush:
+			return nil
+		case packetTypeDelim, packetTypeResponseEnd:
+			continue
+		case packetTypeData:
+			line := string(payload)
+			switch line {
+			case "packfile\n":
+				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.Reader())
+				if err := packfile.UpdateObjectStorage(repo.Storer, demux); err != nil {
+					return fmt.Errorf("store source packfile: %w", err)
+				}
+				return nil
+			case "acknowledgments\n", "shallow-info\n":
+				if err := skipV2Section(reader); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unexpected protocol v2 fetch section %q", strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+func skipV2Section(reader *packetReader) error {
+	for {
+		kind, _, err := reader.ReadPacket()
+		if err != nil {
+			return err
+		}
+		if kind == packetTypeDelim || kind == packetTypeFlush {
+			return nil
+		}
+	}
+}
+
+func decodeV2LSRefs(r io.Reader) ([]*plumbing.Reference, error) {
+	reader := newPacketReader(r)
+	var refs []*plumbing.Reference
+	for {
+		kind, payload, err := reader.ReadPacket()
+		if err != nil {
+			return nil, err
+		}
+		if kind == packetTypeFlush {
+			return refs, nil
+		}
+		if kind != packetTypeData {
+			return nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
+		}
+
+		fields := strings.Fields(strings.TrimSpace(string(payload)))
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("malformed ls-refs response line %q", payload)
+		}
+		hash := plumbing.NewHash(fields[0])
+		name := plumbing.ReferenceName(fields[1])
+		refs = append(refs, plumbing.NewHashReference(name, hash))
+	}
+}
+
+func sourceRefPrefixes(cfg Config) []string {
+	prefixSet := map[string]struct{}{}
+
+	addPrefix := func(ref plumbing.ReferenceName) {
+		switch {
+		case ref.IsBranch():
+			prefixSet["refs/heads/"] = struct{}{}
+		case ref.IsTag():
+			prefixSet["refs/tags/"] = struct{}{}
+		}
+	}
+
+	if len(cfg.Mappings) > 0 {
+		for _, mapping := range cfg.Mappings {
+			sourceRef, _, _, err := normalizeMapping(mapping)
+			if err != nil {
+				continue
+			}
+			addPrefix(sourceRef)
+		}
+	} else {
+		prefixSet["refs/heads/"] = struct{}{}
+	}
+	if cfg.IncludeTags {
+		prefixSet["refs/tags/"] = struct{}{}
+	}
+
+	prefixes := make([]string, 0, len(prefixSet))
+	for prefix := range prefixSet {
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
+}
+
+func v2RequestCapabilities(adv *v2CapabilityAdvertisement) []string {
+	var caps []string
+	if agent := adv.Value("agent"); agent != "" {
+		caps = append(caps, "agent="+capability.DefaultAgent())
+	}
+	return caps
+}
+
+func storeFetchedSourceRefs(repo *git.Repository, desired map[plumbing.ReferenceName]desiredRef) error {
+	for _, ref := range desired {
+		localRef := plumbing.ReferenceName(localBranchRef(sourceRemoteName, ref.TargetRef.Short()))
+		if ref.Kind == RefKindTag {
+			localRef = plumbing.ReferenceName("refs/remotes/" + sourceRemoteName + "/tags/" + ref.TargetRef.Short())
+		}
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(localRef, ref.SourceHash)); err != nil {
+			return fmt.Errorf("set local source ref %s: %w", ref.SourceRef, err)
+		}
+	}
+	return nil
+}
+
+func requestInfoRefs(ctx context.Context, conn *transportConn, service, gitProtocol string) ([]byte, error) {
+	url := fmt.Sprintf("%s/info/refs?service=%s", conn.endpoint.String(), service)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("User-Agent", capability.DefaultAgent())
+	if gitProtocol != "" {
+		req.Header.Set("Git-Protocol", gitProtocol)
+	}
+	applyAuth(req, conn.raw)
+
+	res, err := conn.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if err := transporthttp.NewErr(res); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(res.Body)
+}
+
+func advertisedRefsV1(ctx context.Context, conn *transportConn, service string) (*packp.AdvRefs, error) {
+	data, err := requestInfoRefs(ctx, conn, service, "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeV1AdvertisedRefs(data)
+}
+
+func decodeV1AdvertisedRefs(data []byte) (*packp.AdvRefs, error) {
+	ar := packp.NewAdvRefs()
+	if err := ar.Decode(bytes.NewReader(data)); err != nil {
+		if err == packp.ErrEmptyAdvRefs {
+			return nil, transport.ErrEmptyRemoteRepository
+		}
+		return nil, err
+	}
+	return ar, nil
+}
+
+func postRPC(ctx context.Context, conn *transportConn, service string, body []byte, gitProtocolV2 bool) ([]byte, error) {
+	reader, err := postRPCStream(ctx, conn, service, body, gitProtocolV2)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+func postRPCStream(ctx context.Context, conn *transportConn, service string, body []byte, gitProtocolV2 bool) (io.ReadCloser, error) {
+	url := fmt.Sprintf("%s/%s", conn.endpoint.String(), service)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
+	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
+	req.Header.Set("User-Agent", capability.DefaultAgent())
+	if gitProtocolV2 {
+		req.Header.Set("Git-Protocol", "version=2")
+	}
+	applyAuth(req, conn.raw)
+
+	res, err := conn.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := transporthttp.NewErr(res); err != nil {
+		_ = res.Body.Close()
+		return nil, err
+	}
+	return res.Body, nil
 }
