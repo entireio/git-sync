@@ -537,7 +537,7 @@ func requestInfoRefs(ctx context.Context, conn *transportConn, service, gitProto
 	if gitProtocol != "" {
 		req.Header.Set("Git-Protocol", gitProtocol)
 	}
-	applyAuth(req, conn.raw)
+	applyAuth(req, conn.authMethod())
 
 	res, err := conn.http.Do(req)
 	if err != nil {
@@ -604,7 +604,7 @@ func postRPCStreamWithPhase(ctx context.Context, conn *transportConn, service st
 	if gitProtocolV2 {
 		req.Header.Set("Git-Protocol", "version=2")
 	}
-	applyAuth(req, conn.raw)
+	applyAuth(req, conn.authMethod())
 
 	res, err := conn.http.Do(req)
 	if err != nil {

@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -1050,11 +1052,16 @@ type transportConn struct {
 	transport transport.Transport
 	http      *http.Client
 	raw       Endpoint
+	auth      transport.AuthMethod
 	stats     *statsCollector
 }
 
 func newTransportConn(raw Endpoint, label string, stats *statsCollector) (*transportConn, error) {
 	ep, err := transport.NewEndpoint(raw.URL)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := resolveAuthMethod(raw, ep)
 	if err != nil {
 		return nil, err
 	}
@@ -1073,16 +1080,17 @@ func newTransportConn(raw Endpoint, label string, stats *statsCollector) (*trans
 		transport: transporthttp.NewClient(httpClient),
 		http:      httpClient,
 		raw:       raw,
+		auth:      auth,
 		stats:     stats,
 	}, nil
 }
 
 func (c *transportConn) authMethod() transport.AuthMethod {
-	return c.raw.authMethod()
+	return c.auth
 }
 
-func applyAuth(req *http.Request, endpoint Endpoint) {
-	switch auth := endpoint.authMethod().(type) {
+func applyAuth(req *http.Request, authMethod transport.AuthMethod) {
+	switch auth := authMethod.(type) {
 	case *transporthttp.BasicAuth:
 		auth.SetAuth(req)
 	case *transporthttp.TokenAuth:
@@ -1208,6 +1216,95 @@ func (e Endpoint) authMethod() transport.AuthMethod {
 		return &transporthttp.BasicAuth{Username: username, Password: e.Token}
 	}
 	return nil
+}
+
+var gitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "credential", "fill")
+	cmd.Stdin = strings.NewReader(input)
+	return cmd.Output()
+}
+
+func resolveAuthMethod(raw Endpoint, ep *transport.Endpoint) (transport.AuthMethod, error) {
+	if auth := raw.authMethod(); auth != nil {
+		return auth, nil
+	}
+	if ep == nil {
+		return nil, nil
+	}
+	if ep.Protocol != "http" && ep.Protocol != "https" {
+		return nil, nil
+	}
+	username, password, ok := lookupGitCredential(ep)
+	if !ok {
+		return nil, nil
+	}
+	return &transporthttp.BasicAuth{Username: username, Password: password}, nil
+}
+
+func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {
+	input := credentialFillInput(ep)
+	if input == "" {
+		return "", "", false
+	}
+	output, err := gitCredentialFillCommand(context.Background(), input)
+	if err != nil {
+		return "", "", false
+	}
+	values := parseCredentialFillOutput(output)
+	password := values["password"]
+	if password == "" {
+		return "", "", false
+	}
+	username := values["username"]
+	if username == "" {
+		if ep.User != "" {
+			username = ep.User
+		} else {
+			username = "git"
+		}
+	}
+	return username, password, true
+}
+
+func credentialFillInput(ep *transport.Endpoint) string {
+	if ep == nil || ep.Host == "" {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("protocol=")
+	builder.WriteString(ep.Protocol)
+	builder.WriteString("\n")
+	builder.WriteString("host=")
+	builder.WriteString(ep.Host)
+	builder.WriteString("\n")
+	if path := strings.TrimPrefix(ep.Path, "/"); path != "" {
+		builder.WriteString("path=")
+		builder.WriteString(path)
+		builder.WriteString("\n")
+	}
+	if ep.User != "" {
+		builder.WriteString("username=")
+		builder.WriteString(ep.User)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\n")
+	return builder.String()
+}
+
+func parseCredentialFillOutput(output []byte) map[string]string {
+	values := map[string]string{}
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		key, value, ok := bytes.Cut(line, []byte{'='})
+		if !ok {
+			continue
+		}
+		values[string(key)] = string(value)
+	}
+	return values
 }
 
 func buildSidebandIfSupported(l *capability.List, reader io.Reader, p sideband.Progress) io.Reader {

@@ -217,6 +217,54 @@ func TestRun_IntegrationDryRunPlansWithoutPush(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	const username = "oauth2"
+	const password = "helper-secret"
+
+	sourceServer := newAuthenticatedSmartHTTPRepoServer(t, sourceRepo, username, password)
+	targetServer := newAuthenticatedSmartHTTPRepoServer(t, targetRepo, username, password)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	originalFill := gitCredentialFillCommand
+	t.Cleanup(func() {
+		gitCredentialFillCommand = originalFill
+	})
+	gitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+		if !strings.Contains(input, "protocol=http\n") {
+			t.Fatalf("expected protocol in credential input, got %q", input)
+		}
+		if !strings.Contains(input, "host=") {
+			t.Fatalf("expected host in credential input, got %q", input)
+		}
+		if !strings.Contains(input, "path=repo.git\n") {
+			t.Fatalf("expected repo path in credential input, got %q", input)
+		}
+		return []byte("username=" + username + "\npassword=" + password + "\n\n"), nil
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	})
+	if err != nil {
+		t.Fatalf("sync with credential helper failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
 func TestRun_IntegrationProtocolV2Source(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)
@@ -550,6 +598,8 @@ type smartHTTPRepoServer struct {
 	repo     *git.Repository
 	repoPath string
 	v2       bool
+	username string
+	password string
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -572,6 +622,15 @@ func newSmartHTTPRepoServerV2(t *testing.T, repo *git.Repository) *smartHTTPRepo
 
 	s := newSmartHTTPRepoServer(t, repo)
 	s.v2 = true
+	return s
+}
+
+func newAuthenticatedSmartHTTPRepoServer(t *testing.T, repo *git.Repository, username, password string) *smartHTTPRepoServer {
+	t.Helper()
+
+	s := newSmartHTTPRepoServer(t, repo)
+	s.username = username
+	s.password = password
 	return s
 }
 
@@ -650,6 +709,14 @@ func (s *smartHTTPRepoServer) Haves(service string, kind metricKind) int {
 }
 
 func (s *smartHTTPRepoServer) handle(w http.ResponseWriter, r *http.Request) {
+	if s.username != "" || s.password != "" {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != s.username || password != s.password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="git-sync-test"`)
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == s.repoPath+"/info/refs":
 		s.handleInfoRefs(w, r)

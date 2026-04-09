@@ -158,6 +158,13 @@ go run ./cmd/git-sync plan --stats <source-url> <target-url>
 
 For GitHub and similar providers, use basic auth with a token as the password.
 
+Auth is resolved in this order:
+
+- explicit CLI flags
+- `GITSYNC_*` environment variables
+- local `git credential fill` helper lookup for `http` and `https` remotes
+- anonymous access
+
 - `GITSYNC_SOURCE_TOKEN`
 - `GITSYNC_TARGET_TOKEN`
 - `GITSYNC_SOURCE_USERNAME` default: `git`
@@ -167,6 +174,8 @@ Bearer auth is also available:
 
 - `GITSYNC_SOURCE_BEARER_TOKEN`
 - `GITSYNC_TARGET_BEARER_TOKEN`
+
+That means local testing against a dummy GitHub repo can reuse your regular Git credential helper setup without passing tokens on every command.
 
 ## Behavior
 
