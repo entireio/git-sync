@@ -1213,21 +1213,14 @@ func largestCheckpointUnderLimit(
 	prevSpan int,
 ) (int, error) {
 	return sampledCheckpointUnderLimitByProbe(chain, prevIdx, prevSpan, func(idx int) (bool, error) {
-		progressf(
-			cfg.Verbose,
-			"bootstrap-batch: branch=%s probe checkpoint=%s base=%s",
-			ref.TargetRef,
-			shortHash(chain[idx]),
-			shortHash(prevHash),
-		)
 		tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[idx], prevHash, cfg.BatchMaxPackBytes)
 		if err != nil {
 			return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[idx]), err)
 		}
 		if tooLarge {
-			progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s exceeds limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+			progressf(cfg.Verbose, "bootstrap-batch: sample %s exceeds limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
 		} else {
-			progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s fits limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+			progressf(cfg.Verbose, "bootstrap-batch: sample %s fits limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
 		}
 		return tooLarge, nil
 	})

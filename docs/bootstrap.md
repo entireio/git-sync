@@ -172,6 +172,7 @@ Batching note:
 - it batches branch refs and then optionally creates tags after the branch batches complete
 - it resumes from an existing temp ref when that temp ref matches a planned checkpoint
 - it uses temporary target refs under `refs/gitsync/bootstrap/heads/`
+- it should be treated as an advanced large-repo fallback when one-shot bootstrap is too risky or fails on target-side unpack/index pressure
 
 Phase 4:
 

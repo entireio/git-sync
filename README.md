@@ -94,6 +94,24 @@ Current batching scope is intentionally narrow:
 - temporary refs under `refs/gitsync/bootstrap/heads/`
 - resume from existing temp refs is supported when they match a planned checkpoint
 
+This mode is intended as an advanced large-repo fallback, not the default bootstrap path. Use plain `bootstrap` first when a single streamed initial sync is acceptable.
+
+A practical starting point is:
+
+- `--batch-max-pack-bytes 536870912` for a conservative `512 MiB` target-side batch size
+- `--batch-max-pack-bytes 1073741824` when you want fewer, larger batches and the target has more headroom
+
+For example:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --batch-max-pack-bytes 536870912 \
+  --protocol v2 \
+  -v \
+  <source-url> \
+  <target-url>
+```
+
 Add `--measure-memory` to `bootstrap`, `sync`, `plan`, `probe`, or `fetch` to sample elapsed time and Go heap usage:
 
 ```bash

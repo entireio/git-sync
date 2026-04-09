@@ -254,6 +254,13 @@ Progress:
 - currently requires source-side protocol v2 with fetch filter support
 - resumes from an existing temp ref when that temp ref matches a planned checkpoint
 - exercised by `TestBootstrap_GitHTTPBackendBatchedBranch`
+- validated against `torvalds/linux` as a large-source manual stress path
+
+Operator guidance:
+
+- prefer plain `bootstrap` first
+- use batching when a single large bootstrap push is too risky, too large, or fails on the target side
+- start with `--batch-max-pack-bytes 536870912` and adjust upward only if the target has enough headroom
 
 Phase B:
 
