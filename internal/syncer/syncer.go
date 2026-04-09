@@ -62,6 +62,7 @@ type Config struct {
 	Force        bool
 	Prune        bool
 	MaxPackBytes int64
+	BatchMaxPackBytes int64
 	ProtocolMode string
 }
 
@@ -103,6 +104,8 @@ type Result struct {
 	Relay    bool         `json:"relay"`
 	RelayMode string      `json:"relay_mode"`
 	RelayReason string    `json:"relay_reason"`
+	Batching bool         `json:"batching"`
+	BatchCount int        `json:"batch_count"`
 	BootstrapSuggested bool `json:"bootstrap_suggested"`
 	Stats    Stats        `json:"stats"`
 	Measurement Measurement `json:"measurement"`
@@ -238,8 +241,8 @@ func (r Result) Lines() []string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -853,6 +856,10 @@ func bootstrapWithInputs(
 		Protocol:    sourceService.protocol,
 	}
 
+	if cfg.BatchMaxPackBytes > 0 {
+		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, targetRefs, result)
+	}
+
 	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
 	if err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -870,6 +877,302 @@ func bootstrapWithInputs(
 	result.Pushed = len(plans)
 	result.Stats = stats.snapshot()
 	return result, nil
+}
+
+type bootstrapBatch struct {
+	Plan       BranchPlan
+	TempRef    plumbing.ReferenceName
+	Checkpoints []plumbing.Hash
+}
+
+func bootstrapBatchedWithInputs(
+	ctx context.Context,
+	cfg Config,
+	stats *statsCollector,
+	sourceConn *transportConn,
+	targetConn *transportConn,
+	sourceService *sourceRefService,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	result Result,
+) (Result, error) {
+	if cfg.IncludeTags {
+		return result, fmt.Errorf("bootstrap batching does not support --tags yet")
+	}
+	if sourceService.protocol != protocolModeV2 {
+		return result, fmt.Errorf("bootstrap batching currently requires protocol v2")
+	}
+	if !fetchCapabilitySupports(sourceService.v2, "filter") {
+		return result, fmt.Errorf("bootstrap batching requires source fetch filter support")
+	}
+
+	planRefs := make([]desiredRef, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Kind != RefKindBranch || !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
+			return result, fmt.Errorf("bootstrap batching currently supports branch refs only")
+		}
+		planRefs = append(planRefs, desiredRef{
+			Kind:       plan.Kind,
+			Label:      plan.Branch,
+			SourceRef:  plan.SourceRef,
+			TargetRef:  plan.TargetRef,
+			SourceHash: plan.SourceHash,
+		})
+		tempRef := bootstrapTempRef(plan.TargetRef)
+		if hash := targetRefs[tempRef]; !hash.IsZero() {
+			return result, fmt.Errorf("bootstrap temp ref %s already exists; clean it up before retrying", tempRef)
+		}
+	}
+
+	batches, err := planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs)
+	if err != nil {
+		return result, err
+	}
+
+	batchLimit := cfg.BatchMaxPackBytes
+	if cfg.MaxPackBytes > 0 && (batchLimit == 0 || cfg.MaxPackBytes < batchLimit) {
+		batchLimit = cfg.MaxPackBytes
+	}
+
+	for _, batch := range batches {
+		current := plumbing.ZeroHash
+		for idx, checkpoint := range batch.Checkpoints {
+			stagePlans := []BranchPlan{
+				{
+					Branch:     batch.Plan.Branch,
+					SourceRef:  batch.Plan.SourceRef,
+					TargetRef:  batch.TempRef,
+					SourceHash: checkpoint,
+					TargetHash: current,
+					Kind:       batch.Plan.Kind,
+					Action:     actionForTargetHash(current),
+					Reason:     fmt.Sprintf("%s -> %s via %s", shortHash(current), shortHash(checkpoint), batch.TempRef),
+				},
+			}
+			if idx == len(batch.Checkpoints)-1 {
+				stagePlans = append(stagePlans, BranchPlan{
+					Branch:     batch.Plan.Branch,
+					SourceRef:  batch.Plan.SourceRef,
+					TargetRef:  batch.Plan.TargetRef,
+					SourceHash: checkpoint,
+					TargetHash: plumbing.ZeroHash,
+					Kind:       batch.Plan.Kind,
+					Action:     ActionCreate,
+					Reason:     fmt.Sprintf("create %s at %s", batch.Plan.TargetRef, shortHash(checkpoint)),
+				})
+			}
+
+			packReader, err := sourceService.FetchPack(ctx, sourceConn, singleDesiredRef(batch.Plan.SourceRef, batch.TempRef, checkpoint), singleHaveMap(current))
+			if err != nil {
+				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
+			}
+			packReader = limitPackReadCloser(packReader, batchLimit)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, stagePlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+			}
+			current = checkpoint
+			result.BatchCount++
+		}
+
+		deleteTempPlan := BranchPlan{
+			Branch:     batch.Plan.Branch,
+			TargetRef:  batch.TempRef,
+			SourceHash: plumbing.ZeroHash,
+			TargetHash: current,
+			Kind:       batch.Plan.Kind,
+			Action:     ActionDelete,
+			Reason:     fmt.Sprintf("delete temp ref %s", batch.TempRef),
+		}
+		if err := pushCommandsToTarget(ctx, targetConn, targetAdv, []BranchPlan{deleteTempPlan}, cfg.Verbose); err != nil {
+			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
+		}
+	}
+
+	result.Pushed = len(plans)
+	result.Batching = true
+	result.RelayMode = "bootstrap-batch"
+	result.Stats = stats.snapshot()
+	return result, nil
+}
+
+func actionForTargetHash(hash plumbing.Hash) Action {
+	if hash.IsZero() {
+		return ActionCreate
+	}
+	return ActionUpdate
+}
+
+func singleDesiredRef(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) map[plumbing.ReferenceName]desiredRef {
+	return map[plumbing.ReferenceName]desiredRef{
+		targetRef: {
+			Kind:       RefKindBranch,
+			Label:      targetRef.Short(),
+			SourceRef:  sourceRef,
+			TargetRef:  targetRef,
+			SourceHash: hash,
+		},
+	}
+}
+
+func singleHaveMap(hash plumbing.Hash) map[plumbing.ReferenceName]plumbing.Hash {
+	if hash.IsZero() {
+		return nil
+	}
+	return map[plumbing.ReferenceName]plumbing.Hash{
+		plumbing.ReferenceName("refs/gitsync/have"): hash,
+	}
+}
+
+func bootstrapTempRef(targetRef plumbing.ReferenceName) plumbing.ReferenceName {
+	return plumbing.ReferenceName("refs/gitsync/bootstrap/heads/" + targetRef.Short())
+}
+
+func planBootstrapBatches(
+	ctx context.Context,
+	cfg Config,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	desired []desiredRef,
+) ([]bootstrapBatch, error) {
+	out := make([]bootstrapBatch, 0, len(desired))
+	for _, ref := range desired {
+		checkpoints, err := planBootstrapBranchCheckpoints(ctx, cfg, sourceConn, sourceService, ref)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bootstrapBatch{
+			Plan: BranchPlan{
+				Branch:     ref.Label,
+				SourceRef:  ref.SourceRef,
+				TargetRef:  ref.TargetRef,
+				SourceHash: ref.SourceHash,
+				Kind:       ref.Kind,
+				Action:     ActionCreate,
+			},
+			TempRef:    bootstrapTempRef(ref.TargetRef),
+			Checkpoints: checkpoints,
+		})
+	}
+	return out, nil
+}
+
+func planBootstrapBranchCheckpoints(
+	ctx context.Context,
+	cfg Config,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	ref desiredRef,
+) ([]plumbing.Hash, error) {
+	graphRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("init bootstrap planning repository: %w", err)
+	}
+	if err := fetchSourceCommitGraphV2(ctx, graphRepo, sourceConn, sourceService.v2, ref); err != nil {
+		return nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+	}
+
+	chain, err := firstParentChain(graphRepo, ref.SourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+	}
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+	}
+
+	checkpoints := make([]plumbing.Hash, 0, len(chain))
+	prevIdx := -1
+	prevHash := plumbing.ZeroHash
+	for prevIdx < len(chain)-1 {
+		bestIdx, err := largestCheckpointUnderLimit(ctx, cfg, sourceConn, sourceService, ref, chain, prevIdx, prevHash)
+		if err != nil {
+			return nil, err
+		}
+		if bestIdx <= prevIdx {
+			return nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, cfg.BatchMaxPackBytes)
+		}
+		prevIdx = bestIdx
+		prevHash = chain[bestIdx]
+		checkpoints = append(checkpoints, prevHash)
+	}
+	return checkpoints, nil
+}
+
+func largestCheckpointUnderLimit(
+	ctx context.Context,
+	cfg Config,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	ref desiredRef,
+	chain []plumbing.Hash,
+	prevIdx int,
+	prevHash plumbing.Hash,
+) (int, error) {
+	lo := prevIdx + 1
+	hi := len(chain) - 1
+	best := -1
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[mid], prevHash, cfg.BatchMaxPackBytes)
+		if err != nil {
+			return -1, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[mid]), err)
+		}
+		if tooLarge {
+			hi = mid - 1
+			continue
+		}
+		best = mid
+		lo = mid + 1
+	}
+	return best, nil
+}
+
+func firstParentChain(repo *git.Repository, tip plumbing.Hash) ([]plumbing.Hash, error) {
+	commit, err := repo.CommitObject(tip)
+	if err != nil {
+		return nil, err
+	}
+	reversed := make([]plumbing.Hash, 0, 128)
+	for {
+		reversed = append(reversed, commit.Hash)
+		if len(commit.ParentHashes) == 0 {
+			break
+		}
+		commit, err = repo.CommitObject(commit.ParentHashes[0])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	chain := make([]plumbing.Hash, 0, len(reversed))
+	for i := len(reversed) - 1; i >= 0; i-- {
+		chain = append(chain, reversed[i])
+	}
+	return chain, nil
+}
+
+func sourcePackExceedsLimit(
+	ctx context.Context,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	ref desiredRef,
+	want plumbing.Hash,
+	have plumbing.Hash,
+	limit int64,
+) (bool, error) {
+	packReader, err := sourceService.FetchPack(ctx, sourceConn, singleDesiredRef(ref.SourceRef, ref.TargetRef, want), singleHaveMap(have))
+	if err != nil {
+		return false, err
+	}
+	defer packReader.Close()
+	_, err = io.Copy(io.Discard, limitPackReadCloser(packReader, limit))
+	if err == nil {
+		return false, nil
+	}
+	if strings.Contains(err.Error(), "source pack exceeded max-pack-bytes limit") {
+		return true, nil
+	}
+	return false, err
 }
 
 func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {
@@ -1327,6 +1630,66 @@ func pushPackToTarget(
 	conn.stats.addCommands("target receive-pack", len(commands))
 
 	report, err := receivePackStream(ctx, session, req, pack)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		if err := report.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pushCommandsToTarget(
+	ctx context.Context,
+	conn *transportConn,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	verbose bool,
+) error {
+	session, err := conn.transport.NewReceivePackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return fmt.Errorf("open target receive-pack session: %w", err)
+	}
+	defer session.Close()
+
+	req := packp.NewReferenceUpdateRequestFromCapabilities(targetAdv.Capabilities)
+	req.Progress = progressWriter(verbose)
+	if targetAdv.Capabilities.Supports(capability.Sideband64k) {
+		_ = req.Capabilities.Set(capability.Sideband64k)
+	} else if targetAdv.Capabilities.Supports(capability.Sideband) {
+		_ = req.Capabilities.Set(capability.Sideband)
+	}
+
+	commands := make([]*packp.Command, 0, len(plans))
+	hasDelete := false
+	for _, plan := range plans {
+		cmd := &packp.Command{
+			Name: plan.TargetRef,
+			Old:  plan.TargetHash,
+		}
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			cmd.New = plan.SourceHash
+		case ActionDelete:
+			cmd.New = plumbing.ZeroHash
+			hasDelete = true
+		default:
+			return fmt.Errorf("command-only target push does not support %s", plan.Action)
+		}
+		commands = append(commands, cmd)
+	}
+	req.Commands = commands
+	conn.stats.addCommands("target receive-pack", len(commands))
+	if hasDelete {
+		if !targetAdv.Capabilities.Supports(capability.DeleteRefs) {
+			return fmt.Errorf("target does not support delete-refs")
+		}
+		_ = req.Capabilities.Set(capability.DeleteRefs)
+	}
+
+	report, err := receivePack(ctx, session, nil, req, nil, false, false)
 	if err != nil {
 		return err
 	}

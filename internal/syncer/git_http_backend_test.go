@@ -3,6 +3,8 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -401,6 +403,65 @@ func TestBootstrap_GitHTTPBackendSync(t *testing.T) {
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 }
 
+func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+	for i := range 6 {
+		writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("blob-%d.bin", i)), int64(200_000+i*17))
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", fmt.Sprintf("commit-%d", i))
+	}
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	sourceURL := server.RepoURL("source.git")
+	targetURL := server.RepoURL("target.git")
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceURL},
+		Target:            Endpoint{URL: targetURL},
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected batched bootstrap result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+		t.Fatalf("expected batched bootstrap relay result, got %+v", result)
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("expected multiple bootstrap batches, got %+v", result)
+	}
+
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+	assertGitRefAbsent(t, targetBare, bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
+}
+
 type gitHTTPBackendServer struct {
 	server *httptest.Server
 	root   string
@@ -481,6 +542,28 @@ func assertGitRefEqual(t *testing.T, sourceRepoPath, targetRepoPath string, refs
 	targetHash := strings.TrimSpace(runGit(t, targetRepoPath, "rev-parse", targetRef.String()))
 	if sourceHash != targetHash {
 		t.Fatalf("ref mismatch for %s -> %s: source=%s target=%s", sourceRef, targetRef, sourceHash, targetHash)
+	}
+}
+
+func assertGitRefAbsent(t *testing.T, repoPath string, ref plumbing.ReferenceName) {
+	t.Helper()
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", ref.String())
+	cmd.Dir = repoPath
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("expected ref %s to be absent", ref)
+	}
+}
+
+func writePseudoRandomFile(t *testing.T, path string, size int64) {
+	t.Helper()
+	rng := rand.New(rand.NewSource(size))
+	buf := make([]byte, size)
+	for i := range buf {
+		buf[i] = byte(rng.Intn(256))
+	}
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
 

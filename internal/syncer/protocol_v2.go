@@ -407,6 +407,43 @@ func fetchSourceRefsV2(
 	return storeFetchedSourceRefs(repo, desired)
 }
 
+func fetchSourceCommitGraphV2(
+	ctx context.Context,
+	repo *git.Repository,
+	conn *transportConn,
+	adv *v2CapabilityAdvertisement,
+	ref desiredRef,
+) error {
+	if !fetchCapabilitySupports(adv, "filter") {
+		return fmt.Errorf("source does not advertise fetch filter support")
+	}
+
+	commandArgs := []string{
+		"ofs-delta",
+		"no-progress",
+		"filter tree:0",
+		"want " + ref.SourceHash.String(),
+		"done",
+	}
+	conn.stats.addWantsHaves("source upload-pack", 1, 0)
+
+	body, err := encodeV2CommandRequest("fetch", v2RequestCapabilities(adv), commandArgs)
+	if err != nil {
+		return err
+	}
+
+	reader, err := postRPCStreamWithPhase(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
+	if err != nil {
+		return err
+	}
+	defer ioutil.CheckClose(reader, &err)
+
+	if err := storeV2FetchPack(repo, reader); err != nil {
+		return err
+	}
+	return storeFetchedSourceRefs(repo, singleDesiredRef(ref.SourceRef, ref.TargetRef, ref.SourceHash))
+}
+
 func fetchSourcePackV2(
 	ctx context.Context,
 	conn *transportConn,
@@ -576,6 +613,19 @@ func sourceRefPrefixes(cfg Config) []string {
 	}
 	sort.Strings(prefixes)
 	return prefixes
+}
+
+func fetchCapabilitySupports(adv *v2CapabilityAdvertisement, feature string) bool {
+	if adv == nil {
+		return false
+	}
+	values := strings.Fields(adv.Value("fetch"))
+	for _, value := range values {
+		if value == feature {
+			return true
+		}
+	}
+	return false
 }
 
 func v2RequestCapabilities(adv *v2CapabilityAdvertisement) []string {
