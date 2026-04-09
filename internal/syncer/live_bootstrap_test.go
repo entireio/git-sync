@@ -37,10 +37,9 @@ func TestBootstrap_LiveLinuxSource(t *testing.T) {
 		ProtocolMode:  protocolModeAuto,
 		ShowStats:     true,
 		MeasureMemory: true,
-		MaxPackBytes:  512 * 1024 * 1024,
 	})
 	if err != nil {
-		t.Fatalf("live linux bootstrap failed: %v", err)
+		t.Fatalf("live linux bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
 	}
 	if result.Protocol == "" {
 		t.Fatalf("expected negotiated protocol, got empty result")

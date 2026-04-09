@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/cgi"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -402,6 +404,8 @@ func TestBootstrap_GitHTTPBackendSync(t *testing.T) {
 type gitHTTPBackendServer struct {
 	server *httptest.Server
 	root   string
+	mu     sync.Mutex
+	stderr bytes.Buffer
 }
 
 func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
@@ -420,13 +424,14 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 			"GIT_HTTP_EXPORT_ALL=1",
 		},
 	}
-
-	return &gitHTTPBackendServer{
-		server: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handler.ServeHTTP(w, r)
-		})),
+	s := &gitHTTPBackendServer{
 		root: root,
 	}
+	handler.Stderr = &lockedBuffer{server: s}
+	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	}))
+	return s
 }
 
 func (s *gitHTTPBackendServer) Close() {
@@ -435,6 +440,12 @@ func (s *gitHTTPBackendServer) Close() {
 
 func (s *gitHTTPBackendServer) RepoURL(name string) string {
 	return s.server.URL + "/" + strings.TrimPrefix(name, "/")
+}
+
+func (s *gitHTTPBackendServer) Stderr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stderr.String()
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -471,4 +482,14 @@ func assertGitRefEqual(t *testing.T, sourceRepoPath, targetRepoPath string, refs
 	if sourceHash != targetHash {
 		t.Fatalf("ref mismatch for %s -> %s: source=%s target=%s", sourceRef, targetRef, sourceHash, targetHash)
 	}
+}
+
+type lockedBuffer struct {
+	server *gitHTTPBackendServer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.server.mu.Lock()
+	defer b.server.mu.Unlock()
+	return b.server.stderr.Write(p)
 }
