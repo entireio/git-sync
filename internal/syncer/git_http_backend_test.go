@@ -220,6 +220,77 @@ func TestRun_GitHTTPBackendSyncMultiBranchFastForward(t *testing.T) {
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName("release"))
 }
 
+func TestRun_GitHTTPBackendSyncMappedBranchFastForward(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+
+	writeFile(t, filepath.Join(worktree, "README.md"), "mapped\n")
+	runGit(t, worktree, "add", "README.md")
+	runGit(t, worktree, "commit", "-m", "initial")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	sourceURL := server.RepoURL("source.git")
+	targetURL := server.RepoURL("target.git")
+
+	result, err := Run(context.Background(), Config{
+		Source:   Endpoint{URL: sourceURL},
+		Target:   Endpoint{URL: targetURL},
+		Mappings: []RefMapping{{Source: testBranch, Target: "stable"}},
+	})
+	if err != nil {
+		t.Fatalf("initial mapped sync failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected initial mapped result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap" {
+		t.Fatalf("expected initial mapped sync to use bootstrap relay, got %+v", result)
+	}
+
+	writeFile(t, filepath.Join(worktree, "README.md"), "mapped\nupdate\n")
+	runGit(t, worktree, "add", "README.md")
+	runGit(t, worktree, "commit", "-m", "mapped update")
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	result, err = Run(context.Background(), Config{
+		Source:   Endpoint{URL: sourceURL},
+		Target:   Endpoint{URL: targetURL},
+		Mappings: []RefMapping{{Source: testBranch, Target: "stable"}},
+	})
+	if err != nil {
+		t.Fatalf("mapped incremental sync failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected mapped incremental result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "incremental" {
+		t.Fatalf("expected mapped incremental sync to use incremental relay, got %+v", result)
+	}
+
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch), plumbing.NewBranchReferenceName("stable"))
+}
+
 func TestBootstrap_GitHTTPBackendSync(t *testing.T) {
 	if os.Getenv(gitHTTPBackendEnv) == "" {
 		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
@@ -327,11 +398,16 @@ func writeFile(t *testing.T, path, contents string) {
 	}
 }
 
-func assertGitRefEqual(t *testing.T, sourceRepoPath, targetRepoPath string, ref plumbing.ReferenceName) {
+func assertGitRefEqual(t *testing.T, sourceRepoPath, targetRepoPath string, refs ...plumbing.ReferenceName) {
 	t.Helper()
-	sourceHash := strings.TrimSpace(runGit(t, sourceRepoPath, "rev-parse", ref.String()))
-	targetHash := strings.TrimSpace(runGit(t, targetRepoPath, "rev-parse", ref.String()))
+	sourceRef := refs[0]
+	targetRef := sourceRef
+	if len(refs) > 1 {
+		targetRef = refs[1]
+	}
+	sourceHash := strings.TrimSpace(runGit(t, sourceRepoPath, "rev-parse", sourceRef.String()))
+	targetHash := strings.TrimSpace(runGit(t, targetRepoPath, "rev-parse", targetRef.String()))
 	if sourceHash != targetHash {
-		t.Fatalf("ref mismatch for %s: source=%s target=%s", ref, sourceHash, targetHash)
+		t.Fatalf("ref mismatch for %s -> %s: source=%s target=%s", sourceRef, targetRef, sourceHash, targetHash)
 	}
 }
