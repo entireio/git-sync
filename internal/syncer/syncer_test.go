@@ -112,37 +112,40 @@ func seedCommit(t *testing.T, repo *git.Repository, parents []plumbing.Hash) plu
 	return hash
 }
 
-func TestCoarseCheckpointCandidates(t *testing.T) {
-	candidates := coarseCheckpointCandidates(10, 100, 20)
+func TestSampledCheckpointCandidates(t *testing.T) {
+	candidates := sampledCheckpointCandidates(10, 100, 20)
 	if len(candidates) == 0 {
-		t.Fatalf("expected coarse candidates")
+		t.Fatalf("expected sampled candidates")
 	}
-	if candidates[0] != 100 {
+	if candidates[0] != 29 {
 		t.Fatalf("expected highest candidate first, got %v", candidates)
 	}
 	if !slices.Contains(candidates, 29) {
 		t.Fatalf("expected projected candidate near previous span, got %v", candidates)
 	}
+	if !slices.Contains(candidates, 10) {
+		t.Fatalf("expected lower bound candidate, got %v", candidates)
+	}
 }
 
-func TestLargestCheckpointUnderLimitByProbe(t *testing.T) {
+func TestSampledCheckpointUnderLimitByProbe(t *testing.T) {
 	chain := make([]plumbing.Hash, 40)
 	for i := range chain {
 		chain[i] = plumbing.NewHash(fmt.Sprintf("%040x", i+1))
 	}
 
 	var probes []int
-	best, err := largestCheckpointUnderLimitByProbe(chain, 4, 8, func(idx int) (bool, error) {
+	best, err := sampledCheckpointUnderLimitByProbe(chain, 4, 8, func(idx int) (bool, error) {
 		probes = append(probes, idx)
 		return idx > 19, nil
 	})
 	if err != nil {
-		t.Fatalf("largestCheckpointUnderLimitByProbe: %v", err)
+		t.Fatalf("sampledCheckpointUnderLimitByProbe: %v", err)
 	}
-	if best != 19 {
-		t.Fatalf("expected best checkpoint index 19, got %d", best)
+	if best < 12 || best > 19 {
+		t.Fatalf("expected a reasonable sampled checkpoint, got %d", best)
 	}
-	if len(probes) > 10 {
-		t.Fatalf("expected narrowed probe count, got %d probes: %v", len(probes), probes)
+	if len(probes) > 6 {
+		t.Fatalf("expected fixed small probe count, got %d probes: %v", len(probes), probes)
 	}
 }

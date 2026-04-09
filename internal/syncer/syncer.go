@@ -1212,33 +1212,28 @@ func largestCheckpointUnderLimit(
 	prevHash plumbing.Hash,
 	prevSpan int,
 ) (int, error) {
-	return largestCheckpointUnderLimitByProbe(
-		chain,
-		prevIdx,
-		prevSpan,
-		func(idx int) (bool, error) {
-			progressf(
-				cfg.Verbose,
-				"bootstrap-batch: branch=%s probe checkpoint=%s base=%s",
-				ref.TargetRef,
-				shortHash(chain[idx]),
-				shortHash(prevHash),
-			)
-			tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[idx], prevHash, cfg.BatchMaxPackBytes)
-			if err != nil {
-				return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[idx]), err)
-			}
-			if tooLarge {
-				progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s exceeds limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
-			} else {
-				progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s fits limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
-			}
-			return tooLarge, nil
-		},
-	)
+	return sampledCheckpointUnderLimitByProbe(chain, prevIdx, prevSpan, func(idx int) (bool, error) {
+		progressf(
+			cfg.Verbose,
+			"bootstrap-batch: branch=%s probe checkpoint=%s base=%s",
+			ref.TargetRef,
+			shortHash(chain[idx]),
+			shortHash(prevHash),
+		)
+		tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[idx], prevHash, cfg.BatchMaxPackBytes)
+		if err != nil {
+			return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[idx]), err)
+		}
+		if tooLarge {
+			progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s exceeds limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+		} else {
+			progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s fits limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+		}
+		return tooLarge, nil
+	})
 }
 
-func largestCheckpointUnderLimitByProbe(
+func sampledCheckpointUnderLimitByProbe(
 	chain []plumbing.Hash,
 	prevIdx int,
 	prevSpan int,
@@ -1250,87 +1245,87 @@ func largestCheckpointUnderLimitByProbe(
 		return -1, nil
 	}
 
-	coarse := coarseCheckpointCandidates(lo, hi, prevSpan)
+	samples := sampledCheckpointCandidates(lo, hi, prevSpan)
 	best := -1
-	firstTooLarge := -1
-	for _, idx := range coarse {
+	for _, idx := range samples {
 		tooLarge, err := probe(idx)
 		if err != nil {
 			return -1, err
 		}
 		if tooLarge {
-			if firstTooLarge == -1 || idx < firstTooLarge {
-				firstTooLarge = idx
-			}
 			continue
 		}
 		best = idx
 		break
 	}
-	if best == -1 {
-		return -1, nil
-	}
-	if best == hi {
+	if best != -1 {
 		return best, nil
 	}
 
-	searchLo := best + 1
-	searchHi := hi
-	if firstTooLarge != -1 {
-		searchHi = firstTooLarge - 1
+	if prevSpan > 1 {
+		shrunk := prevSpan / 2
+		if shrunk < 1 {
+			shrunk = 1
+		}
+		idx := lo + shrunk - 1
+		if idx > hi {
+			idx = hi
+		}
+		if idx >= lo {
+			tooLarge, err := probe(idx)
+			if err != nil {
+				return -1, err
+			}
+			if !tooLarge {
+				return idx, nil
+			}
+		}
 	}
 
-	for searchLo <= searchHi {
-		mid := searchLo + (searchHi-searchLo)/2
-		tooLarge, err := probe(mid)
-		if err != nil {
-			return -1, err
-		}
-		if tooLarge {
-			searchHi = mid - 1
-			continue
-		}
-		best = mid
-		searchLo = mid + 1
+	tooLarge, err := probe(lo)
+	if err != nil {
+		return -1, err
 	}
-	return best, nil
+	if tooLarge {
+		return -1, nil
+	}
+	return lo, nil
 }
 
-func coarseCheckpointCandidates(lo, hi int, prevSpan int) []int {
+func sampledCheckpointCandidates(lo, hi int, prevSpan int) []int {
 	if lo > hi {
 		return nil
 	}
 
-	set := map[int]struct{}{
-		hi: {},
-		lo: {},
+	set := map[int]struct{}{}
+	add := func(idx int) {
+		if idx < lo {
+			idx = lo
+		}
+		if idx > hi {
+			idx = hi
+		}
+		set[idx] = struct{}{}
 	}
 
+	projected := hi
 	if prevSpan > 0 {
-		projected := lo + prevSpan - 1
-		if projected < lo {
-			projected = lo
-		}
-		if projected > hi {
-			projected = hi
-		}
-		set[projected] = struct{}{}
+		projected = lo + prevSpan - 1
 	}
+	add(projected)
 
-	const coarseBuckets = 6
-	width := hi - lo
-	if width > 0 {
-		for i := 1; i < coarseBuckets; i++ {
-			idx := lo + (width*i)/coarseBuckets
-			if idx < lo {
-				idx = lo
-			}
-			if idx > hi {
-				idx = hi
-			}
-			set[idx] = struct{}{}
+	const sampleCount = 4
+	current := projected
+	for i := 0; i < sampleCount-1; i++ {
+		if current <= lo {
+			add(lo)
+			continue
 		}
+		distance := current - lo
+		current = lo + distance/2
+		add(current)
 	}
+	add(lo)
 
 	candidates := make([]int, 0, len(set))
 	for idx := range set {
