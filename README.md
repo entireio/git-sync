@@ -218,3 +218,9 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/sync
 ```
 
 That path exercises real smart HTTP fetch and push with a local bare source repo and a local bare target repo.
+
+## Planned Bootstrap Path
+
+There is a planned `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
+
+The design note is in [docs/bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md).
