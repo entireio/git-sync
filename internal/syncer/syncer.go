@@ -765,7 +765,7 @@ func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRef
 	if len(cfg.Mappings) > 0 {
 		return false
 	}
-	if len(plans) != 1 {
+	if len(plans) == 0 {
 		return false
 	}
 	if targetAdv == nil || targetAdv.Capabilities == nil {
@@ -775,15 +775,16 @@ func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRef
 		return false
 	}
 
-	plan := plans[0]
-	if plan.Kind != RefKindBranch {
-		return false
-	}
-	if plan.Action != ActionUpdate {
-		return false
-	}
-	if plan.TargetHash.IsZero() {
-		return false
+	for _, plan := range plans {
+		if plan.Kind != RefKindBranch {
+			return false
+		}
+		if plan.Action != ActionUpdate {
+			return false
+		}
+		if plan.TargetHash.IsZero() {
+			return false
+		}
 	}
 	return true
 }

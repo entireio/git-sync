@@ -164,5 +164,5 @@ Phase 4:
 Progress:
 
 - there is now a narrow incremental relay path in `sync`
-- it is limited to a single fast-forward branch update
-- tags, deletes, force, prune, mapped refs, and multi-ref updates still use the normal path
+- it now covers multi-branch fast-forward branch-only updates
+- tags, deletes, force, prune, and mapped refs still use the normal path
