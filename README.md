@@ -77,6 +77,18 @@ go run ./cmd/git-sync bootstrap \
   <target-url>
 ```
 
+Add `--measure-memory` to `bootstrap`, `sync`, `plan`, `probe`, or `fetch` to sample elapsed time and Go heap usage:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --measure-memory \
+  --json \
+  <source-url> \
+  <target-url>
+```
+
+That is the intended way to compare the bootstrap relay path against the normal sync path on the same fixture or test repo.
+
 Sync specific branches:
 
 ```bash

@@ -68,6 +68,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	fs.BoolVar(&cfg.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
 	fs.BoolVar(&cfg.Prune, "prune", false, "delete managed target refs that no longer exist on source")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
@@ -137,6 +138,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "mirror tags")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.Int64Var(&cfg.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
@@ -197,6 +199,7 @@ func runProbe(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tag ref prefixes in probe")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 
 	if err := fs.Parse(args); err != nil {
@@ -242,6 +245,7 @@ func runFetch(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tags in the fetch request")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.Var(&haveRefs, "have-ref", "source ref name to advertise as have; short names map to branches")
 	fs.Var(&haveHashesRaw, "have", "explicit object hash to advertise as have")
@@ -346,7 +350,7 @@ func envOr(key, fallback string) string {
 }
 
 func usageError(message string) error {
-	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n"
+	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n"
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}

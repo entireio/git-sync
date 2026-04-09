@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -55,6 +58,7 @@ type Config struct {
 	DryRun       bool
 	Verbose      bool
 	ShowStats    bool
+	MeasureMemory bool
 	Force        bool
 	Prune        bool
 	MaxPackBytes int64
@@ -97,6 +101,7 @@ type Result struct {
 	Deleted  int          `json:"deleted"`
 	DryRun   bool         `json:"dry_run"`
 	Stats    Stats        `json:"stats"`
+	Measurement Measurement `json:"measurement"`
 	Protocol string       `json:"protocol"`
 }
 
@@ -110,6 +115,7 @@ type ProbeResult struct {
 	TargetCaps    []string  `json:"target_capabilities,omitempty"`
 	Refs          []RefInfo `json:"refs"`
 	Stats         Stats     `json:"stats"`
+	Measurement   Measurement `json:"measurement"`
 }
 
 type RefInfo struct {
@@ -125,6 +131,7 @@ type FetchResult struct {
 	Haves          []plumbing.Hash `json:"haves"`
 	FetchedObjects int             `json:"fetched_objects"`
 	Stats          Stats           `json:"stats"`
+	Measurement    Measurement     `json:"measurement"`
 }
 
 type Stats struct {
@@ -140,6 +147,15 @@ type ServiceStats struct {
 	Wants         int    `json:"wants"`
 	Haves         int    `json:"haves"`
 	Commands      int    `json:"commands"`
+}
+
+type Measurement struct {
+	Enabled            bool   `json:"enabled"`
+	ElapsedMillis      int64  `json:"elapsed_millis"`
+	PeakAllocBytes     uint64 `json:"peak_alloc_bytes"`
+	PeakHeapInuseBytes uint64 `json:"peak_heap_inuse_bytes"`
+	TotalAllocBytes    uint64 `json:"total_alloc_bytes"`
+	GCCount            uint32 `json:"gc_count"`
 }
 
 func (p BranchPlan) MarshalJSON() ([]byte, error) {
@@ -185,6 +201,7 @@ func (r FetchResult) MarshalJSON() ([]byte, error) {
 		Haves          []string  `json:"haves"`
 		FetchedObjects int       `json:"fetched_objects"`
 		Stats          Stats     `json:"stats"`
+		Measurement    Measurement `json:"measurement"`
 	}
 	haves := make([]string, 0, len(r.Haves))
 	for _, hash := range r.Haves {
@@ -198,6 +215,7 @@ func (r FetchResult) MarshalJSON() ([]byte, error) {
 		Haves:          haves,
 		FetchedObjects: r.FetchedObjects,
 		Stats:          r.Stats,
+		Measurement:    r.Measurement,
 	})
 }
 
@@ -237,6 +255,12 @@ func (r Result) Lines() []string {
 				item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
 			))
 		}
+	}
+	if r.Measurement.Enabled {
+		lines = append(lines, fmt.Sprintf(
+			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
+			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
+		))
 	}
 
 	return lines
@@ -281,6 +305,12 @@ func (r ProbeResult) Lines() []string {
 			))
 		}
 	}
+	if r.Measurement.Enabled {
+		lines = append(lines, fmt.Sprintf(
+			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
+			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
+		))
+	}
 
 	return lines
 }
@@ -314,10 +344,17 @@ func (r FetchResult) Lines() []string {
 			))
 		}
 	}
+	if r.Measurement.Enabled {
+		lines = append(lines, fmt.Sprintf(
+			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
+			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
+		))
+	}
 	return lines
 }
 
 func Run(ctx context.Context, cfg Config) (Result, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -379,6 +416,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		Plans:    plans,
 		DryRun:   cfg.DryRun,
 		Stats:    stats.snapshot(),
+		Measurement: measurementDone(),
 		Protocol: sourceService.protocol,
 	}
 
@@ -424,10 +462,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	result.Stats = stats.snapshot()
+	result.Measurement = measurementDone()
 	return result, nil
 }
 
 func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -486,6 +526,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	result := Result{
 		Plans:    plans,
 		Stats:    stats.snapshot(),
+		Measurement: measurementDone(),
 		Protocol: sourceService.protocol,
 	}
 
@@ -505,10 +546,12 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 
 	result.Pushed = len(plans)
 	result.Stats = stats.snapshot()
+	result.Measurement = measurementDone()
 	return result, nil
 }
 
 func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -552,6 +595,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		Capabilities:  sourceCapabilities(service),
 		Refs:          refInfos,
 		Stats:         stats.snapshot(),
+		Measurement:   measurementDone(),
 	}
 
 	if cfg.Target.URL != "" {
@@ -566,12 +610,14 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		result.TargetURL = cfg.Target.URL
 		result.TargetCaps = advCapabilities(targetAdv)
 		result.Stats = stats.snapshot()
+		result.Measurement = measurementDone()
 	}
 
 	return result, nil
 }
 
 func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plumbing.Hash) (FetchResult, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -645,6 +691,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 		Haves:          sortedUniqueHashes(mapsRefValues(targetRefMap)),
 		FetchedObjects: objectCount,
 		Stats:          stats.snapshot(),
+		Measurement:    measurementDone(),
 	}, nil
 }
 
@@ -1325,6 +1372,72 @@ func (r *packLimitReadCloser) Read(p []byte) (int, error) {
 		return n, fmt.Errorf("source pack exceeded max-pack-bytes limit (%d)", r.maxBytes)
 	}
 	return n, err
+}
+
+func startMeasurement(enabled bool) func() Measurement {
+	if !enabled {
+		return func() Measurement { return Measurement{} }
+	}
+
+	start := time.Now()
+	var startStats runtime.MemStats
+	runtime.ReadMemStats(&startStats)
+
+	done := make(chan struct{})
+	var (
+		mu            sync.Mutex
+		peakAlloc     = startStats.Alloc
+		peakHeapInuse = startStats.HeapInuse
+		result        Measurement
+	)
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				var current runtime.MemStats
+				runtime.ReadMemStats(&current)
+				mu.Lock()
+				if current.Alloc > peakAlloc {
+					peakAlloc = current.Alloc
+				}
+				if current.HeapInuse > peakHeapInuse {
+					peakHeapInuse = current.HeapInuse
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() Measurement {
+		once.Do(func() {
+			close(done)
+			var endStats runtime.MemStats
+			runtime.ReadMemStats(&endStats)
+			mu.Lock()
+			if endStats.Alloc > peakAlloc {
+				peakAlloc = endStats.Alloc
+			}
+			if endStats.HeapInuse > peakHeapInuse {
+				peakHeapInuse = endStats.HeapInuse
+			}
+			result = Measurement{
+				Enabled:            true,
+				ElapsedMillis:      time.Since(start).Milliseconds(),
+				PeakAllocBytes:     peakAlloc,
+				PeakHeapInuseBytes: peakHeapInuse,
+				TotalAllocBytes:    endStats.TotalAlloc - startStats.TotalAlloc,
+				GCCount:            endStats.NumGC - startStats.NumGC,
+			}
+			mu.Unlock()
+		})
+		return result
+	}
 }
 
 func branchMapFromRefHashMap(refs map[plumbing.ReferenceName]plumbing.Hash) map[string]plumbing.Hash {
