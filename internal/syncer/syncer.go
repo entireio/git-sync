@@ -473,7 +473,21 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
 
-	if !cfg.DryRun && len(pushPlans) > 0 {
+	if !cfg.DryRun && canIncrementalRelay(cfg, pushPlans, targetAdv) {
+		relayPlans := append([]BranchPlan(nil), pushPlans...)
+		desiredRelay := desiredSubsetForPlans(desiredRefs, relayPlans)
+		packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRelay, targetRefMap)
+		if err != nil {
+			return result, fmt.Errorf("fetch source pack: %w", err)
+		}
+		defer packReader.Close()
+		packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+		if err := pushPackToTarget(ctx, targetConn, targetAdv, relayPlans, packReader, cfg.Verbose); err != nil {
+			return result, fmt.Errorf("push target refs: %w", err)
+		}
+		result.Relay = true
+		result.RelayMode = "incremental"
+	} else if !cfg.DryRun && len(pushPlans) > 0 {
 		if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
 			return result, fmt.Errorf("push target refs: %w", err)
 		}
@@ -742,6 +756,49 @@ func canBootstrapRelay(
 		}
 	}
 	return true
+}
+
+func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) bool {
+	if cfg.Force || cfg.Prune || cfg.DryRun || cfg.IncludeTags {
+		return false
+	}
+	if len(cfg.Mappings) > 0 {
+		return false
+	}
+	if len(plans) != 1 {
+		return false
+	}
+	if targetAdv == nil || targetAdv.Capabilities == nil {
+		return false
+	}
+	if targetAdv.Capabilities.Supports(capability.Capability("no-thin")) {
+		return false
+	}
+
+	plan := plans[0]
+	if plan.Kind != RefKindBranch {
+		return false
+	}
+	if plan.Action != ActionUpdate {
+		return false
+	}
+	if plan.TargetHash.IsZero() {
+		return false
+	}
+	return true
+}
+
+func desiredSubsetForPlans(
+	desired map[plumbing.ReferenceName]desiredRef,
+	plans []BranchPlan,
+) map[plumbing.ReferenceName]desiredRef {
+	out := make(map[plumbing.ReferenceName]desiredRef, len(plans))
+	for _, plan := range plans {
+		if ref, ok := desired[plan.TargetRef]; ok {
+			out[plan.TargetRef] = ref
+		}
+	}
+	return out
 }
 
 func bootstrapWithInputs(
@@ -1226,14 +1283,17 @@ func pushPackToTarget(
 
 	commands := make([]*packp.Command, 0, len(plans))
 	for _, plan := range plans {
-		if plan.Action != ActionCreate {
-			return fmt.Errorf("bootstrap only supports create actions")
-		}
-		commands = append(commands, &packp.Command{
+		cmd := &packp.Command{
 			Name: plan.TargetRef,
-			Old:  plumbing.ZeroHash,
-			New:  plan.SourceHash,
-		})
+			Old:  plan.TargetHash,
+		}
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			cmd.New = plan.SourceHash
+		default:
+			return fmt.Errorf("streamed pack push only supports create and update actions")
+		}
+		commands = append(commands, cmd)
 	}
 	req.Commands = commands
 	conn.stats.addCommands("target receive-pack", len(commands))

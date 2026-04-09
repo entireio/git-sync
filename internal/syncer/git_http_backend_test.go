@@ -80,8 +80,8 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected incremental result: %+v", result)
 	}
-	if result.Relay || result.RelayMode != "" {
-		t.Fatalf("expected incremental sync to stay on normal path for now, got %+v", result)
+	if !result.Relay || result.RelayMode != "incremental" {
+		t.Fatalf("expected incremental sync to use incremental relay, got %+v", result)
 	}
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))

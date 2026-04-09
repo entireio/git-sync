@@ -160,3 +160,9 @@ Phase 4:
 
 - consider a more advanced incremental relay mode for non-empty targets
 - only pursue this if large migration workflows become important enough to justify the added protocol complexity
+
+Progress:
+
+- there is now a narrow incremental relay path in `sync`
+- it is limited to a single fast-forward branch update
+- tags, deletes, force, prune, mapped refs, and multi-ref updates still use the normal path
