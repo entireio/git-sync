@@ -53,6 +53,7 @@ Expected v1 flags:
 - `--branch`
 - `--map`
 - `--tags`
+- `--max-pack-bytes`
 - `--stats`
 - `--json`
 - `--protocol auto|v1|v2`
@@ -138,6 +139,11 @@ Phase 2:
 - allow relay-safe create-only runs with explicit mapped refs
 - add better operator output for large initial transfers
 - add safety thresholds for advertised/fetched bytes
+
+Progress:
+
+- explicit mapped refs are supported
+- `--max-pack-bytes` provides a first safety threshold for the streamed source pack during bootstrap
 
 Phase 3:
 

@@ -223,6 +223,37 @@ func TestBootstrap_IntegrationTags(t *testing.T) {
 	}
 }
 
+func TestBootstrap_IntegrationPackLimit(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		MaxPackBytes: 32,
+	})
+	if err == nil {
+		t.Fatalf("expected bootstrap failure when pack exceeds threshold")
+	}
+	if !strings.Contains(err.Error(), "max-pack-bytes") {
+		t.Fatalf("expected max-pack-bytes error, got %v", err)
+	}
+	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected target branch to remain absent, got %v", err)
+	}
+}
+
 func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 10)

@@ -68,6 +68,15 @@ go run ./cmd/git-sync bootstrap \
   https://github.com/target-org/target-repo.git
 ```
 
+Add `--max-pack-bytes` to abort bootstrap if the streamed source pack grows past a safety threshold:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --max-pack-bytes 104857600 \
+  <source-url> \
+  <target-url>
+```
+
 Sync specific branches:
 
 ```bash

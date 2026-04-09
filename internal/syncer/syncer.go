@@ -57,6 +57,7 @@ type Config struct {
 	ShowStats    bool
 	Force        bool
 	Prune        bool
+	MaxPackBytes int64
 	ProtocolMode string
 }
 
@@ -496,6 +497,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 		return result, fmt.Errorf("fetch source pack: %w", err)
 	}
 	defer packReader.Close()
+	packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
 
 	if err := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose); err != nil {
 		return result, fmt.Errorf("push target refs: %w", err)
@@ -1298,6 +1300,31 @@ func (r *sessionReadCloser) Close() error {
 		return nil
 	}
 	return r.closeFn()
+}
+
+func limitPackReadCloser(r io.ReadCloser, maxBytes int64) io.ReadCloser {
+	if maxBytes <= 0 {
+		return r
+	}
+	return &packLimitReadCloser{
+		ReadCloser: r,
+		maxBytes:   maxBytes,
+	}
+}
+
+type packLimitReadCloser struct {
+	io.ReadCloser
+	maxBytes int64
+	read     int64
+}
+
+func (r *packLimitReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	r.read += int64(n)
+	if r.read > r.maxBytes {
+		return n, fmt.Errorf("source pack exceeded max-pack-bytes limit (%d)", r.maxBytes)
+	}
+	return n, err
 }
 
 func branchMapFromRefHashMap(refs map[plumbing.ReferenceName]plumbing.Hash) map[string]plumbing.Hash {
