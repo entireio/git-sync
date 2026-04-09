@@ -89,8 +89,8 @@ go run ./cmd/git-sync bootstrap \
 Current batching scope is intentionally narrow:
 
 - protocol v2 only
-- branch refs only
-- no tags
+- branch refs are batched
+- optional create-only tags are pushed after branch batches complete
 - temporary refs under `refs/gitsync/bootstrap/heads/`
 - resume from existing temp refs is supported when they match a planned checkpoint
 

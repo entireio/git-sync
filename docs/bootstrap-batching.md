@@ -266,6 +266,10 @@ Phase C:
 - consider tag creation after successful branch completion
 - consider whether per-ref or per-branch parallelism is worth it
 
+Progress:
+
+- create-only tags are now pushed after successful branch batches complete
+
 Phase D:
 
 - only then consider using similar checkpoint batching ideas for non-empty target incremental relay
