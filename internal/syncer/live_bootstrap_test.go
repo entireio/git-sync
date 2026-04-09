@@ -46,6 +46,7 @@ func runLiveLinuxBootstrap(t *testing.T, batchMaxPackBytes int64, wantRelayMode 
 		ProtocolMode:  protocolModeAuto,
 		ShowStats:     true,
 		MeasureMemory: true,
+		Verbose:       true,
 	})
 	if err != nil {
 		t.Fatalf("live linux bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())

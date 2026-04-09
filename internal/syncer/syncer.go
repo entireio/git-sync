@@ -866,6 +866,8 @@ func bootstrapWithInputs(
 		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, desiredRefs, targetRefs, result)
 	}
 
+	progressf(cfg.Verbose, "bootstrap: fetching %d ref(s) from source", len(plans))
+
 	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
 	if err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -876,6 +878,7 @@ func bootstrapWithInputs(
 	defer packReader.Close()
 	packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
 
+	progressf(cfg.Verbose, "bootstrap: pushing %d ref(s) to target", len(plans))
 	if err := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose); err != nil {
 		return result, fmt.Errorf("push target refs: %w", err)
 	}
@@ -940,6 +943,7 @@ func bootstrapBatchedWithInputs(
 		err error
 	)
 	if len(planRefs) > 0 {
+		progressf(cfg.Verbose, "bootstrap-batch: planning checkpoints for %d branch ref(s)", len(planRefs))
 		batches, err = planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs, targetRefs)
 		if err != nil {
 			return result, err
@@ -954,6 +958,14 @@ func bootstrapBatchedWithInputs(
 	for _, batch := range batches {
 		result.PlannedBatchCount += len(batch.Checkpoints)
 		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
+		progressf(
+			cfg.Verbose,
+			"bootstrap-batch: branch=%s temp-ref=%s planned-batches=%d resume=%s",
+			batch.Plan.TargetRef,
+			batch.TempRef,
+			len(batch.Checkpoints),
+			shortHash(batch.ResumeHash),
+		)
 		current := batch.ResumeHash
 		startIdx, err := bootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
 		if err != nil {
@@ -961,6 +973,15 @@ func bootstrapBatchedWithInputs(
 		}
 		for idx := startIdx; idx < len(batch.Checkpoints); idx++ {
 			checkpoint := batch.Checkpoints[idx]
+			progressf(
+				cfg.Verbose,
+				"bootstrap-batch: branch=%s batch=%d/%d from=%s to=%s",
+				batch.Plan.TargetRef,
+				idx+1,
+				len(batch.Checkpoints),
+				shortHash(current),
+				shortHash(checkpoint),
+			)
 			stagePlans := []BranchPlan{
 				{
 					Branch:     batch.Plan.Branch,
@@ -994,6 +1015,13 @@ func bootstrapBatchedWithInputs(
 			if err := pushPackToTarget(ctx, targetConn, targetAdv, stagePlans, packReader, cfg.Verbose); err != nil {
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
+			progressf(
+				cfg.Verbose,
+				"bootstrap-batch: branch=%s batch=%d/%d complete",
+				batch.Plan.TargetRef,
+				idx+1,
+				len(batch.Checkpoints),
+			)
 			current = checkpoint
 			result.BatchCount++
 		}
@@ -1028,9 +1056,11 @@ func bootstrapBatchedWithInputs(
 		if err := pushCommandsToTarget(ctx, targetConn, targetAdv, []BranchPlan{deleteTempPlan}, cfg.Verbose); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
 		}
+		progressf(cfg.Verbose, "bootstrap-batch: branch=%s finalized", batch.Plan.TargetRef)
 	}
 
 	if len(tagPlans) > 0 {
+		progressf(cfg.Verbose, "bootstrap-batch: pushing %d tag(s) after branch batches", len(tagPlans))
 		tagTargetRefs := copyRefHashMap(targetRefs)
 		for _, batch := range batches {
 			tagTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
@@ -1126,6 +1156,7 @@ func planBootstrapBranchCheckpoints(
 	sourceService *sourceRefService,
 	ref desiredRef,
 ) ([]plumbing.Hash, error) {
+	progressf(cfg.Verbose, "bootstrap-batch: fetching commit graph for %s", ref.TargetRef)
 	graphRepo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("init bootstrap planning repository: %w", err)
@@ -1156,6 +1187,14 @@ func planBootstrapBranchCheckpoints(
 		prevIdx = bestIdx
 		prevHash = chain[bestIdx]
 		checkpoints = append(checkpoints, prevHash)
+		progressf(
+			cfg.Verbose,
+			"bootstrap-batch: branch=%s planned-checkpoint=%s (%d/%d)",
+			ref.TargetRef,
+			shortHash(prevHash),
+			len(checkpoints),
+			len(chain),
+		)
 	}
 	return checkpoints, nil
 }
@@ -1175,14 +1214,23 @@ func largestCheckpointUnderLimit(
 	best := -1
 	for lo <= hi {
 		mid := lo + (hi-lo)/2
+		progressf(
+			cfg.Verbose,
+			"bootstrap-batch: branch=%s probe checkpoint=%s base=%s",
+			ref.TargetRef,
+			shortHash(chain[mid]),
+			shortHash(prevHash),
+		)
 		tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[mid], prevHash, cfg.BatchMaxPackBytes)
 		if err != nil {
 			return -1, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[mid]), err)
 		}
 		if tooLarge {
+			progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s exceeds limit=%d", shortHash(chain[mid]), cfg.BatchMaxPackBytes)
 			hi = mid - 1
 			continue
 		}
+		progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s fits limit=%d", shortHash(chain[mid]), cfg.BatchMaxPackBytes)
 		best = mid
 		lo = mid + 1
 	}
@@ -2230,6 +2278,13 @@ func progressWriter(verbose bool) io.Writer {
 		return nil
 	}
 	return os.Stderr
+}
+
+func progressf(verbose bool, format string, args ...interface{}) {
+	if !verbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[git-sync] %s\n", fmt.Sprintf(format, args...))
 }
 
 func (e Endpoint) authMethod() transport.AuthMethod {
