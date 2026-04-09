@@ -1,6 +1,6 @@
 # Bootstrap Design
 
-`bootstrap` is a planned command path for initial remote-to-remote seeding when the target does not yet contain the managed refs.
+`bootstrap` is the dedicated command path for initial remote-to-remote seeding when the target does not yet contain the managed refs.
 
 The goal is to avoid decoding the fetched source objects into the local in-memory object store during an initial sync. Instead, `bootstrap` should fetch a pack from the source and relay it directly into target `receive-pack`.
 
@@ -134,6 +134,14 @@ Phase 1:
 - add in-process integration tests
 - add `git-http-backend` integration coverage for empty-target bootstrap
 
+Progress:
+
+- `bootstrap` is implemented
+- optional tag creation is supported on the non-batched path
+- JSON and stats output are supported
+- in-process integration coverage exists
+- `git-http-backend` integration coverage exists
+
 Phase 2:
 
 - allow relay-safe create-only runs with explicit mapped refs
@@ -144,6 +152,7 @@ Progress:
 
 - explicit mapped refs are supported
 - `--max-pack-bytes` provides a first safety threshold for the streamed source pack during bootstrap
+- `--batch-max-pack-bytes` now enables a Phase A batched branch-only bootstrap mode for large initial syncs
 
 Phase 3:
 
@@ -155,6 +164,14 @@ Progress:
 
 - `sync` now auto-selects the bootstrap relay path when all managed target refs are absent and the run matches bootstrap semantics
 - dry-run `plan` surfaces a bootstrap suggestion for the same target shape
+
+Batching note:
+
+- the current batched bootstrap path is intentionally narrow
+- it requires source-side protocol v2 with fetch filters
+- it supports branch refs only
+- it does not support tags or resume yet
+- it uses temporary target refs under `refs/gitsync/bootstrap/heads/`
 
 Phase 4:
 

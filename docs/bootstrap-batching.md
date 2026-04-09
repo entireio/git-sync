@@ -248,6 +248,12 @@ Phase A:
 - no resume
 - manual cleanup if interrupted
 
+Progress:
+
+- implemented via `git-sync bootstrap --batch-max-pack-bytes`
+- currently requires source-side protocol v2 with fetch filter support
+- exercised by `TestBootstrap_GitHTTPBackendBatchedBranch`
+
 Phase B:
 
 - add resume from existing temp refs

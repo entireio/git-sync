@@ -77,6 +77,23 @@ go run ./cmd/git-sync bootstrap \
   <target-url>
 ```
 
+Add `--batch-max-pack-bytes` to split large branch bootstraps into multiple relay batches with temporary refs:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --batch-max-pack-bytes 1073741824 \
+  <source-url> \
+  <target-url>
+```
+
+Current batching scope is intentionally narrow:
+
+- protocol v2 only
+- branch refs only
+- no tags
+- no resume
+- temporary refs under `refs/gitsync/bootstrap/heads/`
+
 Add `--measure-memory` to `bootstrap`, `sync`, `plan`, `probe`, or `fetch` to sample elapsed time and Go heap usage:
 
 ```bash
@@ -153,6 +170,7 @@ The JSON interface is intentionally stable:
 - `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
 - `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
 - `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
+- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, and `batch_count`
 - each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
 
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
@@ -256,6 +274,12 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/sync
 
 That path exercises real smart HTTP fetch and push with a local bare source repo and a local bare target repo.
 
+The Phase A batching path also has a dedicated `git-http-backend` test:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run TestBootstrap_GitHTTPBackendBatchedBranch -v
+```
+
 There is also an optional live Linux bootstrap smoke against the public Linux repository:
 
 ```bash
@@ -266,6 +290,8 @@ That is useful for large-source relay and memory measurement checks while keepin
 
 ## Planned Bootstrap Path
 
-There is a planned `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
+There is a dedicated `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
 
 The design note is in [docs/bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md).
+
+For very large single-branch repositories, there is also a batching design and initial implementation note in [docs/bootstrap-batching.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap-batching.md).
