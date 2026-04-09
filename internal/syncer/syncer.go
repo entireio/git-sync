@@ -863,7 +863,7 @@ func bootstrapWithInputs(
 	}
 
 	if cfg.BatchMaxPackBytes > 0 {
-		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, targetRefs, result)
+		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, desiredRefs, targetRefs, result)
 	}
 
 	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
@@ -901,12 +901,10 @@ func bootstrapBatchedWithInputs(
 	sourceService *sourceRefService,
 	targetAdv *packp.AdvRefs,
 	plans []BranchPlan,
+	desiredRefs map[plumbing.ReferenceName]desiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	result Result,
 ) (Result, error) {
-	if cfg.IncludeTags {
-		return result, fmt.Errorf("bootstrap batching does not support --tags yet")
-	}
 	if sourceService.protocol != protocolModeV2 {
 		return result, fmt.Errorf("bootstrap batching currently requires protocol v2")
 	}
@@ -915,9 +913,18 @@ func bootstrapBatchedWithInputs(
 	}
 
 	planRefs := make([]desiredRef, 0, len(plans))
+	tagPlans := make([]BranchPlan, 0, len(plans))
+	tagDesired := make(map[plumbing.ReferenceName]desiredRef)
 	for _, plan := range plans {
-		if plan.Kind != RefKindBranch || !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
-			return result, fmt.Errorf("bootstrap batching currently supports branch refs only")
+		if plan.Kind == RefKindTag {
+			tagPlans = append(tagPlans, plan)
+			if desired, ok := desiredRefs[plan.TargetRef]; ok {
+				tagDesired[plan.TargetRef] = desired
+			}
+			continue
+		}
+		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
+			return result, fmt.Errorf("bootstrap batching currently supports branch refs and create-only tags")
 		}
 		planRefs = append(planRefs, desiredRef{
 			Kind:       plan.Kind,
@@ -928,9 +935,15 @@ func bootstrapBatchedWithInputs(
 		})
 	}
 
-	batches, err := planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs, targetRefs)
-	if err != nil {
-		return result, err
+	var (
+		batches []bootstrapBatch
+		err error
+	)
+	if len(planRefs) > 0 {
+		batches, err = planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs, targetRefs)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	batchLimit := cfg.BatchMaxPackBytes
@@ -1014,6 +1027,25 @@ func bootstrapBatchedWithInputs(
 		}
 		if err := pushCommandsToTarget(ctx, targetConn, targetAdv, []BranchPlan{deleteTempPlan}, cfg.Verbose); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
+		}
+	}
+
+	if len(tagPlans) > 0 {
+		tagTargetRefs := copyRefHashMap(targetRefs)
+		for _, batch := range batches {
+			tagTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
+		}
+		packReader, err := sourceService.FetchPack(ctx, sourceConn, tagDesired, tagTargetRefs)
+		if err != nil {
+			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+				return result, fmt.Errorf("fetch bootstrap tag pack: %w", err)
+			}
+		} else {
+			defer packReader.Close()
+			packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, tagPlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push bootstrap tags: %w", err)
+			}
 		}
 	}
 
@@ -2129,6 +2161,14 @@ func mapsRefValues(input map[plumbing.ReferenceName]plumbing.Hash) []plumbing.Ha
 		if !hash.IsZero() {
 			out = append(out, hash)
 		}
+	}
+	return out
+}
+
+func copyRefHashMap(input map[plumbing.ReferenceName]plumbing.Hash) map[plumbing.ReferenceName]plumbing.Hash {
+	out := make(map[plumbing.ReferenceName]plumbing.Hash, len(input))
+	for name, hash := range input {
+		out[name] = hash
 	}
 	return out
 }

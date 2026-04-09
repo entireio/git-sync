@@ -560,6 +560,66 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	assertGitRefAbsent(t, targetBare, tempRef)
 }
 
+func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+	for i := range 5 {
+		writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("tagged-%d.bin", i)), int64(200_000+i*31))
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", fmt.Sprintf("tagged-%d", i))
+	}
+	runGit(t, worktree, "tag", "-a", "v1", "-m", "version 1")
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+	runGit(t, worktree, "push", "origin", "refs/tags/v1")
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	sourceURL := server.RepoURL("source.git")
+	targetURL := server.RepoURL("target.git")
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceURL},
+		Target:            Endpoint{URL: targetURL},
+		IncludeTags:       true,
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap with tags failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
+	}
+	if result.Pushed != 2 || result.Blocked != 0 {
+		t.Fatalf("unexpected batched bootstrap with tags result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+		t.Fatalf("expected batched bootstrap with tags relay result, got %+v", result)
+	}
+
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewTagReferenceName("v1"))
+	assertGitRefAbsent(t, targetBare, bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
+}
+
 type gitHTTPBackendServer struct {
 	server *httptest.Server
 	root   string
