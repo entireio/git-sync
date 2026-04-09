@@ -252,6 +252,14 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/sync
 
 That path exercises real smart HTTP fetch and push with a local bare source repo and a local bare target repo.
 
+There is also an optional live read-only smoke against the public Linux repository:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestFetch_LiveLinuxSource -v
+```
+
+That is useful for large-source protocol and memory measurement checks without requiring a writable remote.
+
 ## Planned Bootstrap Path
 
 There is a planned `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.

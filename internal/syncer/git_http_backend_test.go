@@ -59,6 +59,9 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected initial result: %+v", result)
 	}
+	if !result.Relay || result.RelayMode != "bootstrap" {
+		t.Fatalf("expected initial empty-target sync to use bootstrap relay, got %+v", result)
+	}
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 
@@ -77,8 +80,72 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected incremental result: %+v", result)
 	}
+	if result.Relay || result.RelayMode != "" {
+		t.Fatalf("expected incremental sync to stay on normal path for now, got %+v", result)
+	}
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+}
+
+func TestRun_GitHTTPBackendSyncDivergedTarget(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	sourceWorktree := filepath.Join(root, "source-work")
+	targetWorktree := filepath.Join(root, "target-work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, sourceWorktree)
+	runGit(t, sourceWorktree, "config", "user.name", "git-sync test")
+	runGit(t, sourceWorktree, "config", "user.email", "git-sync@example.com")
+
+	writeFile(t, filepath.Join(sourceWorktree, "README.md"), "base\n")
+	runGit(t, sourceWorktree, "add", "README.md")
+	runGit(t, sourceWorktree, "commit", "-m", "base")
+	runGit(t, sourceWorktree, "remote", "add", "source", sourceBare)
+	runGit(t, sourceWorktree, "remote", "add", "target", targetBare)
+	runGit(t, sourceWorktree, "push", "source", "HEAD:refs/heads/"+testBranch)
+	runGit(t, sourceWorktree, "push", "target", "HEAD:refs/heads/"+testBranch)
+
+	runGit(t, root, "init", "-b", testBranch, targetWorktree)
+	runGit(t, targetWorktree, "remote", "add", "origin", targetBare)
+	runGit(t, targetWorktree, "fetch", "origin", testBranch)
+	runGit(t, targetWorktree, "reset", "--hard", "origin/"+testBranch)
+	runGit(t, targetWorktree, "config", "user.name", "git-sync test")
+	runGit(t, targetWorktree, "config", "user.email", "git-sync@example.com")
+	writeFile(t, filepath.Join(targetWorktree, "TARGET.txt"), "target-only\n")
+	runGit(t, targetWorktree, "add", "TARGET.txt")
+	runGit(t, targetWorktree, "commit", "-m", "target diverges")
+	runGit(t, targetWorktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	writeFile(t, filepath.Join(sourceWorktree, "SOURCE.txt"), "source-only\n")
+	runGit(t, sourceWorktree, "add", "SOURCE.txt")
+	runGit(t, sourceWorktree, "commit", "-m", "source diverges")
+	runGit(t, sourceWorktree, "push", "source", "HEAD:refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	_, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: server.RepoURL("source.git")},
+		Target: Endpoint{URL: server.RepoURL("target.git")},
+	})
+	if err == nil {
+		t.Fatalf("expected diverged target sync to fail")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("expected blocked error, got %v", err)
+	}
 }
 
 func TestBootstrap_GitHTTPBackendSync(t *testing.T) {

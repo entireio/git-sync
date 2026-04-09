@@ -101,6 +101,7 @@ type Result struct {
 	Deleted  int          `json:"deleted"`
 	DryRun   bool         `json:"dry_run"`
 	Relay    bool         `json:"relay"`
+	RelayMode string      `json:"relay_mode"`
 	BootstrapSuggested bool `json:"bootstrap_suggested"`
 	Stats    Stats        `json:"stats"`
 	Measurement Measurement `json:"measurement"`
@@ -236,8 +237,8 @@ func (r Result) Lines() []string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -415,6 +416,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 				Plans:              plans,
 				DryRun:             true,
 				Relay:              false,
+				RelayMode:          "",
 				BootstrapSuggested: true,
 				Stats:              stats.snapshot(),
 				Measurement:        measurementDone(),
@@ -439,6 +441,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		Plans:    plans,
 		DryRun:   cfg.DryRun,
 		Relay:    false,
+		RelayMode: "",
 		Stats:    stats.snapshot(),
 		Measurement: measurementDone(),
 		Protocol: sourceService.protocol,
@@ -760,6 +763,7 @@ func bootstrapWithInputs(
 	result := Result{
 		Plans:       plans,
 		Relay:       true,
+		RelayMode:   "bootstrap",
 		Stats:       stats.snapshot(),
 		Protocol:    sourceService.protocol,
 	}
