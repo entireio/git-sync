@@ -426,6 +426,86 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	return result, nil
 }
 
+func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
+	if cfg.ProtocolMode == "" {
+		cfg.ProtocolMode = protocolModeAuto
+	}
+	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 && cfg.ProtocolMode != protocolModeV2 {
+		return Result{}, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
+	}
+	if cfg.Force {
+		return Result{}, fmt.Errorf("bootstrap does not support --force")
+	}
+	if cfg.Prune {
+		return Result{}, fmt.Errorf("bootstrap does not support --prune")
+	}
+	if cfg.DryRun {
+		return Result{}, fmt.Errorf("bootstrap does not support dry-run; use plan or sync")
+	}
+
+	stats := newStats(cfg.ShowStats)
+	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	if err != nil {
+		return Result{}, fmt.Errorf("create source transport: %w", err)
+	}
+	targetConn, err := newTransportConn(cfg.Target, "target", stats)
+	if err != nil {
+		return Result{}, fmt.Errorf("create target transport: %w", err)
+	}
+
+	sourceRefs, sourceService, err := listSourceRefs(ctx, sourceConn, cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("list source refs: %w", err)
+	}
+	targetAdv, err := advertisedRefsV1(ctx, targetConn, transport.ReceivePackServiceName)
+	if err != nil {
+		return Result{}, fmt.Errorf("list target refs: %w", err)
+	}
+	targetRefs, err := advertisedReferences(targetAdv)
+	if err != nil {
+		return Result{}, fmt.Errorf("decode target refs: %w", err)
+	}
+
+	sourceRefMap := refHashMap(sourceRefs)
+	targetRefMap := refHashMap(targetRefs)
+
+	desiredRefs, _, err := buildDesiredRefs(sourceRefMap, cfg)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(desiredRefs) == 0 {
+		return Result{}, fmt.Errorf("no source refs matched")
+	}
+
+	plans, err := buildBootstrapPlans(desiredRefs, targetRefMap)
+	if err != nil {
+		return Result{}, err
+	}
+
+	result := Result{
+		Plans:    plans,
+		Stats:    stats.snapshot(),
+		Protocol: sourceService.protocol,
+	}
+
+	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
+	if err != nil {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return result, nil
+		}
+		return result, fmt.Errorf("fetch source pack: %w", err)
+	}
+	defer packReader.Close()
+
+	if err := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose); err != nil {
+		return result, fmt.Errorf("push target refs: %w", err)
+	}
+
+	result.Pushed = len(plans)
+	result.Stats = stats.snapshot()
+	return result, nil
+}
+
 func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
@@ -564,6 +644,37 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 		FetchedObjects: objectCount,
 		Stats:          stats.snapshot(),
 	}, nil
+}
+
+func buildBootstrapPlans(
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) ([]BranchPlan, error) {
+	targetNames := make([]plumbing.ReferenceName, 0, len(desired))
+	for _, want := range desired {
+		targetNames = append(targetNames, want.TargetRef)
+	}
+	sort.Slice(targetNames, func(i, j int) bool { return targetNames[i] < targetNames[j] })
+
+	plans := make([]BranchPlan, 0, len(targetNames))
+	for _, targetRef := range targetNames {
+		targetHash := targetRefs[targetRef]
+		if !targetHash.IsZero() {
+			return nil, fmt.Errorf("target ref %s already exists; use sync for non-bootstrap runs", targetRef)
+		}
+		want := desired[targetRef]
+		plans = append(plans, BranchPlan{
+			Branch:     want.Label,
+			SourceRef:  want.SourceRef,
+			TargetRef:  want.TargetRef,
+			SourceHash: want.SourceHash,
+			TargetHash: plumbing.ZeroHash,
+			Kind:       want.Kind,
+			Action:     ActionCreate,
+			Reason:     fmt.Sprintf("create %s at %s", want.TargetRef, shortHash(want.SourceHash)),
+		})
+	}
+	return plans, nil
 }
 
 func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {
@@ -868,6 +979,50 @@ func fetchSourceRefsWithHavesV1(
 	return nil
 }
 
+func fetchSourcePackV1(
+	ctx context.Context,
+	conn *transportConn,
+	sourceAdv *packp.AdvRefs,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) (io.ReadCloser, error) {
+	session, err := conn.transport.NewUploadPackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return nil, fmt.Errorf("open source upload-pack session: %w", err)
+	}
+
+	req := packp.NewUploadPackRequestFromCapabilities(sourceAdv.Capabilities)
+	for _, ref := range desired {
+		req.Wants = append(req.Wants, ref.SourceHash)
+	}
+	req.Wants = sortedUniqueHashes(req.Wants)
+	req.Haves = sortedUniqueHashes(mapsRefValues(targetRefs))
+	if len(req.Wants) == 0 {
+		_ = session.Close()
+		return nil, git.NoErrAlreadyUpToDate
+	}
+	if sourceAdv.Capabilities.Supports(capability.NoProgress) {
+		_ = req.Capabilities.Set(capability.NoProgress)
+	}
+	conn.stats.addWantsHaves("source upload-pack", len(req.Wants), len(req.Haves))
+
+	reader, err := session.UploadPack(ctx, req)
+	if err != nil {
+		_ = session.Close()
+		if errors.Is(err, transport.ErrEmptyUploadPackRequest) {
+			return nil, git.NoErrAlreadyUpToDate
+		}
+		return nil, fmt.Errorf("source upload-pack: %w", err)
+	}
+	return &sessionReadCloser{
+		Reader: buildSidebandIfSupported(req.Capabilities, reader, nil),
+		closeFn: func() error {
+			_ = reader.Close()
+			return session.Close()
+		},
+	}, nil
+}
+
 func pushToTarget(
 	ctx context.Context,
 	repo *git.Repository,
@@ -937,6 +1092,54 @@ func pushToTarget(
 	return nil
 }
 
+func pushPackToTarget(
+	ctx context.Context,
+	conn *transportConn,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	pack io.ReadCloser,
+	verbose bool,
+) error {
+	session, err := conn.transport.NewReceivePackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return fmt.Errorf("open target receive-pack session: %w", err)
+	}
+	defer session.Close()
+
+	req := packp.NewReferenceUpdateRequestFromCapabilities(targetAdv.Capabilities)
+	req.Progress = progressWriter(verbose)
+	if targetAdv.Capabilities.Supports(capability.Sideband64k) {
+		_ = req.Capabilities.Set(capability.Sideband64k)
+	} else if targetAdv.Capabilities.Supports(capability.Sideband) {
+		_ = req.Capabilities.Set(capability.Sideband)
+	}
+
+	commands := make([]*packp.Command, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Action != ActionCreate {
+			return fmt.Errorf("bootstrap only supports create actions")
+		}
+		commands = append(commands, &packp.Command{
+			Name: plan.TargetRef,
+			Old:  plumbing.ZeroHash,
+			New:  plan.SourceHash,
+		})
+	}
+	req.Commands = commands
+	conn.stats.addCommands("target receive-pack", len(commands))
+
+	report, err := receivePackStream(ctx, session, req, pack)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		if err := report.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func receivePack(
 	ctx context.Context,
 	session transport.ReceivePackSession,
@@ -972,6 +1175,21 @@ func receivePack(
 		return nil, err
 	}
 	return report, nil
+}
+
+func receivePackStream(
+	ctx context.Context,
+	session transport.ReceivePackSession,
+	req *packp.ReferenceUpdateRequest,
+	pack io.ReadCloser,
+) (*packp.ReportStatus, error) {
+	req.Packfile = pack
+	report, err := session.ReceivePack(ctx, req)
+	if err != nil {
+		_ = pack.Close()
+		return nil, err
+	}
+	return report, pack.Close()
 }
 
 func objectsToPush(store storer.Storer, wants []plumbing.Hash, targetRefs map[plumbing.ReferenceName]plumbing.Hash) ([]plumbing.Hash, error) {
@@ -1068,6 +1286,18 @@ func collectPushObjects(
 
 	*out = append(*out, hash)
 	return nil
+}
+
+type sessionReadCloser struct {
+	io.Reader
+	closeFn func() error
+}
+
+func (r *sessionReadCloser) Close() error {
+	if r.closeFn == nil {
+		return nil
+	}
+	return r.closeFn()
 }
 
 func branchMapFromRefHashMap(refs map[plumbing.ReferenceName]plumbing.Hash) map[string]plumbing.Hash {

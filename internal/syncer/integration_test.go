@@ -73,6 +73,74 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	}
 }
 
+func TestBootstrap_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 4)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		ShowStats:    true,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 || len(result.Plans) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Plans[0].Action != ActionCreate {
+		t.Fatalf("expected create plan, got %+v", result.Plans[0])
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+
+	if sourceServer.BytesOut(serviceUploadPack, metricPack) == 0 {
+		t.Fatalf("expected source upload-pack response bytes")
+	}
+	if targetServer.Count(serviceReceivePack, metricPack) != 1 {
+		t.Fatalf("expected one receive-pack POST, got %d", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
+func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, targetFS := newSourceRepo(t)
+	makeCommits(t, targetRepo, targetFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err == nil {
+		t.Fatalf("expected bootstrap failure when target ref exists")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected existing-ref error, got %v", err)
+	}
+	if targetServer.Count(serviceReceivePack, metricPack) != 0 {
+		t.Fatalf("expected no receive-pack POSTs, got %d", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
 func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 10)
