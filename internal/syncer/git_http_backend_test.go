@@ -462,6 +462,92 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	assertGitRefAbsent(t, targetBare, bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
 }
 
+func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+	for i := range 6 {
+		writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("resume-%d.bin", i)), int64(200_000+i*23))
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", fmt.Sprintf("resume-%d", i))
+	}
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	sourceURL := server.RepoURL("source.git")
+	targetURL := server.RepoURL("target.git")
+	cfg := Config{
+		Source:            Endpoint{URL: sourceURL},
+		Target:            Endpoint{URL: targetURL},
+		BatchMaxPackBytes: 350_000,
+		ProtocolMode:      protocolModeAuto,
+	}
+
+	stats := newStats(false)
+	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	if err != nil {
+		t.Fatalf("create source transport: %v", err)
+	}
+	sourceRefs, sourceService, err := listSourceRefs(context.Background(), sourceConn, cfg)
+	if err != nil {
+		t.Fatalf("list source refs: %v", err)
+	}
+	desired, _, err := buildDesiredRefs(refHashMap(sourceRefs), cfg)
+	if err != nil {
+		t.Fatalf("build desired refs: %v", err)
+	}
+	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
+	checkpoints, err := planBootstrapBranchCheckpoints(context.Background(), cfg, sourceConn, sourceService, ref)
+	if err != nil {
+		t.Fatalf("plan checkpoints: %v", err)
+	}
+	if len(checkpoints) < 2 {
+		t.Fatalf("expected multiple checkpoints for resume test, got %v", checkpoints)
+	}
+
+	tempRef := bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
+	runGit(t, worktree, "push", targetBare, checkpoints[0].String()+":"+tempRef.String())
+
+	result, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("batched bootstrap resume failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected batched resume result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+		t.Fatalf("expected batched bootstrap resume relay result, got %+v", result)
+	}
+	if result.BatchCount >= len(checkpoints) {
+		t.Fatalf("expected resume to execute fewer batches than full run, got %+v checkpoints=%d", result, len(checkpoints))
+	}
+
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+	assertGitRefAbsent(t, targetBare, tempRef)
+}
+
 type gitHTTPBackendServer struct {
 	server *httptest.Server
 	root   string

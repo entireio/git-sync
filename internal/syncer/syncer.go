@@ -882,6 +882,7 @@ func bootstrapWithInputs(
 type bootstrapBatch struct {
 	Plan       BranchPlan
 	TempRef    plumbing.ReferenceName
+	ResumeHash plumbing.Hash
 	Checkpoints []plumbing.Hash
 }
 
@@ -919,13 +920,9 @@ func bootstrapBatchedWithInputs(
 			TargetRef:  plan.TargetRef,
 			SourceHash: plan.SourceHash,
 		})
-		tempRef := bootstrapTempRef(plan.TargetRef)
-		if hash := targetRefs[tempRef]; !hash.IsZero() {
-			return result, fmt.Errorf("bootstrap temp ref %s already exists; clean it up before retrying", tempRef)
-		}
 	}
 
-	batches, err := planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs)
+	batches, err := planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs, targetRefs)
 	if err != nil {
 		return result, err
 	}
@@ -936,8 +933,13 @@ func bootstrapBatchedWithInputs(
 	}
 
 	for _, batch := range batches {
-		current := plumbing.ZeroHash
-		for idx, checkpoint := range batch.Checkpoints {
+		current := batch.ResumeHash
+		startIdx, err := bootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
+		if err != nil {
+			return result, fmt.Errorf("resume bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+		}
+		for idx := startIdx; idx < len(batch.Checkpoints); idx++ {
+			checkpoint := batch.Checkpoints[idx]
 			stagePlans := []BranchPlan{
 				{
 					Branch:     batch.Plan.Branch,
@@ -973,6 +975,24 @@ func bootstrapBatchedWithInputs(
 			}
 			current = checkpoint
 			result.BatchCount++
+		}
+
+		if current.IsZero() {
+			return result, fmt.Errorf("bootstrap batching for %s completed with no checkpoint state", batch.Plan.TargetRef)
+		}
+		if batch.ResumeHash == batch.Plan.SourceHash {
+			if err := pushCommandsToTarget(ctx, targetConn, targetAdv, []BranchPlan{{
+				Branch:     batch.Plan.Branch,
+				SourceRef:  batch.Plan.SourceRef,
+				TargetRef:  batch.Plan.TargetRef,
+				SourceHash: batch.Plan.SourceHash,
+				TargetHash: plumbing.ZeroHash,
+				Kind:       batch.Plan.Kind,
+				Action:     ActionCreate,
+				Reason:     fmt.Sprintf("create %s at %s", batch.Plan.TargetRef, shortHash(batch.Plan.SourceHash)),
+			}}, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
+			}
 		}
 
 		deleteTempPlan := BranchPlan{
@@ -1034,6 +1054,7 @@ func planBootstrapBatches(
 	sourceConn *transportConn,
 	sourceService *sourceRefService,
 	desired []desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) ([]bootstrapBatch, error) {
 	out := make([]bootstrapBatch, 0, len(desired))
 	for _, ref := range desired {
@@ -1051,6 +1072,7 @@ func planBootstrapBatches(
 				Action:     ActionCreate,
 			},
 			TempRef:    bootstrapTempRef(ref.TargetRef),
+			ResumeHash: targetRefs[bootstrapTempRef(ref.TargetRef)],
 			Checkpoints: checkpoints,
 		})
 	}
@@ -1173,6 +1195,18 @@ func sourcePackExceedsLimit(
 		return true, nil
 	}
 	return false, err
+}
+
+func bootstrapResumeIndex(checkpoints []plumbing.Hash, resumeHash plumbing.Hash) (int, error) {
+	if resumeHash.IsZero() {
+		return 0, nil
+	}
+	for idx, checkpoint := range checkpoints {
+		if checkpoint == resumeHash {
+			return idx + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("temp ref hash %s does not match any planned checkpoint", resumeHash)
 }
 
 func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {
