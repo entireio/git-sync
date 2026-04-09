@@ -118,6 +118,9 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	if result["dry_run"] != true {
 		t.Fatalf("expected dry_run=true, got %#v", result["dry_run"])
 	}
+	if result["bootstrap_suggested"] != true {
+		t.Fatalf("expected bootstrap_suggested=true, got %#v", result["bootstrap_suggested"])
+	}
 	plans, ok := result["plans"].([]any)
 	if !ok || len(plans) == 0 {
 		t.Fatalf("expected plan entries, got %#v", result["plans"])

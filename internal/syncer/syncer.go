@@ -100,6 +100,8 @@ type Result struct {
 	Blocked  int          `json:"blocked"`
 	Deleted  int          `json:"deleted"`
 	DryRun   bool         `json:"dry_run"`
+	Relay    bool         `json:"relay"`
+	BootstrapSuggested bool `json:"bootstrap_suggested"`
 	Stats    Stats        `json:"stats"`
 	Measurement Measurement `json:"measurement"`
 	Protocol string       `json:"protocol"`
@@ -234,8 +236,8 @@ func (r Result) Lines() []string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -261,6 +263,9 @@ func (r Result) Lines() []string {
 			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
 			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
 		))
+	}
+	if r.BootstrapSuggested {
+		lines = append(lines, "hint: target refs are absent; bootstrap can seed them without local object storage")
 	}
 
 	return lines
@@ -400,6 +405,24 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if len(desiredRefs) == 0 {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
+	if canBootstrapRelay(cfg, desiredRefs, targetRefMap) {
+		if cfg.DryRun {
+			plans, err := buildBootstrapPlans(desiredRefs, targetRefMap)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{
+				Plans:              plans,
+				DryRun:             true,
+				Relay:              false,
+				BootstrapSuggested: true,
+				Stats:              stats.snapshot(),
+				Measurement:        measurementDone(),
+				Protocol:           sourceService.protocol,
+			}, nil
+		}
+		return bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap)
+	}
 
 	if err := sourceService.Fetch(ctx, repo, sourceConn, desiredRefs, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -415,6 +438,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	result := Result{
 		Plans:    plans,
 		DryRun:   cfg.DryRun,
+		Relay:    false,
 		Stats:    stats.snapshot(),
 		Measurement: measurementDone(),
 		Protocol: sourceService.protocol,
@@ -517,37 +541,9 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	if len(desiredRefs) == 0 {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
-
-	plans, err := buildBootstrapPlans(desiredRefs, targetRefMap)
-	if err != nil {
-		return Result{}, err
-	}
-
-	result := Result{
-		Plans:    plans,
-		Stats:    stats.snapshot(),
-		Measurement: measurementDone(),
-		Protocol: sourceService.protocol,
-	}
-
-	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
-	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return result, nil
-		}
-		return result, fmt.Errorf("fetch source pack: %w", err)
-	}
-	defer packReader.Close()
-	packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
-
-	if err := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose); err != nil {
-		return result, fmt.Errorf("push target refs: %w", err)
-	}
-
-	result.Pushed = len(plans)
-	result.Stats = stats.snapshot()
+	result, err := bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap)
 	result.Measurement = measurementDone()
-	return result, nil
+	return result, err
 }
 
 func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
@@ -724,6 +720,67 @@ func buildBootstrapPlans(
 		})
 	}
 	return plans, nil
+}
+
+func canBootstrapRelay(
+	cfg Config,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) bool {
+	if cfg.Force || cfg.Prune {
+		return false
+	}
+	if len(desired) == 0 {
+		return false
+	}
+	for targetRef := range desired {
+		if !targetRefs[targetRef].IsZero() {
+			return false
+		}
+	}
+	return true
+}
+
+func bootstrapWithInputs(
+	ctx context.Context,
+	cfg Config,
+	stats *statsCollector,
+	sourceConn *transportConn,
+	targetConn *transportConn,
+	sourceService *sourceRefService,
+	targetAdv *packp.AdvRefs,
+	desiredRefs map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) (Result, error) {
+	plans, err := buildBootstrapPlans(desiredRefs, targetRefs)
+	if err != nil {
+		return Result{}, err
+	}
+
+	result := Result{
+		Plans:       plans,
+		Relay:       true,
+		Stats:       stats.snapshot(),
+		Protocol:    sourceService.protocol,
+	}
+
+	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
+	if err != nil {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return result, nil
+		}
+		return result, fmt.Errorf("fetch source pack: %w", err)
+	}
+	defer packReader.Close()
+	packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+
+	if err := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose); err != nil {
+		return result, fmt.Errorf("push target refs: %w", err)
+	}
+
+	result.Pushed = len(plans)
+	result.Stats = stats.snapshot()
+	return result, nil
 }
 
 func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {

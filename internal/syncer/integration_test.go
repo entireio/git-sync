@@ -56,6 +56,9 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	if !result.Relay {
+		t.Fatalf("expected sync to auto-switch to relay bootstrap on empty target")
+	}
 
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 
@@ -70,6 +73,37 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	}
 	if targetServer.Count(serviceUploadPack, metricPack) != 0 {
 		t.Fatalf("expected no target upload-pack POSTs, got %d", targetServer.Count(serviceUploadPack, metricPack))
+	}
+}
+
+func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		DryRun:       true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("plan failed: %v", err)
+	}
+	if !result.DryRun || !result.BootstrapSuggested {
+		t.Fatalf("expected bootstrap suggestion, got %+v", result)
+	}
+	if result.Relay {
+		t.Fatalf("dry-run plan should not execute relay")
 	}
 }
 

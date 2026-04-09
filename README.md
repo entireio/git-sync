@@ -89,6 +89,8 @@ go run ./cmd/git-sync bootstrap \
 
 That is the intended way to compare the bootstrap relay path against the normal sync path on the same fixture or test repo.
 
+When `sync` sees that all managed target refs are absent and the run is compatible with bootstrap semantics, it automatically uses the bootstrap relay path instead of the normal decode-and-repack sync path.
+
 Sync specific branches:
 
 ```bash

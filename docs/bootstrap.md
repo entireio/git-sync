@@ -151,6 +151,11 @@ Phase 3:
 - investigate whether target capability combinations require alternate pack handling
 - measure source-to-target pack relay memory and CPU against current `sync`
 
+Progress:
+
+- `sync` now auto-selects the bootstrap relay path when all managed target refs are absent and the run matches bootstrap semantics
+- dry-run `plan` surfaces a bootstrap suggestion for the same target shape
+
 Phase 4:
 
 - consider a more advanced incremental relay mode for non-empty targets
