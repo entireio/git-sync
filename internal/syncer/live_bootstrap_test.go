@@ -13,6 +13,14 @@ import (
 const liveLinuxEnv = "GITSYNC_E2E_LIVE_LINUX"
 
 func TestBootstrap_LiveLinuxSource(t *testing.T) {
+	runLiveLinuxBootstrap(t, 0, "bootstrap")
+}
+
+func TestBootstrap_LiveLinuxSourceBatched(t *testing.T) {
+	runLiveLinuxBootstrap(t, 512*1024*1024, "bootstrap-batch")
+}
+
+func runLiveLinuxBootstrap(t *testing.T, batchMaxPackBytes int64, wantRelayMode string) {
 	if os.Getenv(liveLinuxEnv) == "" {
 		t.Skip("set GITSYNC_E2E_LIVE_LINUX=1 to run the live linux bootstrap smoke test")
 	}
@@ -34,6 +42,7 @@ func TestBootstrap_LiveLinuxSource(t *testing.T) {
 		Source:        Endpoint{URL: "https://github.com/torvalds/linux.git"},
 		Target:        Endpoint{URL: server.RepoURL("target.git")},
 		Branches:      []string{"master"},
+		BatchMaxPackBytes: batchMaxPackBytes,
 		ProtocolMode:  protocolModeAuto,
 		ShowStats:     true,
 		MeasureMemory: true,
@@ -47,8 +56,8 @@ func TestBootstrap_LiveLinuxSource(t *testing.T) {
 	if result.Pushed != 1 {
 		t.Fatalf("expected one pushed ref, got %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap" {
-		t.Fatalf("expected bootstrap relay result, got %+v", result)
+	if !result.Relay || result.RelayMode != wantRelayMode {
+		t.Fatalf("expected %s relay result, got %+v", wantRelayMode, result)
 	}
 	if !result.Measurement.Enabled {
 		t.Fatalf("expected measurement to be enabled")

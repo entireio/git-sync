@@ -288,6 +288,17 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -ru
 
 That is useful for large-source relay and memory measurement checks while keeping the target local and disposable.
 
+There is also a batched variant of the same Linux smoke:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSourceBatched -v
+```
+
+The `mise` tasks are:
+
+- `mise run test:linux-smoke`
+- `mise run test:linux-smoke:batched`
+
 ## Planned Bootstrap Path
 
 There is a dedicated `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.

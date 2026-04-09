@@ -20,6 +20,10 @@ run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_Gi
 description = "Run optional live linux bootstrap smoke test"
 run = "GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSource -timeout 60m -v"
 
+[tasks."test:linux-smoke:batched"]
+description = "Run optional live linux batched bootstrap smoke test"
+run = "GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSourceBatched -timeout 60m -v"
+
 [tasks.build]
 description = "Build git-sync"
 run = "go build ./cmd/git-sync"
