@@ -141,6 +141,88 @@ func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
 	}
 }
 
+func TestBootstrap_IntegrationBranchMapping(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		Mappings:     []RefMapping{{Source: "master", Target: "stable"}},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap mapping failed: %v", err)
+	}
+	if result.Pushed != 1 || len(result.Plans) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Plans[0].TargetRef != plumbing.NewBranchReferenceName("stable") {
+		t.Fatalf("expected stable target ref, got %+v", result.Plans[0])
+	}
+
+	sourceRef, err := sourceRepo.Reference(plumbing.NewBranchReferenceName("master"), true)
+	if err != nil {
+		t.Fatalf("resolve source ref: %v", err)
+	}
+	targetRef, err := targetRepo.Reference(plumbing.NewBranchReferenceName("stable"), true)
+	if err != nil {
+		t.Fatalf("resolve target ref: %v", err)
+	}
+	if sourceRef.Hash() != targetRef.Hash() {
+		t.Fatalf("mapped target mismatch: source=%s target=%s", sourceRef.Hash(), targetRef.Hash())
+	}
+}
+
+func TestBootstrap_IntegrationTags(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1"), head.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		IncludeTags:  true,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap tags failed: %v", err)
+	}
+	if result.Pushed != 2 || len(result.Plans) != 2 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("v1"), true); err != nil {
+		t.Fatalf("expected v1 tag on target: %v", err)
+	}
+}
+
 func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 10)
