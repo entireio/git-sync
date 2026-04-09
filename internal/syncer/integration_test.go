@@ -59,6 +59,9 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	if !result.Relay {
 		t.Fatalf("expected sync to auto-switch to relay bootstrap on empty target")
 	}
+	if result.RelayReason != "empty-target-managed-refs" {
+		t.Fatalf("expected bootstrap relay reason, got %+v", result)
+	}
 
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 
@@ -101,6 +104,9 @@ func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	}
 	if !result.DryRun || !result.BootstrapSuggested {
 		t.Fatalf("expected bootstrap suggestion, got %+v", result)
+	}
+	if result.RelayReason != "empty-target-managed-refs" {
+		t.Fatalf("expected bootstrap suggestion reason, got %+v", result)
 	}
 	if result.Relay {
 		t.Fatalf("dry-run plan should not execute relay")

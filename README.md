@@ -89,6 +89,8 @@ go run ./cmd/git-sync bootstrap \
 
 That is the intended way to compare the bootstrap relay path against the normal sync path on the same fixture or test repo.
 
+`plan` and `sync` JSON output also include `relay`, `relay_mode`, and `relay_reason` so automation can tell whether a relay path was chosen and why.
+
 When `sync` sees that all managed target refs are absent and the run is compatible with bootstrap semantics, it automatically uses the bootstrap relay path instead of the normal decode-and-repack sync path.
 
 `sync` also uses a narrow incremental relay path for fast-forward branch updates and tag creation when there is no prune/delete, no force, and the target does not advertise `no-thin`. This now includes multi-branch batches, branch-to-branch mappings, and create-only tags. Tag retargeting and other more complex updates still fall back to the normal local decode-and-repack path.

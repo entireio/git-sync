@@ -121,6 +121,9 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	if result["bootstrap_suggested"] != true {
 		t.Fatalf("expected bootstrap_suggested=true, got %#v", result["bootstrap_suggested"])
 	}
+	if result["relay_reason"] != "empty-target-managed-refs" {
+		t.Fatalf("expected relay_reason for bootstrap suggestion, got %#v", result["relay_reason"])
+	}
 	plans, ok := result["plans"].([]any)
 	if !ok || len(plans) == 0 {
 		t.Fatalf("expected plan entries, got %#v", result["plans"])

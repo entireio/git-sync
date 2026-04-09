@@ -102,6 +102,7 @@ type Result struct {
 	DryRun   bool         `json:"dry_run"`
 	Relay    bool         `json:"relay"`
 	RelayMode string      `json:"relay_mode"`
+	RelayReason string    `json:"relay_reason"`
 	BootstrapSuggested bool `json:"bootstrap_suggested"`
 	Stats    Stats        `json:"stats"`
 	Measurement Measurement `json:"measurement"`
@@ -237,8 +238,8 @@ func (r Result) Lines() []string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -406,7 +407,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if len(desiredRefs) == 0 {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
-	if canBootstrapRelay(cfg, desiredRefs, targetRefMap) {
+	if ok, reason := canBootstrapRelay(cfg, desiredRefs, targetRefMap); ok {
 		if cfg.DryRun {
 			plans, err := buildBootstrapPlans(desiredRefs, targetRefMap)
 			if err != nil {
@@ -417,13 +418,14 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 				DryRun:             true,
 				Relay:              false,
 				RelayMode:          "",
+				RelayReason:        reason,
 				BootstrapSuggested: true,
 				Stats:              stats.snapshot(),
 				Measurement:        measurementDone(),
 				Protocol:           sourceService.protocol,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap)
+		return bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason)
 	}
 
 	if err := sourceService.Fetch(ctx, repo, sourceConn, desiredRefs, targetRefMap); err != nil {
@@ -442,6 +444,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		DryRun:   cfg.DryRun,
 		Relay:    false,
 		RelayMode: "",
+		RelayReason: "",
 		Stats:    stats.snapshot(),
 		Measurement: measurementDone(),
 		Protocol: sourceService.protocol,
@@ -472,24 +475,28 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
+	result.RelayReason = relayFallbackReason(cfg, pushPlans, targetAdv)
 
-	if !cfg.DryRun && canIncrementalRelay(cfg, pushPlans, targetAdv) {
-		relayPlans := append([]BranchPlan(nil), pushPlans...)
-		desiredRelay := desiredSubsetForPlans(desiredRefs, relayPlans)
-		packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRelay, targetRefMap)
-		if err != nil {
-			return result, fmt.Errorf("fetch source pack: %w", err)
-		}
-		defer packReader.Close()
-		packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
-		if err := pushPackToTarget(ctx, targetConn, targetAdv, relayPlans, packReader, cfg.Verbose); err != nil {
-			return result, fmt.Errorf("push target refs: %w", err)
-		}
-		result.Relay = true
-		result.RelayMode = "incremental"
-	} else if !cfg.DryRun && len(pushPlans) > 0 {
-		if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
-			return result, fmt.Errorf("push target refs: %w", err)
+	if !cfg.DryRun {
+		if ok, reason := canIncrementalRelay(cfg, pushPlans, targetAdv); ok {
+			relayPlans := append([]BranchPlan(nil), pushPlans...)
+			desiredRelay := desiredSubsetForPlans(desiredRefs, relayPlans)
+			packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRelay, targetRefMap)
+			if err != nil {
+				return result, fmt.Errorf("fetch source pack: %w", err)
+			}
+			defer packReader.Close()
+			packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, relayPlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push target refs: %w", err)
+			}
+			result.Relay = true
+			result.RelayMode = "incremental"
+			result.RelayReason = reason
+		} else if len(pushPlans) > 0 {
+			if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push target refs: %w", err)
+			}
 		}
 	}
 
@@ -558,7 +565,8 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	if len(desiredRefs) == 0 {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
-	result, err := bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap)
+	_, reason := canBootstrapRelay(cfg, desiredRefs, targetRefMap)
+	result, err := bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason)
 	result.Measurement = measurementDone()
 	return result, err
 }
@@ -743,59 +751,67 @@ func canBootstrapRelay(
 	cfg Config,
 	desired map[plumbing.ReferenceName]desiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
-) bool {
+) (bool, string) {
 	if cfg.Force || cfg.Prune {
-		return false
+		return false, "bootstrap-disabled-by-force-or-prune"
 	}
 	if len(desired) == 0 {
-		return false
+		return false, "bootstrap-no-managed-refs"
 	}
 	for targetRef := range desired {
 		if !targetRefs[targetRef].IsZero() {
-			return false
+			return false, "bootstrap-target-ref-exists"
 		}
 	}
-	return true
+	return true, "empty-target-managed-refs"
 }
 
-func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) bool {
+func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) (bool, string) {
 	if cfg.Force || cfg.Prune || cfg.DryRun {
-		return false
+		return false, "incremental-disabled-by-force-prune-or-dry-run"
 	}
 	if len(plans) == 0 {
-		return false
+		return false, "incremental-no-plans"
 	}
 	if targetAdv == nil || targetAdv.Capabilities == nil {
-		return false
+		return false, "incremental-missing-target-capabilities"
 	}
 	if targetAdv.Capabilities.Supports(capability.Capability("no-thin")) {
-		return false
+		return false, "incremental-target-no-thin"
 	}
 
 	for _, plan := range plans {
 		switch plan.Kind {
 		case RefKindBranch:
 			if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
-				return false
+				return false, "incremental-non-branch-mapping"
 			}
 			if plan.Action != ActionUpdate {
-				return false
+				return false, "incremental-branch-action-not-update"
 			}
 			if plan.TargetHash.IsZero() {
-				return false
+				return false, "incremental-branch-target-missing"
 			}
 		case RefKindTag:
 			if !plan.SourceRef.IsTag() || !plan.TargetRef.IsTag() {
-				return false
+				return false, "incremental-non-tag-mapping"
 			}
 			if plan.Action != ActionCreate {
-				return false
+				return false, "incremental-tag-action-not-create"
 			}
 		default:
-			return false
+			return false, "incremental-unsupported-ref-kind"
 		}
 	}
-	return true
+	return true, "fast-forward-branch-or-tag-create"
+}
+
+func relayFallbackReason(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) string {
+	if ok, reason := canIncrementalRelay(cfg, plans, targetAdv); ok {
+		return reason
+	} else {
+		return reason
+	}
 }
 
 func desiredSubsetForPlans(
@@ -821,6 +837,7 @@ func bootstrapWithInputs(
 	targetAdv *packp.AdvRefs,
 	desiredRefs map[plumbing.ReferenceName]desiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	relayReason string,
 ) (Result, error) {
 	plans, err := buildBootstrapPlans(desiredRefs, targetRefs)
 	if err != nil {
@@ -831,6 +848,7 @@ func bootstrapWithInputs(
 		Plans:       plans,
 		Relay:       true,
 		RelayMode:   "bootstrap",
+		RelayReason: relayReason,
 		Stats:       stats.snapshot(),
 		Protocol:    sourceService.protocol,
 	}
