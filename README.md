@@ -91,7 +91,7 @@ That is the intended way to compare the bootstrap relay path against the normal 
 
 When `sync` sees that all managed target refs are absent and the run is compatible with bootstrap semantics, it automatically uses the bootstrap relay path instead of the normal decode-and-repack sync path.
 
-`sync` also uses a narrow incremental relay path for fast-forward branch updates when all planned updates are branch-only, there are no tags, no prune/delete, no force, and the target does not advertise `no-thin`. This now includes multi-branch batches and branch-to-branch mappings. More complex updates still fall back to the normal local decode-and-repack path.
+`sync` also uses a narrow incremental relay path for fast-forward branch updates and tag creation when there is no prune/delete, no force, and the target does not advertise `no-thin`. This now includes multi-branch batches, branch-to-branch mappings, and create-only tags. Tag retargeting and other more complex updates still fall back to the normal local decode-and-repack path.
 
 Sync specific branches:
 

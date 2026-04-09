@@ -166,4 +166,5 @@ Progress:
 - there is now a narrow incremental relay path in `sync`
 - it now covers multi-branch fast-forward branch-only updates
 - it now also covers branch-to-branch mappings
-- tags, deletes, force, and prune still use the normal path
+- it now also covers create-only tags
+- tag retargets, deletes, force, and prune still use the normal path
