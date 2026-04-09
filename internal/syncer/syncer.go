@@ -106,6 +106,8 @@ type Result struct {
 	RelayReason string    `json:"relay_reason"`
 	Batching bool         `json:"batching"`
 	BatchCount int        `json:"batch_count"`
+	PlannedBatchCount int `json:"planned_batch_count"`
+	TempRefs []string     `json:"temp_refs"`
 	BootstrapSuggested bool `json:"bootstrap_suggested"`
 	Stats    Stats        `json:"stats"`
 	Measurement Measurement `json:"measurement"`
@@ -241,8 +243,8 @@ func (r Result) Lines() []string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d planned-batches=%d",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount, r.PlannedBatchCount,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -271,6 +273,10 @@ func (r Result) Lines() []string {
 	}
 	if r.BootstrapSuggested {
 		lines = append(lines, "hint: target refs are absent; bootstrap can seed them without local object storage")
+	}
+
+	if r.Batching && len(r.TempRefs) > 0 {
+		lines = append(lines, fmt.Sprintf("batching: temp-refs=%s", strings.Join(r.TempRefs, ",")))
 	}
 
 	return lines
@@ -933,6 +939,8 @@ func bootstrapBatchedWithInputs(
 	}
 
 	for _, batch := range batches {
+		result.PlannedBatchCount += len(batch.Checkpoints)
+		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
 		current := batch.ResumeHash
 		startIdx, err := bootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
 		if err != nil {

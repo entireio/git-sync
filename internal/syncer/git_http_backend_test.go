@@ -457,6 +457,12 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	if result.BatchCount < 2 {
 		t.Fatalf("expected multiple bootstrap batches, got %+v", result)
 	}
+	if result.PlannedBatchCount != result.BatchCount {
+		t.Fatalf("expected fresh batched bootstrap to complete all planned batches, got %+v", result)
+	}
+	if len(result.TempRefs) != 1 || result.TempRefs[0] != bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)).String() {
+		t.Fatalf("unexpected temp refs in batched bootstrap result: %+v", result)
+	}
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 	assertGitRefAbsent(t, targetBare, bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
@@ -542,6 +548,12 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	}
 	if result.BatchCount >= len(checkpoints) {
 		t.Fatalf("expected resume to execute fewer batches than full run, got %+v checkpoints=%d", result, len(checkpoints))
+	}
+	if result.PlannedBatchCount != len(checkpoints) {
+		t.Fatalf("expected resume result to report planned checkpoint count, got %+v checkpoints=%d", result, len(checkpoints))
+	}
+	if len(result.TempRefs) != 1 || result.TempRefs[0] != tempRef.String() {
+		t.Fatalf("unexpected temp refs in batched resume result: %+v", result)
 	}
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
