@@ -202,3 +202,19 @@ Push remains on the existing low-level `receive-pack` path for two reasons:
 - The main transfer and negotiation win is on the source side. That is where `ls-refs` and `fetch` reduce unnecessary work.
 
 In other words, this project uses protocol v2 where it changes the fetch/list behavior in a useful way, and keeps the current push path where switching protocols would mostly add complexity without a comparable payoff.
+
+## Testing
+
+The default test suite uses in-process smart HTTP servers and does not require a local listener:
+
+```bash
+env GOCACHE=/tmp/go-build go test ./...
+```
+
+There is also an optional end-to-end write test against the system `git-http-backend`:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run TestRun_GitHTTPBackendSync -v
+```
+
+That path exercises real smart HTTP fetch and push with a local bare source repo and a local bare target repo.

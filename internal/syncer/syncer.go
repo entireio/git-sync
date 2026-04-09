@@ -20,7 +20,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
-	"github.com/go-git/go-git/v5/plumbing/revlist"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -977,12 +976,6 @@ func receivePack(
 
 func objectsToPush(store storer.Storer, wants []plumbing.Hash, targetRefs map[plumbing.ReferenceName]plumbing.Hash) ([]plumbing.Hash, error) {
 	targetHaves := sortedUniqueHashes(mapsRefValues(targetRefs))
-	haves := make([]plumbing.Hash, 0, len(targetHaves))
-	for _, hash := range targetHaves {
-		if _, err := store.EncodedObject(plumbing.AnyObject, hash); err == nil {
-			haves = append(haves, hash)
-		}
-	}
 	if len(wants) == 0 {
 		return nil, nil
 	}
@@ -1003,7 +996,78 @@ func objectsToPush(store storer.Storer, wants []plumbing.Hash, targetRefs map[pl
 		return nil, nil
 	}
 
-	return revlist.Objects(store, filteredWants, haves)
+	seen := make(map[plumbing.Hash]bool, len(filteredWants)*4)
+	objects := make([]plumbing.Hash, 0, len(filteredWants)*16)
+	for _, hash := range filteredWants {
+		if err := collectPushObjects(store, hash, haveSet, seen, &objects); err != nil {
+			return nil, err
+		}
+	}
+	return objects, nil
+}
+
+func collectPushObjects(
+	store storer.EncodedObjectStorer,
+	hash plumbing.Hash,
+	externalHaves map[plumbing.Hash]struct{},
+	seen map[plumbing.Hash]bool,
+	out *[]plumbing.Hash,
+) error {
+	if hash.IsZero() {
+		return nil
+	}
+	if _, ok := externalHaves[hash]; ok {
+		return nil
+	}
+	if seen[hash] {
+		return nil
+	}
+	seen[hash] = true
+
+	obj, err := store.EncodedObject(plumbing.AnyObject, hash)
+	if err != nil {
+		return fmt.Errorf("load object %s: %w", hash, err)
+	}
+
+	switch obj.Type() {
+	case plumbing.CommitObject:
+		commit, err := object.GetCommit(store, hash)
+		if err != nil {
+			return fmt.Errorf("load commit %s: %w", hash, err)
+		}
+		if err := collectPushObjects(store, commit.TreeHash, externalHaves, seen, out); err != nil {
+			return err
+		}
+		for _, parentHash := range commit.ParentHashes {
+			if err := collectPushObjects(store, parentHash, externalHaves, seen, out); err != nil {
+				return err
+			}
+		}
+	case plumbing.TreeObject:
+		tree, err := object.GetTree(store, hash)
+		if err != nil {
+			return fmt.Errorf("load tree %s: %w", hash, err)
+		}
+		for _, entry := range tree.Entries {
+			if err := collectPushObjects(store, entry.Hash, externalHaves, seen, out); err != nil {
+				return err
+			}
+		}
+	case plumbing.TagObject:
+		tag, err := object.GetTag(store, hash)
+		if err != nil {
+			return fmt.Errorf("load tag %s: %w", hash, err)
+		}
+		if err := collectPushObjects(store, tag.Target, externalHaves, seen, out); err != nil {
+			return err
+		}
+	case plumbing.BlobObject:
+	default:
+		return fmt.Errorf("unsupported object type %s for %s", obj.Type(), hash)
+	}
+
+	*out = append(*out, hash)
+	return nil
 }
 
 func branchMapFromRefHashMap(refs map[plumbing.ReferenceName]plumbing.Hash) map[string]plumbing.Hash {
