@@ -81,6 +81,53 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 }
 
+func TestBootstrap_GitHTTPBackendSync(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+
+	writeFile(t, filepath.Join(worktree, "README.md"), "bootstrap\n")
+	runGit(t, worktree, "add", "README.md")
+	runGit(t, worktree, "commit", "-m", "initial")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	sourceURL := server.RepoURL("source.git")
+	targetURL := server.RepoURL("target.git")
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source: Endpoint{URL: sourceURL},
+		Target: Endpoint{URL: targetURL},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap sync failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected bootstrap result: %+v", result)
+	}
+
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+}
+
 type gitHTTPBackendServer struct {
 	server *httptest.Server
 	root   string

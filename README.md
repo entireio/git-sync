@@ -12,6 +12,7 @@ The command surface is:
 
 - `git-sync probe`: inspect a source remote, and optionally a target remote
 - `git-sync fetch`: exercise source-side fetch negotiation without pushing
+- `git-sync bootstrap`: seed an empty target with create-only relay behavior
 - `git-sync plan`: compute source-to-target ref actions without pushing
 - `git-sync sync`: execute the planned changes against the target
 
@@ -53,6 +54,15 @@ Plan a sync without pushing anything:
 
 ```bash
 go run ./cmd/git-sync plan \
+  --stats \
+  https://github.com/source-org/source-repo.git \
+  https://github.com/target-org/target-repo.git
+```
+
+Bootstrap an empty target without using the normal local object-store sync path:
+
+```bash
+go run ./cmd/git-sync bootstrap \
   --stats \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
@@ -107,7 +117,7 @@ go run ./cmd/git-sync probe \
   <source-url>
 ```
 
-Add `--json` to `probe`, `fetch`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
+Add `--json` to `probe`, `fetch`, `bootstrap`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
 
 The JSON interface is intentionally stable:
 
@@ -115,7 +125,7 @@ The JSON interface is intentionally stable:
 - refs and hashes are serialized as strings, not raw byte arrays
 - `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
 - `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
-- `plan` and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
+- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
 - each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
 
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
