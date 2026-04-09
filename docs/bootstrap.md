@@ -170,7 +170,8 @@ Batching note:
 - the current batched bootstrap path is intentionally narrow
 - it requires source-side protocol v2 with fetch filters
 - it supports branch refs only
-- it does not support tags or resume yet
+- it does not support tags yet
+- it resumes from an existing temp ref when that temp ref matches a planned checkpoint
 - it uses temporary target refs under `refs/gitsync/bootstrap/heads/`
 
 Phase 4:

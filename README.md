@@ -91,8 +91,8 @@ Current batching scope is intentionally narrow:
 - protocol v2 only
 - branch refs only
 - no tags
-- no resume
 - temporary refs under `refs/gitsync/bootstrap/heads/`
+- resume from existing temp refs is supported when they match a planned checkpoint
 
 Add `--measure-memory` to `bootstrap`, `sync`, `plan`, `probe`, or `fetch` to sample elapsed time and Go heap usage:
 
@@ -170,7 +170,7 @@ The JSON interface is intentionally stable:
 - `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
 - `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
 - `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
-- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, and `batch_count`
+- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, `batch_count`, `planned_batch_count`, and `temp_refs`
 - each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
 
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:

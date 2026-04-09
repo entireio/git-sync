@@ -252,6 +252,7 @@ Progress:
 
 - implemented via `git-sync bootstrap --batch-max-pack-bytes`
 - currently requires source-side protocol v2 with fetch filter support
+- resumes from an existing temp ref when that temp ref matches a planned checkpoint
 - exercised by `TestBootstrap_GitHTTPBackendBatchedBranch`
 
 Phase B:
