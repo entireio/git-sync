@@ -1176,20 +1176,22 @@ func planBootstrapBranchCheckpoints(
 	checkpoints := make([]plumbing.Hash, 0, len(chain))
 	prevIdx := -1
 	prevHash := plumbing.ZeroHash
+	prevSpan := 0
 	for prevIdx < len(chain)-1 {
-		bestIdx, err := largestCheckpointUnderLimit(ctx, cfg, sourceConn, sourceService, ref, chain, prevIdx, prevHash)
+		bestIdx, err := largestCheckpointUnderLimit(ctx, cfg, sourceConn, sourceService, ref, chain, prevIdx, prevHash, prevSpan)
 		if err != nil {
 			return nil, err
 		}
 		if bestIdx <= prevIdx {
 			return nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, cfg.BatchMaxPackBytes)
 		}
+		prevSpan = bestIdx - prevIdx
 		prevIdx = bestIdx
 		prevHash = chain[bestIdx]
 		checkpoints = append(checkpoints, prevHash)
 		progressf(
 			cfg.Verbose,
-			"bootstrap-batch: branch=%s planned-checkpoint=%s (%d/%d)",
+			"bootstrap-batch: branch=%s planned-checkpoint=%s selected=%d chain-len=%d",
 			ref.TargetRef,
 			shortHash(prevHash),
 			len(checkpoints),
@@ -1208,33 +1210,134 @@ func largestCheckpointUnderLimit(
 	chain []plumbing.Hash,
 	prevIdx int,
 	prevHash plumbing.Hash,
+	prevSpan int,
+) (int, error) {
+	return largestCheckpointUnderLimitByProbe(
+		chain,
+		prevIdx,
+		prevSpan,
+		func(idx int) (bool, error) {
+			progressf(
+				cfg.Verbose,
+				"bootstrap-batch: branch=%s probe checkpoint=%s base=%s",
+				ref.TargetRef,
+				shortHash(chain[idx]),
+				shortHash(prevHash),
+			)
+			tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[idx], prevHash, cfg.BatchMaxPackBytes)
+			if err != nil {
+				return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[idx]), err)
+			}
+			if tooLarge {
+				progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s exceeds limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+			} else {
+				progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s fits limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+			}
+			return tooLarge, nil
+		},
+	)
+}
+
+func largestCheckpointUnderLimitByProbe(
+	chain []plumbing.Hash,
+	prevIdx int,
+	prevSpan int,
+	probe func(idx int) (bool, error),
 ) (int, error) {
 	lo := prevIdx + 1
 	hi := len(chain) - 1
+	if lo > hi {
+		return -1, nil
+	}
+
+	coarse := coarseCheckpointCandidates(lo, hi, prevSpan)
 	best := -1
-	for lo <= hi {
-		mid := lo + (hi-lo)/2
-		progressf(
-			cfg.Verbose,
-			"bootstrap-batch: branch=%s probe checkpoint=%s base=%s",
-			ref.TargetRef,
-			shortHash(chain[mid]),
-			shortHash(prevHash),
-		)
-		tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[mid], prevHash, cfg.BatchMaxPackBytes)
+	firstTooLarge := -1
+	for _, idx := range coarse {
+		tooLarge, err := probe(idx)
 		if err != nil {
-			return -1, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[mid]), err)
+			return -1, err
 		}
 		if tooLarge {
-			progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s exceeds limit=%d", shortHash(chain[mid]), cfg.BatchMaxPackBytes)
-			hi = mid - 1
+			if firstTooLarge == -1 || idx < firstTooLarge {
+				firstTooLarge = idx
+			}
 			continue
 		}
-		progressf(cfg.Verbose, "bootstrap-batch: checkpoint=%s fits limit=%d", shortHash(chain[mid]), cfg.BatchMaxPackBytes)
+		best = idx
+		break
+	}
+	if best == -1 {
+		return -1, nil
+	}
+	if best == hi {
+		return best, nil
+	}
+
+	searchLo := best + 1
+	searchHi := hi
+	if firstTooLarge != -1 {
+		searchHi = firstTooLarge - 1
+	}
+
+	for searchLo <= searchHi {
+		mid := searchLo + (searchHi-searchLo)/2
+		tooLarge, err := probe(mid)
+		if err != nil {
+			return -1, err
+		}
+		if tooLarge {
+			searchHi = mid - 1
+			continue
+		}
 		best = mid
-		lo = mid + 1
+		searchLo = mid + 1
 	}
 	return best, nil
+}
+
+func coarseCheckpointCandidates(lo, hi int, prevSpan int) []int {
+	if lo > hi {
+		return nil
+	}
+
+	set := map[int]struct{}{
+		hi: {},
+		lo: {},
+	}
+
+	if prevSpan > 0 {
+		projected := lo + prevSpan - 1
+		if projected < lo {
+			projected = lo
+		}
+		if projected > hi {
+			projected = hi
+		}
+		set[projected] = struct{}{}
+	}
+
+	const coarseBuckets = 6
+	width := hi - lo
+	if width > 0 {
+		for i := 1; i < coarseBuckets; i++ {
+			idx := lo + (width*i)/coarseBuckets
+			if idx < lo {
+				idx = lo
+			}
+			if idx > hi {
+				idx = hi
+			}
+			set[idx] = struct{}{}
+		}
+	}
+
+	candidates := make([]int, 0, len(set))
+	for idx := range set {
+		candidates = append(candidates, idx)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(candidates)))
+	return candidates
 }
 
 func firstParentChain(repo *git.Repository, tip plumbing.Hash) ([]plumbing.Hash, error) {
