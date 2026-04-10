@@ -9,10 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +33,7 @@ import (
 	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/go-git/go-git/v5/utils/ioutil"
+	"github.com/zalando/go-keyring"
 )
 
 const (
@@ -36,7 +41,12 @@ const (
 	protocolModeAuto = "auto"
 	protocolModeV1   = "v1"
 	protocolModeV2   = "v2"
+
+	defaultAutoBatchMaxPackBytes = 512 * 1024 * 1024
+	entireCLIClientID            = "entire-cli"
 )
+
+var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
 
 type Endpoint struct {
 	URL           string
@@ -143,6 +153,17 @@ type FetchResult struct {
 	FetchedObjects int             `json:"fetched_objects"`
 	Stats          Stats           `json:"stats"`
 	Measurement    Measurement     `json:"measurement"`
+}
+
+type entireAuthHostInfo struct {
+	ActiveUser string   `json:"activeUser"`
+	Users      []string `json:"users"`
+}
+
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
 }
 
 type Stats struct {
@@ -877,17 +898,83 @@ func bootstrapWithInputs(
 		}
 		return result, fmt.Errorf("fetch source pack: %w", err)
 	}
-	defer packReader.Close()
 	packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
 
 	progressf(cfg.Verbose, "bootstrap: pushing %d ref(s) to target", len(plans))
-	if err := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose); err != nil {
-		return result, fmt.Errorf("push target refs: %w", err)
+	pushErr := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose)
+	if closeErr := packReader.Close(); closeErr != nil && pushErr == nil {
+		pushErr = closeErr
+	}
+	if pushErr != nil {
+		autoBatchSize, ok := autoBatchMaxPackBytes(cfg, sourceService, pushErr)
+		if !ok {
+			return result, fmt.Errorf("push target refs: %w", pushErr)
+		}
+		progressf(
+			cfg.Verbose,
+			"bootstrap: target rejected single-pack push; retrying with batch-max-pack-bytes=%d",
+			autoBatchSize,
+		)
+		cfg.BatchMaxPackBytes = autoBatchSize
+		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, desiredRefs, targetRefs, result)
 	}
 
 	result.Pushed = len(plans)
 	result.Stats = stats.snapshot()
 	return result, nil
+}
+
+func autoBatchMaxPackBytes(cfg Config, sourceService *sourceRefService, err error) (int64, bool) {
+	if cfg.BatchMaxPackBytes > 0 || !isTargetBodyLimitError(err) {
+		return 0, false
+	}
+	if sourceService == nil || sourceService.protocol != protocolModeV2 || !fetchCapabilitySupports(sourceService.v2, "filter") {
+		return 0, false
+	}
+
+	batchLimit := int64(defaultAutoBatchMaxPackBytes)
+	if targetLimit := targetBodyLimit(err); targetLimit > 0 {
+		derivedLimit := targetLimit / 2
+		if derivedLimit <= 0 {
+			derivedLimit = targetLimit
+		}
+		if derivedLimit < batchLimit {
+			batchLimit = derivedLimit
+		}
+	}
+	if cfg.MaxPackBytes > 0 && cfg.MaxPackBytes < batchLimit {
+		batchLimit = cfg.MaxPackBytes
+	}
+	if batchLimit <= 0 {
+		return 0, false
+	}
+	return batchLimit, true
+}
+
+func isTargetBodyLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "body exceeded size limit") ||
+		(strings.Contains(message, "request body") && strings.Contains(message, "too large")) ||
+		(strings.Contains(message, "payload") && strings.Contains(message, "too large")) ||
+		strings.Contains(message, "http 413")
+}
+
+func targetBodyLimit(err error) int64 {
+	if err == nil {
+		return 0
+	}
+	matches := bodyLimitPattern.FindStringSubmatch(strings.ToLower(err.Error()))
+	if len(matches) != 2 {
+		return 0
+	}
+	limit, parseErr := strconv.ParseInt(matches[1], 10, 64)
+	if parseErr != nil {
+		return 0
+	}
+	return limit
 }
 
 type bootstrapBatch struct {
@@ -2422,11 +2509,274 @@ func resolveAuthMethod(raw Endpoint, ep *transport.Endpoint) (transport.AuthMeth
 	if ep.Protocol != "http" && ep.Protocol != "https" {
 		return nil, nil
 	}
+	if username, password, ok := lookupEntireDBCredential(raw, ep); ok {
+		return &transporthttp.BasicAuth{Username: username, Password: password}, nil
+	}
 	username, password, ok := lookupGitCredential(ep)
 	if !ok {
 		return nil, nil
 	}
 	return &transporthttp.BasicAuth{Username: username, Password: password}, nil
+}
+
+func lookupEntireDBCredential(raw Endpoint, ep *transport.Endpoint) (string, string, bool) {
+	if ep == nil || ep.Host == "" {
+		return "", "", false
+	}
+	credHost := endpointCredentialHost(ep)
+	token, ok := lookupEntireDBToken(credHost, endpointBaseURL(ep), raw.SkipTLSVerify)
+	if !ok || token == "" {
+		return "", "", false
+	}
+	username := raw.Username
+	if username == "" {
+		username = "git"
+	}
+	return username, token, true
+}
+
+func endpointBaseURL(ep *transport.Endpoint) string {
+	if ep == nil || ep.Host == "" {
+		return ""
+	}
+	scheme := ep.Protocol
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := ep.Host
+	if ep.Port > 0 {
+		host = fmt.Sprintf("%s:%d", host, ep.Port)
+	}
+	return scheme + "://" + host
+}
+
+func endpointCredentialHost(ep *transport.Endpoint) string {
+	if ep == nil {
+		return ""
+	}
+	if ep.Port > 0 {
+		return fmt.Sprintf("%s:%d", ep.Host, ep.Port)
+	}
+	return ep.Host
+}
+
+func lookupEntireDBToken(host, baseURL string, skipTLSVerify bool) (string, bool) {
+	configDir := os.Getenv("ENTIRE_CONFIG_DIR")
+	if configDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+		configDir = filepath.Join(home, ".config", "entire")
+	}
+
+	username, ok := loadEntireDBActiveUser(host, configDir)
+	if !ok || username == "" {
+		return "", false
+	}
+	token, err := getEntireDBTokenWithRefresh(context.Background(), host, username, baseURL, skipTLSVerify)
+	if err != nil {
+		return "", false
+	}
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+func loadEntireDBActiveUser(host, configDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(configDir, "hosts.json"))
+	if err != nil {
+		return "", false
+	}
+	var hosts map[string]*entireAuthHostInfo
+	if err := json.Unmarshal(data, &hosts); err != nil {
+		return "", false
+	}
+	info := hosts[host]
+	if info == nil || info.ActiveUser == "" {
+		return "", false
+	}
+	return info.ActiveUser, true
+}
+
+func getEntireDBTokenWithRefresh(ctx context.Context, host, username, baseURL string, skipTLSVerify bool) (string, error) {
+	encodedToken, err := readEntireDBStoredToken(entireCredentialService(host), username)
+	if err != nil {
+		return "", err
+	}
+	token, expiresAt := decodeTokenWithExpiration(encodedToken)
+	if token == "" {
+		return "", nil
+	}
+	if !tokenExpiredOrExpiring(expiresAt) {
+		return token, nil
+	}
+	refreshed, err := refreshEntireDBAccessToken(ctx, host, username, baseURL, skipTLSVerify)
+	if err != nil {
+		return token, nil
+	}
+	return refreshed, nil
+}
+
+func decodeTokenWithExpiration(encoded string) (string, time.Time) {
+	idx := strings.LastIndex(encoded, "|")
+	if idx == -1 {
+		return encoded, time.Time{}
+	}
+	token := encoded[:idx]
+	expiresAtUnix, err := strconv.ParseInt(encoded[idx+1:], 10, 64)
+	if err != nil {
+		return encoded, time.Time{}
+	}
+	return token, time.Unix(expiresAtUnix, 0)
+}
+
+func tokenExpiredOrExpiring(expiresAt time.Time) bool {
+	if expiresAt.IsZero() {
+		return true
+	}
+	return time.Now().Add(5 * time.Minute).After(expiresAt)
+}
+
+func refreshEntireDBAccessToken(ctx context.Context, host, username, baseURL string, skipTLSVerify bool) (string, error) {
+	refreshToken, err := readEntireDBStoredToken(entireCredentialService(host)+":refresh", username)
+	if err != nil {
+		return "", err
+	}
+	if refreshToken == "" || baseURL == "" {
+		return "", errors.New("missing refresh token or base url")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", entireCLIClientID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/oauth/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLSVerify}, //nolint:gosec
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("refresh failed with status %d", resp.StatusCode)
+	}
+
+	var tokenResp oauthTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", err
+	}
+	if tokenResp.AccessToken == "" {
+		return "", errors.New("empty access token in refresh response")
+	}
+
+	if err := writeEntireDBStoredToken(
+		entireCredentialService(host),
+		username,
+		encodeTokenWithExpiration(tokenResp.AccessToken, tokenResp.ExpiresIn),
+	); err != nil {
+		return "", err
+	}
+	if tokenResp.RefreshToken != "" {
+		_ = writeEntireDBStoredToken(entireCredentialService(host)+":refresh", username, tokenResp.RefreshToken)
+	}
+	return tokenResp.AccessToken, nil
+}
+
+func encodeTokenWithExpiration(token string, expiresIn int64) string {
+	return fmt.Sprintf("%s|%d", token, time.Now().Unix()+expiresIn)
+}
+
+func entireCredentialService(host string) string {
+	return "entire:" + host
+}
+
+func readEntireDBStoredToken(service, username string) (string, error) {
+	if os.Getenv("ENTIRE_TOKEN_STORE") == "file" {
+		path := os.Getenv("ENTIRE_TOKEN_STORE_PATH")
+		if path == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			path = filepath.Join(home, ".config", "entiredb", "tokens.json")
+		}
+		return readEntireDBFileToken(path, service, username)
+	}
+	return keyring.Get(service, username)
+}
+
+func writeEntireDBStoredToken(service, username, password string) error {
+	if os.Getenv("ENTIRE_TOKEN_STORE") == "file" {
+		path := os.Getenv("ENTIRE_TOKEN_STORE_PATH")
+		if path == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			path = filepath.Join(home, ".config", "entiredb", "tokens.json")
+		}
+		return writeEntireDBFileToken(path, service, username, password)
+	}
+	return keyring.Set(service, username, password)
+}
+
+func readEntireDBFileToken(path, service, username string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", keyring.ErrNotFound
+		}
+		return "", err
+	}
+	var store map[string]map[string]string
+	if err := json.Unmarshal(data, &store); err != nil {
+		return "", err
+	}
+	users := store[service]
+	if users == nil {
+		return "", keyring.ErrNotFound
+	}
+	password, ok := users[username]
+	if !ok {
+		return "", keyring.ErrNotFound
+	}
+	return password, nil
+}
+
+func writeEntireDBFileToken(path, service, username, password string) error {
+	store := map[string]map[string]string{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &store); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if store[service] == nil {
+		store[service] = map[string]string{}
+	}
+	store[service][username] = password
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(store)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {

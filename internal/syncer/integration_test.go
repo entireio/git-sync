@@ -79,6 +79,46 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLimit(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackBodyLimit = 1_000_000
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("initial sync with auto-batch fallback failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+		t.Fatalf("expected batched relay fallback result, got %+v", result)
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("expected multiple batches after size-limit fallback, got %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+
+	if targetServer.Count(serviceReceivePack, metricPack) < 2 {
+		t.Fatalf("expected fallback to retry after initial rejected push, got %d receive-pack POSTs", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
 func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -768,6 +808,48 @@ func makeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count 
 	}
 }
 
+func makeLargeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int, blobSize int) {
+	t.Helper()
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("open worktree: %v", err)
+	}
+
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("blob-%d.bin", i)
+		file, err := fs.Create(name)
+		if err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+		content := make([]byte, blobSize)
+		state := uint32(0x9e3779b9) + uint32(i)*uint32(2654435761)
+		for idx := range content {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			content[idx] = byte(state >> 24)
+		}
+		if _, err := file.Write(content); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("close file: %v", err)
+		}
+		if _, err := wt.Add(name); err != nil {
+			t.Fatalf("add file: %v", err)
+		}
+
+		_, err = wt.Commit(fmt.Sprintf("large commit %d", i), &git.CommitOptions{
+			Author:    &objectSignature,
+			Committer: &objectSignature,
+		})
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+}
+
 var objectSignature = signature()
 
 func signature() object.Signature {
@@ -821,6 +903,8 @@ type smartHTTPRepoServer struct {
 	v2       bool
 	username string
 	password string
+
+	receivePackBodyLimit int64
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -1004,7 +1088,7 @@ func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Re
 	lines := []string{
 		"version 2\n",
 		"ls-refs=unborn\n",
-		"fetch=thin-pack\n",
+		"fetch=thin-pack filter\n",
 		"agent=test-server\n",
 	}
 	for _, line := range lines {
@@ -1134,7 +1218,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 		}
 	}
 
-	hashes, err := revlist.Objects(s.repo.Storer, wants, nil)
+	hashes, err := revlist.Objects(s.repo.Storer, wants, haves)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1171,6 +1255,9 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
+		if isConnectionCloseError(err) {
+			return
+		}
 		s.t.Fatalf("write v2 fetch response: %v", err)
 	}
 
@@ -1185,6 +1272,24 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	}
 	defer r.Body.Close()
 
+	if s.receivePackBodyLimit > 0 && int64(len(body)) > s.receivePackBodyLimit {
+		report := packp.NewReportStatus()
+		report.UnpackStatus = fmt.Sprintf("push rejected: body exceeded size limit %d (trace_id=00000000000000000000000000000000)", s.receivePackBodyLimit)
+
+		var buf bytes.Buffer
+		if err := report.Encode(&buf); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			s.t.Fatalf("write receive-pack rejection: %v", err)
+		}
+		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+		return
+	}
+
 	session, err := s.newSession(serviceReceivePack)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1194,6 +1299,41 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	req := packp.NewReferenceUpdateRequest()
 	if err := req.Decode(bytes.NewReader(body)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if !bytes.Contains(body, []byte("PACK")) {
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ok",
+			})
+			if cmd.New.IsZero() {
+				if err := s.repo.Storer.RemoveReference(cmd.Name); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				continue
+			}
+			if err := s.repo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		var buf bytes.Buffer
+		if err := report.Encode(&buf); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			s.t.Fatalf("write receive-pack command response: %v", err)
+		}
+		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 		return
 	}
 
@@ -1249,6 +1389,15 @@ func (s *smartHTTPRepoServer) recordMetric(service string, kind metricKind, in, 
 		wants:   wants,
 		haves:   haves,
 	})
+}
+
+func isConnectionCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer")
 }
 
 func (s *smartHTTPRepoServer) refsMatchingPrefixes(prefixes []string) ([]*plumbing.Reference, error) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -49,6 +50,18 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 		os.Getenv("GITSYNC_E2E_ENTIRE_BRANCH"),
 		"main",
 	)
+	maxPackBytes, err := envInt64Default("GITSYNC_E2E_ENTIRE_MAX_PACK_BYTES", 0)
+	if err != nil {
+		t.Fatalf("parse GITSYNC_E2E_ENTIRE_MAX_PACK_BYTES: %v", err)
+	}
+	batchMaxPackBytes, err := envInt64Default("GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES", 0)
+	if err != nil {
+		t.Fatalf("parse GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES: %v", err)
+	}
+	protocolMode := firstNonEmpty(
+		os.Getenv("GITSYNC_E2E_ENTIRE_PROTOCOL"),
+		protocolModeAuto,
+	)
 	repoName := firstNonEmpty(
 		os.Getenv("GITSYNC_E2E_ENTIRE_REPO"),
 		"git-sync-smoke",
@@ -84,6 +97,16 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 	}
 
 	targetURL := strings.TrimRight(baseURL, "/") + "/git/" + username + "/" + repoName
+	t.Logf(
+		"Entire local smoke config: source=%s branch=%s target=%s repo=%s protocol=%s max_pack_bytes=%d batch_max_pack_bytes=%d",
+		sourceURL,
+		branch,
+		targetURL,
+		repoName,
+		protocolMode,
+		maxPackBytes,
+		batchMaxPackBytes,
+	)
 	result, err := Run(context.Background(), Config{
 		Source: Endpoint{URL: sourceURL},
 		Target: Endpoint{
@@ -92,8 +115,11 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 			Token:         token,
 			SkipTLSVerify: skipTLSVerify,
 		},
-		Branches: []string{branch},
-		Verbose:  true,
+		Branches:          []string{branch},
+		Verbose:           true,
+		MaxPackBytes:      maxPackBytes,
+		BatchMaxPackBytes: batchMaxPackBytes,
+		ProtocolMode:      protocolMode,
 	})
 	if err != nil {
 		t.Fatalf("sync public source into Entire failed: %v", err)
@@ -277,6 +303,18 @@ func envBoolDefault(key string, defaultValue bool) bool {
 	default:
 		return defaultValue
 	}
+}
+
+func envInt64Default(key string, defaultValue int64) (int64, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }
 
 func firstNonEmpty(values ...string) string {
