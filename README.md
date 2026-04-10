@@ -316,6 +316,29 @@ The `mise` tasks are:
 
 - `mise run test:linux-smoke`
 - `mise run test:linux-smoke:batched`
+- `mise run test:entire-local-smoke`
+
+The Entire local smoke expects:
+
+- a running Entire local instance reachable at `GITSYNC_E2E_ENTIRE_BASE_URL` or `ENTIRE_BASE_URL`
+- an authenticated local Entire CLI session for that host, so the smoke can discover the active user and OAuth token from `hosts.json` and the keyring
+- `entiredb` on `PATH`, or `GITSYNC_E2E_ENTIREDB_BIN` pointing to it
+
+Useful overrides:
+
+- `GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/entireio/cli.git`
+- `GITSYNC_E2E_ENTIRE_BRANCH=main`
+- `GITSYNC_E2E_ENTIRE_REPO=git-sync-smoke`
+- `GITSYNC_E2E_ENTIRE_USERNAME=...`
+- `GITSYNC_E2E_ENTIRE_TOKEN=...`
+- `GITSYNC_E2E_ENTIRE_SKIP_TLS_VERIFY=true`
+
+For local/self-signed targets, `git-sync` also supports:
+
+- `--source-insecure-skip-tls-verify`
+- `--target-insecure-skip-tls-verify`
+- `GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY=true`
+- `GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY=true`
 
 ## Planned Bootstrap Path
 
