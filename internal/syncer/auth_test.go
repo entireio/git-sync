@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -37,5 +38,27 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 	}
 	if basic.Username != "git" || basic.Password != "explicit-token" {
 		t.Fatalf("unexpected auth: %+v", basic)
+	}
+}
+
+func TestNewTransportConnSkipTLSVerify(t *testing.T) {
+	conn, err := newTransportConn(Endpoint{
+		URL:           "https://example.com/repo.git",
+		SkipTLSVerify: true,
+	}, "source", newStats(false))
+	if err != nil {
+		t.Fatalf("new transport conn: %v", err)
+	}
+
+	roundTripper, ok := conn.http.Transport.(*countingRoundTripper)
+	if !ok {
+		t.Fatalf("expected countingRoundTripper, got %T", conn.http.Transport)
+	}
+	base, ok := roundTripper.base.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport base, got %T", roundTripper.base)
+	}
+	if base.TLSClientConfig == nil || !base.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("expected InsecureSkipVerify transport, got %#v", base.TLSClientConfig)
 	}
 }

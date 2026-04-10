@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,10 +39,11 @@ const (
 )
 
 type Endpoint struct {
-	URL         string
-	Username    string
-	Token       string
-	BearerToken string
+	URL           string
+	Username      string
+	Token         string
+	BearerToken   string
+	SkipTLSVerify bool
 }
 
 type RefMapping struct {
@@ -50,20 +52,20 @@ type RefMapping struct {
 }
 
 type Config struct {
-	Source       Endpoint
-	Target       Endpoint
-	Branches     []string
-	Mappings     []RefMapping
-	IncludeTags  bool
-	DryRun       bool
-	Verbose      bool
-	ShowStats    bool
-	MeasureMemory bool
-	Force        bool
-	Prune        bool
-	MaxPackBytes int64
+	Source            Endpoint
+	Target            Endpoint
+	Branches          []string
+	Mappings          []RefMapping
+	IncludeTags       bool
+	DryRun            bool
+	Verbose           bool
+	ShowStats         bool
+	MeasureMemory     bool
+	Force             bool
+	Prune             bool
+	MaxPackBytes      int64
 	BatchMaxPackBytes int64
-	ProtocolMode string
+	ProtocolMode      string
 }
 
 type RefKind string
@@ -95,35 +97,35 @@ const (
 )
 
 type Result struct {
-	Plans    []BranchPlan `json:"plans"`
-	Pushed   int          `json:"pushed"`
-	Skipped  int          `json:"skipped"`
-	Blocked  int          `json:"blocked"`
-	Deleted  int          `json:"deleted"`
-	DryRun   bool         `json:"dry_run"`
-	Relay    bool         `json:"relay"`
-	RelayMode string      `json:"relay_mode"`
-	RelayReason string    `json:"relay_reason"`
-	Batching bool         `json:"batching"`
-	BatchCount int        `json:"batch_count"`
-	PlannedBatchCount int `json:"planned_batch_count"`
-	TempRefs []string     `json:"temp_refs"`
-	BootstrapSuggested bool `json:"bootstrap_suggested"`
-	Stats    Stats        `json:"stats"`
-	Measurement Measurement `json:"measurement"`
-	Protocol string       `json:"protocol"`
+	Plans              []BranchPlan `json:"plans"`
+	Pushed             int          `json:"pushed"`
+	Skipped            int          `json:"skipped"`
+	Blocked            int          `json:"blocked"`
+	Deleted            int          `json:"deleted"`
+	DryRun             bool         `json:"dry_run"`
+	Relay              bool         `json:"relay"`
+	RelayMode          string       `json:"relay_mode"`
+	RelayReason        string       `json:"relay_reason"`
+	Batching           bool         `json:"batching"`
+	BatchCount         int          `json:"batch_count"`
+	PlannedBatchCount  int          `json:"planned_batch_count"`
+	TempRefs           []string     `json:"temp_refs"`
+	BootstrapSuggested bool         `json:"bootstrap_suggested"`
+	Stats              Stats        `json:"stats"`
+	Measurement        Measurement  `json:"measurement"`
+	Protocol           string       `json:"protocol"`
 }
 
 type ProbeResult struct {
-	SourceURL     string    `json:"source_url"`
-	TargetURL     string    `json:"target_url,omitempty"`
-	RequestedMode string    `json:"requested_mode"`
-	Protocol      string    `json:"protocol"`
-	RefPrefixes   []string  `json:"ref_prefixes"`
-	Capabilities  []string  `json:"source_capabilities"`
-	TargetCaps    []string  `json:"target_capabilities,omitempty"`
-	Refs          []RefInfo `json:"refs"`
-	Stats         Stats     `json:"stats"`
+	SourceURL     string      `json:"source_url"`
+	TargetURL     string      `json:"target_url,omitempty"`
+	RequestedMode string      `json:"requested_mode"`
+	Protocol      string      `json:"protocol"`
+	RefPrefixes   []string    `json:"ref_prefixes"`
+	Capabilities  []string    `json:"source_capabilities"`
+	TargetCaps    []string    `json:"target_capabilities,omitempty"`
+	Refs          []RefInfo   `json:"refs"`
+	Stats         Stats       `json:"stats"`
 	Measurement   Measurement `json:"measurement"`
 }
 
@@ -203,13 +205,13 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 
 func (r FetchResult) MarshalJSON() ([]byte, error) {
 	type fetchResultJSON struct {
-		SourceURL      string    `json:"source_url"`
-		RequestedMode  string    `json:"requested_mode"`
-		Protocol       string    `json:"protocol"`
-		Wants          []RefInfo `json:"wants"`
-		Haves          []string  `json:"haves"`
-		FetchedObjects int       `json:"fetched_objects"`
-		Stats          Stats     `json:"stats"`
+		SourceURL      string      `json:"source_url"`
+		RequestedMode  string      `json:"requested_mode"`
+		Protocol       string      `json:"protocol"`
+		Wants          []RefInfo   `json:"wants"`
+		Haves          []string    `json:"haves"`
+		FetchedObjects int         `json:"fetched_objects"`
+		Stats          Stats       `json:"stats"`
 		Measurement    Measurement `json:"measurement"`
 	}
 	haves := make([]string, 0, len(r.Haves))
@@ -449,14 +451,14 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	result := Result{
-		Plans:    plans,
-		DryRun:   cfg.DryRun,
-		Relay:    false,
-		RelayMode: "",
+		Plans:       plans,
+		DryRun:      cfg.DryRun,
+		Relay:       false,
+		RelayMode:   "",
 		RelayReason: "",
-		Stats:    stats.snapshot(),
+		Stats:       stats.snapshot(),
 		Measurement: measurementDone(),
-		Protocol: sourceService.protocol,
+		Protocol:    sourceService.protocol,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -889,9 +891,9 @@ func bootstrapWithInputs(
 }
 
 type bootstrapBatch struct {
-	Plan       BranchPlan
-	TempRef    plumbing.ReferenceName
-	ResumeHash plumbing.Hash
+	Plan        BranchPlan
+	TempRef     plumbing.ReferenceName
+	ResumeHash  plumbing.Hash
 	Checkpoints []plumbing.Hash
 }
 
@@ -940,7 +942,7 @@ func bootstrapBatchedWithInputs(
 
 	var (
 		batches []bootstrapBatch
-		err error
+		err     error
 	)
 	if len(planRefs) > 0 {
 		progressf(cfg.Verbose, "bootstrap-batch: planning checkpoints for %d branch ref(s)", len(planRefs))
@@ -1141,8 +1143,8 @@ func planBootstrapBatches(
 				Kind:       ref.Kind,
 				Action:     ActionCreate,
 			},
-			TempRef:    bootstrapTempRef(ref.TargetRef),
-			ResumeHash: targetRefs[bootstrapTempRef(ref.TargetRef)],
+			TempRef:     bootstrapTempRef(ref.TargetRef),
+			ResumeHash:  targetRefs[bootstrapTempRef(ref.TargetRef)],
 			Checkpoints: checkpoints,
 		})
 	}
@@ -2225,9 +2227,21 @@ func newTransportConn(raw Endpoint, label string, stats *statsCollector) (*trans
 		return nil, err
 	}
 
+	baseTransport := http.DefaultTransport
+	if raw.SkipTLSVerify {
+		if cloned, ok := http.DefaultTransport.(*http.Transport); ok {
+			transportClone := cloned.Clone()
+			if transportClone.TLSClientConfig == nil {
+				transportClone.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+			}
+			transportClone.TLSClientConfig.InsecureSkipVerify = true
+			baseTransport = transportClone
+		}
+	}
+
 	httpClient := &http.Client{
 		Transport: &countingRoundTripper{
-			base:  http.DefaultTransport,
+			base:  baseTransport,
 			label: label,
 			stats: stats,
 		},
