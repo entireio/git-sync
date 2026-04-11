@@ -33,6 +33,7 @@ import (
 	"github.com/soph/git-sync/internal/auth"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
+	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
 )
 
 const testBranch = "master"
@@ -262,6 +263,126 @@ func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
 	}
 	if targetServer.Count(serviceReceivePack, metricPack) != 0 {
 		t.Fatalf("expected no receive-pack POSTs, got %d", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
+func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+
+	unrelatedRepo, unrelatedFS := newSourceRepo(t)
+	makeCommits(t, unrelatedRepo, unrelatedFS, 1)
+	unrelatedHead, err := unrelatedRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve unrelated head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(unrelatedRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy unrelated objects: %v", err)
+	}
+	targetHead := unrelatedHead
+	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, targetHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	}
+
+	s, err := newSession(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	desired, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
+	if err != nil {
+		t.Fatalf("build desired refs: %v", err)
+	}
+	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
+	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
+		SourceConn:    s.sourceConn,
+		SourceService: s.sourceService,
+		BatchMaxPack:  cfg.BatchMaxPackBytes,
+	}, ref)
+	if err != nil {
+		t.Fatalf("plan checkpoints: %v", err)
+	}
+	if len(checkpoints) == 0 {
+		t.Fatal("expected checkpoints for batched bootstrap")
+	}
+	for _, checkpoint := range checkpoints {
+		if checkpoint == targetHead.Hash() {
+			t.Fatalf("expected unrelated temp ref hash, got checkpoint collision at %s", checkpoint)
+		}
+	}
+
+	_, err = Bootstrap(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected batched bootstrap resume mismatch to fail")
+	}
+	if !strings.Contains(err.Error(), "does not match any planned checkpoint") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBootstrap_IntegrationBatchedResumeAtFinalTipCutsOver(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy source objects: %v", err)
+	}
+	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap final-tip cutover failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve target head: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s, got %s", sourceHead.Hash(), targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted", tempRef)
 	}
 }
 

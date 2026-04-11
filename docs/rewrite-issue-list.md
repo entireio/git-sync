@@ -415,7 +415,9 @@ Known missing cases:
 
 Current rewrite note:
 - Some of these are now covered, including empty source repo, tag force-retarget, duplicate/conflicting mappings, and tag creation when target objects already exist.
-- Basic context cancellation coverage now exists, but in-flight cancellation and some harder batch-failure/cutover paths still need stronger coverage.
+- Basic context cancellation coverage now exists.
+- Batched bootstrap resume mismatch and final-tip cutover paths now have direct integration coverage.
+- Some harder batch-failure injection and partial cutover failure paths still remain.
 
 ### 22. No benchmark coverage for the expensive paths
 
