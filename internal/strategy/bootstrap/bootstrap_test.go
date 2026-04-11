@@ -137,9 +137,7 @@ func (fakeBootstrapSource) FetchCommitGraph(context.Context, storer.Storer, *git
 	return nil
 }
 
-func (fakeBootstrapSource) ProtocolName() string { return "v2" }
-
-func (fakeBootstrapSource) SupportsFetchFeature(string) bool { return true }
+func (fakeBootstrapSource) SupportsBootstrapBatch() bool { return true }
 
 type fakeBootstrapPusher struct {
 	pushPack     func(context.Context, []gitproto.PushCommand, io.ReadCloser) error
@@ -202,5 +200,48 @@ func TestExecuteOneShotUsesTargetPusher(t *testing.T) {
 	}
 	if len(gotCommands) != 1 || gotCommands[0].Name != mainRef || gotCommands[0].New != mainHash {
 		t.Fatalf("unexpected push commands: %+v", gotCommands)
+	}
+}
+
+func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	mainHash := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	tests := []struct {
+		name         string
+		batchMaxPack int64
+	}{
+		{name: "one-shot bootstrap", batchMaxPack: 0},
+		{name: "batched bootstrap", batchMaxPack: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calledFetch := false
+			_, err := Execute(context.Background(), Params{
+				SourceService: fakeBootstrapSource{
+					fetchPack: func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+						calledFetch = true
+						return io.NopCloser(bytes.NewReader(nil)), nil
+					},
+				},
+				DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+					mainRef: {
+						SourceRef:  mainRef,
+						TargetRef:  mainRef,
+						SourceHash: mainHash,
+						Kind:       planner.RefKindBranch,
+					},
+				},
+				TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+				BatchMaxPack: tt.batchMaxPack,
+			}, "missing pusher")
+			if err == nil || err.Error() != "bootstrap strategy requires TargetPusher" {
+				t.Fatalf("Execute() error = %v, want missing TargetPusher", err)
+			}
+			if calledFetch {
+				t.Fatal("expected bootstrap to fail before fetching source pack")
+			}
+		})
 	}
 }

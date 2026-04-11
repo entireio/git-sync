@@ -42,8 +42,7 @@ type Params struct {
 	SourceService interface {
 		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 		FetchCommitGraph(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
-		ProtocolName() string
-		SupportsFetchFeature(string) bool
+		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
 		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
@@ -77,7 +76,18 @@ type plannedBatch struct {
 
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
-	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, p.TargetRefs)
+	// GitHub large-repo preflight
+	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
+		p.BatchMaxPack = batchLimit
+		p.log("bootstrap github preflight selected batched mode",
+			"batch_max_pack_bytes", p.BatchMaxPack)
+	}
+
+	planTargetRefs := p.TargetRefs
+	if p.BatchMaxPack > 0 {
+		planTargetRefs = adjustedBootstrapTargetRefs(p.DesiredRefs, p.TargetRefs)
+	}
+	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, planTargetRefs)
 	if err != nil {
 		return Result{}, err
 	}
@@ -85,12 +95,8 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	result := Result{
 		Plans: plans, Relay: true, RelayMode: "bootstrap", RelayReason: relayReason,
 	}
-
-	// GitHub large-repo preflight
-	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
-		p.BatchMaxPack = batchLimit
-		p.log("bootstrap github preflight selected batched mode",
-			"batch_max_pack_bytes", p.BatchMaxPack)
+	if p.TargetPusher == nil {
+		return result, fmt.Errorf("bootstrap strategy requires TargetPusher")
 	}
 
 	if p.BatchMaxPack > 0 {
@@ -111,9 +117,6 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 
 	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
 	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(plans))
-	if p.TargetPusher == nil {
-		return result, fmt.Errorf("bootstrap strategy requires TargetPusher")
-	}
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	if pushErr != nil {
 		autoBatch, ok := autoBatchMaxPackBytes(p, pushErr)
@@ -130,6 +133,26 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	return result, nil
 }
 
+func adjustedBootstrapTargetRefs(
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) map[plumbing.ReferenceName]plumbing.Hash {
+	if len(targetRefs) == 0 {
+		return targetRefs
+	}
+	adjusted := planner.CopyRefHashMap(targetRefs)
+	for targetRef, desired := range desiredRefs {
+		if desired.Kind != planner.RefKindBranch {
+			continue
+		}
+		tempRef := planner.BootstrapTempRef(targetRef)
+		if adjusted[targetRef] == desired.SourceHash && adjusted[tempRef] == desired.SourceHash {
+			adjusted[targetRef] = plumbing.ZeroHash
+		}
+	}
+	return adjusted
+}
+
 // --- Batched bootstrap ---
 
 func executeBatched(
@@ -138,11 +161,8 @@ func executeBatched(
 	plans []planner.BranchPlan,
 	result Result,
 ) (Result, error) {
-	if p.SourceService.ProtocolName() != "v2" {
-		return result, fmt.Errorf("bootstrap batching currently requires protocol v2")
-	}
-	if !p.SourceService.SupportsFetchFeature("filter") {
-		return result, fmt.Errorf("bootstrap batching requires source fetch filter support")
+	if !p.SourceService.SupportsBootstrapBatch() {
+		return result, fmt.Errorf("bootstrap batching requires protocol v2 source fetch filter support")
 	}
 
 	planRefs := make([]planner.DesiredRef, 0, len(plans))
@@ -239,7 +259,7 @@ func executeBatched(
 		if current.IsZero() {
 			return result, fmt.Errorf("bootstrap batching for %s completed with no checkpoint state", batch.Plan.TargetRef)
 		}
-		if batch.ResumeHash == batch.Plan.SourceHash {
+		if batch.ResumeHash == batch.Plan.SourceHash && p.TargetRefs[batch.Plan.TargetRef].IsZero() {
 			cmds := []gitproto.PushCommand{{Name: batch.Plan.TargetRef, Old: plumbing.ZeroHash, New: batch.Plan.SourceHash}}
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
@@ -442,10 +462,7 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	if p.BatchMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
 		return 0, false
 	}
-	if p.SourceService == nil || p.SourceService.ProtocolName() != "v2" {
-		return 0, false
-	}
-	if !p.SourceService.SupportsFetchFeature("filter") {
+	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
 		return 0, false
 	}
 	repoSizeKB, ok := lookupGitHubRepoSizeKB(ctx, p.SourceConn)
@@ -517,10 +534,7 @@ func autoBatchMaxPackBytes(p Params, err error) (int64, bool) {
 	if p.BatchMaxPack > 0 || !isTargetBodyLimitError(err) {
 		return 0, false
 	}
-	if p.SourceService == nil || p.SourceService.ProtocolName() != "v2" {
-		return 0, false
-	}
-	if !p.SourceService.SupportsFetchFeature("filter") {
+	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
 		return 0, false
 	}
 	limit := int64(defaultAutoBatchMaxPackBytes)

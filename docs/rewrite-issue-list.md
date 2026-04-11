@@ -427,7 +427,8 @@ Current rewrite note:
 - Batched lightweight-tag creation without an extra pack is now covered directly.
 - Basic context cancellation coverage now exists.
 - Batched bootstrap resume mismatch and final-tip cutover paths now have direct integration coverage.
-- Some harder batch-failure injection and partial cutover failure paths still remain.
+- Batched bootstrap reruns now also cover the "target ref already created, temp ref cleanup still pending" recovery path.
+- Some harder injected batch-failure paths still remain.
 
 ### 22. No benchmark coverage for the expensive paths
 
@@ -443,6 +444,7 @@ Current rewrite note:
 
 - All mapping validation happens before network activity. Status: done
 - Capability negotiation is centralized and enforced consistently. Status: partial
+  Source-side fetch capability checks now live behind `gitproto.RefService` methods, but some target-side relay gating still relies on orchestration wiring rather than a fully typed capability boundary.
 - Relay strategies are separate packages with explicit inputs and outputs. Status: done
 - Tag creation is correct whether or not a pack transfer is needed. Status: done
 - Stats are concurrency-safe. Status: done

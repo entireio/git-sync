@@ -26,18 +26,26 @@ type DesiredRef struct {
 	IsTag      bool
 }
 
-func (s *RefService) ProtocolName() string {
-	if s == nil {
-		return ""
-	}
-	return s.Protocol
+// FetchFeatures summarizes negotiated source fetch features used by strategies.
+type FetchFeatures struct {
+	Filter     bool
+	IncludeTag bool
 }
 
-func (s *RefService) SupportsFetchFeature(feature string) bool {
+func (s *RefService) FetchFeatures() FetchFeatures {
 	if s == nil || s.Protocol != "v2" || s.V2Caps == nil {
-		return false
+		return FetchFeatures{}
 	}
-	return s.V2Caps.FetchSupports(feature)
+	return FetchFeatures{
+		Filter:     s.V2Caps.FetchSupports("filter"),
+		IncludeTag: s.V2Caps.FetchSupports("include-tag"),
+	}
+}
+
+// SupportsBootstrapBatch centralizes the source-side capability check for the
+// batched bootstrap strategy.
+func (s *RefService) SupportsBootstrapBatch() bool {
+	return s != nil && s.Protocol == "v2" && s.FetchFeatures().Filter
 }
 
 // FetchToStore fetches objects from source into the given store, using the

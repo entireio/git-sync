@@ -46,6 +46,43 @@ func TestCapabilities(t *testing.T) {
 	}
 }
 
+func TestFetchFeatures(t *testing.T) {
+	v2Caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "shallow filter include-tag",
+		},
+	}
+	rs := &RefService{Protocol: "v2", V2Caps: v2Caps}
+	features := rs.FetchFeatures()
+	if !features.Filter || !features.IncludeTag {
+		t.Fatalf("FetchFeatures() = %+v, want filter and include-tag enabled", features)
+	}
+
+	rs = &RefService{Protocol: "v1"}
+	features = rs.FetchFeatures()
+	if features.Filter || features.IncludeTag {
+		t.Fatalf("FetchFeatures() for v1 = %+v, want zero value", features)
+	}
+}
+
+func TestSupportsBootstrapBatch(t *testing.T) {
+	if (&RefService{Protocol: "v1"}).SupportsBootstrapBatch() {
+		t.Fatal("v1 service should not support bootstrap batching")
+	}
+	if (&RefService{
+		Protocol: "v2",
+		V2Caps:   &V2Capabilities{Caps: map[string]string{"fetch": "shallow"}},
+	}).SupportsBootstrapBatch() {
+		t.Fatal("v2 service without filter should not support bootstrap batching")
+	}
+	if !(&RefService{
+		Protocol: "v2",
+		V2Caps:   &V2Capabilities{Caps: map[string]string{"fetch": "filter"}},
+	}).SupportsBootstrapBatch() {
+		t.Fatal("v2 service with filter should support bootstrap batching")
+	}
+}
+
 func TestBuildSidebandReader(t *testing.T) {
 	data := "hello world"
 	reader := bytes.NewBufferString(data)
