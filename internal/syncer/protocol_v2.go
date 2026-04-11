@@ -263,6 +263,17 @@ func (s *sourceRefService) Fetch(ctx context.Context, repo *git.Repository, conn
 	}
 }
 
+func (s *sourceRefService) FetchPack(ctx context.Context, conn *transportConn, desired map[plumbing.ReferenceName]desiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+	switch s.protocol {
+	case protocolModeV2:
+		return fetchSourcePackV2(ctx, conn, s.v2, desired, targetRefs)
+	case protocolModeV1:
+		return fetchSourcePackV1(ctx, conn, s.v1, desired, targetRefs)
+	default:
+		return nil, fmt.Errorf("unsupported source protocol %q", s.protocol)
+	}
+}
+
 func sourceCapabilities(s *sourceRefService) []string {
 	switch s.protocol {
 	case protocolModeV2:
@@ -396,6 +407,71 @@ func fetchSourceRefsV2(
 	return storeFetchedSourceRefs(repo, desired)
 }
 
+func fetchSourceCommitGraphV2(
+	ctx context.Context,
+	repo *git.Repository,
+	conn *transportConn,
+	adv *v2CapabilityAdvertisement,
+	ref desiredRef,
+) error {
+	if !fetchCapabilitySupports(adv, "filter") {
+		return fmt.Errorf("source does not advertise fetch filter support")
+	}
+
+	commandArgs := []string{
+		"ofs-delta",
+		"no-progress",
+		"filter tree:0",
+		"want " + ref.SourceHash.String(),
+		"done",
+	}
+	conn.stats.addWantsHaves("source upload-pack", 1, 0)
+
+	body, err := encodeV2CommandRequest("fetch", v2RequestCapabilities(adv), commandArgs)
+	if err != nil {
+		return err
+	}
+
+	reader, err := postRPCStreamWithPhase(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
+	if err != nil {
+		return err
+	}
+	defer ioutil.CheckClose(reader, &err)
+
+	if err := storeV2FetchPack(repo, reader); err != nil {
+		return err
+	}
+	return storeFetchedSourceRefs(repo, singleDesiredRef(ref.SourceRef, ref.TargetRef, ref.SourceHash))
+}
+
+func fetchSourcePackV2(
+	ctx context.Context,
+	conn *transportConn,
+	adv *v2CapabilityAdvertisement,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) (io.ReadCloser, error) {
+	body, wants, haves, err := sourceFetchRequestV2(adv, desired, targetRefs)
+	if err != nil {
+		return nil, err
+	}
+	if wants == 0 {
+		return nil, git.NoErrAlreadyUpToDate
+	}
+	conn.stats.addWantsHaves("source upload-pack", wants, haves)
+
+	reader, err := postRPCStreamWithPhase(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
+	if err != nil {
+		return nil, err
+	}
+	packReader, err := openV2FetchPackStream(reader)
+	if err != nil {
+		_ = reader.Close()
+		return nil, err
+	}
+	return packReader, nil
+}
+
 func storeV2FetchPack(repo *git.Repository, r io.Reader) error {
 	reader := newPacketReader(r)
 	for {
@@ -427,6 +503,41 @@ func storeV2FetchPack(repo *git.Repository, r io.Reader) error {
 				}
 			default:
 				return fmt.Errorf("unexpected protocol v2 fetch section %q", strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+func openV2FetchPackStream(body io.ReadCloser) (io.ReadCloser, error) {
+	reader := newPacketReader(body)
+	for {
+		kind, payload, err := reader.ReadPacket()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("decode protocol v2 fetch response: %w", err)
+		}
+
+		switch kind {
+		case packetTypeFlush:
+			return nil, io.ErrUnexpectedEOF
+		case packetTypeDelim, packetTypeResponseEnd:
+			continue
+		case packetTypeData:
+			line := string(payload)
+			switch line {
+			case "packfile\n":
+				return &wrappedReadCloser{
+					Reader: sideband.NewDemuxer(sideband.Sideband64k, reader.Reader()),
+					Closer: body,
+				}, nil
+			case "acknowledgments\n", "shallow-info\n":
+				if err := skipV2Section(reader); err != nil {
+					return nil, err
+				}
+			default:
+				return nil, fmt.Errorf("unexpected protocol v2 fetch section %q", strings.TrimSpace(line))
 			}
 		}
 	}
@@ -504,12 +615,62 @@ func sourceRefPrefixes(cfg Config) []string {
 	return prefixes
 }
 
+func fetchCapabilitySupports(adv *v2CapabilityAdvertisement, feature string) bool {
+	if adv == nil {
+		return false
+	}
+	values := strings.Fields(adv.Value("fetch"))
+	for _, value := range values {
+		if value == feature {
+			return true
+		}
+	}
+	return false
+}
+
 func v2RequestCapabilities(adv *v2CapabilityAdvertisement) []string {
 	var caps []string
 	if agent := adv.Value("agent"); agent != "" {
 		caps = append(caps, "agent="+capability.DefaultAgent())
 	}
 	return caps
+}
+
+func sourceFetchRequestV2(
+	adv *v2CapabilityAdvertisement,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) ([]byte, int, int, error) {
+	wants := make([]plumbing.Hash, 0, len(desired))
+	for _, ref := range desired {
+		wants = append(wants, ref.SourceHash)
+	}
+	wants = sortedUniqueHashes(wants)
+	haves := sortedUniqueHashes(mapsRefValues(targetRefs))
+	if len(wants) == 0 {
+		return nil, 0, 0, nil
+	}
+
+	commandArgs := make([]string, 0, len(wants)+len(haves)+4)
+	commandArgs = append(commandArgs, "ofs-delta", "no-progress")
+	for _, hash := range wants {
+		commandArgs = append(commandArgs, "want "+hash.String())
+	}
+	for _, hash := range haves {
+		commandArgs = append(commandArgs, "have "+hash.String())
+	}
+	commandArgs = append(commandArgs, "done")
+
+	body, err := encodeV2CommandRequest("fetch", v2RequestCapabilities(adv), commandArgs)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return body, len(wants), len(haves), nil
+}
+
+type wrappedReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func storeFetchedSourceRefs(repo *git.Repository, desired map[plumbing.ReferenceName]desiredRef) error {

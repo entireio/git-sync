@@ -39,6 +39,14 @@ func TestMarshalOutput_JSONShape(t *testing.T) {
 		Wants:          []syncer.RefInfo{{Name: "refs/heads/main", Hash: plumbing.NewHash("1111111111111111111111111111111111111111")}},
 		Haves:          []plumbing.Hash{plumbing.NewHash("2222222222222222222222222222222222222222")},
 		FetchedObjects: 42,
+		Measurement: syncer.Measurement{
+			Enabled:            true,
+			ElapsedMillis:      12,
+			PeakAllocBytes:     100,
+			PeakHeapInuseBytes: 200,
+			TotalAllocBytes:    300,
+			GCCount:            1,
+		},
 	})
 	if err != nil {
 		t.Fatalf("marshalOutput returned error: %v", err)
@@ -57,6 +65,10 @@ func TestMarshalOutput_JSONShape(t *testing.T) {
 	}
 	if got := decoded["fetched_objects"]; got != float64(42) {
 		t.Fatalf("unexpected fetched_objects: %#v", got)
+	}
+	measurement, ok := decoded["measurement"].(map[string]any)
+	if !ok || measurement["elapsed_millis"] != float64(12) {
+		t.Fatalf("unexpected measurement: %#v", decoded["measurement"])
 	}
 	wants, ok := decoded["wants"].([]any)
 	if !ok || len(wants) != 1 {
@@ -105,6 +117,12 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	}
 	if result["dry_run"] != true {
 		t.Fatalf("expected dry_run=true, got %#v", result["dry_run"])
+	}
+	if result["bootstrap_suggested"] != true {
+		t.Fatalf("expected bootstrap_suggested=true, got %#v", result["bootstrap_suggested"])
+	}
+	if result["relay_reason"] != "empty-target-managed-refs" {
+		t.Fatalf("expected relay_reason for bootstrap suggestion, got %#v", result["relay_reason"])
 	}
 	plans, ok := result["plans"].([]any)
 	if !ok || len(plans) == 0 {

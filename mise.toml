@@ -1,0 +1,41 @@
+[tools]
+# Please also keep the version aligned in the go.mod file
+go = { version = '1.25.2', postinstall = "go install github.com/go-delve/delve/cmd/dlv@latest && go install gotest.tools/gotestsum@latest" }
+golangci-lint = '2.11.3'
+shellcheck = 'latest'
+
+[tasks.fmt]
+description = "Run gofmt"
+run = "gofmt -s -w ."
+
+[tasks.test]
+description = "Run tests"
+run = "go test ./..."
+
+[tasks."test:git-http-backend"]
+description = "Run optional git-http-backend integration tests"
+run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackendSync' -v"
+
+[tasks."test:linux-smoke"]
+description = "Run optional live linux bootstrap smoke test"
+run = "GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSource -timeout 60m -v"
+
+[tasks."test:linux-smoke:batched"]
+description = "Run optional live linux batched bootstrap smoke test"
+run = "GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSourceBatched -timeout 60m -v"
+
+[tasks."test:entire-local-smoke"]
+description = "Run optional smoke syncing a public repo into a running Entire local instance"
+run = "GITSYNC_E2E_ENTIRE=1 go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 30m -v"
+
+[tasks."test:entire-local-smoke:linux"]
+description = "Run optional batched smoke syncing the Linux repo into a running Entire local instance"
+run = "GITSYNC_E2E_ENTIRE=1 GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/torvalds/linux.git GITSYNC_E2E_ENTIRE_BRANCH=master GITSYNC_E2E_ENTIRE_PROTOCOL=v2 GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES=536870912 go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 60m -v"
+
+[tasks."test:entire-local-smoke:linux:single"]
+description = "Run optional single-pack smoke syncing the Linux repo into a running Entire local instance"
+run = "GITSYNC_E2E_ENTIRE=1 GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/torvalds/linux.git GITSYNC_E2E_ENTIRE_BRANCH=master go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 60m -v"
+
+[tasks.build]
+description = "Build git-sync"
+run = "go build ./cmd/git-sync"

@@ -12,6 +12,7 @@ The command surface is:
 
 - `git-sync probe`: inspect a source remote, and optionally a target remote
 - `git-sync fetch`: exercise source-side fetch negotiation without pushing
+- `git-sync bootstrap`: seed an empty target with create-only relay behavior
 - `git-sync plan`: compute source-to-target ref actions without pushing
 - `git-sync sync`: execute the planned changes against the target
 
@@ -57,6 +58,77 @@ go run ./cmd/git-sync plan \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
 ```
+
+Bootstrap an empty target without using the normal local object-store sync path:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --stats \
+  https://github.com/source-org/source-repo.git \
+  https://github.com/target-org/target-repo.git
+```
+
+Add `--max-pack-bytes` to abort bootstrap if the streamed source pack grows past a safety threshold:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --max-pack-bytes 104857600 \
+  <source-url> \
+  <target-url>
+```
+
+Add `--batch-max-pack-bytes` to split large branch bootstraps into multiple relay batches with temporary refs:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --batch-max-pack-bytes 1073741824 \
+  <source-url> \
+  <target-url>
+```
+
+Current batching scope is intentionally narrow:
+
+- protocol v2 only
+- branch refs are batched
+- optional create-only tags are pushed after branch batches complete
+- temporary refs under `refs/gitsync/bootstrap/heads/`
+- resume from existing temp refs is supported when they match a planned checkpoint
+
+This mode is intended as an advanced large-repo fallback, not the default bootstrap path. Use plain `bootstrap` first when a single streamed initial sync is acceptable.
+
+A practical starting point is:
+
+- `--batch-max-pack-bytes 536870912` for a conservative `512 MiB` target-side batch size
+- `--batch-max-pack-bytes 1073741824` when you want fewer, larger batches and the target has more headroom
+
+For example:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --batch-max-pack-bytes 536870912 \
+  --protocol v2 \
+  -v \
+  <source-url> \
+  <target-url>
+```
+
+Add `--measure-memory` to `bootstrap`, `sync`, `plan`, `probe`, or `fetch` to sample elapsed time and Go heap usage:
+
+```bash
+go run ./cmd/git-sync bootstrap \
+  --measure-memory \
+  --json \
+  <source-url> \
+  <target-url>
+```
+
+That is the intended way to compare the bootstrap relay path against the normal sync path on the same fixture or test repo.
+
+`plan` and `sync` JSON output also include `relay`, `relay_mode`, and `relay_reason` so automation can tell whether a relay path was chosen and why.
+
+When `sync` sees that all managed target refs are absent and the run is compatible with bootstrap semantics, it automatically uses the bootstrap relay path instead of the normal decode-and-repack sync path.
+
+`sync` also uses a narrow incremental relay path for fast-forward branch updates and tag creation when there is no prune/delete, no force, and the target does not advertise `no-thin`. This now includes multi-branch batches, branch-to-branch mappings, and create-only tags. Tag retargeting and other more complex updates still fall back to the normal local decode-and-repack path.
 
 Sync specific branches:
 
@@ -107,7 +179,7 @@ go run ./cmd/git-sync probe \
   <source-url>
 ```
 
-Add `--json` to `probe`, `fetch`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
+Add `--json` to `probe`, `fetch`, `bootstrap`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
 
 The JSON interface is intentionally stable:
 
@@ -115,7 +187,8 @@ The JSON interface is intentionally stable:
 - refs and hashes are serialized as strings, not raw byte arrays
 - `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
 - `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
-- `plan` and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
+- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
+- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, `batch_count`, `planned_batch_count`, and `temp_refs`
 - each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
 
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
@@ -218,3 +291,88 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/sync
 ```
 
 That path exercises real smart HTTP fetch and push with a local bare source repo and a local bare target repo.
+
+The Phase A batching path also has a dedicated `git-http-backend` test:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run TestBootstrap_GitHTTPBackendBatchedBranch -v
+```
+
+There is also an optional live Linux bootstrap smoke against the public Linux repository:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSource -v
+```
+
+That is useful for large-source relay and memory measurement checks while keeping the target local and disposable.
+
+There is also a batched variant of the same Linux smoke:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSourceBatched -v
+```
+
+The `mise` tasks are:
+
+- `mise run test:linux-smoke`
+- `mise run test:linux-smoke:batched`
+- `mise run test:entire-local-smoke`
+- `mise run test:entire-local-smoke:linux`
+- `mise run test:entire-local-smoke:linux:single`
+
+`test:linux-smoke` and `test:linux-smoke:batched` use a disposable local bare Git target served through `git-http-backend`. They do not talk to a running Entire instance.
+
+The Entire local smoke expects:
+
+- a running Entire local instance reachable at `GITSYNC_E2E_ENTIRE_BASE_URL` or `ENTIRE_BASE_URL`
+- an authenticated local Entire CLI session for that host, so the smoke can discover the active user and OAuth token from `hosts.json` and the keyring
+- `entiredb` on `PATH`, or `GITSYNC_E2E_ENTIREDB_BIN` pointing to it
+
+Useful overrides:
+
+- `GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/entireio/cli.git`
+- `GITSYNC_E2E_ENTIRE_BRANCH=main`
+- `GITSYNC_E2E_ENTIRE_REPO=git-sync-smoke`
+- `GITSYNC_E2E_ENTIRE_USERNAME=...`
+- `GITSYNC_E2E_ENTIRE_TOKEN=...`
+- `GITSYNC_E2E_ENTIRE_SKIP_TLS_VERIFY=true`
+
+To sync the public Linux repo into a local Entire instance, use:
+
+```bash
+mise run test:entire-local-smoke:linux
+```
+
+That task sets:
+
+- `GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/torvalds/linux.git`
+- `GITSYNC_E2E_ENTIRE_BRANCH=master`
+- `GITSYNC_E2E_ENTIRE_PROTOCOL=v2`
+- `GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES=536870912`
+
+The batched default matters for Entire targets with request body limits around `2 GiB`; a single Linux bootstrap push can exceed that. If you explicitly want the old single-pack behavior, use:
+
+```bash
+mise run test:entire-local-smoke:linux:single
+```
+
+If you use `test:entire-local-smoke` directly, the test falls back to `https://github.com/entireio/cli.git` on `main` unless you override both the source URL and branch yourself. The Entire-local smoke also accepts:
+
+- `GITSYNC_E2E_ENTIRE_MAX_PACK_BYTES`
+- `GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES`
+- `GITSYNC_E2E_ENTIRE_PROTOCOL`
+
+For local/self-signed targets, `git-sync` also supports:
+
+- `--source-insecure-skip-tls-verify`
+- `--target-insecure-skip-tls-verify`
+- `GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY=true`
+- `GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY=true`
+
+## Planned Bootstrap Path
+
+There is a dedicated `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
+
+The design note is in [docs/bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md).
+
+For very large single-branch repositories, there is also a batching design and initial implementation note in [docs/bootstrap-batching.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap-batching.md).

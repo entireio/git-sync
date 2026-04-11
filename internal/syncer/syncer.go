@@ -3,15 +3,23 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -25,6 +33,7 @@ import (
 	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/go-git/go-git/v5/utils/ioutil"
+	"github.com/zalando/go-keyring"
 )
 
 const (
@@ -32,13 +41,19 @@ const (
 	protocolModeAuto = "auto"
 	protocolModeV1   = "v1"
 	protocolModeV2   = "v2"
+
+	defaultAutoBatchMaxPackBytes = 512 * 1024 * 1024
+	entireCLIClientID            = "entire-cli"
 )
 
+var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
+
 type Endpoint struct {
-	URL         string
-	Username    string
-	Token       string
-	BearerToken string
+	URL           string
+	Username      string
+	Token         string
+	BearerToken   string
+	SkipTLSVerify bool
 }
 
 type RefMapping struct {
@@ -47,17 +62,20 @@ type RefMapping struct {
 }
 
 type Config struct {
-	Source       Endpoint
-	Target       Endpoint
-	Branches     []string
-	Mappings     []RefMapping
-	IncludeTags  bool
-	DryRun       bool
-	Verbose      bool
-	ShowStats    bool
-	Force        bool
-	Prune        bool
-	ProtocolMode string
+	Source            Endpoint
+	Target            Endpoint
+	Branches          []string
+	Mappings          []RefMapping
+	IncludeTags       bool
+	DryRun            bool
+	Verbose           bool
+	ShowStats         bool
+	MeasureMemory     bool
+	Force             bool
+	Prune             bool
+	MaxPackBytes      int64
+	BatchMaxPackBytes int64
+	ProtocolMode      string
 }
 
 type RefKind string
@@ -89,26 +107,36 @@ const (
 )
 
 type Result struct {
-	Plans    []BranchPlan `json:"plans"`
-	Pushed   int          `json:"pushed"`
-	Skipped  int          `json:"skipped"`
-	Blocked  int          `json:"blocked"`
-	Deleted  int          `json:"deleted"`
-	DryRun   bool         `json:"dry_run"`
-	Stats    Stats        `json:"stats"`
-	Protocol string       `json:"protocol"`
+	Plans              []BranchPlan `json:"plans"`
+	Pushed             int          `json:"pushed"`
+	Skipped            int          `json:"skipped"`
+	Blocked            int          `json:"blocked"`
+	Deleted            int          `json:"deleted"`
+	DryRun             bool         `json:"dry_run"`
+	Relay              bool         `json:"relay"`
+	RelayMode          string       `json:"relay_mode"`
+	RelayReason        string       `json:"relay_reason"`
+	Batching           bool         `json:"batching"`
+	BatchCount         int          `json:"batch_count"`
+	PlannedBatchCount  int          `json:"planned_batch_count"`
+	TempRefs           []string     `json:"temp_refs"`
+	BootstrapSuggested bool         `json:"bootstrap_suggested"`
+	Stats              Stats        `json:"stats"`
+	Measurement        Measurement  `json:"measurement"`
+	Protocol           string       `json:"protocol"`
 }
 
 type ProbeResult struct {
-	SourceURL     string    `json:"source_url"`
-	TargetURL     string    `json:"target_url,omitempty"`
-	RequestedMode string    `json:"requested_mode"`
-	Protocol      string    `json:"protocol"`
-	RefPrefixes   []string  `json:"ref_prefixes"`
-	Capabilities  []string  `json:"source_capabilities"`
-	TargetCaps    []string  `json:"target_capabilities,omitempty"`
-	Refs          []RefInfo `json:"refs"`
-	Stats         Stats     `json:"stats"`
+	SourceURL     string      `json:"source_url"`
+	TargetURL     string      `json:"target_url,omitempty"`
+	RequestedMode string      `json:"requested_mode"`
+	Protocol      string      `json:"protocol"`
+	RefPrefixes   []string    `json:"ref_prefixes"`
+	Capabilities  []string    `json:"source_capabilities"`
+	TargetCaps    []string    `json:"target_capabilities,omitempty"`
+	Refs          []RefInfo   `json:"refs"`
+	Stats         Stats       `json:"stats"`
+	Measurement   Measurement `json:"measurement"`
 }
 
 type RefInfo struct {
@@ -124,6 +152,18 @@ type FetchResult struct {
 	Haves          []plumbing.Hash `json:"haves"`
 	FetchedObjects int             `json:"fetched_objects"`
 	Stats          Stats           `json:"stats"`
+	Measurement    Measurement     `json:"measurement"`
+}
+
+type entireAuthHostInfo struct {
+	ActiveUser string   `json:"activeUser"`
+	Users      []string `json:"users"`
+}
+
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
 }
 
 type Stats struct {
@@ -139,6 +179,15 @@ type ServiceStats struct {
 	Wants         int    `json:"wants"`
 	Haves         int    `json:"haves"`
 	Commands      int    `json:"commands"`
+}
+
+type Measurement struct {
+	Enabled            bool   `json:"enabled"`
+	ElapsedMillis      int64  `json:"elapsed_millis"`
+	PeakAllocBytes     uint64 `json:"peak_alloc_bytes"`
+	PeakHeapInuseBytes uint64 `json:"peak_heap_inuse_bytes"`
+	TotalAllocBytes    uint64 `json:"total_alloc_bytes"`
+	GCCount            uint32 `json:"gc_count"`
 }
 
 func (p BranchPlan) MarshalJSON() ([]byte, error) {
@@ -177,13 +226,14 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 
 func (r FetchResult) MarshalJSON() ([]byte, error) {
 	type fetchResultJSON struct {
-		SourceURL      string    `json:"source_url"`
-		RequestedMode  string    `json:"requested_mode"`
-		Protocol       string    `json:"protocol"`
-		Wants          []RefInfo `json:"wants"`
-		Haves          []string  `json:"haves"`
-		FetchedObjects int       `json:"fetched_objects"`
-		Stats          Stats     `json:"stats"`
+		SourceURL      string      `json:"source_url"`
+		RequestedMode  string      `json:"requested_mode"`
+		Protocol       string      `json:"protocol"`
+		Wants          []RefInfo   `json:"wants"`
+		Haves          []string    `json:"haves"`
+		FetchedObjects int         `json:"fetched_objects"`
+		Stats          Stats       `json:"stats"`
+		Measurement    Measurement `json:"measurement"`
 	}
 	haves := make([]string, 0, len(r.Haves))
 	for _, hash := range r.Haves {
@@ -197,6 +247,7 @@ func (r FetchResult) MarshalJSON() ([]byte, error) {
 		Haves:          haves,
 		FetchedObjects: r.FetchedObjects,
 		Stats:          r.Stats,
+		Measurement:    r.Measurement,
 	})
 }
 
@@ -215,8 +266,8 @@ func (r Result) Lines() []string {
 	}
 
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d planned-batches=%d",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount, r.PlannedBatchCount,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -236,6 +287,19 @@ func (r Result) Lines() []string {
 				item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
 			))
 		}
+	}
+	if r.Measurement.Enabled {
+		lines = append(lines, fmt.Sprintf(
+			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
+			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
+		))
+	}
+	if r.BootstrapSuggested {
+		lines = append(lines, "hint: target refs are absent; bootstrap can seed them without local object storage")
+	}
+
+	if r.Batching && len(r.TempRefs) > 0 {
+		lines = append(lines, fmt.Sprintf("batching: temp-refs=%s", strings.Join(r.TempRefs, ",")))
 	}
 
 	return lines
@@ -280,6 +344,12 @@ func (r ProbeResult) Lines() []string {
 			))
 		}
 	}
+	if r.Measurement.Enabled {
+		lines = append(lines, fmt.Sprintf(
+			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
+			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
+		))
+	}
 
 	return lines
 }
@@ -313,10 +383,17 @@ func (r FetchResult) Lines() []string {
 			))
 		}
 	}
+	if r.Measurement.Enabled {
+		lines = append(lines, fmt.Sprintf(
+			"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
+			r.Measurement.ElapsedMillis, r.Measurement.PeakAllocBytes, r.Measurement.PeakHeapInuseBytes, r.Measurement.TotalAllocBytes, r.Measurement.GCCount,
+		))
+	}
 	return lines
 }
 
 func Run(ctx context.Context, cfg Config) (Result, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -362,6 +439,26 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if len(desiredRefs) == 0 {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
+	if ok, reason := canBootstrapRelay(cfg, desiredRefs, targetRefMap); ok {
+		if cfg.DryRun {
+			plans, err := buildBootstrapPlans(desiredRefs, targetRefMap)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{
+				Plans:              plans,
+				DryRun:             true,
+				Relay:              false,
+				RelayMode:          "",
+				RelayReason:        reason,
+				BootstrapSuggested: true,
+				Stats:              stats.snapshot(),
+				Measurement:        measurementDone(),
+				Protocol:           sourceService.protocol,
+			}, nil
+		}
+		return bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason)
+	}
 
 	if err := sourceService.Fetch(ctx, repo, sourceConn, desiredRefs, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -375,10 +472,14 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	result := Result{
-		Plans:    plans,
-		DryRun:   cfg.DryRun,
-		Stats:    stats.snapshot(),
-		Protocol: sourceService.protocol,
+		Plans:       plans,
+		DryRun:      cfg.DryRun,
+		Relay:       false,
+		RelayMode:   "",
+		RelayReason: "",
+		Stats:       stats.snapshot(),
+		Measurement: measurementDone(),
+		Protocol:    sourceService.protocol,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -406,10 +507,28 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
+	result.RelayReason = relayFallbackReason(cfg, pushPlans, targetAdv)
 
-	if !cfg.DryRun && len(pushPlans) > 0 {
-		if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
-			return result, fmt.Errorf("push target refs: %w", err)
+	if !cfg.DryRun {
+		if ok, reason := canIncrementalRelay(cfg, pushPlans, targetAdv); ok {
+			relayPlans := append([]BranchPlan(nil), pushPlans...)
+			desiredRelay := desiredSubsetForPlans(desiredRefs, relayPlans)
+			packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRelay, targetRefMap)
+			if err != nil {
+				return result, fmt.Errorf("fetch source pack: %w", err)
+			}
+			defer packReader.Close()
+			packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, relayPlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push target refs: %w", err)
+			}
+			result.Relay = true
+			result.RelayMode = "incremental"
+			result.RelayReason = reason
+		} else if len(pushPlans) > 0 {
+			if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push target refs: %w", err)
+			}
 		}
 	}
 
@@ -423,10 +542,69 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	result.Stats = stats.snapshot()
+	result.Measurement = measurementDone()
 	return result, nil
 }
 
+func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
+	if cfg.ProtocolMode == "" {
+		cfg.ProtocolMode = protocolModeAuto
+	}
+	if cfg.ProtocolMode != protocolModeAuto && cfg.ProtocolMode != protocolModeV1 && cfg.ProtocolMode != protocolModeV2 {
+		return Result{}, fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
+	}
+	if cfg.Force {
+		return Result{}, fmt.Errorf("bootstrap does not support --force")
+	}
+	if cfg.Prune {
+		return Result{}, fmt.Errorf("bootstrap does not support --prune")
+	}
+	if cfg.DryRun {
+		return Result{}, fmt.Errorf("bootstrap does not support dry-run; use plan or sync")
+	}
+
+	stats := newStats(cfg.ShowStats)
+	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	if err != nil {
+		return Result{}, fmt.Errorf("create source transport: %w", err)
+	}
+	targetConn, err := newTransportConn(cfg.Target, "target", stats)
+	if err != nil {
+		return Result{}, fmt.Errorf("create target transport: %w", err)
+	}
+
+	sourceRefs, sourceService, err := listSourceRefs(ctx, sourceConn, cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("list source refs: %w", err)
+	}
+	targetAdv, err := advertisedRefsV1(ctx, targetConn, transport.ReceivePackServiceName)
+	if err != nil {
+		return Result{}, fmt.Errorf("list target refs: %w", err)
+	}
+	targetRefs, err := advertisedReferences(targetAdv)
+	if err != nil {
+		return Result{}, fmt.Errorf("decode target refs: %w", err)
+	}
+
+	sourceRefMap := refHashMap(sourceRefs)
+	targetRefMap := refHashMap(targetRefs)
+
+	desiredRefs, _, err := buildDesiredRefs(sourceRefMap, cfg)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(desiredRefs) == 0 {
+		return Result{}, fmt.Errorf("no source refs matched")
+	}
+	_, reason := canBootstrapRelay(cfg, desiredRefs, targetRefMap)
+	result, err := bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason)
+	result.Measurement = measurementDone()
+	return result, err
+}
+
 func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -470,6 +648,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		Capabilities:  sourceCapabilities(service),
 		Refs:          refInfos,
 		Stats:         stats.snapshot(),
+		Measurement:   measurementDone(),
 	}
 
 	if cfg.Target.URL != "" {
@@ -484,12 +663,14 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 		result.TargetURL = cfg.Target.URL
 		result.TargetCaps = advCapabilities(targetAdv)
 		result.Stats = stats.snapshot()
+		result.Measurement = measurementDone()
 	}
 
 	return result, nil
 }
 
 func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plumbing.Hash) (FetchResult, error) {
+	measurementDone := startMeasurement(cfg.MeasureMemory)
 	if cfg.ProtocolMode == "" {
 		cfg.ProtocolMode = protocolModeAuto
 	}
@@ -563,7 +744,737 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 		Haves:          sortedUniqueHashes(mapsRefValues(targetRefMap)),
 		FetchedObjects: objectCount,
 		Stats:          stats.snapshot(),
+		Measurement:    measurementDone(),
 	}, nil
+}
+
+func buildBootstrapPlans(
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) ([]BranchPlan, error) {
+	targetNames := make([]plumbing.ReferenceName, 0, len(desired))
+	for _, want := range desired {
+		targetNames = append(targetNames, want.TargetRef)
+	}
+	sort.Slice(targetNames, func(i, j int) bool { return targetNames[i] < targetNames[j] })
+
+	plans := make([]BranchPlan, 0, len(targetNames))
+	for _, targetRef := range targetNames {
+		targetHash := targetRefs[targetRef]
+		if !targetHash.IsZero() {
+			return nil, fmt.Errorf("target ref %s already exists; use sync for non-bootstrap runs", targetRef)
+		}
+		want := desired[targetRef]
+		plans = append(plans, BranchPlan{
+			Branch:     want.Label,
+			SourceRef:  want.SourceRef,
+			TargetRef:  want.TargetRef,
+			SourceHash: want.SourceHash,
+			TargetHash: plumbing.ZeroHash,
+			Kind:       want.Kind,
+			Action:     ActionCreate,
+			Reason:     fmt.Sprintf("create %s at %s", want.TargetRef, shortHash(want.SourceHash)),
+		})
+	}
+	return plans, nil
+}
+
+func canBootstrapRelay(
+	cfg Config,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) (bool, string) {
+	if cfg.Force || cfg.Prune {
+		return false, "bootstrap-disabled-by-force-or-prune"
+	}
+	if len(desired) == 0 {
+		return false, "bootstrap-no-managed-refs"
+	}
+	for targetRef := range desired {
+		if !targetRefs[targetRef].IsZero() {
+			return false, "bootstrap-target-ref-exists"
+		}
+	}
+	return true, "empty-target-managed-refs"
+}
+
+func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) (bool, string) {
+	if cfg.Force || cfg.Prune || cfg.DryRun {
+		return false, "incremental-disabled-by-force-prune-or-dry-run"
+	}
+	if len(plans) == 0 {
+		return false, "incremental-no-plans"
+	}
+	if targetAdv == nil || targetAdv.Capabilities == nil {
+		return false, "incremental-missing-target-capabilities"
+	}
+	if targetAdv.Capabilities.Supports(capability.Capability("no-thin")) {
+		return false, "incremental-target-no-thin"
+	}
+
+	for _, plan := range plans {
+		switch plan.Kind {
+		case RefKindBranch:
+			if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
+				return false, "incremental-non-branch-mapping"
+			}
+			if plan.Action != ActionUpdate {
+				return false, "incremental-branch-action-not-update"
+			}
+			if plan.TargetHash.IsZero() {
+				return false, "incremental-branch-target-missing"
+			}
+		case RefKindTag:
+			if !plan.SourceRef.IsTag() || !plan.TargetRef.IsTag() {
+				return false, "incremental-non-tag-mapping"
+			}
+			if plan.Action != ActionCreate {
+				return false, "incremental-tag-action-not-create"
+			}
+		default:
+			return false, "incremental-unsupported-ref-kind"
+		}
+	}
+	return true, "fast-forward-branch-or-tag-create"
+}
+
+func relayFallbackReason(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) string {
+	if ok, reason := canIncrementalRelay(cfg, plans, targetAdv); ok {
+		return reason
+	} else {
+		return reason
+	}
+}
+
+func desiredSubsetForPlans(
+	desired map[plumbing.ReferenceName]desiredRef,
+	plans []BranchPlan,
+) map[plumbing.ReferenceName]desiredRef {
+	out := make(map[plumbing.ReferenceName]desiredRef, len(plans))
+	for _, plan := range plans {
+		if ref, ok := desired[plan.TargetRef]; ok {
+			out[plan.TargetRef] = ref
+		}
+	}
+	return out
+}
+
+func bootstrapWithInputs(
+	ctx context.Context,
+	cfg Config,
+	stats *statsCollector,
+	sourceConn *transportConn,
+	targetConn *transportConn,
+	sourceService *sourceRefService,
+	targetAdv *packp.AdvRefs,
+	desiredRefs map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	relayReason string,
+) (Result, error) {
+	plans, err := buildBootstrapPlans(desiredRefs, targetRefs)
+	if err != nil {
+		return Result{}, err
+	}
+
+	result := Result{
+		Plans:       plans,
+		Relay:       true,
+		RelayMode:   "bootstrap",
+		RelayReason: relayReason,
+		Stats:       stats.snapshot(),
+		Protocol:    sourceService.protocol,
+	}
+
+	if cfg.BatchMaxPackBytes > 0 {
+		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, desiredRefs, targetRefs, result)
+	}
+
+	progressf(cfg.Verbose, "bootstrap: fetching %d ref(s) from source", len(plans))
+
+	packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRefs, nil)
+	if err != nil {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return result, nil
+		}
+		return result, fmt.Errorf("fetch source pack: %w", err)
+	}
+	packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+
+	progressf(cfg.Verbose, "bootstrap: pushing %d ref(s) to target", len(plans))
+	pushErr := pushPackToTarget(ctx, targetConn, targetAdv, plans, packReader, cfg.Verbose)
+	if closeErr := packReader.Close(); closeErr != nil && pushErr == nil {
+		pushErr = closeErr
+	}
+	if pushErr != nil {
+		autoBatchSize, ok := autoBatchMaxPackBytes(cfg, sourceService, pushErr)
+		if !ok {
+			return result, fmt.Errorf("push target refs: %w", pushErr)
+		}
+		progressf(
+			cfg.Verbose,
+			"bootstrap: target rejected single-pack push; retrying with batch-max-pack-bytes=%d",
+			autoBatchSize,
+		)
+		cfg.BatchMaxPackBytes = autoBatchSize
+		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, desiredRefs, targetRefs, result)
+	}
+
+	result.Pushed = len(plans)
+	result.Stats = stats.snapshot()
+	return result, nil
+}
+
+func autoBatchMaxPackBytes(cfg Config, sourceService *sourceRefService, err error) (int64, bool) {
+	if cfg.BatchMaxPackBytes > 0 || !isTargetBodyLimitError(err) {
+		return 0, false
+	}
+	if sourceService == nil || sourceService.protocol != protocolModeV2 || !fetchCapabilitySupports(sourceService.v2, "filter") {
+		return 0, false
+	}
+
+	batchLimit := int64(defaultAutoBatchMaxPackBytes)
+	if targetLimit := targetBodyLimit(err); targetLimit > 0 {
+		derivedLimit := targetLimit / 2
+		if derivedLimit <= 0 {
+			derivedLimit = targetLimit
+		}
+		if derivedLimit < batchLimit {
+			batchLimit = derivedLimit
+		}
+	}
+	if cfg.MaxPackBytes > 0 && cfg.MaxPackBytes < batchLimit {
+		batchLimit = cfg.MaxPackBytes
+	}
+	if batchLimit <= 0 {
+		return 0, false
+	}
+	return batchLimit, true
+}
+
+func isTargetBodyLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "body exceeded size limit") ||
+		(strings.Contains(message, "request body") && strings.Contains(message, "too large")) ||
+		(strings.Contains(message, "payload") && strings.Contains(message, "too large")) ||
+		strings.Contains(message, "http 413")
+}
+
+func targetBodyLimit(err error) int64 {
+	if err == nil {
+		return 0
+	}
+	matches := bodyLimitPattern.FindStringSubmatch(strings.ToLower(err.Error()))
+	if len(matches) != 2 {
+		return 0
+	}
+	limit, parseErr := strconv.ParseInt(matches[1], 10, 64)
+	if parseErr != nil {
+		return 0
+	}
+	return limit
+}
+
+type bootstrapBatch struct {
+	Plan        BranchPlan
+	TempRef     plumbing.ReferenceName
+	ResumeHash  plumbing.Hash
+	Checkpoints []plumbing.Hash
+}
+
+func bootstrapBatchedWithInputs(
+	ctx context.Context,
+	cfg Config,
+	stats *statsCollector,
+	sourceConn *transportConn,
+	targetConn *transportConn,
+	sourceService *sourceRefService,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	desiredRefs map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	result Result,
+) (Result, error) {
+	if sourceService.protocol != protocolModeV2 {
+		return result, fmt.Errorf("bootstrap batching currently requires protocol v2")
+	}
+	if !fetchCapabilitySupports(sourceService.v2, "filter") {
+		return result, fmt.Errorf("bootstrap batching requires source fetch filter support")
+	}
+
+	planRefs := make([]desiredRef, 0, len(plans))
+	tagPlans := make([]BranchPlan, 0, len(plans))
+	tagDesired := make(map[plumbing.ReferenceName]desiredRef)
+	for _, plan := range plans {
+		if plan.Kind == RefKindTag {
+			tagPlans = append(tagPlans, plan)
+			if desired, ok := desiredRefs[plan.TargetRef]; ok {
+				tagDesired[plan.TargetRef] = desired
+			}
+			continue
+		}
+		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
+			return result, fmt.Errorf("bootstrap batching currently supports branch refs and create-only tags")
+		}
+		planRefs = append(planRefs, desiredRef{
+			Kind:       plan.Kind,
+			Label:      plan.Branch,
+			SourceRef:  plan.SourceRef,
+			TargetRef:  plan.TargetRef,
+			SourceHash: plan.SourceHash,
+		})
+	}
+
+	var (
+		batches []bootstrapBatch
+		err     error
+	)
+	if len(planRefs) > 0 {
+		progressf(cfg.Verbose, "bootstrap-batch: planning checkpoints for %d branch ref(s)", len(planRefs))
+		batches, err = planBootstrapBatches(ctx, cfg, sourceConn, sourceService, planRefs, targetRefs)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	batchLimit := cfg.BatchMaxPackBytes
+	if cfg.MaxPackBytes > 0 && (batchLimit == 0 || cfg.MaxPackBytes < batchLimit) {
+		batchLimit = cfg.MaxPackBytes
+	}
+
+	for _, batch := range batches {
+		result.PlannedBatchCount += len(batch.Checkpoints)
+		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
+		progressf(
+			cfg.Verbose,
+			"bootstrap-batch: branch=%s temp-ref=%s planned-batches=%d resume=%s",
+			batch.Plan.TargetRef,
+			batch.TempRef,
+			len(batch.Checkpoints),
+			shortHash(batch.ResumeHash),
+		)
+		current := batch.ResumeHash
+		startIdx, err := bootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
+		if err != nil {
+			return result, fmt.Errorf("resume bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+		}
+		for idx := startIdx; idx < len(batch.Checkpoints); idx++ {
+			checkpoint := batch.Checkpoints[idx]
+			progressf(
+				cfg.Verbose,
+				"bootstrap-batch: branch=%s batch=%d/%d from=%s to=%s",
+				batch.Plan.TargetRef,
+				idx+1,
+				len(batch.Checkpoints),
+				shortHash(current),
+				shortHash(checkpoint),
+			)
+			stagePlans := []BranchPlan{
+				{
+					Branch:     batch.Plan.Branch,
+					SourceRef:  batch.Plan.SourceRef,
+					TargetRef:  batch.TempRef,
+					SourceHash: checkpoint,
+					TargetHash: current,
+					Kind:       batch.Plan.Kind,
+					Action:     actionForTargetHash(current),
+					Reason:     fmt.Sprintf("%s -> %s via %s", shortHash(current), shortHash(checkpoint), batch.TempRef),
+				},
+			}
+			if idx == len(batch.Checkpoints)-1 {
+				stagePlans = append(stagePlans, BranchPlan{
+					Branch:     batch.Plan.Branch,
+					SourceRef:  batch.Plan.SourceRef,
+					TargetRef:  batch.Plan.TargetRef,
+					SourceHash: checkpoint,
+					TargetHash: plumbing.ZeroHash,
+					Kind:       batch.Plan.Kind,
+					Action:     ActionCreate,
+					Reason:     fmt.Sprintf("create %s at %s", batch.Plan.TargetRef, shortHash(checkpoint)),
+				})
+			}
+
+			packReader, err := sourceService.FetchPack(ctx, sourceConn, singleDesiredRef(batch.Plan.SourceRef, batch.TempRef, checkpoint), singleHaveMap(current))
+			if err != nil {
+				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
+			}
+			packReader = limitPackReadCloser(packReader, batchLimit)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, stagePlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+			}
+			progressf(
+				cfg.Verbose,
+				"bootstrap-batch: branch=%s batch=%d/%d complete",
+				batch.Plan.TargetRef,
+				idx+1,
+				len(batch.Checkpoints),
+			)
+			current = checkpoint
+			result.BatchCount++
+		}
+
+		if current.IsZero() {
+			return result, fmt.Errorf("bootstrap batching for %s completed with no checkpoint state", batch.Plan.TargetRef)
+		}
+		if batch.ResumeHash == batch.Plan.SourceHash {
+			if err := pushCommandsToTarget(ctx, targetConn, targetAdv, []BranchPlan{{
+				Branch:     batch.Plan.Branch,
+				SourceRef:  batch.Plan.SourceRef,
+				TargetRef:  batch.Plan.TargetRef,
+				SourceHash: batch.Plan.SourceHash,
+				TargetHash: plumbing.ZeroHash,
+				Kind:       batch.Plan.Kind,
+				Action:     ActionCreate,
+				Reason:     fmt.Sprintf("create %s at %s", batch.Plan.TargetRef, shortHash(batch.Plan.SourceHash)),
+			}}, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
+			}
+		}
+
+		deleteTempPlan := BranchPlan{
+			Branch:     batch.Plan.Branch,
+			TargetRef:  batch.TempRef,
+			SourceHash: plumbing.ZeroHash,
+			TargetHash: current,
+			Kind:       batch.Plan.Kind,
+			Action:     ActionDelete,
+			Reason:     fmt.Sprintf("delete temp ref %s", batch.TempRef),
+		}
+		if err := pushCommandsToTarget(ctx, targetConn, targetAdv, []BranchPlan{deleteTempPlan}, cfg.Verbose); err != nil {
+			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
+		}
+		progressf(cfg.Verbose, "bootstrap-batch: branch=%s finalized", batch.Plan.TargetRef)
+	}
+
+	if len(tagPlans) > 0 {
+		progressf(cfg.Verbose, "bootstrap-batch: pushing %d tag(s) after branch batches", len(tagPlans))
+		tagTargetRefs := copyRefHashMap(targetRefs)
+		for _, batch := range batches {
+			tagTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
+		}
+		packReader, err := sourceService.FetchPack(ctx, sourceConn, tagDesired, tagTargetRefs)
+		if err != nil {
+			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+				return result, fmt.Errorf("fetch bootstrap tag pack: %w", err)
+			}
+		} else {
+			defer packReader.Close()
+			packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, tagPlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push bootstrap tags: %w", err)
+			}
+		}
+	}
+
+	result.Pushed = len(plans)
+	result.Batching = true
+	result.RelayMode = "bootstrap-batch"
+	result.Stats = stats.snapshot()
+	return result, nil
+}
+
+func actionForTargetHash(hash plumbing.Hash) Action {
+	if hash.IsZero() {
+		return ActionCreate
+	}
+	return ActionUpdate
+}
+
+func singleDesiredRef(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) map[plumbing.ReferenceName]desiredRef {
+	return map[plumbing.ReferenceName]desiredRef{
+		targetRef: {
+			Kind:       RefKindBranch,
+			Label:      targetRef.Short(),
+			SourceRef:  sourceRef,
+			TargetRef:  targetRef,
+			SourceHash: hash,
+		},
+	}
+}
+
+func singleHaveMap(hash plumbing.Hash) map[plumbing.ReferenceName]plumbing.Hash {
+	if hash.IsZero() {
+		return nil
+	}
+	return map[plumbing.ReferenceName]plumbing.Hash{
+		plumbing.ReferenceName("refs/gitsync/have"): hash,
+	}
+}
+
+func bootstrapTempRef(targetRef plumbing.ReferenceName) plumbing.ReferenceName {
+	return plumbing.ReferenceName("refs/gitsync/bootstrap/heads/" + targetRef.Short())
+}
+
+func planBootstrapBatches(
+	ctx context.Context,
+	cfg Config,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	desired []desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) ([]bootstrapBatch, error) {
+	out := make([]bootstrapBatch, 0, len(desired))
+	for _, ref := range desired {
+		checkpoints, err := planBootstrapBranchCheckpoints(ctx, cfg, sourceConn, sourceService, ref)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bootstrapBatch{
+			Plan: BranchPlan{
+				Branch:     ref.Label,
+				SourceRef:  ref.SourceRef,
+				TargetRef:  ref.TargetRef,
+				SourceHash: ref.SourceHash,
+				Kind:       ref.Kind,
+				Action:     ActionCreate,
+			},
+			TempRef:     bootstrapTempRef(ref.TargetRef),
+			ResumeHash:  targetRefs[bootstrapTempRef(ref.TargetRef)],
+			Checkpoints: checkpoints,
+		})
+	}
+	return out, nil
+}
+
+func planBootstrapBranchCheckpoints(
+	ctx context.Context,
+	cfg Config,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	ref desiredRef,
+) ([]plumbing.Hash, error) {
+	progressf(cfg.Verbose, "bootstrap-batch: fetching commit graph for %s", ref.TargetRef)
+	graphRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("init bootstrap planning repository: %w", err)
+	}
+	if err := fetchSourceCommitGraphV2(ctx, graphRepo, sourceConn, sourceService.v2, ref); err != nil {
+		return nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+	}
+
+	chain, err := firstParentChain(graphRepo, ref.SourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+	}
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+	}
+
+	checkpoints := make([]plumbing.Hash, 0, len(chain))
+	prevIdx := -1
+	prevHash := plumbing.ZeroHash
+	prevSpan := 0
+	for prevIdx < len(chain)-1 {
+		bestIdx, err := largestCheckpointUnderLimit(ctx, cfg, sourceConn, sourceService, ref, chain, prevIdx, prevHash, prevSpan)
+		if err != nil {
+			return nil, err
+		}
+		if bestIdx <= prevIdx {
+			return nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, cfg.BatchMaxPackBytes)
+		}
+		prevSpan = bestIdx - prevIdx
+		prevIdx = bestIdx
+		prevHash = chain[bestIdx]
+		checkpoints = append(checkpoints, prevHash)
+		progressf(
+			cfg.Verbose,
+			"bootstrap-batch: branch=%s planned-checkpoint=%s selected=%d chain-len=%d",
+			ref.TargetRef,
+			shortHash(prevHash),
+			len(checkpoints),
+			len(chain),
+		)
+	}
+	return checkpoints, nil
+}
+
+func largestCheckpointUnderLimit(
+	ctx context.Context,
+	cfg Config,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	ref desiredRef,
+	chain []plumbing.Hash,
+	prevIdx int,
+	prevHash plumbing.Hash,
+	prevSpan int,
+) (int, error) {
+	return sampledCheckpointUnderLimitByProbe(chain, prevIdx, prevSpan, func(idx int) (bool, error) {
+		tooLarge, err := sourcePackExceedsLimit(ctx, sourceConn, sourceService, ref, chain[idx], prevHash, cfg.BatchMaxPackBytes)
+		if err != nil {
+			return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, shortHash(chain[idx]), err)
+		}
+		if tooLarge {
+			progressf(cfg.Verbose, "bootstrap-batch: sample %s exceeds limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+		} else {
+			progressf(cfg.Verbose, "bootstrap-batch: sample %s fits limit=%d", shortHash(chain[idx]), cfg.BatchMaxPackBytes)
+		}
+		return tooLarge, nil
+	})
+}
+
+func sampledCheckpointUnderLimitByProbe(
+	chain []plumbing.Hash,
+	prevIdx int,
+	prevSpan int,
+	probe func(idx int) (bool, error),
+) (int, error) {
+	lo := prevIdx + 1
+	hi := len(chain) - 1
+	if lo > hi {
+		return -1, nil
+	}
+
+	samples := sampledCheckpointCandidates(lo, hi, prevSpan)
+	best := -1
+	for _, idx := range samples {
+		tooLarge, err := probe(idx)
+		if err != nil {
+			return -1, err
+		}
+		if tooLarge {
+			continue
+		}
+		best = idx
+		break
+	}
+	if best != -1 {
+		return best, nil
+	}
+
+	if prevSpan > 1 {
+		shrunk := prevSpan / 2
+		if shrunk < 1 {
+			shrunk = 1
+		}
+		idx := lo + shrunk - 1
+		if idx > hi {
+			idx = hi
+		}
+		if idx >= lo {
+			tooLarge, err := probe(idx)
+			if err != nil {
+				return -1, err
+			}
+			if !tooLarge {
+				return idx, nil
+			}
+		}
+	}
+
+	tooLarge, err := probe(lo)
+	if err != nil {
+		return -1, err
+	}
+	if tooLarge {
+		return -1, nil
+	}
+	return lo, nil
+}
+
+func sampledCheckpointCandidates(lo, hi int, prevSpan int) []int {
+	if lo > hi {
+		return nil
+	}
+
+	set := map[int]struct{}{}
+	add := func(idx int) {
+		if idx < lo {
+			idx = lo
+		}
+		if idx > hi {
+			idx = hi
+		}
+		set[idx] = struct{}{}
+	}
+
+	projected := hi
+	if prevSpan > 0 {
+		projected = lo + prevSpan - 1
+	}
+	add(projected)
+
+	const sampleCount = 4
+	current := projected
+	for i := 0; i < sampleCount-1; i++ {
+		if current <= lo {
+			add(lo)
+			continue
+		}
+		distance := current - lo
+		current = lo + distance/2
+		add(current)
+	}
+	add(lo)
+
+	candidates := make([]int, 0, len(set))
+	for idx := range set {
+		candidates = append(candidates, idx)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(candidates)))
+	return candidates
+}
+
+func firstParentChain(repo *git.Repository, tip plumbing.Hash) ([]plumbing.Hash, error) {
+	commit, err := repo.CommitObject(tip)
+	if err != nil {
+		return nil, err
+	}
+	reversed := make([]plumbing.Hash, 0, 128)
+	for {
+		reversed = append(reversed, commit.Hash)
+		if len(commit.ParentHashes) == 0 {
+			break
+		}
+		commit, err = repo.CommitObject(commit.ParentHashes[0])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	chain := make([]plumbing.Hash, 0, len(reversed))
+	for i := len(reversed) - 1; i >= 0; i-- {
+		chain = append(chain, reversed[i])
+	}
+	return chain, nil
+}
+
+func sourcePackExceedsLimit(
+	ctx context.Context,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	ref desiredRef,
+	want plumbing.Hash,
+	have plumbing.Hash,
+	limit int64,
+) (bool, error) {
+	packReader, err := sourceService.FetchPack(ctx, sourceConn, singleDesiredRef(ref.SourceRef, ref.TargetRef, want), singleHaveMap(have))
+	if err != nil {
+		return false, err
+	}
+	defer packReader.Close()
+	_, err = io.Copy(io.Discard, limitPackReadCloser(packReader, limit))
+	if err == nil {
+		return false, nil
+	}
+	if strings.Contains(err.Error(), "source pack exceeded max-pack-bytes limit") {
+		return true, nil
+	}
+	return false, err
+}
+
+func bootstrapResumeIndex(checkpoints []plumbing.Hash, resumeHash plumbing.Hash) (int, error) {
+	if resumeHash.IsZero() {
+		return 0, nil
+	}
+	for idx, checkpoint := range checkpoints {
+		if checkpoint == resumeHash {
+			return idx + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("temp ref hash %s does not match any planned checkpoint", resumeHash)
 }
 
 func selectBranches(source map[string]plumbing.Hash, requested []string) map[string]plumbing.Hash {
@@ -868,6 +1779,50 @@ func fetchSourceRefsWithHavesV1(
 	return nil
 }
 
+func fetchSourcePackV1(
+	ctx context.Context,
+	conn *transportConn,
+	sourceAdv *packp.AdvRefs,
+	desired map[plumbing.ReferenceName]desiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) (io.ReadCloser, error) {
+	session, err := conn.transport.NewUploadPackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return nil, fmt.Errorf("open source upload-pack session: %w", err)
+	}
+
+	req := packp.NewUploadPackRequestFromCapabilities(sourceAdv.Capabilities)
+	for _, ref := range desired {
+		req.Wants = append(req.Wants, ref.SourceHash)
+	}
+	req.Wants = sortedUniqueHashes(req.Wants)
+	req.Haves = sortedUniqueHashes(mapsRefValues(targetRefs))
+	if len(req.Wants) == 0 {
+		_ = session.Close()
+		return nil, git.NoErrAlreadyUpToDate
+	}
+	if sourceAdv.Capabilities.Supports(capability.NoProgress) {
+		_ = req.Capabilities.Set(capability.NoProgress)
+	}
+	conn.stats.addWantsHaves("source upload-pack", len(req.Wants), len(req.Haves))
+
+	reader, err := session.UploadPack(ctx, req)
+	if err != nil {
+		_ = session.Close()
+		if errors.Is(err, transport.ErrEmptyUploadPackRequest) {
+			return nil, git.NoErrAlreadyUpToDate
+		}
+		return nil, fmt.Errorf("source upload-pack: %w", err)
+	}
+	return &sessionReadCloser{
+		Reader: buildSidebandIfSupported(req.Capabilities, reader, nil),
+		closeFn: func() error {
+			_ = reader.Close()
+			return session.Close()
+		},
+	}, nil
+}
+
 func pushToTarget(
 	ctx context.Context,
 	repo *git.Repository,
@@ -937,6 +1892,117 @@ func pushToTarget(
 	return nil
 }
 
+func pushPackToTarget(
+	ctx context.Context,
+	conn *transportConn,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	pack io.ReadCloser,
+	verbose bool,
+) error {
+	session, err := conn.transport.NewReceivePackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return fmt.Errorf("open target receive-pack session: %w", err)
+	}
+	defer session.Close()
+
+	req := packp.NewReferenceUpdateRequestFromCapabilities(targetAdv.Capabilities)
+	req.Progress = progressWriter(verbose)
+	if targetAdv.Capabilities.Supports(capability.Sideband64k) {
+		_ = req.Capabilities.Set(capability.Sideband64k)
+	} else if targetAdv.Capabilities.Supports(capability.Sideband) {
+		_ = req.Capabilities.Set(capability.Sideband)
+	}
+
+	commands := make([]*packp.Command, 0, len(plans))
+	for _, plan := range plans {
+		cmd := &packp.Command{
+			Name: plan.TargetRef,
+			Old:  plan.TargetHash,
+		}
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			cmd.New = plan.SourceHash
+		default:
+			return fmt.Errorf("streamed pack push only supports create and update actions")
+		}
+		commands = append(commands, cmd)
+	}
+	req.Commands = commands
+	conn.stats.addCommands("target receive-pack", len(commands))
+
+	report, err := receivePackStream(ctx, session, req, pack)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		if err := report.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pushCommandsToTarget(
+	ctx context.Context,
+	conn *transportConn,
+	targetAdv *packp.AdvRefs,
+	plans []BranchPlan,
+	verbose bool,
+) error {
+	session, err := conn.transport.NewReceivePackSession(conn.endpoint, conn.authMethod())
+	if err != nil {
+		return fmt.Errorf("open target receive-pack session: %w", err)
+	}
+	defer session.Close()
+
+	req := packp.NewReferenceUpdateRequestFromCapabilities(targetAdv.Capabilities)
+	req.Progress = progressWriter(verbose)
+	if targetAdv.Capabilities.Supports(capability.Sideband64k) {
+		_ = req.Capabilities.Set(capability.Sideband64k)
+	} else if targetAdv.Capabilities.Supports(capability.Sideband) {
+		_ = req.Capabilities.Set(capability.Sideband)
+	}
+
+	commands := make([]*packp.Command, 0, len(plans))
+	hasDelete := false
+	for _, plan := range plans {
+		cmd := &packp.Command{
+			Name: plan.TargetRef,
+			Old:  plan.TargetHash,
+		}
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			cmd.New = plan.SourceHash
+		case ActionDelete:
+			cmd.New = plumbing.ZeroHash
+			hasDelete = true
+		default:
+			return fmt.Errorf("command-only target push does not support %s", plan.Action)
+		}
+		commands = append(commands, cmd)
+	}
+	req.Commands = commands
+	conn.stats.addCommands("target receive-pack", len(commands))
+	if hasDelete {
+		if !targetAdv.Capabilities.Supports(capability.DeleteRefs) {
+			return fmt.Errorf("target does not support delete-refs")
+		}
+		_ = req.Capabilities.Set(capability.DeleteRefs)
+	}
+
+	report, err := receivePack(ctx, session, nil, req, nil, false, false)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		if err := report.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func receivePack(
 	ctx context.Context,
 	session transport.ReceivePackSession,
@@ -972,6 +2038,21 @@ func receivePack(
 		return nil, err
 	}
 	return report, nil
+}
+
+func receivePackStream(
+	ctx context.Context,
+	session transport.ReceivePackSession,
+	req *packp.ReferenceUpdateRequest,
+	pack io.ReadCloser,
+) (*packp.ReportStatus, error) {
+	req.Packfile = pack
+	report, err := session.ReceivePack(ctx, req)
+	if err != nil {
+		_ = pack.Close()
+		return nil, err
+	}
+	return report, pack.Close()
 }
 
 func objectsToPush(store storer.Storer, wants []plumbing.Hash, targetRefs map[plumbing.ReferenceName]plumbing.Hash) ([]plumbing.Hash, error) {
@@ -1070,6 +2151,109 @@ func collectPushObjects(
 	return nil
 }
 
+type sessionReadCloser struct {
+	io.Reader
+	closeFn func() error
+}
+
+func (r *sessionReadCloser) Close() error {
+	if r.closeFn == nil {
+		return nil
+	}
+	return r.closeFn()
+}
+
+func limitPackReadCloser(r io.ReadCloser, maxBytes int64) io.ReadCloser {
+	if maxBytes <= 0 {
+		return r
+	}
+	return &packLimitReadCloser{
+		ReadCloser: r,
+		maxBytes:   maxBytes,
+	}
+}
+
+type packLimitReadCloser struct {
+	io.ReadCloser
+	maxBytes int64
+	read     int64
+}
+
+func (r *packLimitReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	r.read += int64(n)
+	if r.read > r.maxBytes {
+		return n, fmt.Errorf("source pack exceeded max-pack-bytes limit (%d)", r.maxBytes)
+	}
+	return n, err
+}
+
+func startMeasurement(enabled bool) func() Measurement {
+	if !enabled {
+		return func() Measurement { return Measurement{} }
+	}
+
+	start := time.Now()
+	var startStats runtime.MemStats
+	runtime.ReadMemStats(&startStats)
+
+	done := make(chan struct{})
+	var (
+		mu            sync.Mutex
+		peakAlloc     = startStats.Alloc
+		peakHeapInuse = startStats.HeapInuse
+		result        Measurement
+	)
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				var current runtime.MemStats
+				runtime.ReadMemStats(&current)
+				mu.Lock()
+				if current.Alloc > peakAlloc {
+					peakAlloc = current.Alloc
+				}
+				if current.HeapInuse > peakHeapInuse {
+					peakHeapInuse = current.HeapInuse
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() Measurement {
+		once.Do(func() {
+			close(done)
+			var endStats runtime.MemStats
+			runtime.ReadMemStats(&endStats)
+			mu.Lock()
+			if endStats.Alloc > peakAlloc {
+				peakAlloc = endStats.Alloc
+			}
+			if endStats.HeapInuse > peakHeapInuse {
+				peakHeapInuse = endStats.HeapInuse
+			}
+			result = Measurement{
+				Enabled:            true,
+				ElapsedMillis:      time.Since(start).Milliseconds(),
+				PeakAllocBytes:     peakAlloc,
+				PeakHeapInuseBytes: peakHeapInuse,
+				TotalAllocBytes:    endStats.TotalAlloc - startStats.TotalAlloc,
+				GCCount:            endStats.NumGC - startStats.NumGC,
+			}
+			mu.Unlock()
+		})
+		return result
+	}
+}
+
 func branchMapFromRefHashMap(refs map[plumbing.ReferenceName]plumbing.Hash) map[string]plumbing.Hash {
 	branches := make(map[string]plumbing.Hash)
 	for name, hash := range refs {
@@ -1130,9 +2314,21 @@ func newTransportConn(raw Endpoint, label string, stats *statsCollector) (*trans
 		return nil, err
 	}
 
+	baseTransport := http.DefaultTransport
+	if raw.SkipTLSVerify {
+		if cloned, ok := http.DefaultTransport.(*http.Transport); ok {
+			transportClone := cloned.Clone()
+			if transportClone.TLSClientConfig == nil {
+				transportClone.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+			}
+			transportClone.TLSClientConfig.InsecureSkipVerify = true
+			baseTransport = transportClone
+		}
+	}
+
 	httpClient := &http.Client{
 		Transport: &countingRoundTripper{
-			base:  http.DefaultTransport,
+			base:  baseTransport,
 			label: label,
 			stats: stats,
 		},
@@ -1209,6 +2405,14 @@ func mapsRefValues(input map[plumbing.ReferenceName]plumbing.Hash) []plumbing.Ha
 	return out
 }
 
+func copyRefHashMap(input map[plumbing.ReferenceName]plumbing.Hash) map[plumbing.ReferenceName]plumbing.Hash {
+	out := make(map[plumbing.ReferenceName]plumbing.Hash, len(input))
+	for name, hash := range input {
+		out[name] = hash
+	}
+	return out
+}
+
 func sortedUniqueHashes(input []plumbing.Hash) []plumbing.Hash {
 	seen := make(map[plumbing.Hash]bool, len(input))
 	out := make([]plumbing.Hash, 0, len(input))
@@ -1268,6 +2472,13 @@ func progressWriter(verbose bool) io.Writer {
 	return os.Stderr
 }
 
+func progressf(verbose bool, format string, args ...interface{}) {
+	if !verbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[git-sync] %s\n", fmt.Sprintf(format, args...))
+}
+
 func (e Endpoint) authMethod() transport.AuthMethod {
 	if e.BearerToken != "" {
 		return &transporthttp.TokenAuth{Token: e.BearerToken}
@@ -1298,11 +2509,274 @@ func resolveAuthMethod(raw Endpoint, ep *transport.Endpoint) (transport.AuthMeth
 	if ep.Protocol != "http" && ep.Protocol != "https" {
 		return nil, nil
 	}
+	if username, password, ok := lookupEntireDBCredential(raw, ep); ok {
+		return &transporthttp.BasicAuth{Username: username, Password: password}, nil
+	}
 	username, password, ok := lookupGitCredential(ep)
 	if !ok {
 		return nil, nil
 	}
 	return &transporthttp.BasicAuth{Username: username, Password: password}, nil
+}
+
+func lookupEntireDBCredential(raw Endpoint, ep *transport.Endpoint) (string, string, bool) {
+	if ep == nil || ep.Host == "" {
+		return "", "", false
+	}
+	credHost := endpointCredentialHost(ep)
+	token, ok := lookupEntireDBToken(credHost, endpointBaseURL(ep), raw.SkipTLSVerify)
+	if !ok || token == "" {
+		return "", "", false
+	}
+	username := raw.Username
+	if username == "" {
+		username = "git"
+	}
+	return username, token, true
+}
+
+func endpointBaseURL(ep *transport.Endpoint) string {
+	if ep == nil || ep.Host == "" {
+		return ""
+	}
+	scheme := ep.Protocol
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := ep.Host
+	if ep.Port > 0 {
+		host = fmt.Sprintf("%s:%d", host, ep.Port)
+	}
+	return scheme + "://" + host
+}
+
+func endpointCredentialHost(ep *transport.Endpoint) string {
+	if ep == nil {
+		return ""
+	}
+	if ep.Port > 0 {
+		return fmt.Sprintf("%s:%d", ep.Host, ep.Port)
+	}
+	return ep.Host
+}
+
+func lookupEntireDBToken(host, baseURL string, skipTLSVerify bool) (string, bool) {
+	configDir := os.Getenv("ENTIRE_CONFIG_DIR")
+	if configDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+		configDir = filepath.Join(home, ".config", "entire")
+	}
+
+	username, ok := loadEntireDBActiveUser(host, configDir)
+	if !ok || username == "" {
+		return "", false
+	}
+	token, err := getEntireDBTokenWithRefresh(context.Background(), host, username, baseURL, skipTLSVerify)
+	if err != nil {
+		return "", false
+	}
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+func loadEntireDBActiveUser(host, configDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(configDir, "hosts.json"))
+	if err != nil {
+		return "", false
+	}
+	var hosts map[string]*entireAuthHostInfo
+	if err := json.Unmarshal(data, &hosts); err != nil {
+		return "", false
+	}
+	info := hosts[host]
+	if info == nil || info.ActiveUser == "" {
+		return "", false
+	}
+	return info.ActiveUser, true
+}
+
+func getEntireDBTokenWithRefresh(ctx context.Context, host, username, baseURL string, skipTLSVerify bool) (string, error) {
+	encodedToken, err := readEntireDBStoredToken(entireCredentialService(host), username)
+	if err != nil {
+		return "", err
+	}
+	token, expiresAt := decodeTokenWithExpiration(encodedToken)
+	if token == "" {
+		return "", nil
+	}
+	if !tokenExpiredOrExpiring(expiresAt) {
+		return token, nil
+	}
+	refreshed, err := refreshEntireDBAccessToken(ctx, host, username, baseURL, skipTLSVerify)
+	if err != nil {
+		return token, nil
+	}
+	return refreshed, nil
+}
+
+func decodeTokenWithExpiration(encoded string) (string, time.Time) {
+	idx := strings.LastIndex(encoded, "|")
+	if idx == -1 {
+		return encoded, time.Time{}
+	}
+	token := encoded[:idx]
+	expiresAtUnix, err := strconv.ParseInt(encoded[idx+1:], 10, 64)
+	if err != nil {
+		return encoded, time.Time{}
+	}
+	return token, time.Unix(expiresAtUnix, 0)
+}
+
+func tokenExpiredOrExpiring(expiresAt time.Time) bool {
+	if expiresAt.IsZero() {
+		return true
+	}
+	return time.Now().Add(5 * time.Minute).After(expiresAt)
+}
+
+func refreshEntireDBAccessToken(ctx context.Context, host, username, baseURL string, skipTLSVerify bool) (string, error) {
+	refreshToken, err := readEntireDBStoredToken(entireCredentialService(host)+":refresh", username)
+	if err != nil {
+		return "", err
+	}
+	if refreshToken == "" || baseURL == "" {
+		return "", errors.New("missing refresh token or base url")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", entireCLIClientID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/oauth/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLSVerify}, //nolint:gosec
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("refresh failed with status %d", resp.StatusCode)
+	}
+
+	var tokenResp oauthTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", err
+	}
+	if tokenResp.AccessToken == "" {
+		return "", errors.New("empty access token in refresh response")
+	}
+
+	if err := writeEntireDBStoredToken(
+		entireCredentialService(host),
+		username,
+		encodeTokenWithExpiration(tokenResp.AccessToken, tokenResp.ExpiresIn),
+	); err != nil {
+		return "", err
+	}
+	if tokenResp.RefreshToken != "" {
+		_ = writeEntireDBStoredToken(entireCredentialService(host)+":refresh", username, tokenResp.RefreshToken)
+	}
+	return tokenResp.AccessToken, nil
+}
+
+func encodeTokenWithExpiration(token string, expiresIn int64) string {
+	return fmt.Sprintf("%s|%d", token, time.Now().Unix()+expiresIn)
+}
+
+func entireCredentialService(host string) string {
+	return "entire:" + host
+}
+
+func readEntireDBStoredToken(service, username string) (string, error) {
+	if os.Getenv("ENTIRE_TOKEN_STORE") == "file" {
+		path := os.Getenv("ENTIRE_TOKEN_STORE_PATH")
+		if path == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			path = filepath.Join(home, ".config", "entiredb", "tokens.json")
+		}
+		return readEntireDBFileToken(path, service, username)
+	}
+	return keyring.Get(service, username)
+}
+
+func writeEntireDBStoredToken(service, username, password string) error {
+	if os.Getenv("ENTIRE_TOKEN_STORE") == "file" {
+		path := os.Getenv("ENTIRE_TOKEN_STORE_PATH")
+		if path == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			path = filepath.Join(home, ".config", "entiredb", "tokens.json")
+		}
+		return writeEntireDBFileToken(path, service, username, password)
+	}
+	return keyring.Set(service, username, password)
+}
+
+func readEntireDBFileToken(path, service, username string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", keyring.ErrNotFound
+		}
+		return "", err
+	}
+	var store map[string]map[string]string
+	if err := json.Unmarshal(data, &store); err != nil {
+		return "", err
+	}
+	users := store[service]
+	if users == nil {
+		return "", keyring.ErrNotFound
+	}
+	password, ok := users[username]
+	if !ok {
+		return "", keyring.ErrNotFound
+	}
+	return password, nil
+}
+
+func writeEntireDBFileToken(path, service, username, password string) error {
+	store := map[string]map[string]string{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &store); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if store[service] == nil {
+		store[service] = map[string]string{}
+	}
+	store[service][username] = password
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(store)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {

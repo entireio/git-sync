@@ -56,6 +56,12 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	if !result.Relay {
+		t.Fatalf("expected sync to auto-switch to relay bootstrap on empty target")
+	}
+	if result.RelayReason != "empty-target-managed-refs" {
+		t.Fatalf("expected bootstrap relay reason, got %+v", result)
+	}
 
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 
@@ -70,6 +76,261 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	}
 	if targetServer.Count(serviceUploadPack, metricPack) != 0 {
 		t.Fatalf("expected no target upload-pack POSTs, got %d", targetServer.Count(serviceUploadPack, metricPack))
+	}
+}
+
+func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLimit(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackBodyLimit = 1_000_000
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("initial sync with auto-batch fallback failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+		t.Fatalf("expected batched relay fallback result, got %+v", result)
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("expected multiple batches after size-limit fallback, got %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+
+	if targetServer.Count(serviceReceivePack, metricPack) < 2 {
+		t.Fatalf("expected fallback to retry after initial rejected push, got %d receive-pack POSTs", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
+func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		DryRun:       true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("plan failed: %v", err)
+	}
+	if !result.DryRun || !result.BootstrapSuggested {
+		t.Fatalf("expected bootstrap suggestion, got %+v", result)
+	}
+	if result.RelayReason != "empty-target-managed-refs" {
+		t.Fatalf("expected bootstrap suggestion reason, got %+v", result)
+	}
+	if result.Relay {
+		t.Fatalf("dry-run plan should not execute relay")
+	}
+}
+
+func TestBootstrap_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 4)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		ShowStats:    true,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 || len(result.Plans) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Plans[0].Action != ActionCreate {
+		t.Fatalf("expected create plan, got %+v", result.Plans[0])
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+
+	if sourceServer.BytesOut(serviceUploadPack, metricPack) == 0 {
+		t.Fatalf("expected source upload-pack response bytes")
+	}
+	if targetServer.Count(serviceReceivePack, metricPack) != 1 {
+		t.Fatalf("expected one receive-pack POST, got %d", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
+func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, targetFS := newSourceRepo(t)
+	makeCommits(t, targetRepo, targetFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err == nil {
+		t.Fatalf("expected bootstrap failure when target ref exists")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected existing-ref error, got %v", err)
+	}
+	if targetServer.Count(serviceReceivePack, metricPack) != 0 {
+		t.Fatalf("expected no receive-pack POSTs, got %d", targetServer.Count(serviceReceivePack, metricPack))
+	}
+}
+
+func TestBootstrap_IntegrationBranchMapping(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		Mappings:     []RefMapping{{Source: "master", Target: "stable"}},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap mapping failed: %v", err)
+	}
+	if result.Pushed != 1 || len(result.Plans) != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Plans[0].TargetRef != plumbing.NewBranchReferenceName("stable") {
+		t.Fatalf("expected stable target ref, got %+v", result.Plans[0])
+	}
+
+	sourceRef, err := sourceRepo.Reference(plumbing.NewBranchReferenceName("master"), true)
+	if err != nil {
+		t.Fatalf("resolve source ref: %v", err)
+	}
+	targetRef, err := targetRepo.Reference(plumbing.NewBranchReferenceName("stable"), true)
+	if err != nil {
+		t.Fatalf("resolve target ref: %v", err)
+	}
+	if sourceRef.Hash() != targetRef.Hash() {
+		t.Fatalf("mapped target mismatch: source=%s target=%s", sourceRef.Hash(), targetRef.Hash())
+	}
+}
+
+func TestBootstrap_IntegrationTags(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1"), head.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		IncludeTags:  true,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap tags failed: %v", err)
+	}
+	if result.Pushed != 2 || len(result.Plans) != 2 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("v1"), true); err != nil {
+		t.Fatalf("expected v1 tag on target: %v", err)
+	}
+}
+
+func TestBootstrap_IntegrationPackLimit(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Bootstrap(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		MaxPackBytes: 32,
+	})
+	if err == nil {
+		t.Fatalf("expected bootstrap failure when pack exceeds threshold")
+	}
+	if !strings.Contains(err.Error(), "max-pack-bytes") {
+		t.Fatalf("expected max-pack-bytes error, got %v", err)
+	}
+	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected target branch to remain absent, got %v", err)
 	}
 }
 
@@ -547,6 +808,48 @@ func makeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count 
 	}
 }
 
+func makeLargeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int, blobSize int) {
+	t.Helper()
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("open worktree: %v", err)
+	}
+
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("blob-%d.bin", i)
+		file, err := fs.Create(name)
+		if err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+		content := make([]byte, blobSize)
+		state := uint32(0x9e3779b9) + uint32(i)*uint32(2654435761)
+		for idx := range content {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			content[idx] = byte(state >> 24)
+		}
+		if _, err := file.Write(content); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("close file: %v", err)
+		}
+		if _, err := wt.Add(name); err != nil {
+			t.Fatalf("add file: %v", err)
+		}
+
+		_, err = wt.Commit(fmt.Sprintf("large commit %d", i), &git.CommitOptions{
+			Author:    &objectSignature,
+			Committer: &objectSignature,
+		})
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+}
+
 var objectSignature = signature()
 
 func signature() object.Signature {
@@ -600,6 +903,8 @@ type smartHTTPRepoServer struct {
 	v2       bool
 	username string
 	password string
+
+	receivePackBodyLimit int64
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -783,7 +1088,7 @@ func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Re
 	lines := []string{
 		"version 2\n",
 		"ls-refs=unborn\n",
-		"fetch=thin-pack\n",
+		"fetch=thin-pack filter\n",
 		"agent=test-server\n",
 	}
 	for _, line := range lines {
@@ -913,7 +1218,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 		}
 	}
 
-	hashes, err := revlist.Objects(s.repo.Storer, wants, nil)
+	hashes, err := revlist.Objects(s.repo.Storer, wants, haves)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -950,6 +1255,9 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
+		if isConnectionCloseError(err) {
+			return
+		}
 		s.t.Fatalf("write v2 fetch response: %v", err)
 	}
 
@@ -964,6 +1272,24 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	}
 	defer r.Body.Close()
 
+	if s.receivePackBodyLimit > 0 && int64(len(body)) > s.receivePackBodyLimit {
+		report := packp.NewReportStatus()
+		report.UnpackStatus = fmt.Sprintf("push rejected: body exceeded size limit %d (trace_id=00000000000000000000000000000000)", s.receivePackBodyLimit)
+
+		var buf bytes.Buffer
+		if err := report.Encode(&buf); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			s.t.Fatalf("write receive-pack rejection: %v", err)
+		}
+		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+		return
+	}
+
 	session, err := s.newSession(serviceReceivePack)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -973,6 +1299,41 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	req := packp.NewReferenceUpdateRequest()
 	if err := req.Decode(bytes.NewReader(body)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if !bytes.Contains(body, []byte("PACK")) {
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ok",
+			})
+			if cmd.New.IsZero() {
+				if err := s.repo.Storer.RemoveReference(cmd.Name); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				continue
+			}
+			if err := s.repo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		var buf bytes.Buffer
+		if err := report.Encode(&buf); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			s.t.Fatalf("write receive-pack command response: %v", err)
+		}
+		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 		return
 	}
 
@@ -1028,6 +1389,15 @@ func (s *smartHTTPRepoServer) recordMetric(service string, kind metricKind, in, 
 		wants:   wants,
 		haves:   haves,
 	})
+}
+
+func isConnectionCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer")
 }
 
 func (s *smartHTTPRepoServer) refsMatchingPrefixes(prefixes []string) ([]*plumbing.Reference, error) {
