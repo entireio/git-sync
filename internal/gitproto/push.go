@@ -22,6 +22,33 @@ type PushCommand struct {
 	Delete bool
 }
 
+// Pusher wraps target-side receive-pack state behind a smaller execution API.
+type Pusher struct {
+	Conn    *Conn
+	Adv     *packp.AdvRefs
+	Verbose bool
+}
+
+// NewPusher builds a target-side push executor.
+func NewPusher(conn *Conn, adv *packp.AdvRefs, verbose bool) Pusher {
+	return Pusher{Conn: conn, Adv: adv, Verbose: verbose}
+}
+
+// PushPack streams a pack to the target.
+func (p Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
+	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.Verbose)
+}
+
+// PushCommands sends ref-only updates without a pack.
+func (p Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
+	return PushCommands(ctx, p.Conn, p.Adv, commands, p.Verbose)
+}
+
+// PushObjects encodes and pushes locally materialized objects.
+func (p Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
+	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose)
+}
+
 // preparePush opens a receive-pack session and builds the base request with
 // sideband negotiation. Shared by PushObjects, PushPack, and PushCommands.
 func preparePush(

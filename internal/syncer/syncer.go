@@ -379,9 +379,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	measurementDone := s.measurementDone
 	stats := s.stats
 	sourceConn := s.sourceConn
-	targetConn := s.targetConn
 	sourceService := s.sourceService
 	targetAdv := s.targetAdv
+	targetPusher := gitproto.NewPusher(s.targetConn, s.targetAdv, cfg.Verbose)
 	sourceRefMap := s.sourceRefMap
 	targetRefMap := s.targetRefMap
 
@@ -406,7 +406,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, cfg, stats, s.logger, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason, measurementDone)
+		return bootstrapWithInputs(ctx, cfg, stats, s.logger, sourceConn, s.targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason, measurementDone)
 	}
 
 	// Normal sync: allocate in-memory repo and fetch objects
@@ -455,10 +455,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun {
 		// Try incremental relay first
 		incResult, err := incremental.Execute(ctx, incremental.Params{
-			SourceConn: sourceConn, TargetConn: targetConn,
-			SourceService: sourceService, TargetAdv: targetAdv,
+			SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
 			DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
-			PushPlans: pushPlans, MaxPackBytes: cfg.MaxPackBytes, Verbose: cfg.Verbose,
+			PushPlans: pushPlans, MaxPackBytes: cfg.MaxPackBytes,
+			CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
+				return planner.CanIncrementalRelay(force, prune, dryRun, plans, targetAdv)
+			},
 		}, planConfig(cfg))
 		if err != nil {
 			return result, err
@@ -470,10 +472,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		} else if len(pushPlans) > 0 {
 			// Materialized fallback
 			if err := materialized.Execute(ctx, materialized.Params{
-				Store: repo.Storer, SourceConn: sourceConn, SourceService: sourceService,
-				TargetConn: targetConn, TargetAdv: targetAdv,
+				Store: repo.Storer, SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
 				DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
-				PushPlans: pushPlans, Verbose: cfg.Verbose,
+				PushPlans: pushPlans,
 			}); err != nil {
 				return result, err
 			}
@@ -651,9 +652,9 @@ func bootstrapWithInputs(
 	relayReason string,
 	measurementDone func() Measurement,
 ) (Result, error) {
+	targetPusher := gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
-		SourceConn: sourceConn, TargetConn: targetConn,
-		SourceService: sourceService, TargetAdv: targetAdv,
+		SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
 		MaxPackBytes: cfg.MaxPackBytes, BatchMaxPack: cfg.BatchMaxPackBytes,
 		Verbose: cfg.Verbose, Logger: logger,

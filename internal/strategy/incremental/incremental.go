@@ -9,7 +9,6 @@ import (
 	"io"
 
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 
 	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
@@ -19,16 +18,18 @@ import (
 // Params holds the inputs for an incremental relay execution.
 type Params struct {
 	SourceConn    *gitproto.Conn
-	TargetConn    *gitproto.Conn
 	SourceService interface {
 		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 	}
-	TargetAdv     *packp.AdvRefs
-	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
-	PushPlans     []planner.BranchPlan
-	MaxPackBytes  int64
-	Verbose       bool
+	TargetPusher interface {
+		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
+	}
+	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
+	PushPlans    []planner.BranchPlan
+	MaxPackBytes int64
+	Verbose      bool
+	CanRelay     func(bool, bool, bool, []planner.BranchPlan) (bool, string)
 }
 
 // Result holds the outcome of an incremental relay.
@@ -42,7 +43,14 @@ type Result struct {
 // success, or (zero, nil) if the strategy is not applicable. Errors indicate
 // a relay was attempted but failed.
 func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, error) {
-	if ok, reason := planner.CanIncrementalRelay(cfg.Force, cfg.Prune, false, p.PushPlans, p.TargetAdv); ok {
+	canRelay := p.CanRelay
+	if canRelay == nil {
+		return Result{}, fmt.Errorf("incremental strategy requires CanRelay")
+	}
+	if p.TargetPusher == nil {
+		return Result{}, fmt.Errorf("incremental strategy requires TargetPusher")
+	}
+	if ok, reason := canRelay(cfg.Force, cfg.Prune, false, p.PushPlans); ok {
 		desired := convert.DesiredRefs(planner.DesiredSubset(p.DesiredRefs, p.PushPlans))
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, p.TargetRefs)
 		if err != nil {
@@ -50,7 +58,7 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 		}
 		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 		cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
-		if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
+		if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 			return Result{}, fmt.Errorf("push target refs: %w", err)
 		}
 		return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil
@@ -64,7 +72,7 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 		}
 		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 		cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
-		if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
+		if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 			return Result{}, fmt.Errorf("push target refs: %w", err)
 		}
 		return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil

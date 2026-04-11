@@ -1,6 +1,9 @@
 package incremental
 
 import (
+	"bytes"
+	"context"
+	"io"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -108,6 +111,142 @@ func TestPlansToPushPlans(t *testing.T) {
 	}
 }
 
+type fakeSourceService struct {
+	fetchPack func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+}
+
+func (f fakeSourceService) FetchPack(
+	ctx context.Context,
+	conn *gitproto.Conn,
+	desired map[plumbing.ReferenceName]gitproto.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) (io.ReadCloser, error) {
+	return f.fetchPack(ctx, conn, desired, targetRefs)
+}
+
+type fakeTargetPusher struct {
+	pushPack func(context.Context, []gitproto.PushCommand, io.ReadCloser) error
+}
+
+func (f fakeTargetPusher) PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error {
+	return f.pushPack(ctx, cmds, pack)
+}
+
+func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	newHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	var gotDesired map[plumbing.ReferenceName]gitproto.DesiredRef
+	var gotHaves map[plumbing.ReferenceName]plumbing.Hash
+	var pushed []gitproto.PushCommand
+
+	params := Params{
+		SourceService: fakeSourceService{
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				gotDesired = desired
+				gotHaves = targetRefs
+				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
+			},
+		},
+		TargetPusher: fakeTargetPusher{
+			pushPack: func(_ context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error {
+				defer pack.Close()
+				pushed = append([]gitproto.PushCommand(nil), cmds...)
+				return nil
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: newHash,
+				Kind:       planner.RefKindBranch,
+			},
+		},
+		TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: oldHash},
+		PushPlans: []planner.BranchPlan{{
+			SourceRef:  mainRef,
+			TargetRef:  mainRef,
+			SourceHash: newHash,
+			TargetHash: oldHash,
+			Kind:       planner.RefKindBranch,
+			Action:     planner.ActionUpdate,
+		}},
+		CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
+			if force || prune || dryRun || len(plans) != 1 {
+				t.Fatalf("unexpected relay inputs: force=%v prune=%v dryRun=%v plans=%d", force, prune, dryRun, len(plans))
+			}
+			return true, "fast-forward"
+		},
+	}
+	result, err := Execute(context.Background(), params, planner.PlanConfig{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Relay || result.RelayMode != "incremental" || result.RelayReason != "fast-forward" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if gotDesired[mainRef].SourceHash != newHash {
+		t.Fatalf("desired source hash = %s, want %s", gotDesired[mainRef].SourceHash, newHash)
+	}
+	if gotHaves[mainRef] != oldHash {
+		t.Fatalf("have hash = %s, want %s", gotHaves[mainRef], oldHash)
+	}
+	if len(pushed) != 1 || pushed[0].Name != mainRef || pushed[0].New != newHash || pushed[0].Old != oldHash {
+		t.Fatalf("unexpected pushed commands: %+v", pushed)
+	}
+}
+
+func TestExecuteFullTagCreateRelayOmitsHaves(t *testing.T) {
+	tagRef := plumbing.NewTagReferenceName("v1.0.0")
+	tagHash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	var gotHaves map[plumbing.ReferenceName]plumbing.Hash
+
+	params := Params{
+		SourceService: fakeSourceService{
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				gotHaves = targetRefs
+				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
+			},
+		},
+		TargetPusher: fakeTargetPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				return pack.Close()
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			tagRef: {
+				SourceRef:  tagRef,
+				TargetRef:  tagRef,
+				SourceHash: tagHash,
+				Kind:       planner.RefKindTag,
+			},
+		},
+		PushPlans: []planner.BranchPlan{{
+			SourceRef:  tagRef,
+			TargetRef:  tagRef,
+			SourceHash: tagHash,
+			Kind:       planner.RefKindTag,
+			Action:     planner.ActionCreate,
+		}},
+		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
+			return false, ""
+		},
+	}
+	result, err := Execute(context.Background(), params, planner.PlanConfig{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Relay || result.RelayReason == "" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if gotHaves != nil {
+		t.Fatalf("expected nil haves for full tag create relay, got %v", gotHaves)
+	}
+}
+
 func TestToGP(t *testing.T) {
 	hash1 := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	hash2 := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -162,13 +301,13 @@ func TestToGP(t *testing.T) {
 				},
 			},
 			wantIsTag: map[plumbing.ReferenceName]bool{
-				plumbing.NewBranchReferenceName("dev"):  false,
-				plumbing.NewTagReferenceName("v2.0"):    true,
+				plumbing.NewBranchReferenceName("dev"): false,
+				plumbing.NewTagReferenceName("v2.0"):   true,
 			},
 		},
 		{
-			name:    "empty input",
-			desired: map[plumbing.ReferenceName]planner.DesiredRef{},
+			name:      "empty input",
+			desired:   map[plumbing.ReferenceName]planner.DesiredRef{},
 			wantIsTag: map[plumbing.ReferenceName]bool{},
 		},
 	}

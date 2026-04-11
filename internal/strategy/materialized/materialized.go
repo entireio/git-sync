@@ -9,7 +9,6 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
 	"github.com/soph/git-sync/internal/convert"
@@ -24,12 +23,12 @@ type Params struct {
 	SourceService interface {
 		FetchToStore(context.Context, storer.Storer, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) error
 	}
-	TargetConn    *gitproto.Conn
-	TargetAdv     *packp.AdvRefs
-	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
-	PushPlans     []planner.BranchPlan
-	Verbose       bool
+	TargetPusher interface {
+		PushObjects(context.Context, []gitproto.PushCommand, storer.Storer, []plumbing.Hash) error
+	}
+	DesiredRefs map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs  map[plumbing.ReferenceName]plumbing.Hash
+	PushPlans   []planner.BranchPlan
 }
 
 // MaxMaterializedObjects is the safety limit for the materialized fallback path.
@@ -69,7 +68,10 @@ func Execute(ctx context.Context, p Params) error {
 	}
 
 	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
-	if err := gitproto.PushObjects(ctx, p.TargetConn, p.TargetAdv, cmds, p.Store, hashes, p.Verbose); err != nil {
+	if p.TargetPusher == nil {
+		return fmt.Errorf("materialized strategy requires TargetPusher")
+	}
+	if err := p.TargetPusher.PushObjects(ctx, cmds, p.Store, hashes); err != nil {
 		return fmt.Errorf("push target refs: %w", err)
 	}
 	return nil

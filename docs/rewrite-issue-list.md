@@ -286,7 +286,8 @@ Rewrite requirement:
 Current rewrite note:
 - Major strategy and protocol concerns were extracted.
 - The strategy packages now depend on narrower source-side interfaces instead of the full concrete `gitproto.RefService`.
-- Some helpers still carry broad parameter structs, and target-side/push abstractions are still concrete, so this remains partial.
+- The strategies now also depend on a narrower target-side push executor instead of raw target transport state, and direct strategy tests exercise those boundaries.
+- Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability
 

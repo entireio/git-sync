@@ -17,7 +17,6 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -40,20 +39,22 @@ var GitHubRepoAPIBaseURL = "https://api.github.com"
 // Params holds the inputs for a bootstrap execution.
 type Params struct {
 	SourceConn    *gitproto.Conn
-	TargetConn    *gitproto.Conn
 	SourceService interface {
 		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 		FetchCommitGraph(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
 		ProtocolName() string
 		SupportsFetchFeature(string) bool
 	}
-	TargetAdv     *packp.AdvRefs
-	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
-	MaxPackBytes  int64
-	BatchMaxPack  int64
-	Verbose       bool
-	Logger        *slog.Logger
+	TargetPusher interface {
+		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
+		PushCommands(context.Context, []gitproto.PushCommand) error
+	}
+	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
+	MaxPackBytes int64
+	BatchMaxPack int64
+	Verbose      bool
+	Logger       *slog.Logger
 }
 
 // Result holds the outcome of the bootstrap strategy.
@@ -110,7 +111,10 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 
 	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
 	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(plans))
-	pushErr := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose)
+	if p.TargetPusher == nil {
+		return result, fmt.Errorf("bootstrap strategy requires TargetPusher")
+	}
+	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	if pushErr != nil {
 		autoBatch, ok := autoBatchMaxPackBytes(p, pushErr)
 		if !ok {
@@ -176,14 +180,14 @@ func executeBatched(
 		batchLimit = p.MaxPackBytes
 	}
 
-		for _, batch := range batches {
-			result.PlannedBatchCount += len(batch.Checkpoints)
-			result.TempRefs = append(result.TempRefs, batch.TempRef.String())
-			p.log("bootstrap batch branch plan",
-				"branch", batch.Plan.TargetRef.String(),
-				"temp_ref", batch.TempRef.String(),
-				"planned_batches", len(batch.Checkpoints),
-				"resume_hash", planner.ShortHash(batch.ResumeHash))
+	for _, batch := range batches {
+		result.PlannedBatchCount += len(batch.Checkpoints)
+		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
+		p.log("bootstrap batch branch plan",
+			"branch", batch.Plan.TargetRef.String(),
+			"temp_ref", batch.TempRef.String(),
+			"planned_batches", len(batch.Checkpoints),
+			"resume_hash", planner.ShortHash(batch.ResumeHash))
 
 		current := batch.ResumeHash
 		startIdx, err := planner.BootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
@@ -221,7 +225,7 @@ func executeBatched(
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
 			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(stagePlans))
-			if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
+			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
 			p.log("bootstrap batch checkpoint complete",
@@ -237,13 +241,13 @@ func executeBatched(
 		}
 		if batch.ResumeHash == batch.Plan.SourceHash {
 			cmds := []gitproto.PushCommand{{Name: batch.Plan.TargetRef, Old: plumbing.ZeroHash, New: batch.Plan.SourceHash}}
-			if err := gitproto.PushCommands(ctx, p.TargetConn, p.TargetAdv, cmds, p.Verbose); err != nil {
+			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
 			}
 		}
 
 		cmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: current, Delete: true}}
-		if err := gitproto.PushCommands(ctx, p.TargetConn, p.TargetAdv, cmds, p.Verbose); err != nil {
+		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
 		}
 		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
@@ -260,7 +264,7 @@ func executeBatched(
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
 				cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
-				if err := gitproto.PushCommands(ctx, p.TargetConn, p.TargetAdv, cmds, p.Verbose); err != nil {
+				if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 					return result, fmt.Errorf("create tag refs after bootstrap: %w", err)
 				}
 			} else {
@@ -269,7 +273,7 @@ func executeBatched(
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
-			if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
+			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				return result, fmt.Errorf("push bootstrap tags: %w", err)
 			}
 		}
@@ -480,7 +484,9 @@ func lookupGitHubRepoSizeKB(ctx context.Context, conn *gitproto.Conn) (int64, bo
 	if resp.StatusCode != http.StatusOK {
 		return 0, false
 	}
-	var payload struct{ Size int64 `json:"size"` }
+	var payload struct {
+		Size int64 `json:"size"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil || payload.Size <= 0 {
 		return 0, false
 	}
