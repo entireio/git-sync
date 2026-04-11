@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
+	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
 )
@@ -65,7 +66,7 @@ func Execute(ctx context.Context, p Params) error {
 		)
 	}
 
-	cmds := gitproto.ToPushCommands(plansToPushPlans(p.PushPlans))
+	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
 	if err := gitproto.PushObjects(ctx, p.TargetConn, p.TargetAdv, cmds, p.Store, hashes, p.Verbose); err != nil {
 		return fmt.Errorf("push target refs: %w", err)
 	}
@@ -95,13 +96,3 @@ func ensureTagObjects(ctx context.Context, p Params) error {
 	return nil
 }
 
-func plansToPushPlans(plans []planner.BranchPlan) []gitproto.PushPlan {
-	out := make([]gitproto.PushPlan, len(plans))
-	for i, p := range plans {
-		out[i] = gitproto.PushPlan{
-			TargetRef: p.TargetRef, TargetHash: p.TargetHash, SourceHash: p.SourceHash,
-			Delete: p.Action == planner.ActionDelete,
-		}
-	}
-	return out
-}

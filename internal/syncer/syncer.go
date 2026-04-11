@@ -19,6 +19,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	"github.com/soph/git-sync/internal/auth"
+	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
 	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
@@ -294,20 +295,6 @@ func planConfig(cfg Config) planner.PlanConfig {
 	}
 }
 
-// toGitprotoDesired converts planner DesiredRefs to gitproto DesiredRefs.
-func toGitprotoDesired(desired map[plumbing.ReferenceName]planner.DesiredRef) map[plumbing.ReferenceName]gitproto.DesiredRef {
-	out := make(map[plumbing.ReferenceName]gitproto.DesiredRef, len(desired))
-	for k, v := range desired {
-		out[k] = gitproto.DesiredRef{
-			SourceRef:  v.SourceRef,
-			TargetRef:  v.TargetRef,
-			SourceHash: v.SourceHash,
-			IsTag:      v.Kind == planner.RefKindTag,
-		}
-	}
-	return out
-}
-
 // --- Session setup (issue #12) ---
 
 // syncSession holds the shared state for a sync operation, reducing
@@ -419,7 +406,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
-	gpDesired := toGitprotoDesired(desiredRefs)
+	gpDesired := convert.DesiredRefs(desiredRefs)
 	if err := sourceService.FetchToStore(ctx, repo.Storer, sourceConn, gpDesired, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return Result{}, err
@@ -604,7 +591,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 		targetRefMap[plumbing.ReferenceName(fmt.Sprintf("refs/haves/%d", idx))] = hash
 	}
 
-	gpDesired := toGitprotoDesired(desiredRefs)
+	gpDesired := convert.DesiredRefs(desiredRefs)
 	if err := s.sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return FetchResult{}, err

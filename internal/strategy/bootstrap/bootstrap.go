@@ -20,6 +20,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/storage/memory"
 
+	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
 )
@@ -83,7 +84,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 
 	// One-shot bootstrap
 	progressf(p.Verbose, "bootstrap: fetching %d ref(s) from source", len(plans))
-	gpDesired := toGP(p.DesiredRefs)
+	gpDesired := convert.DesiredRefs(p.DesiredRefs)
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, gpDesired, nil)
 	if err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -94,7 +95,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 
 	progressf(p.Verbose, "bootstrap: pushing %d ref(s) to target", len(plans))
-	cmds := gitproto.ToPushCommands(plansToPushPlans(plans))
+	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(plans))
 	pushErr := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose)
 	if pushErr != nil {
 		autoBatch, ok := autoBatchMaxPackBytes(p, pushErr)
@@ -201,7 +202,7 @@ func executeBatched(
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
 			packReader = gitproto.LimitPackReader(packReader, batchLimit)
-			cmds := gitproto.ToPushCommands(plansToPushPlans(stagePlans))
+			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(stagePlans))
 			if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
@@ -238,7 +239,7 @@ func executeBatched(
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, tagDesired, tagTargetRefs)
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
-				cmds := gitproto.ToPushCommands(plansToPushPlans(tagPlans))
+				cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
 				if err := gitproto.PushCommands(ctx, p.TargetConn, p.TargetAdv, cmds, p.Verbose); err != nil {
 					return result, fmt.Errorf("create tag refs after bootstrap: %w", err)
 				}
@@ -247,7 +248,7 @@ func executeBatched(
 			}
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-			cmds := gitproto.ToPushCommands(plansToPushPlans(tagPlans))
+			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
 			if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
 				return result, fmt.Errorf("push bootstrap tags: %w", err)
 			}
@@ -492,32 +493,10 @@ func targetBodyLimit(err error) int64 {
 
 // --- Shared helpers ---
 
-func toGP(desired map[plumbing.ReferenceName]planner.DesiredRef) map[plumbing.ReferenceName]gitproto.DesiredRef {
-	out := make(map[plumbing.ReferenceName]gitproto.DesiredRef, len(desired))
-	for k, v := range desired {
-		out[k] = gitproto.DesiredRef{
-			SourceRef: v.SourceRef, TargetRef: v.TargetRef,
-			SourceHash: v.SourceHash, IsTag: v.Kind == planner.RefKindTag,
-		}
-	}
-	return out
-}
-
 func singleGP(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) map[plumbing.ReferenceName]gitproto.DesiredRef {
 	return map[plumbing.ReferenceName]gitproto.DesiredRef{
 		targetRef: {SourceRef: sourceRef, TargetRef: targetRef, SourceHash: hash},
 	}
-}
-
-func plansToPushPlans(plans []planner.BranchPlan) []gitproto.PushPlan {
-	out := make([]gitproto.PushPlan, len(plans))
-	for i, p := range plans {
-		out[i] = gitproto.PushPlan{
-			TargetRef: p.TargetRef, TargetHash: p.TargetHash, SourceHash: p.SourceHash,
-			Delete: p.Action == planner.ActionDelete,
-		}
-	}
-	return out
 }
 
 func progressf(verbose bool, format string, args ...any) {

@@ -46,27 +46,6 @@ func (s *statsCollector) ensure(name string) *ServiceStats {
 	return item
 }
 
-func (s *statsCollector) addWantsHaves(name string, wants, haves int) {
-	if !s.enabled {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	item := s.ensure(name)
-	item.Wants += wants
-	item.Haves += haves
-}
-
-func (s *statsCollector) addCommands(name string, commands int) {
-	if !s.enabled {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	item := s.ensure(name)
-	item.Commands += commands
-}
-
 func (s *statsCollector) recordRoundTrip(name string, requestBytes, responseBytes int64) {
 	if !s.enabled {
 		return

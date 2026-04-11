@@ -7,16 +7,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// PlannerDesired is the subset of planner.DesiredRef fields needed by gitproto.
-// This avoids a circular import between gitproto and planner.
-type PlannerDesired struct {
-	SourceRef  plumbing.ReferenceName
-	TargetRef  plumbing.ReferenceName
-	SourceHash plumbing.Hash
-	IsTag      bool
-}
-
-// ToPushCommands converts a slice of plan-like structs to PushCommands.
+// ToPushCommands converts a slice of PushPlans to PushCommands.
 // Used by all strategy packages to avoid copy-pasting the conversion.
 func ToPushCommands(plans []PushPlan) []PushCommand {
 	cmds := make([]PushCommand, 0, len(plans))

@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
 )
@@ -85,7 +86,7 @@ func TestPlansToPushPlans(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := plansToPushPlans(tt.plans)
+			got := convert.PlansToPushPlans(tt.plans)
 			if len(got) != len(tt.expect) {
 				t.Fatalf("expected %d push plans, got %d", len(tt.expect), len(got))
 			}
@@ -174,7 +175,7 @@ func TestToGP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toGP(tt.desired)
+			got := convert.DesiredRefs(tt.desired)
 			if len(got) != len(tt.desired) {
 				t.Fatalf("expected %d results, got %d", len(tt.desired), len(got))
 			}

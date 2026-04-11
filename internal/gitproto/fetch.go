@@ -396,13 +396,13 @@ func refValues(m map[plumbing.ReferenceName]plumbing.Hash) []plumbing.Hash {
 
 // SortedUniqueHashes deduplicates and sorts a hash slice.
 func SortedUniqueHashes(input []plumbing.Hash) []plumbing.Hash {
-	seen := make(map[plumbing.Hash]bool, len(input))
+	seen := make(map[plumbing.Hash]struct{}, len(input))
 	out := make([]plumbing.Hash, 0, len(input))
 	for _, h := range input {
-		if seen[h] {
+		if _, ok := seen[h]; ok {
 			continue
 		}
-		seen[h] = true
+		seen[h] = struct{}{}
 		out = append(out, h)
 	}
 	plumbing.HashesSort(out)
