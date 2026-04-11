@@ -20,7 +20,7 @@ func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
 
 	sourceRepo, sourceFS := newBenchRepo(b)
 	makeBenchCommits(b, sourceRepo, sourceFS, 8)
-	sourceServer := newSmartHTTPRepoServerV2(&testing.T{}, sourceRepo)
+	sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
 	defer sourceServer.Close()
 
 	b.ResetTimer()
@@ -30,7 +30,7 @@ func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
 		if err != nil {
 			b.Fatalf("init target repo: %v", err)
 		}
-		targetServer := newSmartHTTPRepoServer(&testing.T{}, targetRepo)
+		targetServer := newSmartHTTPRepoServer(b, targetRepo)
 		b.StartTimer()
 
 		_, err = Run(context.Background(), Config{
@@ -66,8 +66,8 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 
 		makeBenchCommits(b, sourceRepo, sourceFS, 1)
 
-		sourceServer := newSmartHTTPRepoServerV2(&testing.T{}, sourceRepo)
-		targetServer := newSmartHTTPRepoServer(&testing.T{}, targetRepo)
+		sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
+		targetServer := newSmartHTTPRepoServer(b, targetRepo)
 		b.StartTimer()
 
 		_, err = Run(context.Background(), Config{
@@ -110,8 +110,8 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 			b.Fatalf("set source release branch: %v", err)
 		}
 
-		sourceServer := newSmartHTTPRepoServerV2(&testing.T{}, sourceRepo)
-		targetServer := newSmartHTTPRepoServer(&testing.T{}, targetRepo)
+		sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
+		targetServer := newSmartHTTPRepoServer(b, targetRepo)
 		b.StartTimer()
 
 		_, err = Run(context.Background(), Config{

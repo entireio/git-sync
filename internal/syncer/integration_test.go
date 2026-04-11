@@ -1048,7 +1048,7 @@ type exchangeMetric struct {
 }
 
 type smartHTTPRepoServer struct {
-	t        *testing.T
+	tb       testing.TB
 	server   *httptest.Server
 	repo     *git.Repository
 	repoPath string
@@ -1063,11 +1063,11 @@ type smartHTTPRepoServer struct {
 	metrics []exchangeMetric
 }
 
-func newSmartHTTPRepoServer(t *testing.T, repo *git.Repository) *smartHTTPRepoServer {
-	t.Helper()
+func newSmartHTTPRepoServer(tb testing.TB, repo *git.Repository) *smartHTTPRepoServer {
+	tb.Helper()
 
 	s := &smartHTTPRepoServer{
-		t:        t,
+		tb:       tb,
 		repo:     repo,
 		repoPath: "/repo.git",
 	}
@@ -1075,18 +1075,18 @@ func newSmartHTTPRepoServer(t *testing.T, repo *git.Repository) *smartHTTPRepoSe
 	return s
 }
 
-func newSmartHTTPRepoServerV2(t *testing.T, repo *git.Repository) *smartHTTPRepoServer {
-	t.Helper()
+func newSmartHTTPRepoServerV2(tb testing.TB, repo *git.Repository) *smartHTTPRepoServer {
+	tb.Helper()
 
-	s := newSmartHTTPRepoServer(t, repo)
+	s := newSmartHTTPRepoServer(tb, repo)
 	s.v2 = true
 	return s
 }
 
-func newAuthenticatedSmartHTTPRepoServer(t *testing.T, repo *git.Repository, username, password string) *smartHTTPRepoServer {
-	t.Helper()
+func newAuthenticatedSmartHTTPRepoServer(tb testing.TB, repo *git.Repository, username, password string) *smartHTTPRepoServer {
+	tb.Helper()
 
-	s := newSmartHTTPRepoServer(t, repo)
+	s := newSmartHTTPRepoServer(tb, repo)
 	s.username = username
 	s.password = password
 	return s
@@ -1232,7 +1232,7 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write advertised refs: %v", err)
+			s.tb.Fatalf("write advertised refs: %v", err)
 	}
 
 	s.recordMetric(service, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
@@ -1260,7 +1260,7 @@ func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write v2 advertised refs: %v", err)
+		s.tb.Fatalf("write v2 advertised refs: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
@@ -1304,7 +1304,7 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write upload-pack response: %v", err)
+		s.tb.Fatalf("write upload-pack response: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), len(req.Wants), strings.Count(string(body), "have "))
@@ -1356,7 +1356,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write v2 ls-refs response: %v", err)
+		s.tb.Fatalf("write v2 ls-refs response: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
@@ -1414,7 +1414,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 		if isConnectionCloseError(err) {
 			return
 		}
-		s.t.Fatalf("write v2 fetch response: %v", err)
+		s.tb.Fatalf("write v2 fetch response: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), len(wants), len(haves))
@@ -1440,7 +1440,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
 		if _, err := w.Write(buf.Bytes()); err != nil {
-			s.t.Fatalf("write receive-pack rejection: %v", err)
+			s.tb.Fatalf("write receive-pack rejection: %v", err)
 		}
 		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 		return
@@ -1487,7 +1487,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
 		if _, err := w.Write(buf.Bytes()); err != nil {
-			s.t.Fatalf("write receive-pack command response: %v", err)
+			s.tb.Fatalf("write receive-pack command response: %v", err)
 		}
 		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 		return
@@ -1505,7 +1505,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write receive-pack response: %v", err)
+		s.tb.Fatalf("write receive-pack response: %v", err)
 	}
 	if err != nil {
 		return
