@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
@@ -144,6 +147,16 @@ type fakeBootstrapPusher struct {
 	pushCommands func(context.Context, []gitproto.PushCommand) error
 }
 
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func (f fakeBootstrapPusher) PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error {
 	return f.pushPack(ctx, cmds, pack)
 }
@@ -203,6 +216,40 @@ func TestExecuteOneShotUsesTargetPusher(t *testing.T) {
 	}
 }
 
+func TestExecuteOneShotClosesPackOnPushError(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	mainHash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	pack := &trackingReadCloser{Reader: bytes.NewReader([]byte("PACK"))}
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return pack, nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				_ = pack.Close()
+				return errors.New("boom")
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: mainHash,
+				Kind:       planner.RefKindBranch,
+			},
+		},
+	}, "empty target")
+	if err == nil || err.Error() != "push target refs: boom" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pack.closed {
+		t.Fatal("expected pack to be closed on push error")
+	}
+}
+
 func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	mainHash := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -243,5 +290,51 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 				t.Fatal("expected bootstrap to fail before fetching source pack")
 			}
 		})
+	}
+}
+
+func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		t.Fatalf("unexpected preflight request: %s %s", r.Method, r.URL.String())
+	}))
+	defer server.Close()
+
+	prevBaseURL := GitHubRepoAPIBaseURL
+	GitHubRepoAPIBaseURL = server.URL
+	defer func() { GitHubRepoAPIBaseURL = prevBaseURL }()
+
+	ep, err := transport.NewEndpoint("https://github.com/acme/repo.git")
+	if err != nil {
+		t.Fatalf("transport.NewEndpoint: %v", err)
+	}
+
+	_, err = Execute(context.Background(), Params{
+		SourceConn: &gitproto.Conn{
+			Endpoint: ep,
+			HTTP:     server.Client(),
+		},
+		SourceService: fakeBootstrapSource{
+			fetchPack: func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				t.Fatal("unexpected fetch")
+				return nil, nil
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			plumbing.NewBranchReferenceName("main"): {
+				SourceRef:  plumbing.NewBranchReferenceName("main"),
+				TargetRef:  plumbing.NewBranchReferenceName("main"),
+				SourceHash: plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc"),
+				Kind:       planner.RefKindBranch,
+			},
+		},
+		TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
+	}, "missing pusher")
+	if err == nil || err.Error() != "bootstrap strategy requires TargetPusher" {
+		t.Fatalf("Execute() error = %v, want missing TargetPusher", err)
+	}
+	if requests != 0 {
+		t.Fatalf("expected no GitHub preflight requests, got %d", requests)
 	}
 }

@@ -157,7 +157,8 @@ Comparison check:
 
 Current rewrite note:
 - Ownership of stream lifecycle is clearer than on `main`, and the rewrite now has direct tests for key pack-stream close behavior on success and error paths.
-- This still wants a fuller close-audit around all strategy-level failure paths before it should be considered fully done.
+- Direct strategy-level error-path tests now verify that relay bootstrap and incremental paths close source pack streams when pushes fail.
+- This still wants a fuller close-audit around deeper batched failure paths before it should be considered fully done.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
 
@@ -287,6 +288,7 @@ Current rewrite note:
 - Major strategy and protocol concerns were extracted.
 - The strategy packages now depend on narrower source-side interfaces instead of the full concrete `gitproto.RefService`.
 - The strategies now also depend on a narrower target-side push executor instead of raw target transport state, and direct strategy tests exercise those boundaries.
+- Incremental relay policy decisions are now injected consistently instead of splitting between one injected check and one hard-coded planner call.
 - Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability

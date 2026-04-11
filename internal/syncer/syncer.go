@@ -461,6 +461,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
 				return planner.CanIncrementalRelay(force, prune, dryRun, plans, targetAdv)
 			},
+			CanTagRelay: planner.CanFullTagCreateRelay,
 		}, planConfig(cfg))
 		if err != nil {
 			return result, err

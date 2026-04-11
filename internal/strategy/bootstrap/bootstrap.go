@@ -76,6 +76,10 @@ type plannedBatch struct {
 
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
+	if p.TargetPusher == nil {
+		return Result{Relay: true, RelayMode: "bootstrap", RelayReason: relayReason}, fmt.Errorf("bootstrap strategy requires TargetPusher")
+	}
+
 	// GitHub large-repo preflight
 	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
 		p.BatchMaxPack = batchLimit
@@ -94,9 +98,6 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 
 	result := Result{
 		Plans: plans, Relay: true, RelayMode: "bootstrap", RelayReason: relayReason,
-	}
-	if p.TargetPusher == nil {
-		return result, fmt.Errorf("bootstrap strategy requires TargetPusher")
 	}
 
 	if p.BatchMaxPack > 0 {

@@ -3,6 +3,7 @@ package incremental
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -132,6 +133,16 @@ func (f fakeTargetPusher) PushPack(ctx context.Context, cmds []gitproto.PushComm
 	return f.pushPack(ctx, cmds, pack)
 }
 
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
@@ -178,6 +189,10 @@ func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 				t.Fatalf("unexpected relay inputs: force=%v prune=%v dryRun=%v plans=%d", force, prune, dryRun, len(plans))
 			}
 			return true, "fast-forward"
+		},
+		CanTagRelay: func([]planner.BranchPlan) (bool, string) {
+			t.Fatal("tag relay policy should not be called for incremental branch relay")
+			return false, ""
 		},
 	}
 	result, err := Execute(context.Background(), params, planner.PlanConfig{})
@@ -234,16 +249,72 @@ func TestExecuteFullTagCreateRelayOmitsHaves(t *testing.T) {
 		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
 			return false, ""
 		},
+		CanTagRelay: func(plans []planner.BranchPlan) (bool, string) {
+			if len(plans) != 1 || plans[0].TargetRef != tagRef {
+				t.Fatalf("unexpected tag relay plans: %+v", plans)
+			}
+			return true, "full-tag-create"
+		},
 	}
 	result, err := Execute(context.Background(), params, planner.PlanConfig{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !result.Relay || result.RelayReason == "" {
+	if !result.Relay || result.RelayReason != "full-tag-create" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	if gotHaves != nil {
 		t.Fatalf("expected nil haves for full tag create relay, got %v", gotHaves)
+	}
+}
+
+func TestExecuteIncrementalRelayClosesPackOnPushError(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	newHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+	pack := &trackingReadCloser{Reader: bytes.NewReader([]byte("PACK"))}
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeSourceService{
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return pack, nil
+			},
+		},
+		TargetPusher: fakeTargetPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				_ = pack.Close()
+				return errors.New("boom")
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: newHash,
+				Kind:       planner.RefKindBranch,
+			},
+		},
+		TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: oldHash},
+		PushPlans: []planner.BranchPlan{{
+			SourceRef:  mainRef,
+			TargetRef:  mainRef,
+			SourceHash: newHash,
+			TargetHash: oldHash,
+			Kind:       planner.RefKindBranch,
+			Action:     planner.ActionUpdate,
+		}},
+		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
+			return true, "fast-forward"
+		},
+		CanTagRelay: func([]planner.BranchPlan) (bool, string) {
+			return false, ""
+		},
+	}, planner.PlanConfig{})
+	if err == nil || err.Error() != "push target refs: boom" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pack.closed {
+		t.Fatal("expected pack to be closed on push error")
 	}
 }
 
