@@ -330,12 +330,18 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 	prevIdx := -1
 	prevHash := plumbing.ZeroHash
 	prevSpan := initialSpan
+	probeCache := make(map[string]bool)
 	for prevIdx < len(chain)-1 {
 		bestIdx, err := planner.SampledCheckpointUnderLimit(chain, prevIdx, prevSpan, func(idx int) (bool, error) {
+			cacheKey := prevHash.String() + ":" + strconv.Itoa(idx)
+			if tooLarge, ok := probeCache[cacheKey]; ok {
+				return tooLarge, nil
+			}
 			tooLarge, err := packExceedsLimit(ctx, p, ref, chain[idx], prevHash, p.BatchMaxPack)
 			if err != nil {
 				return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, planner.ShortHash(chain[idx]), err)
 			}
+			probeCache[cacheKey] = tooLarge
 			return tooLarge, nil
 		})
 		if err != nil {

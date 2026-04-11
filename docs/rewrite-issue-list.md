@@ -305,7 +305,7 @@ Comparison check:
 - Rewrite branch should significantly reduce HTTP round-trips during batch planning.
 
 Current rewrite note:
-- The rewrite adds an initial commit-count heuristic to reduce probing, but still performs fetch-and-discard sizing probes in the bootstrap planner.
+- The rewrite adds an initial commit-count heuristic and now memoizes repeated equivalent probe results within a planning run, but it still performs fetch-and-discard sizing probes in the bootstrap planner.
 
 ### 15. Materialized fallback path does not scale to large repos
 
