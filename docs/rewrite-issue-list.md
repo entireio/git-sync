@@ -67,7 +67,7 @@ Rebuild `git-sync` as a smaller set of focused packages around the same product 
 
 ### 1. Batched bootstrap can claim tag refs were pushed when no tag ref was created
 
-Status: open
+Status: done
 
 Problem:
 - In the batched bootstrap tag phase, `FetchPack` returning `git.NoErrAlreadyUpToDate` can skip tag creation entirely even when the tag ref is absent and only the tag object is already reachable.
@@ -86,7 +86,7 @@ Comparison check:
 
 ### 2. Duplicate target mappings are silently accepted
 
-Status: open
+Status: done
 
 Problem:
 - Multiple mappings to the same target ref overwrite each other silently.
@@ -103,7 +103,7 @@ Comparison check:
 
 ### 3. Mapping normalization accepts inconsistent ref kinds and partially-qualified refs
 
-Status: open
+Status: done
 
 Problem:
 - Invalid combinations survive normalization and fail later with misleading errors.
@@ -121,7 +121,7 @@ Comparison check:
 
 ### 4. Sideband preference is backwards
 
-Status: open
+Status: done
 
 Problem:
 - The current code prefers `sideband` before `sideband64k`.
@@ -137,7 +137,7 @@ Comparison check:
 
 ### 5. Pack reader leak in bootstrap batch loop
 
-Status: open
+Status: partial
 
 Problem:
 - Batch loop fetches a `packReader` without robust close discipline on all error paths.
@@ -152,9 +152,12 @@ Rewrite requirement:
 Comparison check:
 - Failing batch pushes must not leak HTTP response bodies.
 
+Current rewrite note:
+- Ownership of stream lifecycle is clearer than on `main`, but this still wants an explicit close-audit and tests around failing push paths.
+
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
 
-Status: open
+Status: done
 
 Problem:
 - v2 request building sends `include-tag` without first checking server support.
@@ -171,7 +174,7 @@ Comparison check:
 
 ### 7. OAuth refresh failures are swallowed and stale tokens are reused
 
-Status: open
+Status: done
 
 Problem:
 - Token refresh failure degrades into later auth failure with poor diagnostics.
@@ -190,7 +193,7 @@ Comparison check:
 
 ### 8. `statsCollector` is not safely synchronized
 
-Status: open
+Status: done
 
 Problem:
 - The stats map is mutated and read across goroutines without full synchronization.
@@ -204,9 +207,12 @@ Rewrite requirement:
 Comparison check:
 - Rewrite branch should pass `go test -race ./...`.
 
+Current rewrite note:
+- `go test -race ./...` currently passes on the rewrite branch.
+
 ### 9. Unbounded response reads can cause avoidable memory blowups
 
-Status: open
+Status: done
 
 Problem:
 - Some response paths use unbounded reads from remote servers.
@@ -223,7 +229,7 @@ Comparison check:
 
 ### 10. File token store has no locking
 
-Status: open
+Status: done
 
 Problem:
 - Multiple processes can corrupt token storage.
@@ -239,7 +245,7 @@ Rewrite requirement:
 
 ### 11. `syncer.go` is a monolith
 
-Status: open
+Status: done
 
 Problem:
 - One file currently owns protocol setup, planning, batching, auth, stats, and execution.
@@ -255,7 +261,7 @@ Comparison check:
 
 ### 12. Entry points duplicate setup work
 
-Status: open
+Status: done
 
 Problem:
 - `Run`, `Bootstrap`, `Probe`, and `Fetch` all repeat protocol validation, stats setup, connection setup, and ref discovery.
@@ -265,7 +271,7 @@ Rewrite requirement:
 
 ### 13. Functions carry too much ambient state
 
-Status: open
+Status: partial
 
 Problem:
 - Large helpers like batched bootstrap depend on too many parameters and too much shared context.
@@ -273,11 +279,14 @@ Problem:
 Rewrite requirement:
 - Introduce explicit session/context objects with narrow responsibilities.
 
+Current rewrite note:
+- Major strategy and protocol concerns were extracted, but some helpers still carry broad parameter structs and concrete dependencies rather than narrower interfaces.
+
 ## Performance And Scalability
 
 ### 14. Batch planning probes by repeatedly fetching full packs and discarding them
 
-Status: open
+Status: partial
 
 Problem:
 - `sourcePackExceedsLimit` can turn checkpoint planning into repeated full-pack fetches.
@@ -292,9 +301,12 @@ Rewrite requirement:
 Comparison check:
 - Rewrite branch should significantly reduce HTTP round-trips during batch planning.
 
+Current rewrite note:
+- The rewrite adds an initial commit-count heuristic to reduce probing, but still performs fetch-and-discard sizing probes in the bootstrap planner.
+
 ### 15. Materialized fallback path does not scale to large repos
 
-Status: open
+Status: partial
 
 Problem:
 - The non-relay path stores fetched objects in memory.
@@ -304,9 +316,12 @@ Rewrite requirement:
 - If yes, redesign storage strategy.
 - If no, fail early and clearly outside safe operating bounds.
 
+Current rewrite note:
+- The rewrite introduces a materialized strategy package and safety limits, but it still relies on in-memory object storage rather than a fundamentally new scaling model.
+
 ### 16. Fast-forward checks can degenerate into full graph walks
 
-Status: open
+Status: done
 
 Problem:
 - `reachesCommitHash` can traverse very large histories.
@@ -316,6 +331,9 @@ Current code:
 
 Rewrite requirement:
 - Make ancestry checking cost visible and bounded where possible.
+
+Current rewrite note:
+- The planner now uses a depth-limited ancestry check and blocks with an explicit reason when the limit is exceeded.
 
 ### 17. Packet parsing allocates too aggressively
 
@@ -330,11 +348,14 @@ Current code:
 Rewrite requirement:
 - Reuse buffers where practical.
 
+Current rewrite note:
+- This does not appear to be addressed yet. Packet parsing is cleaner and better tested, but still allocation-heavy.
+
 ## Test Gaps
 
 ### 18. Core planning functions are under-tested directly
 
-Status: open
+Status: done
 
 Missing direct tests include:
 - `buildDesiredRefs`
@@ -352,7 +373,7 @@ Rewrite requirement:
 
 ### 19. Relay eligibility logic is only tested indirectly
 
-Status: open
+Status: partial
 
 Missing direct tests include:
 - `canIncrementalRelay`
@@ -362,9 +383,12 @@ Missing direct tests include:
 Rewrite requirement:
 - Strategy selection must be testable independently from network execution.
 
+Current rewrite note:
+- Relay logic moved into planner/strategy packages and is more directly testable, but the original acceptance wording implies more isolated decision tests than currently exist.
+
 ### 20. Protocol v2 error handling is under-tested
 
-Status: open
+Status: done
 
 Missing test coverage includes:
 - malformed pkt-lines
@@ -378,7 +402,7 @@ Rewrite requirement:
 
 ### 21. Missing behavioral coverage
 
-Status: open
+Status: partial
 
 Known missing cases:
 - empty source repo
@@ -389,24 +413,32 @@ Known missing cases:
 - batch cutover partial failure
 - tag creation when target objects already exist
 
+Current rewrite note:
+- Some of these are now covered, including empty source repo, tag force-retarget, duplicate/conflicting mappings, and tag creation when target objects already exist.
+- Context cancellation and some harder batch-failure/cutover paths still appear missing.
+
 ### 22. No benchmark coverage for the expensive paths
 
-Status: open
+Status: done
 
 Rewrite requirement:
 - Add benchmarks for relay path overhead, planning overhead, and fallback graph/object work.
 
 ## Rewrite Branch Acceptance Criteria
 
-- All mapping validation happens before network activity.
-- Capability negotiation is centralized and enforced consistently.
-- Relay strategies are separate packages with explicit inputs and outputs.
-- Tag creation is correct whether or not a pack transfer is needed.
-- Stats and logging are concurrency-safe.
-- Protocol parsing has explicit malformed-input tests.
-- Rewrite passes `go test ./...` and `go test -race ./...`.
-- Rewrite includes benchmarks for the critical planning and execution paths.
-- Rewrite branch can be compared against current behavior using the same integration scenarios.
+- All mapping validation happens before network activity. Status: done
+- Capability negotiation is centralized and enforced consistently. Status: partial
+- Relay strategies are separate packages with explicit inputs and outputs. Status: done
+- Tag creation is correct whether or not a pack transfer is needed. Status: done
+- Stats and logging are concurrency-safe. Status: partial
+- Protocol parsing has explicit malformed-input tests. Status: done
+- Rewrite passes `go test ./...` and `go test -race ./...`. Status: done
+- Rewrite includes benchmarks for the critical planning and execution paths. Status: done
+- Rewrite branch can be compared against current behavior using the same integration scenarios. Status: done
+
+Notes:
+- Capability handling is much better centralized under `internal/gitproto`, but the rewrite still uses `go-git` transport/protocol types rather than fully owning the protocol layer end-to-end.
+- Stats are now concurrency-safe; logging is still ad hoc `progressf` output rather than a structured logger.
 
 ## Suggested Execution Order
 
@@ -419,4 +451,3 @@ Rewrite requirement:
 7. Rebuild auth and token store behavior.
 8. Port and expand tests.
 9. Compare rewrite branch behavior against current integration fixtures.
-
