@@ -734,6 +734,72 @@ func TestCanIncrementalRelayMixed(t *testing.T) {
 	}
 }
 
+func TestObjectsToPush(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	commitHash := seedCommit(t, repo, nil)
+
+	// ObjectsToPush with the commit and empty target refs should return at
+	// least the commit hash itself (plus its tree, etc.).
+	hashes, err := ObjectsToPush(repo.Storer, []plumbing.Hash{commitHash}, nil)
+	if err != nil {
+		t.Fatalf("ObjectsToPush error: %v", err)
+	}
+	if len(hashes) == 0 {
+		t.Fatal("expected at least one object hash, got none")
+	}
+
+	found := false
+	for _, h := range hashes {
+		if h == commitHash {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected commit hash %s in returned objects", commitHash)
+	}
+
+	// If the want hash is already in the haves set, it should be excluded.
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		plumbing.NewBranchReferenceName("main"): commitHash,
+	}
+	hashes2, err := ObjectsToPush(repo.Storer, []plumbing.Hash{commitHash}, targetRefs)
+	if err != nil {
+		t.Fatalf("ObjectsToPush with haves error: %v", err)
+	}
+	if hashes2 != nil {
+		t.Fatalf("expected nil when all wants are in haves, got %d objects", len(hashes2))
+	}
+}
+
+func TestObjectsToPushEmpty(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+
+	// Empty wants should return nil.
+	hashes, err := ObjectsToPush(repo.Storer, nil, nil)
+	if err != nil {
+		t.Fatalf("ObjectsToPush error: %v", err)
+	}
+	if hashes != nil {
+		t.Fatalf("expected nil for empty wants, got %d objects", len(hashes))
+	}
+
+	// Also test with an empty (non-nil) slice.
+	hashes, err = ObjectsToPush(repo.Storer, []plumbing.Hash{}, nil)
+	if err != nil {
+		t.Fatalf("ObjectsToPush error: %v", err)
+	}
+	if hashes != nil {
+		t.Fatalf("expected nil for empty wants slice, got %d objects", len(hashes))
+	}
+}
+
 func seedCommit(tb testing.TB, repo *git.Repository, parents []plumbing.Hash) plumbing.Hash {
 	tb.Helper()
 	now := time.Now().UTC()

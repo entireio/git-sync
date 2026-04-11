@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -546,5 +548,142 @@ func TestWriteFileTokenEmptyPath(t *testing.T) {
 	}
 	if !errors.Is(err, os.ErrInvalid) {
 		t.Errorf("expected os.ErrInvalid, got %v", err)
+	}
+}
+
+func TestGetTokenWithRefresh(t *testing.T) {
+	t.Run("non-expired token returned without refresh", func(t *testing.T) {
+		dir := t.TempDir()
+		tokenPath := filepath.Join(dir, "tokens.json")
+		t.Setenv("ENTIRE_TOKEN_STORE", "file")
+		t.Setenv("ENTIRE_TOKEN_STORE_PATH", tokenPath)
+
+		// Set up a hosts.json so lookupEntireDBToken would find a user.
+		configDir := t.TempDir()
+		t.Setenv("ENTIRE_CONFIG_DIR", configDir)
+		hostsJSON := fmt.Sprintf(`{"example.com":{"activeUser":"alice","users":["alice"]}}`)
+		if err := os.WriteFile(filepath.Join(configDir, "hosts.json"), []byte(hostsJSON), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Write a non-expired token (expires 1 hour from now).
+		futureExpiry := time.Now().Add(1 * time.Hour).Unix()
+		encoded := fmt.Sprintf("my-access-token|%d", futureExpiry)
+		if err := WriteStoredToken(credentialService("example.com"), "alice", encoded); err != nil {
+			t.Fatalf("WriteStoredToken: %v", err)
+		}
+
+		// getTokenWithRefresh should return the token without attempting refresh.
+		got, err := getTokenWithRefresh(context.Background(), "example.com", "alice", "https://example.com", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "my-access-token" {
+			t.Errorf("got %q, want %q", got, "my-access-token")
+		}
+	})
+
+	t.Run("expired token with no refresh token returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		tokenPath := filepath.Join(dir, "tokens.json")
+		t.Setenv("ENTIRE_TOKEN_STORE", "file")
+		t.Setenv("ENTIRE_TOKEN_STORE_PATH", tokenPath)
+
+		configDir := t.TempDir()
+		t.Setenv("ENTIRE_CONFIG_DIR", configDir)
+
+		// Write an expired token (expired 1 hour ago).
+		pastExpiry := time.Now().Add(-1 * time.Hour).Unix()
+		encoded := fmt.Sprintf("stale-token|%d", pastExpiry)
+		if err := WriteStoredToken(credentialService("example.com"), "bob", encoded); err != nil {
+			t.Fatalf("WriteStoredToken: %v", err)
+		}
+		// No refresh token stored — refresh should fail.
+
+		_, err := getTokenWithRefresh(context.Background(), "example.com", "bob", "https://example.com", false)
+		if err == nil {
+			t.Fatal("expected error for expired token with no refresh token, got nil")
+		}
+		// Issue #7: error should mention refresh failure.
+		if !strings.Contains(err.Error(), "refresh failed") {
+			t.Errorf("error should mention refresh failure, got: %v", err)
+		}
+	})
+}
+
+func TestReadWriteStoredTokenFileStore(t *testing.T) {
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, "tokens.json")
+	t.Setenv("ENTIRE_TOKEN_STORE", "file")
+	t.Setenv("ENTIRE_TOKEN_STORE_PATH", tokenPath)
+
+	// Write and read back — round-trip.
+	if err := WriteStoredToken("svc:test", "user1", "secret-value"); err != nil {
+		t.Fatalf("WriteStoredToken: %v", err)
+	}
+	got, err := ReadStoredToken("svc:test", "user1")
+	if err != nil {
+		t.Fatalf("ReadStoredToken: %v", err)
+	}
+	if got != "secret-value" {
+		t.Errorf("ReadStoredToken = %q, want %q", got, "secret-value")
+	}
+
+	// Read a missing key returns ErrNotFound.
+	_, err = ReadStoredToken("svc:missing", "nobody")
+	if !isNotFound(err) {
+		t.Errorf("expected ErrNotFound for missing key, got %v", err)
+	}
+
+	// Read from a non-existent file path returns ErrNotFound.
+	t.Setenv("ENTIRE_TOKEN_STORE_PATH", filepath.Join(dir, "nonexistent", "tokens.json"))
+	_, err = ReadStoredToken("svc:test", "user1")
+	if !isNotFound(err) {
+		t.Errorf("expected ErrNotFound for missing file, got %v", err)
+	}
+}
+
+func TestEncodeTokenWithExpiration(t *testing.T) {
+	before := time.Now().Unix()
+	encoded := encodeTokenWithExpiration("mytoken", 3600)
+	after := time.Now().Unix()
+
+	// Format should be "token|unixtime".
+	parts := strings.SplitN(encoded, "|", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected format 'token|unixtime', got %q", encoded)
+	}
+	if parts[0] != "mytoken" {
+		t.Errorf("token part = %q, want %q", parts[0], "mytoken")
+	}
+	ts, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		t.Fatalf("failed to parse timestamp: %v", err)
+	}
+	// The timestamp should be now + 3600 (within the before/after window).
+	if ts < before+3600 || ts > after+3600 {
+		t.Errorf("timestamp %d not in expected range [%d, %d]", ts, before+3600, after+3600)
+	}
+}
+
+func TestCredentialService(t *testing.T) {
+	got := credentialService("example.com")
+	want := "entire:example.com"
+	if got != want {
+		t.Errorf("credentialService(%q) = %q, want %q", "example.com", got, want)
+	}
+}
+
+func TestLookupEntireDBTokenNotConfigured(t *testing.T) {
+	// Set ENTIRE_CONFIG_DIR to an empty temp dir (no hosts.json).
+	configDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", configDir)
+
+	got, err := lookupEntireDBToken("example.com", "https://example.com", false)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
 	}
 }
