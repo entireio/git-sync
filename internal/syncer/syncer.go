@@ -44,9 +44,11 @@ const (
 
 	defaultAutoBatchMaxPackBytes = 512 * 1024 * 1024
 	entireCLIClientID            = "entire-cli"
+	githubLargeRepoThresholdKB   = 1536 * 1024
 )
 
 var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
+var githubRepoAPIBaseURL = "https://api.github.com"
 
 type Endpoint struct {
 	URL           string
@@ -946,6 +948,15 @@ func bootstrapWithInputs(
 		Protocol:    sourceService.protocol,
 	}
 
+	if batchLimit, ok := githubBootstrapBatchMaxPackBytes(ctx, cfg, sourceConn, sourceService); ok {
+		cfg.BatchMaxPackBytes = batchLimit
+		progressf(
+			cfg.Verbose,
+			"bootstrap: github repo-size preflight selected batched mode with batch-max-pack-bytes=%d",
+			cfg.BatchMaxPackBytes,
+		)
+	}
+
 	if cfg.BatchMaxPackBytes > 0 {
 		return bootstrapBatchedWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, plans, desiredRefs, targetRefs, result)
 	}
@@ -1010,6 +1021,91 @@ func autoBatchMaxPackBytes(cfg Config, sourceService *sourceRefService, err erro
 		return 0, false
 	}
 	return batchLimit, true
+}
+
+func githubBootstrapBatchMaxPackBytes(ctx context.Context, cfg Config, sourceConn *transportConn, sourceService *sourceRefService) (int64, bool) {
+	if cfg.BatchMaxPackBytes > 0 {
+		return 0, false
+	}
+	if sourceConn == nil || sourceConn.endpoint == nil {
+		return 0, false
+	}
+	if sourceService == nil || sourceService.protocol != protocolModeV2 || !fetchCapabilitySupports(sourceService.v2, "filter") {
+		return 0, false
+	}
+	repoSizeKB, ok := lookupGitHubRepoSizeKB(ctx, sourceConn)
+	if !ok || repoSizeKB < githubLargeRepoThresholdKB {
+		return 0, false
+	}
+
+	batchLimit := int64(defaultAutoBatchMaxPackBytes)
+	if cfg.MaxPackBytes > 0 && cfg.MaxPackBytes < batchLimit {
+		batchLimit = cfg.MaxPackBytes
+	}
+	if batchLimit <= 0 {
+		return 0, false
+	}
+	return batchLimit, true
+}
+
+func lookupGitHubRepoSizeKB(ctx context.Context, sourceConn *transportConn) (int64, bool) {
+	owner, repo, ok := githubOwnerRepo(sourceConn)
+	if !ok {
+		return 0, false
+	}
+
+	apiURL := strings.TrimRight(githubRepoAPIBaseURL, "/") + "/repos/" + owner + "/" + repo
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return 0, false
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set(statsPhaseHdr, "github repo metadata")
+
+	resp, err := sourceConn.http.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, false
+	}
+
+	var payload struct {
+		Size int64 `json:"size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return 0, false
+	}
+	if payload.Size <= 0 {
+		return 0, false
+	}
+	return payload.Size, true
+}
+
+func githubOwnerRepo(sourceConn *transportConn) (string, string, bool) {
+	if sourceConn == nil || sourceConn.endpoint == nil {
+		return "", "", false
+	}
+	ep := sourceConn.endpoint
+	if ep.Protocol != "http" && ep.Protocol != "https" {
+		return "", "", false
+	}
+	if !strings.EqualFold(ep.Host, "github.com") {
+		return "", "", false
+	}
+
+	path := strings.Trim(ep.Path, "/")
+	if strings.HasSuffix(path, ".git") {
+		path = strings.TrimSuffix(path, ".git")
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func isTargetBodyLimitError(err error) bool {

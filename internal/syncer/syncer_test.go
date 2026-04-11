@@ -1,7 +1,10 @@
 package syncer
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -147,5 +150,92 @@ func TestSampledCheckpointUnderLimitByProbe(t *testing.T) {
 	}
 	if len(probes) > 6 {
 		t.Fatalf("expected fixed small probe count, got %d probes: %v", len(probes), probes)
+	}
+}
+
+func TestGitHubOwnerRepo(t *testing.T) {
+	conn, err := newTransportConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", newStats(false))
+	if err != nil {
+		t.Fatalf("new transport conn: %v", err)
+	}
+	owner, repo, ok := githubOwnerRepo(conn)
+	if !ok {
+		t.Fatalf("expected github owner/repo match")
+	}
+	if owner != "torvalds" || repo != "linux" {
+		t.Fatalf("unexpected owner/repo: %s/%s", owner, repo)
+	}
+}
+
+func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
+	conn, err := newTransportConn(Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", newStats(false))
+	if err != nil {
+		t.Fatalf("new transport conn: %v", err)
+	}
+	if _, _, ok := githubOwnerRepo(conn); ok {
+		t.Fatalf("expected non-github source to be rejected")
+	}
+}
+
+func TestGitHubBootstrapBatchMaxPackBytesLargeRepo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/torvalds/linux" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"size":%d}`, githubLargeRepoThresholdKB+1)))
+	}))
+	defer server.Close()
+
+	originalAPIBaseURL := githubRepoAPIBaseURL
+	githubRepoAPIBaseURL = server.URL
+	t.Cleanup(func() {
+		githubRepoAPIBaseURL = originalAPIBaseURL
+	})
+
+	conn, err := newTransportConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", newStats(false))
+	if err != nil {
+		t.Fatalf("new transport conn: %v", err)
+	}
+
+	batchLimit, ok := githubBootstrapBatchMaxPackBytes(context.Background(), Config{}, conn, &sourceRefService{
+		protocol: protocolModeV2,
+		v2: &v2CapabilityAdvertisement{Capabilities: map[string]string{
+			"fetch": "thin-pack filter",
+		}},
+	})
+	if !ok {
+		t.Fatalf("expected github preflight to select batched mode")
+	}
+	if batchLimit != defaultAutoBatchMaxPackBytes {
+		t.Fatalf("unexpected batch limit: %d", batchLimit)
+	}
+}
+
+func TestGitHubBootstrapBatchMaxPackBytesSkipsSmallRepo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"size":1024}`))
+	}))
+	defer server.Close()
+
+	originalAPIBaseURL := githubRepoAPIBaseURL
+	githubRepoAPIBaseURL = server.URL
+	t.Cleanup(func() {
+		githubRepoAPIBaseURL = originalAPIBaseURL
+	})
+
+	conn, err := newTransportConn(Endpoint{URL: "https://github.com/octocat/Hello-World.git"}, "source", newStats(false))
+	if err != nil {
+		t.Fatalf("new transport conn: %v", err)
+	}
+
+	if _, ok := githubBootstrapBatchMaxPackBytes(context.Background(), Config{}, conn, &sourceRefService{
+		protocol: protocolModeV2,
+		v2: &v2CapabilityAdvertisement{Capabilities: map[string]string{
+			"fetch": "thin-pack filter",
+		}},
+	}); ok {
+		t.Fatalf("expected small github repo to keep single-pack bootstrap")
 	}
 }
