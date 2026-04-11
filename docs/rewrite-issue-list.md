@@ -156,7 +156,8 @@ Comparison check:
 - Failing batch pushes must not leak HTTP response bodies.
 
 Current rewrite note:
-- Ownership of stream lifecycle is clearer than on `main`, but this still wants an explicit close-audit and tests around failing push paths.
+- Ownership of stream lifecycle is clearer than on `main`, and the rewrite now has direct tests for key pack-stream close behavior on success and error paths.
+- This still wants a fuller close-audit around all strategy-level failure paths before it should be considered fully done.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
 
