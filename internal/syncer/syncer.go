@@ -304,6 +304,7 @@ func planConfig(cfg Config) planner.PlanConfig {
 type syncSession struct {
 	cfg             Config
 	stats           *statsCollector
+	logger          *slog.Logger
 	sourceConn      *gitproto.Conn
 	targetConn      *gitproto.Conn
 	sourceService   *gitproto.RefService
@@ -327,6 +328,11 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		cfg:             cfg,
 		stats:           newStats(cfg.ShowStats),
 		measurementDone: startMeasurement(cfg.MeasureMemory),
+	}
+	if cfg.Verbose {
+		s.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}))
 	}
 
 	var err error
@@ -400,7 +406,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, cfg, stats, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason, measurementDone)
+		return bootstrapWithInputs(ctx, cfg, stats, s.logger, sourceConn, targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason, measurementDone)
 	}
 
 	// Normal sync: allocate in-memory repo and fetch objects
@@ -513,7 +519,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	_, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, s.targetRefMap)
-	result, err := bootstrapWithInputs(ctx, cfg, s.stats, s.sourceConn, s.targetConn, s.sourceService, s.targetAdv, desiredRefs, s.targetRefMap, reason, s.measurementDone)
+	result, err := bootstrapWithInputs(ctx, cfg, s.stats, s.logger, s.sourceConn, s.targetConn, s.sourceService, s.targetAdv, desiredRefs, s.targetRefMap, reason, s.measurementDone)
 	result.Measurement = s.measurementDone()
 	return result, err
 }
@@ -636,6 +642,7 @@ func bootstrapWithInputs(
 	ctx context.Context,
 	cfg Config,
 	stats *statsCollector,
+	logger *slog.Logger,
 	sourceConn, targetConn *gitproto.Conn,
 	sourceService *gitproto.RefService,
 	targetAdv *packp.AdvRefs,
@@ -644,12 +651,6 @@ func bootstrapWithInputs(
 	relayReason string,
 	measurementDone func() Measurement,
 ) (Result, error) {
-	var logger *slog.Logger
-	if cfg.Verbose {
-		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
-		}))
-	}
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: sourceConn, TargetConn: targetConn,
 		SourceService: sourceService, TargetAdv: targetAdv,
@@ -704,4 +705,3 @@ func countObjects(store storer.EncodedObjectStorer) (int, error) {
 	})
 	return count, err
 }
-

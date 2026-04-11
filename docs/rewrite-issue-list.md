@@ -340,7 +340,7 @@ Current rewrite note:
 
 ### 17. Packet parsing allocates too aggressively
 
-Status: open
+Status: done
 
 Problem:
 - Packet reader allocates per packet and may create unnecessary GC churn.
@@ -352,7 +352,7 @@ Rewrite requirement:
 - Reuse buffers where practical.
 
 Current rewrite note:
-- This does not appear to be addressed yet. Packet parsing is cleaner and better tested, but still allocation-heavy.
+- `internal/gitproto.PacketReader` now reuses a fixed header buffer and a growable payload buffer, and the rewrite includes packet-reader benchmarks.
 
 ## Test Gaps
 
