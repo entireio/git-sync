@@ -386,6 +386,49 @@ func TestBootstrap_IntegrationBatchedResumeAtFinalTipCutsOver(t *testing.T) {
 	}
 }
 
+func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1"), sourceHead.Hash())); err != nil {
+		t.Fatalf("set lightweight tag: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		IncludeTags:       true,
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap with lightweight tag failed: %v", err)
+	}
+	if result.Pushed != 2 || !result.Batching || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	tagRef, err := targetRepo.Reference(plumbing.NewTagReferenceName("v1"), true)
+	if err != nil {
+		t.Fatalf("resolve target tag: %v", err)
+	}
+	if tagRef.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target tag %s, got %s", sourceHead.Hash(), tagRef.Hash())
+	}
+}
+
 func TestBootstrap_IntegrationBranchMapping(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)

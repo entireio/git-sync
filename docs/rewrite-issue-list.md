@@ -67,7 +67,7 @@ Rebuild `git-sync` as a smaller set of focused packages around the same product 
 
 ### 1. Batched bootstrap can claim tag refs were pushed when no tag ref was created
 
-Status: partial
+Status: done
 
 Problem:
 - In the batched bootstrap tag phase, `FetchPack` returning `git.NoErrAlreadyUpToDate` can skip tag creation entirely even when the tag ref is absent and only the tag object is already reachable.
@@ -83,6 +83,9 @@ Rewrite requirement:
 
 Comparison check:
 - A tag whose target object is already present on target must still be created during bootstrap.
+
+Current rewrite note:
+- This is now covered directly for the lightweight-tag case where branch batches already made the target object reachable before tag creation.
 
 ### 2. Duplicate target mappings are silently accepted
 
@@ -415,6 +418,7 @@ Known missing cases:
 
 Current rewrite note:
 - Some of these are now covered, including empty source repo, tag force-retarget, duplicate/conflicting mappings, and tag creation when target objects already exist.
+- Batched lightweight-tag creation without an extra pack is now covered directly.
 - Basic context cancellation coverage now exists.
 - Batched bootstrap resume mismatch and final-tip cutover paths now have direct integration coverage.
 - Some harder batch-failure injection and partial cutover failure paths still remain.
