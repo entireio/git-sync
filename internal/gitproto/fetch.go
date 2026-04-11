@@ -26,6 +26,20 @@ type DesiredRef struct {
 	IsTag      bool
 }
 
+func (s *RefService) ProtocolName() string {
+	if s == nil {
+		return ""
+	}
+	return s.Protocol
+}
+
+func (s *RefService) SupportsFetchFeature(feature string) bool {
+	if s == nil || s.Protocol != "v2" || s.V2Caps == nil {
+		return false
+	}
+	return s.V2Caps.FetchSupports(feature)
+}
+
 // FetchToStore fetches objects from source into the given store, using the
 // appropriate protocol version.
 func (s *RefService) FetchToStore(

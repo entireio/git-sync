@@ -19,6 +19,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	"github.com/soph/git-sync/internal/convert"
@@ -40,7 +41,12 @@ var GitHubRepoAPIBaseURL = "https://api.github.com"
 type Params struct {
 	SourceConn    *gitproto.Conn
 	TargetConn    *gitproto.Conn
-	SourceService *gitproto.RefService
+	SourceService interface {
+		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+		FetchCommitGraph(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+		ProtocolName() string
+		SupportsFetchFeature(string) bool
+	}
 	TargetAdv     *packp.AdvRefs
 	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
@@ -128,10 +134,10 @@ func executeBatched(
 	plans []planner.BranchPlan,
 	result Result,
 ) (Result, error) {
-	if p.SourceService.Protocol != "v2" {
+	if p.SourceService.ProtocolName() != "v2" {
 		return result, fmt.Errorf("bootstrap batching currently requires protocol v2")
 	}
-	if p.SourceService.V2Caps == nil || !p.SourceService.V2Caps.FetchSupports("filter") {
+	if !p.SourceService.SupportsFetchFeature("filter") {
 		return result, fmt.Errorf("bootstrap batching requires source fetch filter support")
 	}
 
@@ -432,10 +438,10 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	if p.BatchMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
 		return 0, false
 	}
-	if p.SourceService == nil || p.SourceService.Protocol != "v2" {
+	if p.SourceService == nil || p.SourceService.ProtocolName() != "v2" {
 		return 0, false
 	}
-	if p.SourceService.V2Caps == nil || !p.SourceService.V2Caps.FetchSupports("filter") {
+	if !p.SourceService.SupportsFetchFeature("filter") {
 		return 0, false
 	}
 	repoSizeKB, ok := lookupGitHubRepoSizeKB(ctx, p.SourceConn)
@@ -505,10 +511,10 @@ func autoBatchMaxPackBytes(p Params, err error) (int64, bool) {
 	if p.BatchMaxPack > 0 || !isTargetBodyLimitError(err) {
 		return 0, false
 	}
-	if p.SourceService == nil || p.SourceService.Protocol != "v2" {
+	if p.SourceService == nil || p.SourceService.ProtocolName() != "v2" {
 		return 0, false
 	}
-	if p.SourceService.V2Caps == nil || !p.SourceService.V2Caps.FetchSupports("filter") {
+	if !p.SourceService.SupportsFetchFeature("filter") {
 		return 0, false
 	}
 	limit := int64(defaultAutoBatchMaxPackBytes)

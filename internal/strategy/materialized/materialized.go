@@ -21,7 +21,9 @@ import (
 type Params struct {
 	Store         storer.Storer
 	SourceConn    *gitproto.Conn
-	SourceService *gitproto.RefService
+	SourceService interface {
+		FetchToStore(context.Context, storer.Storer, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) error
+	}
 	TargetConn    *gitproto.Conn
 	TargetAdv     *packp.AdvRefs
 	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
@@ -95,4 +97,3 @@ func ensureTagObjects(ctx context.Context, p Params) error {
 	}
 	return nil
 }
-

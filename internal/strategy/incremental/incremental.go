@@ -6,6 +6,7 @@ package incremental
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
@@ -19,7 +20,9 @@ import (
 type Params struct {
 	SourceConn    *gitproto.Conn
 	TargetConn    *gitproto.Conn
-	SourceService *gitproto.RefService
+	SourceService interface {
+		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	}
 	TargetAdv     *packp.AdvRefs
 	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash

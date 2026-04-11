@@ -284,7 +284,9 @@ Rewrite requirement:
 - Introduce explicit session/context objects with narrow responsibilities.
 
 Current rewrite note:
-- Major strategy and protocol concerns were extracted, but some helpers still carry broad parameter structs and concrete dependencies rather than narrower interfaces.
+- Major strategy and protocol concerns were extracted.
+- The strategy packages now depend on narrower source-side interfaces instead of the full concrete `gitproto.RefService`.
+- Some helpers still carry broad parameter structs, and target-side/push abstractions are still concrete, so this remains partial.
 
 ## Performance And Scalability
 
