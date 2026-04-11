@@ -29,6 +29,9 @@ import (
 	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	transportserver "github.com/go-git/go-git/v5/plumbing/transport/server"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/soph/git-sync/internal/auth"
+	"github.com/soph/git-sync/internal/gitproto"
+	"github.com/soph/git-sync/internal/planner"
 )
 
 const testBranch = "master"
@@ -496,11 +499,11 @@ func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	originalFill := gitCredentialFillCommand
+	originalFill := auth.GitCredentialFillCommand
 	t.Cleanup(func() {
-		gitCredentialFillCommand = originalFill
+		auth.GitCredentialFillCommand = originalFill
 	})
-	gitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
 		if !strings.Contains(input, "protocol=http\n") {
 			t.Fatalf("expected protocol in credential input, got %q", input)
 		}
@@ -839,7 +842,7 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 	if err != nil {
 		t.Fatalf("source head: %v", err)
 	}
-	chain, err := firstParentChain(sourceRepo, head.Hash())
+	chain, err := planner.FirstParentChain(sourceRepo.Storer, head.Hash())
 	if err != nil {
 		t.Fatalf("build commit chain: %v", err)
 	}
@@ -1556,7 +1559,7 @@ type v2TestCommandRequest struct {
 }
 
 func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
-	reader := newPacketReader(bytes.NewReader(body))
+	reader := gitproto.NewPacketReader(bytes.NewReader(body))
 	req := v2TestCommandRequest{}
 	inArgs := false
 
@@ -1566,11 +1569,11 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 			return req, err
 		}
 		switch kind {
-		case packetTypeFlush:
+		case gitproto.PacketFlush:
 			return req, nil
-		case packetTypeDelim:
+		case gitproto.PacketDelim:
 			inArgs = true
-		case packetTypeData:
+		case gitproto.PacketData:
 			line := strings.TrimSuffix(string(payload), "\n")
 			if strings.HasPrefix(line, "command=") {
 				req.Command = strings.TrimPrefix(line, "command=")
