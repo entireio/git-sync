@@ -3,6 +3,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,6 +61,11 @@ type Result struct {
 	BatchCount        int
 	PlannedBatchCount int
 	TempRefs          []string
+}
+
+type plannedBatch struct {
+	planner.BootstrapBatch
+	prefetchedPacks map[plumbing.Hash][]byte
 }
 
 // Execute runs the bootstrap strategy (one-shot or batched).
@@ -149,7 +155,7 @@ func executeBatched(
 		planRefs = append(planRefs, p.DesiredRefs[plan.TargetRef])
 	}
 
-	var batches []planner.BootstrapBatch
+	var batches []plannedBatch
 	if len(planRefs) > 0 {
 		p.log("bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
 		var err error
@@ -204,13 +210,10 @@ func executeBatched(
 				})
 			}
 
-			desired := singleGP(batch.Plan.SourceRef, batch.TempRef, checkpoint)
-			haves := planner.SingleHaveMap(current)
-			packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
+			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, batchLimit)
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
-			packReader = gitproto.LimitPackReader(packReader, batchLimit)
 			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(stagePlans))
 			if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
@@ -274,22 +277,25 @@ func executeBatched(
 
 // --- Checkpoint planning ---
 
-func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]planner.BootstrapBatch, error) {
-	out := make([]planner.BootstrapBatch, 0, len(desired))
+func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
+	out := make([]plannedBatch, 0, len(desired))
 	for _, ref := range desired {
-		checkpoints, err := PlanCheckpoints(ctx, p, ref)
+		checkpoints, prefetched, err := planCheckpointsWithCache(ctx, p, ref)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, planner.BootstrapBatch{
-			Plan: planner.BranchPlan{
-				Branch: ref.Label, SourceRef: ref.SourceRef,
-				TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
-				Kind: ref.Kind, Action: planner.ActionCreate,
+		out = append(out, plannedBatch{
+			BootstrapBatch: planner.BootstrapBatch{
+				Plan: planner.BranchPlan{
+					Branch: ref.Label, SourceRef: ref.SourceRef,
+					TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
+					Kind: ref.Kind, Action: planner.ActionCreate,
+				},
+				TempRef:     planner.BootstrapTempRef(ref.TargetRef),
+				ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
+				Checkpoints: checkpoints,
 			},
-			TempRef:     planner.BootstrapTempRef(ref.TargetRef),
-			ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
-			Checkpoints: checkpoints,
+			prefetchedPacks: prefetched,
 		})
 	}
 	return out, nil
@@ -297,18 +303,23 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 
 // PlanCheckpoints plans the checkpoint hashes for a single branch during batched bootstrap.
 func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
+	checkpoints, _, err := planCheckpointsWithCache(ctx, p, ref)
+	return checkpoints, err
+}
+
+func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, map[plumbing.Hash][]byte, error) {
 	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
-		return nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
 	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
 	if err != nil {
-		return nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
 	}
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+		return nil, nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
 	}
 
 	// Issue #14: Use a commit-count heuristic for the initial span estimate
@@ -330,25 +341,29 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 	prevIdx := -1
 	prevHash := plumbing.ZeroHash
 	prevSpan := initialSpan
-	probeCache := make(map[string]bool)
+	probeCache := make(map[string]probeResult)
+	prefetched := make(map[plumbing.Hash][]byte)
 	for prevIdx < len(chain)-1 {
 		bestIdx, err := planner.SampledCheckpointUnderLimit(chain, prevIdx, prevSpan, func(idx int) (bool, error) {
 			cacheKey := prevHash.String() + ":" + strconv.Itoa(idx)
-			if tooLarge, ok := probeCache[cacheKey]; ok {
-				return tooLarge, nil
+			if result, ok := probeCache[cacheKey]; ok {
+				return result.tooLarge, nil
 			}
-			tooLarge, err := packExceedsLimit(ctx, p, ref, chain[idx], prevHash, p.BatchMaxPack)
+			data, tooLarge, err := fetchPackForProbe(ctx, p, ref, chain[idx], prevHash, p.BatchMaxPack)
 			if err != nil {
 				return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, planner.ShortHash(chain[idx]), err)
 			}
-			probeCache[cacheKey] = tooLarge
+			probeCache[cacheKey] = probeResult{tooLarge: tooLarge, data: data}
 			return tooLarge, nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if bestIdx <= prevIdx {
-			return nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, p.BatchMaxPack)
+			return nil, nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, p.BatchMaxPack)
+		}
+		if result, ok := probeCache[prevHash.String()+":"+strconv.Itoa(bestIdx)]; ok && !result.tooLarge && len(result.data) > 0 {
+			prefetched[chain[bestIdx]] = result.data
 		}
 		prevSpan = bestIdx - prevIdx
 		prevIdx = bestIdx
@@ -360,25 +375,55 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 			"selected", len(checkpoints),
 			"chain_len", len(chain))
 	}
-	return checkpoints, nil
+	return checkpoints, prefetched, nil
 }
 
-func packExceedsLimit(ctx context.Context, p Params, ref planner.DesiredRef, want, have plumbing.Hash, limit int64) (bool, error) {
+type probeResult struct {
+	tooLarge bool
+	data     []byte
+}
+
+func fetchPackForProbe(ctx context.Context, p Params, ref planner.DesiredRef, want, have plumbing.Hash, limit int64) ([]byte, bool, error) {
 	desired := singleGP(ref.SourceRef, ref.TargetRef, want)
 	haves := planner.SingleHaveMap(have)
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	defer packReader.Close()
-	_, err = io.Copy(io.Discard, gitproto.LimitPackReader(packReader, limit))
+	data, err := io.ReadAll(gitproto.LimitPackReader(packReader, limit))
 	if err == nil {
-		return false, nil
+		return data, false, nil
 	}
 	if strings.Contains(err.Error(), "source pack exceeded max-pack-bytes limit") {
-		return true, nil
+		return nil, true, nil
 	}
-	return false, err
+	return nil, false, err
+}
+
+func packReaderForCheckpoint(
+	ctx context.Context,
+	p Params,
+	batch plannedBatch,
+	checkpoint plumbing.Hash,
+	current plumbing.Hash,
+	batchLimit int64,
+) (io.ReadCloser, error) {
+	if data, ok := batch.prefetchedPacks[checkpoint]; ok && len(data) > 0 {
+		p.log("bootstrap batch reusing prefetched probe pack",
+			"branch", batch.Plan.TargetRef.String(),
+			"checkpoint", planner.ShortHash(checkpoint),
+			"bytes", len(data))
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+
+	desired := singleGP(batch.Plan.SourceRef, batch.TempRef, checkpoint)
+	haves := planner.SingleHaveMap(current)
+	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
+	if err != nil {
+		return nil, err
+	}
+	return gitproto.LimitPackReader(packReader, batchLimit), nil
 }
 
 // --- GitHub preflight ---
