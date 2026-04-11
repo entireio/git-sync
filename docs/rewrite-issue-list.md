@@ -1,0 +1,422 @@
+# git-sync Rewrite Issue List
+
+This document converts the review memo into a concrete issue list for a from-scratch rewrite branch.
+
+The intent is not to patch the current architecture incrementally first. The intent is to:
+
+1. Preserve the parts of the current implementation that are directionally correct.
+2. Throw away the parts that are structurally wrong or too costly to evolve.
+3. Rebuild in a way that makes comparison against the current branch explicit.
+
+## Rewrite Goal
+
+Rebuild `git-sync` as a smaller set of focused packages around the same product goal:
+
+- remote-to-remote smart HTTP Git mirroring
+- empty-target bootstrap relay
+- narrow incremental relay
+- fallback materialized push path when relay is not safe
+
+## Preserve These Ideas
+
+- Relay-first design is correct.
+- Empty-target bootstrap as a distinct strategy is correct.
+- Narrow incremental relay instead of trying to make every update streamable is correct.
+- Typed result/output structs are useful.
+- Machine-readable output is worth keeping.
+- Integration-heavy testing is the right testing style for this tool.
+
+## Replace These Structural Choices
+
+- Monolithic orchestration in `internal/syncer/syncer.go`
+- Mixed protocol, auth, planning, execution, stats, and measurement concerns in one package
+- Partially custom, partially `go-git` transport stack
+- Implicit capability handling spread across request builders
+- Batch planning that probes by repeatedly fetching full packs and discarding them
+
+## Proposed Rewrite Shape
+
+- `internal/gitproto`
+  - pkt-line
+  - smart HTTP v1/v2
+  - capability negotiation
+  - ref advertisement and fetch/push request building
+- `internal/planner`
+  - desired ref construction
+  - mapping normalization and validation
+  - plan generation
+  - prune policy
+  - checkpoint planning
+- `internal/auth`
+  - credential resolution chain
+  - token refresh
+  - token store backends
+- `internal/strategy/bootstrap`
+  - one-shot relay bootstrap
+  - batched bootstrap
+- `internal/strategy/incremental`
+  - incremental relay eligibility and execution
+- `internal/strategy/materialized`
+  - fetch, local object materialization, and encode/repack push
+- `internal/syncer`
+  - top-level orchestration only
+
+## Issues
+
+## Correctness
+
+### 1. Batched bootstrap can claim tag refs were pushed when no tag ref was created
+
+Status: open
+
+Problem:
+- In the batched bootstrap tag phase, `FetchPack` returning `git.NoErrAlreadyUpToDate` can skip tag creation entirely even when the tag ref is absent and only the tag object is already reachable.
+- The result still reports success.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1308)
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1328)
+
+Rewrite requirement:
+- Ref creation must be independent from pack necessity.
+- Support command-only tag creation when objects already exist.
+
+Comparison check:
+- A tag whose target object is already present on target must still be created during bootstrap.
+
+### 2. Duplicate target mappings are silently accepted
+
+Status: open
+
+Problem:
+- Multiple mappings to the same target ref overwrite each other silently.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1655)
+
+Rewrite requirement:
+- Mapping validation must reject duplicate target refs.
+- Validation failure must happen before planning or network activity.
+
+Comparison check:
+- `--map main:stable --map release:stable` must fail fast with a clear error.
+
+### 3. Mapping normalization accepts inconsistent ref kinds and partially-qualified refs
+
+Status: open
+
+Problem:
+- Invalid combinations survive normalization and fail later with misleading errors.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1706)
+
+Rewrite requirement:
+- Normalize short branch names consistently.
+- Reject branch-to-tag and tag-to-branch mappings.
+- Reject mixed fully-qualified and shorthand forms when ambiguous.
+
+Comparison check:
+- Invalid mappings must fail at validation time with precise messages.
+
+### 4. Sideband preference is backwards
+
+Status: open
+
+Problem:
+- The current code prefers `sideband` before `sideband64k`.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:3020)
+
+Rewrite requirement:
+- Prefer `sideband64k` whenever both are available.
+
+Comparison check:
+- Negotiation must pick the highest-capability sideband mode.
+
+### 5. Pack reader leak in bootstrap batch loop
+
+Status: open
+
+Problem:
+- Batch loop fetches a `packReader` without robust close discipline on all error paths.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1257)
+
+Rewrite requirement:
+- Stream lifecycle must be explicit and testable.
+- Every fetch stream must have one owner responsible for close.
+
+Comparison check:
+- Failing batch pushes must not leak HTTP response bodies.
+
+### 6. Protocol v2 tag fetches request `include-tag` without capability gating
+
+Status: open
+
+Problem:
+- v2 request building sends `include-tag` without first checking server support.
+
+Current code:
+- [internal/syncer/protocol_v2.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/protocol_v2.go:639)
+
+Rewrite requirement:
+- Capability handling must be centralized and typed.
+- Unsupported optional features must never be requested.
+
+Comparison check:
+- Tag sync against a v2 server without `include-tag` support must behave correctly.
+
+### 7. OAuth refresh failures are swallowed and stale tokens are reused
+
+Status: open
+
+Problem:
+- Token refresh failure degrades into later auth failure with poor diagnostics.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:2775)
+
+Rewrite requirement:
+- Distinguish refresh failure from remote auth rejection.
+- Surface the actual cause.
+
+Comparison check:
+- Expired token plus refresh failure must produce an explicit auth-refresh error path.
+
+## Concurrency And Safety
+
+### 8. `statsCollector` is not safely synchronized
+
+Status: open
+
+Problem:
+- The stats map is mutated and read across goroutines without full synchronization.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:3041)
+
+Rewrite requirement:
+- Stats collection must be race-free under concurrent HTTP activity.
+
+Comparison check:
+- Rewrite branch should pass `go test -race ./...`.
+
+### 9. Unbounded response reads can cause avoidable memory blowups
+
+Status: open
+
+Problem:
+- Some response paths use unbounded reads from remote servers.
+
+Current code:
+- `protocol_v2.go:713` from review notes
+
+Rewrite requirement:
+- Bound responses where protocol shape permits.
+- Stream where possible instead of buffering whole bodies.
+
+Comparison check:
+- Large or malicious server responses must not be able to force unbounded buffering in normal control paths.
+
+### 10. File token store has no locking
+
+Status: open
+
+Problem:
+- Multiple processes can corrupt token storage.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:2931)
+
+Rewrite requirement:
+- Add process-safe locking if file store remains supported.
+- Or explicitly scope file store to single-process/dev usage and document that.
+
+## Architecture
+
+### 11. `syncer.go` is a monolith
+
+Status: open
+
+Problem:
+- One file currently owns protocol setup, planning, batching, auth, stats, and execution.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:397)
+
+Rewrite requirement:
+- Package boundaries must isolate protocol, planning, auth, and execution strategies.
+
+Comparison check:
+- Top-level orchestrator should be visibly smaller and mostly wiring.
+
+### 12. Entry points duplicate setup work
+
+Status: open
+
+Problem:
+- `Run`, `Bootstrap`, `Probe`, and `Fetch` all repeat protocol validation, stats setup, connection setup, and ref discovery.
+
+Rewrite requirement:
+- Introduce a shared session/setup layer.
+
+### 13. Functions carry too much ambient state
+
+Status: open
+
+Problem:
+- Large helpers like batched bootstrap depend on too many parameters and too much shared context.
+
+Rewrite requirement:
+- Introduce explicit session/context objects with narrow responsibilities.
+
+## Performance And Scalability
+
+### 14. Batch planning probes by repeatedly fetching full packs and discarding them
+
+Status: open
+
+Problem:
+- `sourcePackExceedsLimit` can turn checkpoint planning into repeated full-pack fetches.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1601)
+
+Rewrite requirement:
+- Avoid repeated throwaway fetches as the primary sizing mechanism.
+- Reuse fitted packs or use a cheaper sizing heuristic.
+
+Comparison check:
+- Rewrite branch should significantly reduce HTTP round-trips during batch planning.
+
+### 15. Materialized fallback path does not scale to large repos
+
+Status: open
+
+Problem:
+- The non-relay path stores fetched objects in memory.
+
+Rewrite requirement:
+- Decide explicitly whether large non-relay sync is supported.
+- If yes, redesign storage strategy.
+- If no, fail early and clearly outside safe operating bounds.
+
+### 16. Fast-forward checks can degenerate into full graph walks
+
+Status: open
+
+Problem:
+- `reachesCommitHash` can traverse very large histories.
+
+Current code:
+- [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:2533)
+
+Rewrite requirement:
+- Make ancestry checking cost visible and bounded where possible.
+
+### 17. Packet parsing allocates too aggressively
+
+Status: open
+
+Problem:
+- Packet reader allocates per packet and may create unnecessary GC churn.
+
+Current code:
+- [internal/syncer/protocol_v2.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/protocol_v2.go:75)
+
+Rewrite requirement:
+- Reuse buffers where practical.
+
+## Test Gaps
+
+### 18. Core planning functions are under-tested directly
+
+Status: open
+
+Missing direct tests include:
+- `buildDesiredRefs`
+- `buildPlans`
+- `planRef`
+- `normalizeMapping`
+- `objectsToPush`
+- `collectPushObjects`
+- `firstParentChain`
+- `autoBatchMaxPackBytes`
+- `bootstrapResumeIndex` error path
+
+Rewrite requirement:
+- Pure planning and validation logic should be unit-testable without HTTP fixtures.
+
+### 19. Relay eligibility logic is only tested indirectly
+
+Status: open
+
+Missing direct tests include:
+- `canIncrementalRelay`
+- `canFullTagCreateRelay`
+- `relayFallbackReason`
+
+Rewrite requirement:
+- Strategy selection must be testable independently from network execution.
+
+### 20. Protocol v2 error handling is under-tested
+
+Status: open
+
+Missing test coverage includes:
+- malformed pkt-lines
+- truncated packet bodies
+- missing `version 2`
+- malformed `ls-refs`
+- unsupported capability combinations
+
+Rewrite requirement:
+- Protocol parser behavior must be locked down with explicit failure tests.
+
+### 21. Missing behavioral coverage
+
+Status: open
+
+Known missing cases:
+- empty source repo
+- tag force-retarget
+- duplicate/conflicting mappings
+- context cancellation
+- batch resume mismatch
+- batch cutover partial failure
+- tag creation when target objects already exist
+
+### 22. No benchmark coverage for the expensive paths
+
+Status: open
+
+Rewrite requirement:
+- Add benchmarks for relay path overhead, planning overhead, and fallback graph/object work.
+
+## Rewrite Branch Acceptance Criteria
+
+- All mapping validation happens before network activity.
+- Capability negotiation is centralized and enforced consistently.
+- Relay strategies are separate packages with explicit inputs and outputs.
+- Tag creation is correct whether or not a pack transfer is needed.
+- Stats and logging are concurrency-safe.
+- Protocol parsing has explicit malformed-input tests.
+- Rewrite passes `go test ./...` and `go test -race ./...`.
+- Rewrite includes benchmarks for the critical planning and execution paths.
+- Rewrite branch can be compared against current behavior using the same integration scenarios.
+
+## Suggested Execution Order
+
+1. Define package boundaries and minimal interfaces.
+2. Rebuild mapping validation and planning first.
+3. Rebuild protocol and capability layer.
+4. Rebuild bootstrap relay.
+5. Rebuild incremental relay.
+6. Rebuild fallback materialized push path.
+7. Rebuild auth and token store behavior.
+8. Port and expand tests.
+9. Compare rewrite branch behavior against current integration fixtures.
+
