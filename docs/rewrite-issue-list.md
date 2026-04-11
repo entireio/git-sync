@@ -434,7 +434,7 @@ Current rewrite note:
 - Relay strategies are separate packages with explicit inputs and outputs. Status: done
 - Tag creation is correct whether or not a pack transfer is needed. Status: done
 - Stats are concurrency-safe. Status: done
-- Logging is structured and concurrency-safe. Status: open
+- Logging is structured and concurrency-safe. Status: done
 - Protocol parsing has explicit malformed-input tests. Status: done
 - Rewrite passes `go test ./...` and `go test -race ./...`. Status: done
 - Rewrite includes benchmarks for the critical planning and execution paths. Status: partial
@@ -443,7 +443,7 @@ Current rewrite note:
 Notes:
 - Capability handling is much better centralized under `internal/gitproto`, but the rewrite still uses `go-git` transport/protocol types rather than fully owning the protocol layer end-to-end.
 - Stats are now concurrency-safe and race-tested.
-- Logging is still ad hoc `progressf` output rather than structured logging.
+- Bootstrap logging now uses structured `slog` output instead of ad hoc formatted stderr lines.
 
 ## Suggested Execution Order
 

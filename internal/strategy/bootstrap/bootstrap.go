@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -43,9 +43,10 @@ type Params struct {
 	TargetAdv     *packp.AdvRefs
 	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
-	MaxPackBytes int64
-	BatchMaxPack int64
-	Verbose      bool
+	MaxPackBytes  int64
+	BatchMaxPack  int64
+	Verbose       bool
+	Logger        *slog.Logger
 }
 
 // Result holds the outcome of the bootstrap strategy.
@@ -75,7 +76,8 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	// GitHub large-repo preflight
 	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
 		p.BatchMaxPack = batchLimit
-		progressf(p.Verbose, "bootstrap: github repo-size preflight selected batched mode with batch-max-pack-bytes=%d", p.BatchMaxPack)
+		p.log("bootstrap github preflight selected batched mode",
+			"batch_max_pack_bytes", p.BatchMaxPack)
 	}
 
 	if p.BatchMaxPack > 0 {
@@ -83,7 +85,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 
 	// One-shot bootstrap
-	progressf(p.Verbose, "bootstrap: fetching %d ref(s) from source", len(plans))
+	p.log("bootstrap fetching refs from source", "ref_count", len(plans))
 	gpDesired := convert.DesiredRefs(p.DesiredRefs)
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, gpDesired, nil)
 	if err != nil {
@@ -94,7 +96,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 
-	progressf(p.Verbose, "bootstrap: pushing %d ref(s) to target", len(plans))
+	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
 	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(plans))
 	pushErr := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose)
 	if pushErr != nil {
@@ -102,7 +104,8 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		if !ok {
 			return result, fmt.Errorf("push target refs: %w", pushErr)
 		}
-		progressf(p.Verbose, "bootstrap: target rejected; retrying with batch-max-pack-bytes=%d", autoBatch)
+		p.log("bootstrap retrying with batched mode after target rejection",
+			"batch_max_pack_bytes", autoBatch)
 		p.BatchMaxPack = autoBatch
 		return executeBatched(ctx, p, plans, result)
 	}
@@ -148,7 +151,7 @@ func executeBatched(
 
 	var batches []planner.BootstrapBatch
 	if len(planRefs) > 0 {
-		progressf(p.Verbose, "bootstrap-batch: planning checkpoints for %d branch ref(s)", len(planRefs))
+		p.log("bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
 		var err error
 		batches, err = planBatches(ctx, p, planRefs)
 		if err != nil {
@@ -161,11 +164,14 @@ func executeBatched(
 		batchLimit = p.MaxPackBytes
 	}
 
-	for _, batch := range batches {
-		result.PlannedBatchCount += len(batch.Checkpoints)
-		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
-		progressf(p.Verbose, "bootstrap-batch: branch=%s temp-ref=%s planned-batches=%d resume=%s",
-			batch.Plan.TargetRef, batch.TempRef, len(batch.Checkpoints), planner.ShortHash(batch.ResumeHash))
+		for _, batch := range batches {
+			result.PlannedBatchCount += len(batch.Checkpoints)
+			result.TempRefs = append(result.TempRefs, batch.TempRef.String())
+			p.log("bootstrap batch branch plan",
+				"branch", batch.Plan.TargetRef.String(),
+				"temp_ref", batch.TempRef.String(),
+				"planned_batches", len(batch.Checkpoints),
+				"resume_hash", planner.ShortHash(batch.ResumeHash))
 
 		current := batch.ResumeHash
 		startIdx, err := planner.BootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
@@ -175,9 +181,12 @@ func executeBatched(
 
 		for idx := startIdx; idx < len(batch.Checkpoints); idx++ {
 			checkpoint := batch.Checkpoints[idx]
-			progressf(p.Verbose, "bootstrap-batch: branch=%s batch=%d/%d from=%s to=%s",
-				batch.Plan.TargetRef, idx+1, len(batch.Checkpoints),
-				planner.ShortHash(current), planner.ShortHash(checkpoint))
+			p.log("bootstrap batch push checkpoint",
+				"branch", batch.Plan.TargetRef.String(),
+				"batch", idx+1,
+				"batch_total", len(batch.Checkpoints),
+				"from", planner.ShortHash(current),
+				"to", planner.ShortHash(checkpoint))
 
 			stagePlans := []planner.BranchPlan{{
 				Branch: batch.Plan.Branch, SourceRef: batch.Plan.SourceRef,
@@ -206,8 +215,10 @@ func executeBatched(
 			if err := gitproto.PushPack(ctx, p.TargetConn, p.TargetAdv, cmds, packReader, p.Verbose); err != nil {
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
-			progressf(p.Verbose, "bootstrap-batch: branch=%s batch=%d/%d complete",
-				batch.Plan.TargetRef, idx+1, len(batch.Checkpoints))
+			p.log("bootstrap batch checkpoint complete",
+				"branch", batch.Plan.TargetRef.String(),
+				"batch", idx+1,
+				"batch_total", len(batch.Checkpoints))
 			current = checkpoint
 			result.BatchCount++
 		}
@@ -226,12 +237,12 @@ func executeBatched(
 		if err := gitproto.PushCommands(ctx, p.TargetConn, p.TargetAdv, cmds, p.Verbose); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
 		}
-		progressf(p.Verbose, "bootstrap-batch: branch=%s finalized", batch.Plan.TargetRef)
+		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
 	}
 
 	// Tag phase (issue #1)
 	if len(tagPlans) > 0 {
-		progressf(p.Verbose, "bootstrap-batch: pushing %d tag(s) after branch batches", len(tagPlans))
+		p.log("bootstrap batch pushing tags after branch batches", "tag_count", len(tagPlans))
 		tagTargetRefs := planner.CopyRefHashMap(p.TargetRefs)
 		for _, batch := range batches {
 			tagTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
@@ -286,7 +297,7 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 
 // PlanCheckpoints plans the checkpoint hashes for a single branch during batched bootstrap.
 func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
-	progressf(p.Verbose, "bootstrap-batch: fetching commit graph for %s", ref.TargetRef)
+	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
@@ -337,8 +348,11 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 		prevIdx = bestIdx
 		prevHash = chain[bestIdx]
 		checkpoints = append(checkpoints, prevHash)
-		progressf(p.Verbose, "bootstrap-batch: branch=%s planned-checkpoint=%s selected=%d chain-len=%d",
-			ref.TargetRef, planner.ShortHash(prevHash), len(checkpoints), len(chain))
+		p.log("bootstrap batch planned checkpoint",
+			"branch", ref.TargetRef.String(),
+			"checkpoint", planner.ShortHash(prevHash),
+			"selected", len(checkpoints),
+			"chain_len", len(chain))
 	}
 	return checkpoints, nil
 }
@@ -499,9 +513,9 @@ func singleGP(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) m
 	}
 }
 
-func progressf(verbose bool, format string, args ...any) {
-	if !verbose {
+func (p Params) log(msg string, args ...any) {
+	if p.Logger == nil {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[git-sync] %s\n", fmt.Sprintf(format, args...))
+	p.Logger.Info(msg, args...)
 }

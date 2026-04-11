@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"sort"
 	"strings"
 
@@ -642,12 +644,18 @@ func bootstrapWithInputs(
 	relayReason string,
 	measurementDone func() Measurement,
 ) (Result, error) {
+	var logger *slog.Logger
+	if cfg.Verbose {
+		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		}))
+	}
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: sourceConn, TargetConn: targetConn,
 		SourceService: sourceService, TargetAdv: targetAdv,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
 		MaxPackBytes: cfg.MaxPackBytes, BatchMaxPack: cfg.BatchMaxPackBytes,
-		Verbose: cfg.Verbose,
+		Verbose: cfg.Verbose, Logger: logger,
 	}, relayReason)
 	if err != nil {
 		return Result{}, err
@@ -696,5 +704,4 @@ func countObjects(store storer.EncodedObjectStorer) (int, error) {
 	})
 	return count, err
 }
-
 
