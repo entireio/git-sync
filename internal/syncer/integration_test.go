@@ -159,17 +159,36 @@ func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 }
 
 func TestProbe_ContextCanceled(t *testing.T) {
+	started := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
 		<-r.Context().Done()
 	}))
 	defer server.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Probe(ctx, Config{
+			Source: Endpoint{URL: server.URL + "/repo.git"},
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("probe request did not reach server before timeout")
+	}
 	cancel()
 
-	_, err := Probe(ctx, Config{
-		Source: Endpoint{URL: server.URL + "/repo.git"},
-	})
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("probe did not return after cancellation")
+	}
 	if err == nil {
 		t.Fatal("expected context cancellation error")
 	}

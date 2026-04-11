@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -81,21 +81,37 @@ func TestApplyAuth(t *testing.T) {
 }
 
 func TestRequestInfoRefsContextCanceled(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-
-	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
+	started := make(chan struct{}, 1)
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, http.DefaultTransport)
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		started <- struct{}{}
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}))
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := RequestInfoRefs(ctx, conn, "git-upload-pack", "version=2")
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach server before timeout")
+	}
 	cancel()
 
-	_, err = RequestInfoRefs(ctx, conn, "git-upload-pack", "version=2")
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not return after cancellation")
+	}
 	if err == nil {
 		t.Fatal("expected cancellation error, got nil")
 	}
@@ -105,25 +121,47 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 }
 
 func TestPostRPCStreamContextCanceled(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-
-	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
+	started := make(chan struct{}, 1)
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, http.DefaultTransport)
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		started <- struct{}{}
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}))
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := PostRPCStream(ctx, conn, "git-upload-pack", []byte("0000"), true, "upload-pack fetch")
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach server before timeout")
+	}
 	cancel()
 
-	_, err = PostRPCStream(ctx, conn, "git-upload-pack", []byte("0000"), true, "upload-pack fetch")
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not return after cancellation")
+	}
 	if err == nil {
 		t.Fatal("expected cancellation error, got nil")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
