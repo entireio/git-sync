@@ -419,13 +419,13 @@ Current rewrite note:
 
 ### 22. No benchmark coverage for the expensive paths
 
-Status: partial
+Status: done
 
 Rewrite requirement:
 - Add benchmarks for relay path overhead, planning overhead, and fallback graph/object work.
 
 Current rewrite note:
-- Planner and protocol benchmarks exist, but execution-path benchmarks for bootstrap relay, incremental relay, and materialized fallback still appear missing.
+- Planner and protocol benchmarks exist, and the rewrite now also includes syncer-level execution-path benchmarks for bootstrap relay, incremental relay, and a materialized fallback case.
 
 ## Rewrite Branch Acceptance Criteria
 
@@ -437,7 +437,7 @@ Current rewrite note:
 - Logging is structured and concurrency-safe. Status: done
 - Protocol parsing has explicit malformed-input tests. Status: done
 - Rewrite passes `go test ./...` and `go test -race ./...`. Status: done
-- Rewrite includes benchmarks for the critical planning and execution paths. Status: partial
+- Rewrite includes benchmarks for the critical planning and execution paths. Status: done
 - Rewrite branch can be compared against current behavior using the same integration scenarios. Status: done
 
 Notes:
