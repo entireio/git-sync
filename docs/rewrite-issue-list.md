@@ -373,7 +373,7 @@ Rewrite requirement:
 
 ### 19. Relay eligibility logic is only tested indirectly
 
-Status: partial
+Status: done
 
 Missing direct tests include:
 - `canIncrementalRelay`
@@ -384,7 +384,7 @@ Rewrite requirement:
 - Strategy selection must be testable independently from network execution.
 
 Current rewrite note:
-- Relay logic moved into planner/strategy packages and is more directly testable, but the original acceptance wording implies more isolated decision tests than currently exist.
+- Relay decision functions now have direct planner-level coverage in addition to higher-level execution-path tests.
 
 ### 20. Protocol v2 error handling is under-tested
 
@@ -419,7 +419,7 @@ Current rewrite note:
 
 ### 22. No benchmark coverage for the expensive paths
 
-Status: done
+Status: partial
 
 Rewrite requirement:
 - Add benchmarks for relay path overhead, planning overhead, and fallback graph/object work.
@@ -437,7 +437,7 @@ Current rewrite note:
 - Logging is structured and concurrency-safe. Status: open
 - Protocol parsing has explicit malformed-input tests. Status: done
 - Rewrite passes `go test ./...` and `go test -race ./...`. Status: done
-- Rewrite includes benchmarks for the critical planning and execution paths. Status: done
+- Rewrite includes benchmarks for the critical planning and execution paths. Status: partial
 - Rewrite branch can be compared against current behavior using the same integration scenarios. Status: done
 
 Notes:

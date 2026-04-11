@@ -734,6 +734,105 @@ func TestCanIncrementalRelayMixed(t *testing.T) {
 	}
 }
 
+func TestCanIncrementalRelayRejectsNoThin(t *testing.T) {
+	plans := []BranchPlan{{
+		Branch:     "main",
+		SourceRef:  "refs/heads/main",
+		TargetRef:  "refs/heads/main",
+		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		TargetHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		Kind:       RefKindBranch,
+		Action:     ActionUpdate,
+	}}
+
+	advRefs := &packp.AdvRefs{}
+	advRefs.Capabilities = capability.NewList()
+	_ = advRefs.Capabilities.Set(capability.Capability("no-thin"))
+
+	ok, reason := CanIncrementalRelay(false, false, false, plans, advRefs)
+	if ok {
+		t.Fatal("expected CanIncrementalRelay=false when target advertises no-thin")
+	}
+	if reason != "incremental-target-no-thin" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
+	plans := []BranchPlan{{
+		Branch:     "main",
+		SourceRef:  "refs/heads/main",
+		TargetRef:  "refs/heads/main",
+		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		TargetHash: plumbing.ZeroHash,
+		Kind:       RefKindBranch,
+		Action:     ActionCreate,
+	}}
+
+	advRefs := &packp.AdvRefs{}
+	advRefs.Capabilities = capability.NewList()
+
+	ok, reason := CanIncrementalRelay(false, false, false, plans, advRefs)
+	if ok {
+		t.Fatal("expected CanIncrementalRelay=false for branch create")
+	}
+	if reason != "incremental-branch-action-not-update" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanFullTagCreateRelay(t *testing.T) {
+	plans := []BranchPlan{{
+		Branch:     "v1.0",
+		SourceRef:  "refs/tags/v1.0",
+		TargetRef:  "refs/tags/v1.0",
+		SourceHash: plumbing.NewHash("3333333333333333333333333333333333333333"),
+		TargetHash: plumbing.ZeroHash,
+		Kind:       RefKindTag,
+		Action:     ActionCreate,
+	}}
+
+	ok, reason := CanFullTagCreateRelay(plans)
+	if !ok {
+		t.Fatalf("expected CanFullTagCreateRelay=true, got reason=%s", reason)
+	}
+	if reason != "tag-create-full-pack" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestRelayFallbackReason(t *testing.T) {
+	tagCreate := []BranchPlan{{
+		Branch:     "v1.0",
+		SourceRef:  "refs/tags/v1.0",
+		TargetRef:  "refs/tags/v1.0",
+		SourceHash: plumbing.NewHash("3333333333333333333333333333333333333333"),
+		TargetHash: plumbing.ZeroHash,
+		Kind:       RefKindTag,
+		Action:     ActionCreate,
+	}}
+
+	advRefs := &packp.AdvRefs{}
+	advRefs.Capabilities = capability.NewList()
+
+	if got := RelayFallbackReason(false, false, false, tagCreate, advRefs); got != "fast-forward-branch-or-tag-create" {
+		t.Fatalf("expected fast-forward-branch-or-tag-create, got %s", got)
+	}
+
+	unsupported := []BranchPlan{{
+		Branch:     "main",
+		SourceRef:  "refs/heads/main",
+		TargetRef:  "refs/tags/main",
+		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		TargetHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		Kind:       RefKindBranch,
+		Action:     ActionUpdate,
+	}}
+	if got := RelayFallbackReason(false, false, false, unsupported, advRefs); got != "incremental-tag-relay-non-tag-plan" {
+		t.Fatalf("unexpected fallback reason: %s", got)
+	}
+}
+
 func TestObjectsToPush(t *testing.T) {
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
