@@ -653,6 +653,9 @@ func sourceFetchRequestV2(
 
 	commandArgs := make([]string, 0, len(wants)+len(haves)+4)
 	commandArgs = append(commandArgs, "ofs-delta", "no-progress")
+	if desiredHasTag(desired) {
+		commandArgs = append(commandArgs, "include-tag")
+	}
 	for _, hash := range wants {
 		commandArgs = append(commandArgs, "want "+hash.String())
 	}

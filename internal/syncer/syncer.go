@@ -525,7 +525,25 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			result.Relay = true
 			result.RelayMode = "incremental"
 			result.RelayReason = reason
+		} else if ok, reason := canFullTagCreateRelay(pushPlans); ok {
+			relayPlans := append([]BranchPlan(nil), pushPlans...)
+			desiredRelay := desiredSubsetForPlans(desiredRefs, relayPlans)
+			packReader, err := sourceService.FetchPack(ctx, sourceConn, desiredRelay, nil)
+			if err != nil {
+				return result, fmt.Errorf("fetch source tag pack: %w", err)
+			}
+			defer packReader.Close()
+			packReader = limitPackReadCloser(packReader, cfg.MaxPackBytes)
+			if err := pushPackToTarget(ctx, targetConn, targetAdv, relayPlans, packReader, cfg.Verbose); err != nil {
+				return result, fmt.Errorf("push target refs: %w", err)
+			}
+			result.Relay = true
+			result.RelayMode = "incremental"
+			result.RelayReason = reason
 		} else if len(pushPlans) > 0 {
+			if err := ensureLocalObjectsForPush(ctx, repo, sourceConn, sourceService, desiredRefs, pushPlans); err != nil {
+				return result, fmt.Errorf("prepare local objects for push: %w", err)
+			}
 			if err := pushToTarget(ctx, repo, targetConn, targetAdv, pushPlans, targetRefMap, cfg.Verbose); err != nil {
 				return result, fmt.Errorf("push target refs: %w", err)
 			}
@@ -841,9 +859,29 @@ func canIncrementalRelay(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRef
 func relayFallbackReason(cfg Config, plans []BranchPlan, targetAdv *packp.AdvRefs) string {
 	if ok, reason := canIncrementalRelay(cfg, plans, targetAdv); ok {
 		return reason
+	} else if ok, reason := canFullTagCreateRelay(plans); ok {
+		return reason
 	} else {
 		return reason
 	}
+}
+
+func canFullTagCreateRelay(plans []BranchPlan) (bool, string) {
+	if len(plans) == 0 {
+		return false, "incremental-no-plans"
+	}
+	for _, plan := range plans {
+		if plan.Kind != RefKindTag {
+			return false, "incremental-tag-relay-non-tag-plan"
+		}
+		if !plan.SourceRef.IsTag() || !plan.TargetRef.IsTag() {
+			return false, "incremental-tag-relay-non-tag-mapping"
+		}
+		if plan.Action != ActionCreate {
+			return false, "incremental-tag-relay-tag-action-not-create"
+		}
+	}
+	return true, "tag-create-full-pack"
 }
 
 func desiredSubsetForPlans(
@@ -857,6 +895,29 @@ func desiredSubsetForPlans(
 		}
 	}
 	return out
+}
+
+func ensureLocalObjectsForPush(
+	ctx context.Context,
+	repo *git.Repository,
+	sourceConn *transportConn,
+	sourceService *sourceRefService,
+	desired map[plumbing.ReferenceName]desiredRef,
+	plans []BranchPlan,
+) error {
+	tagDesired := make(map[plumbing.ReferenceName]desiredRef)
+	for _, plan := range plans {
+		if plan.Kind != RefKindTag {
+			continue
+		}
+		if desiredRef, ok := desired[plan.TargetRef]; ok {
+			tagDesired[plan.TargetRef] = desiredRef
+		}
+	}
+	if len(tagDesired) == 0 {
+		return nil
+	}
+	return sourceService.Fetch(ctx, repo, sourceConn, tagDesired, nil)
 }
 
 func bootstrapWithInputs(
@@ -1752,6 +1813,9 @@ func fetchSourceRefsWithHavesV1(
 	if sourceAdv.Capabilities.Supports(capability.NoProgress) {
 		_ = req.Capabilities.Set(capability.NoProgress)
 	}
+	if desiredHasTag(desired) && sourceAdv.Capabilities.Supports(capability.IncludeTag) {
+		_ = req.Capabilities.Set(capability.IncludeTag)
+	}
 	conn.stats.addWantsHaves("source upload-pack", len(req.Wants), len(req.Haves))
 
 	reader, err := session.UploadPack(ctx, req)
@@ -1804,6 +1868,9 @@ func fetchSourcePackV1(
 	if sourceAdv.Capabilities.Supports(capability.NoProgress) {
 		_ = req.Capabilities.Set(capability.NoProgress)
 	}
+	if desiredHasTag(desired) && sourceAdv.Capabilities.Supports(capability.IncludeTag) {
+		_ = req.Capabilities.Set(capability.IncludeTag)
+	}
 	conn.stats.addWantsHaves("source upload-pack", len(req.Wants), len(req.Haves))
 
 	reader, err := session.UploadPack(ctx, req)
@@ -1821,6 +1888,15 @@ func fetchSourcePackV1(
 			return session.Close()
 		},
 	}, nil
+}
+
+func desiredHasTag(desired map[plumbing.ReferenceName]desiredRef) bool {
+	for _, ref := range desired {
+		if ref.Kind == RefKindTag {
+			return true
+		}
+	}
+	return false
 }
 
 func pushToTarget(

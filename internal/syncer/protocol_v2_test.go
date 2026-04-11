@@ -3,6 +3,8 @@ package syncer
 import (
 	"bytes"
 	"testing"
+
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 func TestPacketReaderHandlesSpecialPackets(t *testing.T) {
@@ -83,5 +85,33 @@ func TestEncodeV2CommandRequest(t *testing.T) {
 		"0000"
 	if string(req) != want {
 		t.Fatalf("unexpected request:\n%s\nwant:\n%s", req, want)
+	}
+}
+
+func TestSourceFetchRequestV2IncludesIncludeTagForTagSync(t *testing.T) {
+	adv := &v2CapabilityAdvertisement{
+		Capabilities: map[string]string{
+			"fetch": "thin-pack filter",
+		},
+	}
+	desired := map[plumbing.ReferenceName]desiredRef{
+		plumbing.NewTagReferenceName("v1"): {
+			Kind:       RefKindTag,
+			Label:      "v1",
+			SourceRef:  plumbing.NewTagReferenceName("v1"),
+			TargetRef:  plumbing.NewTagReferenceName("v1"),
+			SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		},
+	}
+
+	body, wants, haves, err := sourceFetchRequestV2(adv, desired, nil)
+	if err != nil {
+		t.Fatalf("build fetch request: %v", err)
+	}
+	if wants != 1 || haves != 0 {
+		t.Fatalf("unexpected wants/haves: wants=%d haves=%d", wants, haves)
+	}
+	if !bytes.Contains(body, []byte("include-tag\n")) {
+		t.Fatalf("expected include-tag in fetch request, got:\n%s", body)
 	}
 }

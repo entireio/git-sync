@@ -22,6 +22,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/revlist"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
@@ -761,6 +762,114 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+func TestRun_IntegrationAddAnnotatedTagAfterInitialBranchSync(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+	}); err != nil {
+		t.Fatalf("initial branch sync failed: %v", err)
+	}
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	if _, err := sourceRepo.CreateTag("annotated-v1", head.Hash(), &git.CreateTagOptions{
+		Tagger:  &objectSignature,
+		Message: "annotated release",
+	}); err != nil {
+		t.Fatalf("create annotated tag: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+		IncludeTags:  true,
+	})
+	if err != nil {
+		t.Fatalf("annotated tag follow-up sync failed: %v", err)
+	}
+	if result.Pushed == 0 {
+		t.Fatalf("expected follow-up sync to push annotated tag, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("annotated-v1"), true); err != nil {
+		t.Fatalf("expected annotated tag on target: %v", err)
+	}
+}
+
+func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 4)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackNoThin = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+	}); err != nil {
+		t.Fatalf("initial branch sync failed: %v", err)
+	}
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	chain, err := firstParentChain(sourceRepo, head.Hash())
+	if err != nil {
+		t.Fatalf("build commit chain: %v", err)
+	}
+	if len(chain) < 2 {
+		t.Fatalf("expected historical commit chain, got %d", len(chain))
+	}
+	if _, err := sourceRepo.CreateTag("annotated-old", chain[1], &git.CreateTagOptions{
+		Tagger:  &objectSignature,
+		Message: "historical release",
+	}); err != nil {
+		t.Fatalf("create historical annotated tag: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+		IncludeTags:  true,
+	})
+	if err != nil {
+		t.Fatalf("historical annotated tag follow-up sync failed: %v", err)
+	}
+	if result.Pushed == 0 {
+		t.Fatalf("expected follow-up sync to push historical annotated tag, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("annotated-old"), true); err != nil {
+		t.Fatalf("expected historical annotated tag on target: %v", err)
+	}
+}
+
 func newSourceRepo(t *testing.T) (*git.Repository, billy.Filesystem) {
 	t.Helper()
 
@@ -905,6 +1014,7 @@ type smartHTTPRepoServer struct {
 	password string
 
 	receivePackBodyLimit int64
+	receivePackNoThin    bool
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -1061,6 +1171,9 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if service == serviceReceivePack && s.receivePackNoThin {
+		_ = ar.Capabilities.Set(capability.Capability("no-thin"))
 	}
 
 	ar.Prefix = [][]byte{
