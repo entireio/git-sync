@@ -439,6 +439,84 @@ func TestBootstrap_IntegrationBatchedResumeAfterCutoverOnlyDeletesTempRef(t *tes
 	}
 }
 
+func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy source objects: %v", err)
+	}
+	targetRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(targetRef)
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	failDeleteOnce := true
+	targetServer.commandHook = func(req *packp.ReferenceUpdateRequest) *packp.ReportStatus {
+		if !failDeleteOnce || len(req.Commands) != 1 {
+			return nil
+		}
+		cmd := req.Commands[0]
+		if cmd.Name != tempRef || !cmd.New.IsZero() {
+			return nil
+		}
+		failDeleteOnce = false
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+			ReferenceName: cmd.Name,
+			Status:        "ng simulated temp-ref delete failure",
+		})
+		return report
+	}
+
+	cfg := Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	}
+
+	if _, err := Bootstrap(context.Background(), cfg); err == nil {
+		t.Fatal("expected first bootstrap retry to fail on temp-ref delete")
+	}
+	targetHead, err := targetRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve target head after failed delete: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s after failed delete, got %s", sourceHead.Hash(), targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err != nil {
+		t.Fatalf("expected temp ref %s to remain after failed delete: %v", tempRef, err)
+	}
+
+	result, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("bootstrap retry after delete failure failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted after retry", tempRef)
+	}
+}
+
 func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
@@ -1275,6 +1353,7 @@ type smartHTTPRepoServer struct {
 
 	receivePackBodyLimit int64
 	receivePackNoThin    bool
+	commandHook          func(*packp.ReferenceUpdateRequest) *packp.ReportStatus
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -1676,6 +1755,23 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	}
 
 	if !bytes.Contains(body, []byte("PACK")) {
+		if s.commandHook != nil {
+			if report := s.commandHook(req); report != nil {
+				var buf bytes.Buffer
+				if err := report.Encode(&buf); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+
+				w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+				if _, err := w.Write(buf.Bytes()); err != nil {
+					s.tb.Fatalf("write receive-pack command hook response: %v", err)
+				}
+				s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+				return
+			}
+		}
+
 		report := packp.NewReportStatus()
 		report.UnpackStatus = "ok"
 		for _, cmd := range req.Commands {

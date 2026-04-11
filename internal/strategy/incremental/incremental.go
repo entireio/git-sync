@@ -51,9 +51,6 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 	if p.TargetPusher == nil {
 		return Result{}, fmt.Errorf("incremental strategy requires TargetPusher")
 	}
-	if p.CanTagRelay == nil {
-		return Result{}, fmt.Errorf("incremental strategy requires CanTagRelay")
-	}
 	if ok, reason := canRelay(cfg.Force, cfg.Prune, false, p.PushPlans); ok {
 		desired := convert.DesiredRefs(planner.DesiredSubset(p.DesiredRefs, p.PushPlans))
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, p.TargetRefs)
@@ -68,6 +65,9 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 		return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil
 	}
 
+	if p.CanTagRelay == nil {
+		return Result{}, fmt.Errorf("incremental strategy requires CanTagRelay")
+	}
 	if ok, reason := p.CanTagRelay(p.PushPlans); ok {
 		desired := convert.DesiredRefs(planner.DesiredSubset(p.DesiredRefs, p.PushPlans))
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, nil)

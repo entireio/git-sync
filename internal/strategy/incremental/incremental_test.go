@@ -190,10 +190,6 @@ func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 			}
 			return true, "fast-forward"
 		},
-		CanTagRelay: func([]planner.BranchPlan) (bool, string) {
-			t.Fatal("tag relay policy should not be called for incremental branch relay")
-			return false, ""
-		},
 	}
 	result, err := Execute(context.Background(), params, planner.PlanConfig{})
 	if err != nil {
@@ -305,9 +301,6 @@ func TestExecuteIncrementalRelayClosesPackOnPushError(t *testing.T) {
 		}},
 		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
 			return true, "fast-forward"
-		},
-		CanTagRelay: func([]planner.BranchPlan) (bool, string) {
-			return false, ""
 		},
 	}, planner.PlanConfig{})
 	if err == nil || err.Error() != "push target refs: boom" {

@@ -430,7 +430,8 @@ Current rewrite note:
 - Basic context cancellation coverage now exists.
 - Batched bootstrap resume mismatch and final-tip cutover paths now have direct integration coverage.
 - Batched bootstrap reruns now also cover the "target ref already created, temp ref cleanup still pending" recovery path.
-- Some harder injected batch-failure paths still remain.
+- Injected temp-ref delete failure during batched cutover is now covered end-to-end, including successful recovery on retry.
+- Some harder injected pack-transfer failure paths still remain.
 
 ### 22. No benchmark coverage for the expensive paths
 
