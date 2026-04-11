@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -154,6 +155,26 @@ func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	}
 	if result.Relay {
 		t.Fatalf("dry-run plan should not execute relay")
+	}
+}
+
+func TestProbe_ContextCanceled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := Probe(ctx, Config{
+		Source: Endpoint{URL: server.URL + "/repo.git"},
+	})
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
 

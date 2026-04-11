@@ -1,7 +1,10 @@
 package gitproto
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -75,4 +78,52 @@ func TestApplyAuth(t *testing.T) {
 	// nil auth should not panic.
 	req, _ = http.NewRequest("GET", "https://example.com", nil)
 	ApplyAuth(req, nil)
+}
+
+func TestRequestInfoRefsContextCanceled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewConn(ep, "source", nil, http.DefaultTransport)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = RequestInfoRefs(ctx, conn, "git-upload-pack", "version=2")
+	if err == nil {
+		t.Fatal("expected cancellation error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestPostRPCStreamContextCanceled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewConn(ep, "source", nil, http.DefaultTransport)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = PostRPCStream(ctx, conn, "git-upload-pack", []byte("0000"), true, "upload-pack fetch")
+	if err == nil {
+		t.Fatal("expected cancellation error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
 }

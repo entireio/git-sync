@@ -67,7 +67,7 @@ Rebuild `git-sync` as a smaller set of focused packages around the same product 
 
 ### 1. Batched bootstrap can claim tag refs were pushed when no tag ref was created
 
-Status: done
+Status: partial
 
 Problem:
 - In the batched bootstrap tag phase, `FetchPack` returning `git.NoErrAlreadyUpToDate` can skip tag creation entirely even when the tag ref is absent and only the tag object is already reachable.
@@ -424,13 +424,17 @@ Status: done
 Rewrite requirement:
 - Add benchmarks for relay path overhead, planning overhead, and fallback graph/object work.
 
+Current rewrite note:
+- Planner and protocol benchmarks exist, but execution-path benchmarks for bootstrap relay, incremental relay, and materialized fallback still appear missing.
+
 ## Rewrite Branch Acceptance Criteria
 
 - All mapping validation happens before network activity. Status: done
 - Capability negotiation is centralized and enforced consistently. Status: partial
 - Relay strategies are separate packages with explicit inputs and outputs. Status: done
 - Tag creation is correct whether or not a pack transfer is needed. Status: done
-- Stats and logging are concurrency-safe. Status: partial
+- Stats are concurrency-safe. Status: done
+- Logging is structured and concurrency-safe. Status: open
 - Protocol parsing has explicit malformed-input tests. Status: done
 - Rewrite passes `go test ./...` and `go test -race ./...`. Status: done
 - Rewrite includes benchmarks for the critical planning and execution paths. Status: done
@@ -438,7 +442,8 @@ Rewrite requirement:
 
 Notes:
 - Capability handling is much better centralized under `internal/gitproto`, but the rewrite still uses `go-git` transport/protocol types rather than fully owning the protocol layer end-to-end.
-- Stats are now concurrency-safe; logging is still ad hoc `progressf` output rather than a structured logger.
+- Stats are now concurrency-safe and race-tested.
+- Logging is still ad hoc `progressf` output rather than structured logging.
 
 ## Suggested Execution Order
 
