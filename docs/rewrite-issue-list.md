@@ -435,7 +435,8 @@ Current rewrite note:
 - Batched bootstrap reruns now also cover the "target ref already created, temp ref cleanup still pending" recovery path.
 - Injected temp-ref delete failure during batched cutover is now covered end-to-end, including successful recovery on retry.
 - Injected checkpoint pack failure after partial batched progress is now covered end-to-end, including successful resume on retry.
-- Some harder transport-interruption and malformed mid-stream failure paths still remain.
+- `fetchToStoreV2` now also has direct coverage for cancellation after response parsing has started.
+- Some harder transport-interruption and malformed mid-stream failure paths still remain, but the remaining gap is narrower than the original list.
 
 ### 22. No benchmark coverage for the expensive paths
 

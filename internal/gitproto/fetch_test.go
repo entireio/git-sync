@@ -163,6 +163,34 @@ type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
 
+type blockingPacketBody struct {
+	ctx         context.Context
+	startedRead chan<- struct{}
+	first       []byte
+	stage       int
+	closed      bool
+}
+
+func (b *blockingPacketBody) Read(p []byte) (int, error) {
+	switch b.stage {
+	case 0:
+		b.stage = 1
+		return copy(p, b.first), nil
+	default:
+		select {
+		case b.startedRead <- struct{}{}:
+		default:
+		}
+		<-b.ctx.Done()
+		return 0, b.ctx.Err()
+	}
+}
+
+func (b *blockingPacketBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestDecodeV2LSRefs(t *testing.T) {
 	// Build a valid ls-refs response:
 	// Each line: "<hash> <refname>\n"
@@ -441,6 +469,65 @@ func TestFetchToStoreV2ClosesBodyOnDecodeError(t *testing.T) {
 	}
 	if !body.closed {
 		t.Fatal("expected response body to be closed on decode error")
+	}
+}
+
+func TestFetchToStoreV2ContextCanceledMidStream(t *testing.T) {
+	startedRead := make(chan struct{}, 1)
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		body := &blockingPacketBody{
+			ctx:         req.Context(),
+			startedRead: startedRead,
+			first:       []byte(FormatPktLine("packfile\n")),
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "",
+		},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fetchToStoreV2(ctx, memory.NewStorage(), conn, caps, desired, nil)
+	}()
+
+	select {
+	case <-startedRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("response body was not consumed before timeout")
+	}
+	cancel()
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fetchToStoreV2 did not return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
 
