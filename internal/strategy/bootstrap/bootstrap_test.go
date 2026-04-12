@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -459,6 +460,92 @@ func TestExecuteOneShotClosesPackOnPushError(t *testing.T) {
 	}
 	if !pack.closed {
 		t.Fatal("expected pack to be closed on push error")
+	}
+}
+
+func TestExecuteOneShotClosesPackWhenPusherDoesNot(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	mainHash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	pack := &trackingReadCloser{Reader: bytes.NewReader([]byte("PACK"))}
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return pack, nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, _ io.ReadCloser) error {
+				return nil
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: mainHash,
+				Kind:       planner.RefKindBranch,
+			},
+		},
+	}, "empty target")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pack.closed {
+		t.Fatal("expected strategy to close pack after successful push")
+	}
+}
+
+func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	hashes := makeLinearCommitChain(t, 1)
+	pack := &trackingReadCloser{Reader: bytes.NewReader([]byte("PACK"))}
+	packFetches := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+				writeLinearCommitChain(t, store, 1)
+				return nil
+			},
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				packFetches++
+				for _, ref := range desired {
+					if ref.SourceHash == hashes[len(hashes)-1] {
+						if packFetches == 1 {
+							return io.NopCloser(bytes.NewReader(nil)), nil
+						}
+						return pack, nil
+					}
+				}
+				return io.NopCloser(bytes.NewReader(nil)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, _ io.ReadCloser) error {
+				return errors.New("boom")
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: hashes[len(hashes)-1],
+				Kind:       planner.RefKindBranch,
+				Label:      "main",
+			},
+		},
+		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		BatchMaxPack: 1,
+	}, "empty target")
+	if err == nil || !strings.Contains(err.Error(), "push bootstrap batch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if packFetches < 2 {
+		t.Fatalf("expected separate probe and execution fetches, got %d", packFetches)
+	}
+	if !pack.closed {
+		t.Fatal("expected strategy to close checkpoint pack on push error")
 	}
 }
 

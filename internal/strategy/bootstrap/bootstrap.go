@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -115,10 +116,12 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		return result, fmt.Errorf("fetch source pack: %w", err)
 	}
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
+	packReader = closeOnce(packReader)
 
 	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
 	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(plans))
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
+	_ = packReader.Close()
 	if pushErr != nil {
 		autoBatch, ok := autoBatchMaxPackBytes(p, pushErr)
 		if !ok {
@@ -245,10 +248,13 @@ func executeBatched(
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
+			packReader = closeOnce(packReader)
 			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(stagePlans))
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
+				_ = packReader.Close()
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
+			_ = packReader.Close()
 			p.log("bootstrap batch checkpoint complete",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
@@ -293,10 +299,13 @@ func executeBatched(
 			}
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
+			packReader = closeOnce(packReader)
 			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
+				_ = packReader.Close()
 				return result, fmt.Errorf("push bootstrap tags: %w", err)
 			}
+			_ = packReader.Close()
 		}
 	}
 
@@ -650,4 +659,27 @@ func (p Params) log(msg string, args ...any) {
 		return
 	}
 	p.Logger.Info(msg, args...)
+}
+
+type closeOnceReadCloser struct {
+	io.ReadCloser
+	once sync.Once
+}
+
+func (c *closeOnceReadCloser) Close() error {
+	var err error
+	c.once.Do(func() {
+		err = c.ReadCloser.Close()
+	})
+	return err
+}
+
+func closeOnce(rc io.ReadCloser) io.ReadCloser {
+	if rc == nil {
+		return nil
+	}
+	if _, ok := rc.(*closeOnceReadCloser); ok {
+		return rc
+	}
+	return &closeOnceReadCloser{ReadCloser: rc}
 }
