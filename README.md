@@ -75,7 +75,7 @@ The command surface is:
 - Ref mapping is explicit, not wildcard-based.
 - Only smart HTTP remotes are supported.
 - Objects are kept in memory for the duration of the run.
-- Non-relay materialized syncs are bounded by `--materialized-max-objects` and fail clearly when they exceed that limit.
+- Non-relay materialized syncs are bounded by `--materialized-max-objects`, an object-count guardrail for the in-memory fallback path.
 
 ## Quick Start
 
@@ -198,7 +198,7 @@ When `sync` sees that all managed target refs are absent and the run is compatib
 
 `sync` also uses a narrow incremental relay path for fast-forward branch updates and tag creation when there is no prune/delete, no force, and the target does not advertise `no-thin`. This now includes multi-branch batches, branch-to-branch mappings, and create-only tags. Tag retargeting and other more complex updates still fall back to the normal local decode-and-repack path.
 
-If `sync` falls back to the materialized path, `--materialized-max-objects` sets an explicit safety bound for the in-memory object set. The default is conservative; raise it only when you intend to trade memory headroom for broader non-relay coverage.
+If `sync` falls back to the materialized path, `--materialized-max-objects` sets an explicit object-count safety bound for the in-memory object set. It is a conservative guardrail, not a precise heap-size limit.
 
 Sync specific branches:
 
