@@ -3,7 +3,7 @@ package gitproto
 import (
 	"testing"
 
-	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
 func TestCollectWants(t *testing.T) {

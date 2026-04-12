@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	billy "github.com/go-git/go-billy/v5"
-	"github.com/go-git/go-billy/v5/memfs"
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/storage/memory"
+	billy "github.com/go-git/go-billy/v6"
+	"github.com/go-git/go-billy/v6/memfs"
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/storage/memory"
 )
 
 func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
@@ -26,7 +26,7 @@ func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		targetRepo, err := git.Init(memory.NewStorage(), nil)
+		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
 			b.Fatalf("init target repo: %v", err)
 		}
@@ -56,7 +56,7 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 		sourceRepo, sourceFS := newBenchRepo(b)
 		makeBenchCommits(b, sourceRepo, sourceFS, 2)
 
-		targetRepo, err := git.Init(memory.NewStorage(), nil)
+		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
 			b.Fatalf("init target repo: %v", err)
 		}
@@ -94,7 +94,7 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 		sourceRepo, sourceFS := newBenchRepo(b)
 		makeBenchCommits(b, sourceRepo, sourceFS, 3)
 
-		targetRepo, err := git.Init(memory.NewStorage(), nil)
+		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
 			b.Fatalf("init target repo: %v", err)
 		}
@@ -132,7 +132,7 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 func newBenchRepo(b *testing.B) (*git.Repository, billy.Filesystem) {
 	b.Helper()
 	fs := memfs.New()
-	repo, err := git.Init(memory.NewStorage(), fs)
+	repo, err := git.Init(memory.NewStorage(), git.WithWorkTree(fs))
 	if err != nil {
 		b.Fatalf("init repo: %v", err)
 	}

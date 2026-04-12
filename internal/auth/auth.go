@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
 // Endpoint holds the authentication-related fields for a remote.
@@ -27,7 +27,7 @@ func Resolve(raw Endpoint, ep *transport.Endpoint) (transport.AuthMethod, error)
 	if ep == nil {
 		return nil, nil
 	}
-	if ep.Protocol != "http" && ep.Protocol != "https" {
+	if ep.Scheme != "http" && ep.Scheme != "https" {
 		return nil, nil
 	}
 	if username, password, ok, err := LookupEntireDBCredential(raw, ep); err != nil {
@@ -78,8 +78,8 @@ func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {
 	}
 	username := values["username"]
 	if username == "" {
-		if ep.User != "" {
-			username = ep.User
+		if ep.User != nil && ep.User.Username() != "" {
+			username = ep.User.Username()
 		} else {
 			username = "git"
 		}
@@ -88,16 +88,16 @@ func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {
 }
 
 func credentialFillInput(ep *transport.Endpoint) string {
-	if ep == nil || ep.Host == "" {
+	if ep == nil || ep.Hostname() == "" {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "protocol=%s\nhost=%s\n", ep.Protocol, ep.Host)
+	fmt.Fprintf(&b, "protocol=%s\nhost=%s\n", ep.Scheme, ep.Hostname())
 	if path := strings.TrimPrefix(ep.Path, "/"); path != "" {
 		fmt.Fprintf(&b, "path=%s\n", path)
 	}
-	if ep.User != "" {
-		fmt.Fprintf(&b, "username=%s\n", ep.User)
+	if ep.User != nil && ep.User.Username() != "" {
+		fmt.Fprintf(&b, "username=%s\n", ep.User.Username())
 	}
 	b.WriteString("\n")
 	return b.String()

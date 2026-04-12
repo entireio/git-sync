@@ -1,21 +1,22 @@
 package gitproto
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/utils/ioutil"
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/packfile"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/go-git/go-git/v6/utils/ioutil"
 )
 
 // DesiredRef describes a single ref we want to fetch from source.
@@ -111,7 +112,7 @@ func (s *RefService) FetchCommitGraph(
 	if err != nil {
 		return err
 	}
-	reader, err := PostRPCStream(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, true, "upload-pack fetch")
 	if err != nil {
 		return err
 	}
@@ -161,7 +162,7 @@ func fetchToStoreV2(
 	if err != nil {
 		return err
 	}
-	reader, err := PostRPCStream(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, true, "upload-pack fetch")
 	if err != nil {
 		return err
 	}
@@ -200,7 +201,7 @@ func fetchPackV2(
 	if err != nil {
 		return nil, err
 	}
-	reader, err := PostRPCStream(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack fetch")
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, true, "upload-pack fetch")
 	if err != nil {
 		return nil, err
 	}
@@ -280,6 +281,46 @@ func openV2PackStream(body io.ReadCloser) (io.ReadCloser, error) {
 
 // --- V1 fetch implementation ---
 
+// buildV1UploadPackBody encodes a v1 upload-pack request body for stateless-rpc HTTP.
+func buildV1UploadPackBody(
+	adv *packp.AdvRefs,
+	desired map[plumbing.ReferenceName]DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	includeTags bool,
+) ([]byte, *capability.List, error) {
+	wants := collectWants(desired)
+	haves := SortedUniqueHashes(refValues(targetRefs))
+	if len(wants) == 0 {
+		return nil, nil, git.NoErrAlreadyUpToDate
+	}
+
+	req := packp.NewUploadRequest()
+	req.Wants = wants
+	if adv.Capabilities.Supports(capability.NoProgress) {
+		_ = req.Capabilities.Set(capability.NoProgress)
+	}
+	if includeTags && adv.Capabilities.Supports(capability.IncludeTag) {
+		_ = req.Capabilities.Set(capability.IncludeTag)
+	}
+	// Prefer sideband64k over sideband (issue #4).
+	if sb := PreferredSideband(adv.Capabilities); sb != "" {
+		_ = req.Capabilities.Set(sb)
+	}
+	if adv.Capabilities.Supports(capability.OFSDelta) {
+		_ = req.Capabilities.Set(capability.OFSDelta)
+	}
+
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		return nil, nil, fmt.Errorf("encode upload-request: %w", err)
+	}
+	uphav := &packp.UploadHaves{Haves: haves, Done: true}
+	if err := uphav.Encode(&buf); err != nil {
+		return nil, nil, fmt.Errorf("encode upload-haves: %w", err)
+	}
+	return buf.Bytes(), req.Capabilities, nil
+}
+
 func fetchToStoreV1(
 	ctx context.Context,
 	store storer.Storer,
@@ -288,38 +329,22 @@ func fetchToStoreV1(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) error {
-	session, err := conn.Transport.NewUploadPackSession(conn.Endpoint, conn.Auth)
+	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired))
 	if err != nil {
-		return fmt.Errorf("open source upload-pack session: %w", err)
+		return err
 	}
-	defer session.Close()
-
-	req := packp.NewUploadPackRequestFromCapabilities(adv.Capabilities)
-	for _, ref := range desired {
-		req.Wants = append(req.Wants, ref.SourceHash)
-	}
-	req.Wants = SortedUniqueHashes(req.Wants)
-	req.Haves = SortedUniqueHashes(refValues(targetRefs))
-	if len(req.Wants) == 0 {
-		return git.NoErrAlreadyUpToDate
-	}
-	if adv.Capabilities.Supports(capability.NoProgress) {
-		_ = req.Capabilities.Set(capability.NoProgress)
-	}
-	if hasTag(desired) && adv.Capabilities.Supports(capability.IncludeTag) {
-		_ = req.Capabilities.Set(capability.IncludeTag)
-	}
-
-	reader, err := session.UploadPack(ctx, req)
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, false, "upload-pack fetch")
 	if err != nil {
-		if errors.Is(err, transport.ErrEmptyUploadPackRequest) {
-			return git.NoErrAlreadyUpToDate
-		}
 		return fmt.Errorf("source upload-pack: %w", err)
 	}
 	defer ioutil.CheckClose(reader, &err)
 
-	sbReader := buildSidebandReader(req.Capabilities, reader, nil)
+	// Decode server response (ACK/NAK) then read pack with sideband demux.
+	var srvResp packp.ServerResponse
+	if decErr := srvResp.Decode(reader); decErr != nil {
+		return fmt.Errorf("decode server response: %w", decErr)
+	}
+	sbReader := buildSidebandReader(caps, reader, nil)
 	return packfile.UpdateObjectStorage(store, sbReader)
 }
 
@@ -330,42 +355,23 @@ func fetchPackV1(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) (io.ReadCloser, error) {
-	session, err := conn.Transport.NewUploadPackSession(conn.Endpoint, conn.Auth)
+	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired))
 	if err != nil {
-		return nil, fmt.Errorf("open source upload-pack session: %w", err)
+		return nil, err
 	}
-
-	req := packp.NewUploadPackRequestFromCapabilities(adv.Capabilities)
-	for _, ref := range desired {
-		req.Wants = append(req.Wants, ref.SourceHash)
-	}
-	req.Wants = SortedUniqueHashes(req.Wants)
-	req.Haves = SortedUniqueHashes(refValues(targetRefs))
-	if len(req.Wants) == 0 {
-		_ = session.Close()
-		return nil, git.NoErrAlreadyUpToDate
-	}
-	if adv.Capabilities.Supports(capability.NoProgress) {
-		_ = req.Capabilities.Set(capability.NoProgress)
-	}
-	if hasTag(desired) && adv.Capabilities.Supports(capability.IncludeTag) {
-		_ = req.Capabilities.Set(capability.IncludeTag)
-	}
-
-	reader, err := session.UploadPack(ctx, req)
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, false, "upload-pack fetch")
 	if err != nil {
-		_ = session.Close()
-		if errors.Is(err, transport.ErrEmptyUploadPackRequest) {
-			return nil, git.NoErrAlreadyUpToDate
-		}
 		return nil, fmt.Errorf("source upload-pack: %w", err)
 	}
-	return &sessionRC{
-		Reader: buildSidebandReader(req.Capabilities, reader, nil),
-		closeFn: func() error {
-			_ = reader.Close()
-			return session.Close()
-		},
+
+	var srvResp packp.ServerResponse
+	if decErr := srvResp.Decode(reader); decErr != nil {
+		_ = reader.Close()
+		return nil, fmt.Errorf("decode server response: %w", decErr)
+	}
+	return &wrappedRC{
+		Reader: buildSidebandReader(caps, reader, nil),
+		Closer: reader,
 	}, nil
 }
 
@@ -436,14 +442,3 @@ type wrappedRC struct {
 	io.Closer
 }
 
-type sessionRC struct {
-	io.Reader
-	closeFn func() error
-}
-
-func (r *sessionRC) Close() error {
-	if r.closeFn == nil {
-		return nil
-	}
-	return r.closeFn()
-}

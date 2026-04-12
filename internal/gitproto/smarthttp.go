@@ -8,10 +8,25 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
+
+// httpError checks an HTTP response status and returns an error for non-2xx responses.
+func httpError(res *http.Response) error {
+	if res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices {
+		return nil
+	}
+	var reason string
+	if res.Body != nil {
+		var buf bytes.Buffer
+		if n, _ := buf.ReadFrom(res.Body); n > 0 {
+			reason = buf.String()
+		}
+	}
+	return fmt.Errorf("http %d: %s %s", res.StatusCode, res.Request.URL.Redacted(), reason)
+}
 
 // StatsPhaseHeader is the HTTP header used to annotate requests with the
 // current git-sync stats phase for round-trip tracking.
@@ -32,7 +47,7 @@ func NewConn(ep *transport.Endpoint, label string, auth transport.AuthMethod, rt
 	return &Conn{
 		Label:     label,
 		Endpoint:  ep,
-		Transport: transporthttp.NewClient(httpClient),
+		Transport: transporthttp.NewTransport(&transporthttp.TransportOptions{Client: httpClient}),
 		HTTP:      httpClient,
 		Auth:      auth,
 	}
@@ -55,15 +70,16 @@ func NewHTTPTransport(skipTLS bool) http.RoundTripper {
 }
 
 // RequestInfoRefs fetches /info/refs for the given service.
-func RequestInfoRefs(ctx context.Context, conn *Conn, service, gitProtocol string) ([]byte, error) {
-	url := fmt.Sprintf("%s/info/refs?service=%s", conn.Endpoint.String(), service)
+func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service, gitProtocol string) ([]byte, error) {
+	svc := service.String()
+	url := fmt.Sprintf("%s/info/refs?service=%s", conn.Endpoint.String(), svc)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", capability.DefaultAgent())
-	req.Header.Set(StatsPhaseHeader, service+" info-refs")
+	req.Header.Set(StatsPhaseHeader, svc+" info-refs")
 	if gitProtocol != "" {
 		req.Header.Set("Git-Protocol", gitProtocol)
 	}
@@ -74,7 +90,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service, gitProtocol strin
 		return nil, err
 	}
 	defer res.Body.Close()
-	if err := transporthttp.NewErr(res); err != nil {
+	if err := httpError(res); err != nil {
 		return nil, err
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
@@ -92,7 +108,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service, gitProtocol strin
 
 // PostRPC sends a buffered POST to the given service and returns the full response body.
 // Responses are bounded to prevent unbounded memory allocation (issue #9).
-func PostRPC(ctx context.Context, conn *Conn, service string, body []byte, v2 bool, phase string) ([]byte, error) {
+func PostRPC(ctx context.Context, conn *Conn, service transport.Service, body []byte, v2 bool, phase string) ([]byte, error) {
 	reader, err := PostRPCStream(ctx, conn, service, body, v2, phase)
 	if err != nil {
 		return nil, err
@@ -112,14 +128,15 @@ func PostRPC(ctx context.Context, conn *Conn, service string, body []byte, v2 bo
 
 // PostRPCStream sends a POST to the given service and returns the response body
 // as a streaming reader. Caller must close the returned ReadCloser.
-func PostRPCStream(ctx context.Context, conn *Conn, service string, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
-	url := fmt.Sprintf("%s/%s", conn.Endpoint.String(), service)
+func PostRPCStream(ctx context.Context, conn *Conn, service transport.Service, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
+	svc := service.String()
+	url := fmt.Sprintf("%s/%s", conn.Endpoint.String(), svc)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
-	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
+	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", svc))
+	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", svc))
 	req.Header.Set("User-Agent", capability.DefaultAgent())
 	req.Header.Set(StatsPhaseHeader, phase)
 	if v2 {
@@ -131,7 +148,7 @@ func PostRPCStream(ctx context.Context, conn *Conn, service string, body []byte,
 	if err != nil {
 		return nil, err
 	}
-	if err := transporthttp.NewErr(res); err != nil {
+	if err := httpError(res); err != nil {
 		_ = res.Body.Close()
 		return nil, err
 	}

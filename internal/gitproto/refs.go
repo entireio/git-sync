@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
 // RefService encapsulates the result of source ref discovery and the negotiated
@@ -31,7 +31,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 		return refs, &RefService{Protocol: "v1", V1Adv: adv}, nil
 
 	case "auto", "v2":
-		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackServiceName, "version=2")
+		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, "version=2")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -65,7 +65,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 }
 
 // AdvertisedRefsV1 fetches and decodes v1 advertised refs for the given service.
-func AdvertisedRefsV1(ctx context.Context, conn *Conn, service string) (*packp.AdvRefs, error) {
+func AdvertisedRefsV1(ctx context.Context, conn *Conn, service transport.Service) (*packp.AdvRefs, error) {
 	data, err := RequestInfoRefs(ctx, conn, service, "")
 	if err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func AdvRefsCaps(adv *packp.AdvRefs) []string {
 }
 
 func listSourceRefsV1(ctx context.Context, conn *Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
-	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackServiceName)
+	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackService)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,7 +134,7 @@ func listSourceRefsV2(ctx context.Context, conn *Conn, caps *V2Capabilities, pre
 	if err != nil {
 		return nil, err
 	}
-	data, err := PostRPC(ctx, conn, transport.UploadPackServiceName, body, true, "upload-pack ls-refs")
+	data, err := PostRPC(ctx, conn, transport.UploadPackService, body, true, "upload-pack ls-refs")
 	if err != nil {
 		return nil, err
 	}

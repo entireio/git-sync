@@ -13,12 +13,12 @@ import (
 	"sort"
 	"strings"
 
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/storage/memory"
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/go-git/go-git/v6/storage/memory"
 
 	"github.com/soph/git-sync/internal/auth"
 	"github.com/soph/git-sync/internal/convert"
@@ -354,7 +354,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
-		s.targetAdv, err = gitproto.AdvertisedRefsV1(ctx, s.targetConn, transport.ReceivePackServiceName)
+		s.targetAdv, err = gitproto.AdvertisedRefsV1(ctx, s.targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}

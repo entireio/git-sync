@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 
 	"github.com/soph/git-sync/internal/auth"
 )
@@ -81,9 +81,6 @@ func TestResolveAuthMethodUsesEntireDBStoredToken(t *testing.T) {
 		t.Fatalf("new endpoint: %v", err)
 	}
 	credHost := ep.Host
-	if ep.Port > 0 {
-		credHost = ep.Host + ":8080"
-	}
 	writeEntireDBHostsFile(t, configDir, credHost, "test-user")
 	// Store token with a future expiration so it's not treated as expired (issue #7).
 	futureExpiry := time.Now().Unix() + 3600
@@ -139,9 +136,6 @@ func TestResolveAuthMethodRefreshesExpiredEntireDBToken(t *testing.T) {
 		t.Fatalf("new endpoint: %v", err)
 	}
 	credHost := ep.Host
-	if ep.Port > 0 {
-		credHost = ep.Host + ":" + itoa(ep.Port)
-	}
 	writeEntireDBHostsFile(t, configDir, credHost, "test-user")
 	// Expired token: expiration in the past
 	if err := auth.WriteStoredToken("entire:"+credHost, "test-user", "expired-token|1"); err != nil {
@@ -179,6 +173,3 @@ func writeEntireDBHostsFile(t *testing.T, configDir, host, username string) {
 	}
 }
 
-func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
-}

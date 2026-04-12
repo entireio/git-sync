@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"strings"
 
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/storage/memory"
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/storage/memory"
 
 	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
@@ -517,10 +517,10 @@ func GitHubOwnerRepo(conn *gitproto.Conn) (string, string, bool) {
 		return "", "", false
 	}
 	ep := conn.Endpoint
-	if ep.Protocol != "http" && ep.Protocol != "https" {
+	if ep.Scheme != "http" && ep.Scheme != "https" {
 		return "", "", false
 	}
-	if !strings.EqualFold(ep.Host, "github.com") {
+	if !strings.EqualFold(ep.Hostname(), "github.com") {
 		return "", "", false
 	}
 	path := strings.TrimSuffix(strings.Trim(ep.Path, "/"), ".git")

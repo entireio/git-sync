@@ -3,7 +3,7 @@ package materialized
 import (
 	"testing"
 
-	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"

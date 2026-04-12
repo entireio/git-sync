@@ -5,9 +5,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 )
 
 func TestCapabilities(t *testing.T) {
@@ -133,32 +133,27 @@ func TestProgressWriter(t *testing.T) {
 	}
 }
 
-func TestSessionRCClose(t *testing.T) {
-	// With closeFn
+func TestWrappedRCClose(t *testing.T) {
+	// wrappedRC should close the underlying closer.
 	called := false
-	rc := &sessionRC{
+	rc := &wrappedRC{
 		Reader: bytes.NewBufferString("data"),
-		closeFn: func() error {
+		Closer: closerFunc(func() error {
 			called = true
 			return nil
-		},
+		}),
 	}
 	if err := rc.Close(); err != nil {
 		t.Fatalf("Close() error: %v", err)
 	}
 	if !called {
-		t.Error("closeFn was not called")
-	}
-
-	// With nil closeFn
-	rc = &sessionRC{
-		Reader:  bytes.NewBufferString("data"),
-		closeFn: nil,
-	}
-	if err := rc.Close(); err != nil {
-		t.Fatalf("Close() with nil closeFn error: %v", err)
+		t.Error("underlying closer was not called")
 	}
 }
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 func TestDecodeV2LSRefs(t *testing.T) {
 	// Build a valid ls-refs response:

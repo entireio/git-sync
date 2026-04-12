@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/zalando/go-keyring"
 )
 
@@ -120,10 +121,12 @@ func TestTokenExpiredOrExpiring(t *testing.T) {
 
 func TestCredentialFillInput(t *testing.T) {
 	ep := &transport.Endpoint{
-		Protocol: "https",
-		Host:     "github.com",
-		Path:     "/owner/repo.git",
-		User:     "myuser",
+		URL: url.URL{
+			Scheme: "https",
+			Host:   "github.com",
+			Path:   "/owner/repo.git",
+			User:   url.User("myuser"),
+		},
 	}
 
 	got := credentialFillInput(ep)
@@ -141,7 +144,7 @@ func TestCredentialFillInputNilEndpoint(t *testing.T) {
 }
 
 func TestCredentialFillInputEmptyHost(t *testing.T) {
-	ep := &transport.Endpoint{Protocol: "https"}
+	ep := &transport.Endpoint{URL: url.URL{Scheme: "https"}}
 	got := credentialFillInput(ep)
 	if got != "" {
 		t.Errorf("expected empty string for empty host, got %q", got)
@@ -150,9 +153,11 @@ func TestCredentialFillInputEmptyHost(t *testing.T) {
 
 func TestCredentialFillInputNoUser(t *testing.T) {
 	ep := &transport.Endpoint{
-		Protocol: "https",
-		Host:     "example.com",
-		Path:     "/repo.git",
+		URL: url.URL{
+			Scheme: "https",
+			Host:   "example.com",
+			Path:   "/repo.git",
+		},
 	}
 	got := credentialFillInput(ep)
 	want := "protocol=https\nhost=example.com\npath=repo.git\n\n"
@@ -227,7 +232,7 @@ func TestResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sshEP := &transport.Endpoint{Protocol: "ssh", Host: "example.com", Path: "/repo.git"}
+	sshEP := &transport.Endpoint{URL: url.URL{Scheme: "ssh", Host: "example.com", Path: "/repo.git"}}
 
 	tests := []struct {
 		name      string
@@ -414,12 +419,12 @@ func TestEndpointBaseURL(t *testing.T) {
 	}{
 		{
 			name: "https host",
-			ep:   &transport.Endpoint{Protocol: "https", Host: "example.com"},
+			ep:   &transport.Endpoint{URL: url.URL{Scheme: "https", Host: "example.com"}},
 			want: "https://example.com",
 		},
 		{
 			name: "http host with port",
-			ep:   &transport.Endpoint{Protocol: "http", Host: "example.com", Port: 8080},
+			ep:   &transport.Endpoint{URL: url.URL{Scheme: "http", Host: "example.com:8080"}},
 			want: "http://example.com:8080",
 		},
 		{
@@ -447,12 +452,12 @@ func TestEndpointCredentialHost(t *testing.T) {
 	}{
 		{
 			name: "host without port",
-			ep:   &transport.Endpoint{Host: "example.com"},
+			ep:   &transport.Endpoint{URL: url.URL{Host: "example.com"}},
 			want: "example.com",
 		},
 		{
 			name: "host with port",
-			ep:   &transport.Endpoint{Host: "example.com", Port: 8080},
+			ep:   &transport.Endpoint{URL: url.URL{Host: "example.com:8080"}},
 			want: "example.com:8080",
 		},
 		{

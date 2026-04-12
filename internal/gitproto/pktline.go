@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 )
 
 // PacketType represents the type of a pkt-line packet.
@@ -105,26 +105,25 @@ func hexVal(b byte) (byte, bool) {
 // EncodeCommand builds a pkt-line encoded v2 command request.
 func EncodeCommand(command string, capArgs, cmdArgs []string) ([]byte, error) {
 	var buf bytes.Buffer
-	enc := pktline.NewEncoder(&buf)
-	if err := enc.EncodeString("command=" + command + "\n"); err != nil {
+	if _, err := pktline.Writef(&buf, "command=%s\n", command); err != nil {
 		return nil, err
 	}
 	for _, arg := range capArgs {
-		if err := enc.EncodeString(arg + "\n"); err != nil {
+		if _, err := pktline.Writef(&buf, "%s\n", arg); err != nil {
 			return nil, err
 		}
 	}
 	if len(cmdArgs) > 0 {
-		if _, err := buf.WriteString("0001"); err != nil {
+		if err := pktline.WriteDelim(&buf); err != nil {
 			return nil, err
 		}
 		for _, arg := range cmdArgs {
-			if err := enc.EncodeString(arg + "\n"); err != nil {
+			if _, err := pktline.Writef(&buf, "%s\n", arg); err != nil {
 				return nil, err
 			}
 		}
 	}
-	if err := enc.Flush(); err != nil {
+	if err := pktline.WriteFlush(&buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

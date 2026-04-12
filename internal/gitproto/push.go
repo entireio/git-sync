@@ -1,17 +1,19 @@
 package gitproto
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/packfile"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
 // PushCommand represents a single ref update command.
@@ -49,23 +51,18 @@ func (p Pusher) PushObjects(ctx context.Context, commands []PushCommand, store s
 	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose)
 }
 
-// preparePush opens a receive-pack session and builds the base request with
-// sideband negotiation. Shared by PushObjects, PushPack, and PushCommands.
-func preparePush(
-	conn *Conn,
+// buildUpdateRequest builds the receive-pack update request.
+func buildUpdateRequest(
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	verbose bool,
-) (transport.ReceivePackSession, *packp.ReferenceUpdateRequest, bool, bool, error) {
-	session, err := conn.Transport.NewReceivePackSession(conn.Endpoint, conn.Auth)
-	if err != nil {
-		return nil, nil, false, false, fmt.Errorf("open target receive-pack session: %w", err)
-	}
-
-	req := packp.NewReferenceUpdateRequestFromCapabilities(adv.Capabilities)
-	req.Progress = progressWriter(verbose)
+) (*packp.UpdateRequests, bool, bool, error) {
+	req := packp.NewUpdateRequests()
 	if sb := PreferredSideband(adv.Capabilities); sb != "" {
 		_ = req.Capabilities.Set(sb)
+	}
+	if adv.Capabilities.Supports(capability.ReportStatus) {
+		_ = req.Capabilities.Set(capability.ReportStatus)
 	}
 
 	hasDelete := false
@@ -84,13 +81,55 @@ func preparePush(
 
 	if hasDelete {
 		if !adv.Capabilities.Supports(capability.DeleteRefs) {
-			_ = session.Close()
-			return nil, nil, false, false, fmt.Errorf("target does not support delete-refs")
+			return nil, false, false, fmt.Errorf("target does not support delete-refs")
 		}
 		_ = req.Capabilities.Set(capability.DeleteRefs)
 	}
 
-	return session, req, hasDelete, hasUpdates, nil
+	_ = verbose // progress handling is server-side in HTTP mode
+	return req, hasDelete, hasUpdates, nil
+}
+
+// sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
+func sendReceivePack(
+	ctx context.Context,
+	conn *Conn,
+	req *packp.UpdateRequests,
+	packData io.Reader,
+) error {
+	var buf bytes.Buffer
+	if err := req.Encode(&buf); err != nil {
+		return fmt.Errorf("encode update-request: %w", err)
+	}
+	if packData != nil {
+		if _, err := io.Copy(&buf, packData); err != nil {
+			return fmt.Errorf("buffer pack data: %w", err)
+		}
+	}
+	reader, err := PostRPCStream(ctx, conn, transport.ReceivePackService, buf.Bytes(), false, "receive-pack push")
+	if err != nil {
+		return fmt.Errorf("target receive-pack: %w", err)
+	}
+	defer reader.Close()
+
+	// Unwrap sideband if negotiated.
+	var respReader io.Reader = reader
+	if req.Capabilities.Supports(capability.Sideband64k) {
+		respReader = sideband.NewDemuxer(sideband.Sideband64k, reader)
+	} else if req.Capabilities.Supports(capability.Sideband) {
+		respReader = sideband.NewDemuxer(sideband.Sideband, reader)
+	}
+
+	if req.Capabilities.Supports(capability.ReportStatus) {
+		report := packp.NewReportStatus()
+		if err := report.Decode(respReader); err != nil {
+			return fmt.Errorf("decode report-status: %w", err)
+		}
+		if err := report.Error(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PushObjects pushes locally-materialized objects to the target.
@@ -103,12 +142,21 @@ func PushObjects(
 	hashes []plumbing.Hash,
 	verbose bool,
 ) error {
-	session, req, _, hasUpdates, err := preparePush(conn, adv, commands, verbose)
+	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
-	return executePush(ctx, session, store, req, hashes, hasUpdates, !adv.Capabilities.Supports(capability.OFSDelta))
+	if !hasUpdates {
+		return sendReceivePack(ctx, conn, req, nil)
+	}
+
+	useRefDeltas := !adv.Capabilities.Supports(capability.OFSDelta)
+	var packBuf bytes.Buffer
+	enc := packfile.NewEncoder(&packBuf, store, useRefDeltas)
+	if _, err := enc.Encode(hashes, 10); err != nil {
+		return fmt.Errorf("encode packfile: %w", err)
+	}
+	return sendReceivePack(ctx, conn, req, &packBuf)
 }
 
 // PushPack pushes a pack stream (relay) to the target.
@@ -120,32 +168,24 @@ func PushPack(
 	pack io.ReadCloser,
 	verbose bool,
 ) error {
-	// Validate no deletes in pack push before opening session.
 	for _, cmd := range commands {
 		if cmd.Delete {
 			return fmt.Errorf("pack push only supports create and update actions")
 		}
 	}
 
-	session, req, _, _, err := preparePush(conn, adv, commands, verbose)
-	if err != nil {
-		return err
-	}
-	defer session.Close()
-
-	req.Packfile = pack
-	report, err := session.ReceivePack(ctx, req)
+	req, _, _, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		_ = pack.Close()
 		return err
 	}
-	if closeErr := pack.Close(); closeErr != nil {
-		return closeErr
+
+	err = sendReceivePack(ctx, conn, req, pack)
+	closeErr := pack.Close()
+	if err != nil {
+		return err
 	}
-	if report != nil {
-		return report.Error()
-	}
-	return nil
+	return closeErr
 }
 
 // PushCommands sends ref update commands without a pack (for ref-only changes).
@@ -156,59 +196,11 @@ func PushCommands(
 	commands []PushCommand,
 	verbose bool,
 ) error {
-	session, req, _, _, err := preparePush(conn, adv, commands, verbose)
+	req, _, _, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
-	return executePush(ctx, session, nil, req, nil, false, false)
-}
-
-func executePush(
-	ctx context.Context,
-	session transport.ReceivePackSession,
-	store storer.Storer,
-	req *packp.ReferenceUpdateRequest,
-	hashes []plumbing.Hash,
-	sendPack bool,
-	useRefDeltas bool,
-) error {
-	if !sendPack {
-		report, err := session.ReceivePack(ctx, req)
-		if err != nil {
-			return err
-		}
-		if report != nil {
-			return report.Error()
-		}
-		return nil
-	}
-
-	rd, wr := io.Pipe()
-	req.Packfile = rd
-	done := make(chan error, 1)
-
-	go func() {
-		enc := packfile.NewEncoder(wr, store, useRefDeltas)
-		if _, err := enc.Encode(hashes, 10); err != nil {
-			done <- wr.CloseWithError(err)
-			return
-		}
-		done <- wr.Close()
-	}()
-
-	report, err := session.ReceivePack(ctx, req)
-	if err != nil {
-		_ = rd.Close()
-		return err
-	}
-	if err := <-done; err != nil {
-		return err
-	}
-	if report != nil {
-		return report.Error()
-	}
-	return nil
+	return sendReceivePack(ctx, conn, req, nil)
 }
 
 func progressWriter(verbose bool) io.Writer {

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
 func TestNewConn(t *testing.T) {

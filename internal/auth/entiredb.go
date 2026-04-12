@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/zalando/go-keyring"
 )
 
@@ -59,17 +59,14 @@ func LookupEntireDBCredential(raw Endpoint, ep *transport.Endpoint) (string, str
 }
 
 func endpointBaseURL(ep *transport.Endpoint) string {
-	if ep == nil || ep.Host == "" {
+	if ep == nil || ep.Hostname() == "" {
 		return ""
 	}
-	scheme := ep.Protocol
+	scheme := ep.Scheme
 	if scheme == "" {
 		scheme = "https"
 	}
-	host := ep.Host
-	if ep.Port > 0 {
-		host = fmt.Sprintf("%s:%d", host, ep.Port)
-	}
+	host := ep.Host // includes port if present in url.URL
 	return scheme + "://" + host
 }
 
@@ -77,10 +74,7 @@ func endpointCredentialHost(ep *transport.Endpoint) string {
 	if ep == nil {
 		return ""
 	}
-	if ep.Port > 0 {
-		return fmt.Sprintf("%s:%d", ep.Host, ep.Port)
-	}
-	return ep.Host
+	return ep.Host // includes port if present in url.URL
 }
 
 func lookupEntireDBToken(host, baseURL string, skipTLS bool) (string, error) {
