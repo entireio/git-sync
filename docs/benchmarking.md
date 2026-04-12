@@ -39,6 +39,8 @@ The JSON report includes:
 - per-run `syncer.Result`
 - aggregate min/avg/max wall time
 - aggregate min/avg/max internal elapsed time
+- aggregate min/avg/max actual batch count for batched runs
+- aggregate min/avg/max planned batch count for batched runs
 - maximum observed alloc and heap-inuse peaks
 - relay modes seen across successful runs
 

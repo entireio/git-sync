@@ -12,6 +12,7 @@ func TestSummarizeRuns(t *testing.T) {
 			WallMillis: 100,
 			Result: syncer.Result{
 				RelayMode: "bootstrap",
+				Batching:  false,
 				Measurement: syncer.Measurement{
 					ElapsedMillis:      90,
 					PeakAllocBytes:     10,
@@ -24,7 +25,10 @@ func TestSummarizeRuns(t *testing.T) {
 		{
 			WallMillis: 140,
 			Result: syncer.Result{
-				RelayMode: "bootstrap-batch",
+				RelayMode:         "bootstrap-batch",
+				Batching:          true,
+				BatchCount:        3,
+				PlannedBatchCount: 4,
 				Measurement: syncer.Measurement{
 					ElapsedMillis:      130,
 					PeakAllocBytes:     50,
@@ -54,6 +58,15 @@ func TestSummarizeRuns(t *testing.T) {
 	}
 	if got.AvgSyncElapsedMillis != 110 {
 		t.Fatalf("unexpected avg elapsed: %+v", got)
+	}
+	if got.BatchedRuns != 1 {
+		t.Fatalf("unexpected batched run count: %+v", got)
+	}
+	if got.MinBatchCount != 3 || got.MaxBatchCount != 3 || got.AvgBatchCount != 3 {
+		t.Fatalf("unexpected batch count summary: %+v", got)
+	}
+	if got.MinPlannedBatchCount != 4 || got.MaxPlannedBatchCount != 4 || got.AvgPlannedBatchCount != 4 {
+		t.Fatalf("unexpected planned batch count summary: %+v", got)
 	}
 	if got.MaxPeakAllocBytes != 50 || got.MaxPeakHeapInuseBytes != 60 || got.MaxTotalAllocBytes != 70 || got.MaxGCCount != 2 {
 		t.Fatalf("unexpected maxima: %+v", got)

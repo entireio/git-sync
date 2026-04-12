@@ -38,12 +38,19 @@ type runSummary struct {
 type aggregateSummary struct {
 	SuccessfulRuns        int      `json:"successful_runs"`
 	FailedRuns            int      `json:"failed_runs"`
+	BatchedRuns           int      `json:"batched_runs"`
 	MinWallMillis         int64    `json:"min_wall_millis"`
 	MaxWallMillis         int64    `json:"max_wall_millis"`
 	AvgWallMillis         float64  `json:"avg_wall_millis"`
 	MinSyncElapsedMillis  int64    `json:"min_sync_elapsed_millis"`
 	MaxSyncElapsedMillis  int64    `json:"max_sync_elapsed_millis"`
 	AvgSyncElapsedMillis  float64  `json:"avg_sync_elapsed_millis"`
+	MinBatchCount         int      `json:"min_batch_count,omitempty"`
+	MaxBatchCount         int      `json:"max_batch_count,omitempty"`
+	AvgBatchCount         float64  `json:"avg_batch_count,omitempty"`
+	MinPlannedBatchCount  int      `json:"min_planned_batch_count,omitempty"`
+	MaxPlannedBatchCount  int      `json:"max_planned_batch_count,omitempty"`
+	AvgPlannedBatchCount  float64  `json:"avg_planned_batch_count,omitempty"`
 	MaxPeakAllocBytes     uint64   `json:"max_peak_alloc_bytes"`
 	MaxPeakHeapInuseBytes uint64   `json:"max_peak_heap_inuse_bytes"`
 	MaxTotalAllocBytes    uint64   `json:"max_total_alloc_bytes"`
@@ -234,13 +241,18 @@ func summarizeRuns(runs []runSummary) aggregateSummary {
 	var (
 		okRuns           int
 		failedRuns       int
+		batchedRuns      int
 		totalWall        int64
 		totalSyncElapsed int64
+		totalBatchCount  int
+		totalPlanned     int
 		relayModes       []string
 	)
 	summary := aggregateSummary{
 		MinWallMillis:        -1,
 		MinSyncElapsedMillis: -1,
+		MinBatchCount:        -1,
+		MinPlannedBatchCount: -1,
 	}
 
 	for _, run := range runs {
@@ -280,13 +292,35 @@ func summarizeRuns(runs []runSummary) aggregateSummary {
 		if mode := strings.TrimSpace(run.Result.RelayMode); mode != "" {
 			relayModes = append(relayModes, mode)
 		}
+		if run.Result.Batching {
+			batchedRuns++
+			totalBatchCount += run.Result.BatchCount
+			totalPlanned += run.Result.PlannedBatchCount
+			if summary.MinBatchCount < 0 || run.Result.BatchCount < summary.MinBatchCount {
+				summary.MinBatchCount = run.Result.BatchCount
+			}
+			if run.Result.BatchCount > summary.MaxBatchCount {
+				summary.MaxBatchCount = run.Result.BatchCount
+			}
+			if summary.MinPlannedBatchCount < 0 || run.Result.PlannedBatchCount < summary.MinPlannedBatchCount {
+				summary.MinPlannedBatchCount = run.Result.PlannedBatchCount
+			}
+			if run.Result.PlannedBatchCount > summary.MaxPlannedBatchCount {
+				summary.MaxPlannedBatchCount = run.Result.PlannedBatchCount
+			}
+		}
 	}
 
 	summary.SuccessfulRuns = okRuns
 	summary.FailedRuns = failedRuns
+	summary.BatchedRuns = batchedRuns
 	if okRuns > 0 {
 		summary.AvgWallMillis = float64(totalWall) / float64(okRuns)
 		summary.AvgSyncElapsedMillis = float64(totalSyncElapsed) / float64(okRuns)
+	}
+	if batchedRuns > 0 {
+		summary.AvgBatchCount = float64(totalBatchCount) / float64(batchedRuns)
+		summary.AvgPlannedBatchCount = float64(totalPlanned) / float64(batchedRuns)
 	}
 	summary.RelayModes = uniqueStrings(relayModes)
 	return summary
@@ -346,6 +380,12 @@ func printTextReport(report benchmarkReport) {
 	fmt.Printf("sync-elapsed-ms: avg=%.1f min=%d max=%d\n", report.Aggregate.AvgSyncElapsedMillis, report.Aggregate.MinSyncElapsedMillis, report.Aggregate.MaxSyncElapsedMillis)
 	fmt.Printf("peak-alloc-bytes: %d\n", report.Aggregate.MaxPeakAllocBytes)
 	fmt.Printf("peak-heap-inuse-bytes: %d\n", report.Aggregate.MaxPeakHeapInuseBytes)
+	if report.Aggregate.BatchedRuns > 0 {
+		fmt.Printf("batch-count: avg=%.1f min=%d max=%d batched-runs=%d\n",
+			report.Aggregate.AvgBatchCount, report.Aggregate.MinBatchCount, report.Aggregate.MaxBatchCount, report.Aggregate.BatchedRuns)
+		fmt.Printf("planned-batch-count: avg=%.1f min=%d max=%d\n",
+			report.Aggregate.AvgPlannedBatchCount, report.Aggregate.MinPlannedBatchCount, report.Aggregate.MaxPlannedBatchCount)
+	}
 	if len(report.Aggregate.RelayModes) > 0 {
 		fmt.Printf("relay-modes: %s\n", strings.Join(report.Aggregate.RelayModes, ","))
 	}
@@ -354,8 +394,8 @@ func printTextReport(report benchmarkReport) {
 		if run.Error != "" {
 			status = "error=" + run.Error
 		}
-		fmt.Printf("run[%d]: wall-ms=%d relay-mode=%s batch-count=%d target=%s %s\n",
-			run.Index, run.WallMillis, run.Result.RelayMode, run.Result.BatchCount, run.TargetPath, status)
+		fmt.Printf("run[%d]: wall-ms=%d relay-mode=%s batch-count=%d planned-batches=%d target=%s %s\n",
+			run.Index, run.WallMillis, run.Result.RelayMode, run.Result.BatchCount, run.Result.PlannedBatchCount, run.TargetPath, status)
 	}
 }
 
