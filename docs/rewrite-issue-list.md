@@ -301,6 +301,7 @@ Current rewrite note:
 - Syncer bootstrap execution now takes a shared session object instead of threading raw source/target transports, stats, logger, measurement, and target advertisement through a wide helper signature.
 - Syncer normal execution now routes both incremental relay and materialized fallback through session-owned helpers instead of rebuilding transport, capability, and policy inputs inline inside `Run`.
 - Syncer target-side state is now grouped into a dedicated target session object so advertised refs, derived features, relay policy, and the push executor move together instead of being carried as parallel top-level fields.
+- Syncer source-side probe/fetch result assembly and have-ref normalization now also live behind session-owned helpers instead of rebuilding those structures ad hoc in the public entrypoints.
 - Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability

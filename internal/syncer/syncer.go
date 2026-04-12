@@ -545,31 +545,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{}, err
 	}
-
-	refInfos := make([]RefInfo, 0, len(s.sourceRefMap))
-	for name, hash := range s.sourceRefMap {
-		refInfos = append(refInfos, RefInfo{Name: name.String(), Hash: hash})
-	}
-	sort.Slice(refInfos, func(i, j int) bool { return refInfos[i].Name < refInfos[j].Name })
-
-	result := ProbeResult{
-		SourceURL:     cfg.Source.URL,
-		RequestedMode: cfg.ProtocolMode,
-		Protocol:      s.sourceService.Protocol,
-		RefPrefixes:   planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags),
-		Capabilities:  s.sourceService.Capabilities(),
-		Refs:          refInfos,
-		Stats:         s.stats.snapshot(),
-		Measurement:   s.measurementDone(),
-	}
-
-	if cfg.Target.URL != "" {
-		result.TargetURL = cfg.Target.URL
-		result.TargetCaps = gitproto.AdvRefsCaps(s.target.adv)
-		result.Stats = s.stats.snapshot()
-		result.Measurement = s.measurementDone()
-	}
-	return result, nil
+	return s.newProbeResult(), nil
 }
 
 // Fetch exercises source-side fetch negotiation.
@@ -587,27 +563,13 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
-	sourceRefMap := s.sourceRefMap
-
-	desiredRefs, _, err := planner.BuildDesiredRefs(sourceRefMap, planConfig(cfg))
+	desiredRefs, err := s.buildDesiredRefs()
 	if err != nil {
 		return FetchResult{}, err
 	}
-	if len(desiredRefs) == 0 {
-		return FetchResult{}, fmt.Errorf("no source refs matched")
-	}
-
-	targetRefMap := make(map[plumbing.ReferenceName]plumbing.Hash)
-	for _, raw := range haveRefs {
-		name := validation.ParseHaveRef(raw)
-		hash, ok := sourceRefMap[name]
-		if !ok {
-			return FetchResult{}, fmt.Errorf("have-ref %q not found on source", raw)
-		}
-		targetRefMap[name] = hash
-	}
-	for idx, hash := range haveHashes {
-		targetRefMap[plumbing.ReferenceName(fmt.Sprintf("refs/haves/%d", idx))] = hash
+	targetRefMap, err := s.buildHaveRefMap(haveRefs, haveHashes)
+	if err != nil {
+		return FetchResult{}, err
 	}
 
 	gpDesired := convert.DesiredRefs(desiredRefs)
@@ -617,34 +579,11 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 		}
 	}
 
-	wants := make([]RefInfo, 0, len(desiredRefs))
-	for _, ref := range desiredRefs {
-		wants = append(wants, RefInfo{Name: ref.SourceRef.String(), Hash: ref.SourceHash})
-	}
-	sort.Slice(wants, func(i, j int) bool { return wants[i].Name < wants[j].Name })
-
 	objectCount, err := countObjects(repo.Storer)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("count fetched objects: %w", err)
 	}
-
-	haveValues := make([]plumbing.Hash, 0, len(targetRefMap))
-	for _, h := range targetRefMap {
-		if !h.IsZero() {
-			haveValues = append(haveValues, h)
-		}
-	}
-
-	return FetchResult{
-		SourceURL:      cfg.Source.URL,
-		RequestedMode:  cfg.ProtocolMode,
-		Protocol:       s.sourceService.Protocol,
-		Wants:          wants,
-		Haves:          gitproto.SortedUniqueHashes(haveValues),
-		FetchedObjects: objectCount,
-		Stats:          s.stats.snapshot(),
-		Measurement:    s.measurementDone(),
-	}, nil
+	return s.newFetchResult(objectCount, desiredRefs, targetRefMap), nil
 }
 
 // --- Bootstrap implementation ---
@@ -701,6 +640,89 @@ func (s *syncSession) executeMaterialized(
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxObjects: s.cfg.MaterializedMaxObjects,
 	})
+}
+
+func (s *syncSession) buildDesiredRefs() (map[plumbing.ReferenceName]planner.DesiredRef, error) {
+	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
+	if err != nil {
+		return nil, err
+	}
+	if len(desiredRefs) == 0 {
+		return nil, fmt.Errorf("no source refs matched")
+	}
+	return desiredRefs, nil
+}
+
+func (s *syncSession) buildHaveRefMap(haveRefs []string, haveHashes []plumbing.Hash) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+	targetRefMap := make(map[plumbing.ReferenceName]plumbing.Hash)
+	for _, raw := range haveRefs {
+		name := validation.ParseHaveRef(raw)
+		hash, ok := s.sourceRefMap[name]
+		if !ok {
+			return nil, fmt.Errorf("have-ref %q not found on source", raw)
+		}
+		targetRefMap[name] = hash
+	}
+	for idx, hash := range haveHashes {
+		targetRefMap[plumbing.ReferenceName(fmt.Sprintf("refs/haves/%d", idx))] = hash
+	}
+	return targetRefMap, nil
+}
+
+func (s *syncSession) newProbeResult() ProbeResult {
+	refInfos := make([]RefInfo, 0, len(s.sourceRefMap))
+	for name, hash := range s.sourceRefMap {
+		refInfos = append(refInfos, RefInfo{Name: name.String(), Hash: hash})
+	}
+	sort.Slice(refInfos, func(i, j int) bool { return refInfos[i].Name < refInfos[j].Name })
+
+	result := ProbeResult{
+		SourceURL:     s.cfg.Source.URL,
+		RequestedMode: s.cfg.ProtocolMode,
+		Protocol:      s.sourceService.Protocol,
+		RefPrefixes:   planner.RefPrefixes(s.cfg.Mappings, s.cfg.IncludeTags),
+		Capabilities:  s.sourceService.Capabilities(),
+		Refs:          refInfos,
+		Stats:         s.stats.snapshot(),
+		Measurement:   s.measurementDone(),
+	}
+	if s.target != nil {
+		result.TargetURL = s.cfg.Target.URL
+		result.TargetCaps = gitproto.AdvRefsCaps(s.target.adv)
+		result.Stats = s.stats.snapshot()
+		result.Measurement = s.measurementDone()
+	}
+	return result
+}
+
+func (s *syncSession) newFetchResult(
+	objectCount int,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefMap map[plumbing.ReferenceName]plumbing.Hash,
+) FetchResult {
+	wants := make([]RefInfo, 0, len(desiredRefs))
+	for _, ref := range desiredRefs {
+		wants = append(wants, RefInfo{Name: ref.SourceRef.String(), Hash: ref.SourceHash})
+	}
+	sort.Slice(wants, func(i, j int) bool { return wants[i].Name < wants[j].Name })
+
+	haveValues := make([]plumbing.Hash, 0, len(targetRefMap))
+	for _, h := range targetRefMap {
+		if !h.IsZero() {
+			haveValues = append(haveValues, h)
+		}
+	}
+
+	return FetchResult{
+		SourceURL:      s.cfg.Source.URL,
+		RequestedMode:  s.cfg.ProtocolMode,
+		Protocol:       s.sourceService.Protocol,
+		Wants:          wants,
+		Haves:          gitproto.SortedUniqueHashes(haveValues),
+		FetchedObjects: objectCount,
+		Stats:          s.stats.snapshot(),
+		Measurement:    s.measurementDone(),
+	}
 }
 
 func countObjects(store storer.EncodedObjectStorer) (int, error) {
