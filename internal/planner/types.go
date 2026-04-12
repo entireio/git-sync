@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/soph/git-sync/internal/validation"
 )
 
 // RefKind distinguishes branch refs from tag refs.
@@ -29,10 +30,7 @@ const (
 )
 
 // RefMapping is a user-specified source:target mapping.
-type RefMapping struct {
-	Source string
-	Target string
-}
+type RefMapping = validation.RefMapping
 
 // DesiredRef represents a source ref that should be mirrored to a target ref.
 type DesiredRef struct {

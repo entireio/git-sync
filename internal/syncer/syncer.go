@@ -46,7 +46,7 @@ type Endpoint struct {
 }
 
 // RefMapping is a user-specified source:target ref mapping.
-type RefMapping = planner.RefMapping
+type RefMapping = validation.RefMapping
 
 // Config holds all configuration for a sync operation.
 type Config struct {

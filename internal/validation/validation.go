@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
-
-	"github.com/soph/git-sync/internal/planner"
 )
 
 const (
@@ -14,6 +12,12 @@ const (
 	ProtocolV1   = "v1"
 	ProtocolV2   = "v2"
 )
+
+// RefMapping is a user-specified source:target mapping.
+type RefMapping struct {
+	Source string
+	Target string
+}
 
 // NormalizeProtocolMode validates the configured protocol mode and applies the
 // default auto mode when the user did not specify one.
@@ -30,17 +34,17 @@ func NormalizeProtocolMode(mode string) (string, error) {
 }
 
 // ParseMapping parses a CLI --map value into a planner mapping.
-func ParseMapping(raw string) (planner.RefMapping, error) {
+func ParseMapping(raw string) (RefMapping, error) {
 	parts := strings.SplitN(raw, ":", 2)
 	if len(parts) != 2 {
-		return planner.RefMapping{}, fmt.Errorf("invalid --map %q, expected src:dst", raw)
+		return RefMapping{}, fmt.Errorf("invalid --map %q, expected src:dst", raw)
 	}
 	source := strings.TrimSpace(parts[0])
 	target := strings.TrimSpace(parts[1])
 	if source == "" || target == "" {
-		return planner.RefMapping{}, fmt.Errorf("invalid --map %q, expected src:dst", raw)
+		return RefMapping{}, fmt.Errorf("invalid --map %q, expected src:dst", raw)
 	}
-	return planner.RefMapping{Source: source, Target: target}, nil
+	return RefMapping{Source: source, Target: target}, nil
 }
 
 // ParseHaveRef normalizes a have-ref CLI value. Short names are treated as
