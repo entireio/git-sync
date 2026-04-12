@@ -25,6 +25,31 @@ That is why the design leans so heavily on:
 - typed results and JSON output
 - explicit execution modes instead of a single opaque "mirror" operation
 
+## When To Use `git-sync`
+
+`git-sync` is most useful when the main problem is moving Git data between remotes without turning that into a persistent local clone service.
+
+Strong fit:
+
+- remote-to-remote migrations where bootstrap relay can avoid a full local mirror clone and re-push
+- repeat sync jobs where updates are mostly fast-forward and the narrow incremental relay path is likely to apply
+- automation environments that benefit from disposable runners and no persistent local repo storage
+- provider-agnostic workflows where one explicit sync primitive is more useful than host-specific migration tooling
+- operations that need clear mapping, prune, force, and relay-policy behavior with machine-readable output
+
+Weaker fit:
+
+- systems that need arbitrary complex Git reconciliation to succeed uniformly through one local full-state model
+- services that already keep warm local mirrors and are willing to pay the storage and maintenance cost for that generality
+- workflows that depend on broader history inspection, repo rewriting, or other local-object-heavy logic as a first-class feature
+
+The practical tradeoff is:
+
+- a local-clone service is the more general model
+- `git-sync` is the lower-state, relay-first, operationally cheaper model
+
+That means the tool gets most of its advantage when relay is common enough to be the normal case rather than an exceptional optimization.
+
 ## Core Decisions
 
 ### Relay First
