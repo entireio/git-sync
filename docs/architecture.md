@@ -155,4 +155,3 @@ That is why the rewrite keeps an explicit `--materialized-max-objects` guardrail
 - [bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md)
 - [bootstrap-batching.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap-batching.md)
 - [benchmarking.md](/Users/soph/Work/entire/devenv/git-sync/docs/benchmarking.md)
-- [rewrite-memo.md](/Users/soph/Work/entire/devenv/git-sync/docs/rewrite-memo.md)
