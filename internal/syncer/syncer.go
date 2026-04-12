@@ -323,7 +323,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		return nil, err
 	}
 	cfg.ProtocolMode = mode
-	if _, err := planner.ValidateMappings(cfg.Mappings); err != nil {
+	if _, err := validation.ValidateMappings(cfg.Mappings); err != nil {
 		return nil, err
 	}
 

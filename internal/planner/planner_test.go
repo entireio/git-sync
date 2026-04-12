@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/soph/git-sync/internal/validation"
 )
 
 func TestSelectBranches(t *testing.T) {
@@ -29,8 +30,8 @@ func TestPlanRefSkip(t *testing.T) {
 	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
 	plan, err := PlanRef(nil, DesiredRef{
 		Kind: RefKindBranch, Label: "main",
-		SourceRef: plumbing.NewBranchReferenceName("main"),
-		TargetRef: plumbing.NewBranchReferenceName("main"),
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
 		SourceHash: hash,
 	}, hash, false)
 	if err != nil {
@@ -52,8 +53,8 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 
 	ffPlan, err := PlanRef(repo.Storer, DesiredRef{
 		Kind: RefKindBranch, Label: "main",
-		SourceRef: plumbing.NewBranchReferenceName("main"),
-		TargetRef: plumbing.NewBranchReferenceName("main"),
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
 		SourceHash: next,
 	}, root, false)
 	if err != nil {
@@ -65,8 +66,8 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 
 	blockPlan, err := PlanRef(repo.Storer, DesiredRef{
 		Kind: RefKindBranch, Label: "main",
-		SourceRef: plumbing.NewBranchReferenceName("main"),
-		TargetRef: plumbing.NewBranchReferenceName("main"),
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
 		SourceHash: side,
 	}, next, false)
 	if err != nil {
@@ -78,7 +79,7 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 }
 
 func TestValidateMappingsRejectsDuplicateTargets(t *testing.T) {
-	_, err := ValidateMappings([]RefMapping{
+	_, err := validation.ValidateMappings([]RefMapping{
 		{Source: "main", Target: "stable"},
 		{Source: "release", Target: "stable"},
 	})
@@ -88,7 +89,7 @@ func TestValidateMappingsRejectsDuplicateTargets(t *testing.T) {
 }
 
 func TestValidateMappingsRejectsCrossKind(t *testing.T) {
-	_, err := ValidateMappings([]RefMapping{
+	_, err := validation.ValidateMappings([]RefMapping{
 		{Source: "refs/heads/main", Target: "refs/tags/main"},
 	})
 	if err == nil {
@@ -97,7 +98,7 @@ func TestValidateMappingsRejectsCrossKind(t *testing.T) {
 }
 
 func TestValidateMappingsRejectsMixedQualification(t *testing.T) {
-	_, err := ValidateMappings([]RefMapping{
+	_, err := validation.ValidateMappings([]RefMapping{
 		{Source: "refs/heads/main", Target: "stable"},
 	})
 	if err == nil {
@@ -515,7 +516,7 @@ func TestFirstParentChain(t *testing.T) {
 }
 
 func TestValidateMappingsEmpty(t *testing.T) {
-	result, err := ValidateMappings(nil)
+	result, err := validation.ValidateMappings(nil)
 	if err != nil {
 		t.Fatalf("expected nil error for empty mappings, got %v", err)
 	}
@@ -525,7 +526,7 @@ func TestValidateMappingsEmpty(t *testing.T) {
 }
 
 func TestValidateMappingsValidBranch(t *testing.T) {
-	normalized, err := ValidateMappings([]RefMapping{
+	normalized, err := validation.ValidateMappings([]RefMapping{
 		{Source: "main", Target: "stable"},
 	})
 	if err != nil {
@@ -541,13 +542,10 @@ func TestValidateMappingsValidBranch(t *testing.T) {
 	if nm.TargetRef != plumbing.NewBranchReferenceName("stable") {
 		t.Fatalf("expected target ref refs/heads/stable, got %s", nm.TargetRef)
 	}
-	if nm.Kind != RefKindBranch {
-		t.Fatalf("expected kind branch, got %s", nm.Kind)
-	}
 }
 
 func TestValidateMappingsValidFullRef(t *testing.T) {
-	normalized, err := ValidateMappings([]RefMapping{
+	normalized, err := validation.ValidateMappings([]RefMapping{
 		{Source: "refs/heads/main", Target: "refs/heads/upstream-main"},
 	})
 	if err != nil {
@@ -562,9 +560,6 @@ func TestValidateMappingsValidFullRef(t *testing.T) {
 	}
 	if nm.TargetRef != "refs/heads/upstream-main" {
 		t.Fatalf("expected target ref refs/heads/upstream-main, got %s", nm.TargetRef)
-	}
-	if nm.Kind != RefKindBranch {
-		t.Fatalf("expected kind branch, got %s", nm.Kind)
 	}
 }
 

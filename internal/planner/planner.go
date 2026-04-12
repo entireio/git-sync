@@ -8,6 +8,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/soph/git-sync/internal/validation"
 )
 
 // PlanConfig holds configuration for plan generation.
@@ -51,12 +52,13 @@ func BuildDesiredRefs(
 
 	if len(cfg.Mappings) > 0 {
 		// Validate all mappings up front (issue #2, #3)
-		normalized, err := ValidateMappings(cfg.Mappings)
+		normalized, err := validation.ValidateMappings(cfg.Mappings)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, nm := range normalized {
-			if err := addManaged(nm.SourceRef, nm.TargetRef, nm.Kind, sourceRefs[nm.SourceRef]); err != nil {
+			kind := RefKindFromName(nm.TargetRef)
+			if err := addManaged(nm.SourceRef, nm.TargetRef, kind, sourceRefs[nm.SourceRef]); err != nil {
 				return nil, nil, err
 			}
 		}
