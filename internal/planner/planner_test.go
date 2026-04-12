@@ -9,9 +9,8 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/validation"
 )
 
@@ -716,11 +715,7 @@ func TestCanIncrementalRelayMixed(t *testing.T) {
 		},
 	}
 
-	// Build a minimal AdvRefs with capabilities to pass the capability check.
-	advRefs := &packp.AdvRefs{}
-	advRefs.Capabilities = capability.NewList()
-
-	ok, reason := CanIncrementalRelay(false, false, false, plans, advRefs)
+	ok, reason := CanIncrementalRelay(false, false, false, plans, gitproto.TargetFeatures{Known: true})
 	if ok {
 		t.Fatalf("expected CanIncrementalRelay=false for tag with ActionUpdate")
 	}
@@ -740,11 +735,7 @@ func TestCanIncrementalRelayRejectsNoThin(t *testing.T) {
 		Action:     ActionUpdate,
 	}}
 
-	advRefs := &packp.AdvRefs{}
-	advRefs.Capabilities = capability.NewList()
-	_ = advRefs.Capabilities.Set(capability.Capability("no-thin"))
-
-	ok, reason := CanIncrementalRelay(false, false, false, plans, advRefs)
+	ok, reason := CanIncrementalRelay(false, false, false, plans, gitproto.TargetFeatures{Known: true, NoThin: true})
 	if ok {
 		t.Fatal("expected CanIncrementalRelay=false when target advertises no-thin")
 	}
@@ -764,10 +755,7 @@ func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
 		Action:     ActionCreate,
 	}}
 
-	advRefs := &packp.AdvRefs{}
-	advRefs.Capabilities = capability.NewList()
-
-	ok, reason := CanIncrementalRelay(false, false, false, plans, advRefs)
+	ok, reason := CanIncrementalRelay(false, false, false, plans, gitproto.TargetFeatures{Known: true})
 	if ok {
 		t.Fatal("expected CanIncrementalRelay=false for branch create")
 	}
@@ -807,10 +795,8 @@ func TestRelayFallbackReason(t *testing.T) {
 		Action:     ActionCreate,
 	}}
 
-	advRefs := &packp.AdvRefs{}
-	advRefs.Capabilities = capability.NewList()
-
-	if got := RelayFallbackReason(false, false, false, tagCreate, advRefs); got != "fast-forward-branch-or-tag-create" {
+	target := gitproto.TargetFeatures{Known: true}
+	if got := RelayFallbackReason(false, false, false, tagCreate, target); got != "fast-forward-branch-or-tag-create" {
 		t.Fatalf("expected fast-forward-branch-or-tag-create, got %s", got)
 	}
 
@@ -823,7 +809,7 @@ func TestRelayFallbackReason(t *testing.T) {
 		Kind:       RefKindBranch,
 		Action:     ActionUpdate,
 	}}
-	if got := RelayFallbackReason(false, false, false, unsupported, advRefs); got != "incremental-tag-relay-non-tag-plan" {
+	if got := RelayFallbackReason(false, false, false, unsupported, target); got != "incremental-tag-relay-non-tag-plan" {
 		t.Fatalf("unexpected fallback reason: %s", got)
 	}
 }

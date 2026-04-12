@@ -383,6 +383,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	sourceConn := s.sourceConn
 	sourceService := s.sourceService
 	targetAdv := s.targetAdv
+	targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
 	targetPusher := gitproto.NewPusher(s.targetConn, s.targetAdv, cfg.Verbose)
 	sourceRefMap := s.sourceRefMap
 	targetRefMap := s.targetRefMap
@@ -452,7 +453,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
-	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, targetAdv)
+	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, targetFeatures)
 
 	if !cfg.DryRun {
 		// Try incremental relay first
@@ -461,7 +462,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
 			PushPlans: pushPlans, MaxPackBytes: cfg.MaxPackBytes,
 			CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
-				return planner.CanIncrementalRelay(force, prune, dryRun, plans, targetAdv)
+				return planner.CanIncrementalRelay(force, prune, dryRun, plans, targetFeatures)
 			},
 			CanTagRelay: planner.CanFullTagCreateRelay,
 		}, planConfig(cfg))

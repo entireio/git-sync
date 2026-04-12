@@ -2,8 +2,7 @@ package planner
 
 import (
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/soph/git-sync/internal/gitproto"
 )
 
 // CanBootstrapRelay checks whether all desired target refs are absent on the target,
@@ -29,17 +28,17 @@ func CanBootstrapRelay(
 
 // CanIncrementalRelay checks whether all plans are eligible for the incremental
 // relay fast-path (fast-forward branch updates + new tag creates).
-func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, targetAdv *packp.AdvRefs) (bool, string) {
+func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target gitproto.TargetFeatures) (bool, string) {
 	if force || prune || dryRun {
 		return false, "incremental-disabled-by-force-prune-or-dry-run"
 	}
 	if len(plans) == 0 {
 		return false, "incremental-no-plans"
 	}
-	if targetAdv == nil || targetAdv.Capabilities == nil {
+	if !target.Known {
 		return false, "incremental-missing-target-capabilities"
 	}
-	if targetAdv.Capabilities.Supports(capability.Capability("no-thin")) {
+	if target.NoThin {
 		return false, "incremental-target-no-thin"
 	}
 
@@ -90,8 +89,8 @@ func CanFullTagCreateRelay(plans []BranchPlan) (bool, string) {
 }
 
 // RelayFallbackReason returns the reason why relay was not used.
-func RelayFallbackReason(force, prune, dryRun bool, plans []BranchPlan, targetAdv *packp.AdvRefs) string {
-	if ok, reason := CanIncrementalRelay(force, prune, dryRun, plans, targetAdv); ok {
+func RelayFallbackReason(force, prune, dryRun bool, plans []BranchPlan, target gitproto.TargetFeatures) string {
+	if ok, reason := CanIncrementalRelay(force, prune, dryRun, plans, target); ok {
 		return reason
 	} else if ok, reason := CanFullTagCreateRelay(plans); ok {
 		return reason
