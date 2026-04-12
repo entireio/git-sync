@@ -185,6 +185,60 @@ func TestAdaptiveNextProbeSpan(t *testing.T) {
 	}
 }
 
+func TestShouldProbeTipFirst(t *testing.T) {
+	tests := []struct {
+		name         string
+		limit        int64
+		measured     int
+		measuredSpan int
+		remaining    int
+		want         bool
+	}{
+		{
+			name:         "probes tip when estimate is comfortably under limit",
+			limit:        1000,
+			measured:     200,
+			measuredSpan: 4,
+			remaining:    10,
+			want:         true,
+		},
+		{
+			name:         "does not probe tip when estimate is too close to limit",
+			limit:        1000,
+			measured:     400,
+			measuredSpan: 4,
+			remaining:    10,
+			want:         false,
+		},
+		{
+			name:         "does not probe tip without measurements",
+			limit:        1000,
+			measured:     0,
+			measuredSpan: 4,
+			remaining:    10,
+			want:         false,
+		},
+		{
+			name:         "does not probe tip when remaining span is not larger",
+			limit:        1000,
+			measured:     200,
+			measuredSpan: 4,
+			remaining:    4,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldProbeTipFirst(tt.limit, tt.measured, tt.measuredSpan, tt.remaining)
+			if got != tt.want {
+				t.Fatalf("shouldProbeTipFirst(%d, %d, %d, %d) = %v, want %v",
+					tt.limit, tt.measured, tt.measuredSpan, tt.remaining, got, tt.want)
+			}
+		})
+	}
+}
+
 type fakeBootstrapSource struct {
 	fetchPack func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 }

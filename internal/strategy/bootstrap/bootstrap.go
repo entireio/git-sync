@@ -372,10 +372,11 @@ func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.Desired
 	prevIdx := -1
 	prevHash := plumbing.ZeroHash
 	prevSpan := initialSpan
+	prevMeasuredBytes := 0
 	probeCache := make(map[string]probeResult)
 	prefetched := make(map[plumbing.Hash][]byte)
 	for prevIdx < len(chain)-1 {
-		bestIdx, err := planner.SampledCheckpointUnderLimit(chain, prevIdx, prevSpan, func(idx int) (bool, error) {
+		probe := func(idx int) (bool, error) {
 			cacheKey := prevHash.String() + ":" + strconv.Itoa(idx)
 			if result, ok := probeCache[cacheKey]; ok {
 				return result.tooLarge, nil
@@ -386,9 +387,26 @@ func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.Desired
 			}
 			probeCache[cacheKey] = probeResult{tooLarge: tooLarge, data: data}
 			return tooLarge, nil
-		})
-		if err != nil {
-			return nil, nil, err
+		}
+
+		bestIdx := -1
+		remaining := len(chain) - 1 - prevIdx
+		if shouldProbeTipFirst(p.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
+			tipIdx := len(chain) - 1
+			tooLarge, err := probe(tipIdx)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !tooLarge {
+				bestIdx = tipIdx
+			}
+		}
+		if bestIdx == -1 {
+			var err error
+			bestIdx, err = planner.SampledCheckpointUnderLimit(chain, prevIdx, prevSpan, probe)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		if bestIdx <= prevIdx {
 			return nil, nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, p.BatchMaxPack)
@@ -396,8 +414,10 @@ func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.Desired
 		if result, ok := probeCache[prevHash.String()+":"+strconv.Itoa(bestIdx)]; ok && !result.tooLarge && len(result.data) > 0 {
 			prefetched[chain[bestIdx]] = result.data
 			prevSpan = adaptiveNextProbeSpan(p.BatchMaxPack, len(result.data), bestIdx-prevIdx, len(chain)-1-bestIdx)
+			prevMeasuredBytes = len(result.data)
 		} else {
 			prevSpan = bestIdx - prevIdx
+			prevMeasuredBytes = 0
 		}
 		prevIdx = bestIdx
 		prevHash = chain[bestIdx]
@@ -438,6 +458,14 @@ func adaptiveNextProbeSpan(limit int64, measuredBytes int, selectedSpan int, rem
 		next = remaining
 	}
 	return next
+}
+
+func shouldProbeTipFirst(limit int64, measuredBytes int, measuredSpan int, remaining int) bool {
+	if limit <= 0 || measuredBytes <= 0 || measuredSpan <= 0 || remaining <= measuredSpan {
+		return false
+	}
+	estimated := (int64(measuredBytes) * int64(remaining)) / int64(measuredSpan)
+	return estimated <= (limit*9)/10
 }
 
 func fetchPackForProbe(ctx context.Context, p Params, ref planner.DesiredRef, want, have plumbing.Hash, limit int64) ([]byte, bool, error) {
