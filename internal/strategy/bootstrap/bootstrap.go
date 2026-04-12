@@ -400,7 +400,9 @@ func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.Desired
 
 		bestIdx := -1
 		remaining := len(chain) - 1 - prevIdx
-		if shouldProbeTipFirst(p.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
+		if shouldSelectTipWithoutProbe(p.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
+			bestIdx = len(chain) - 1
+		} else if shouldProbeTipFirst(p.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
 			tipIdx := len(chain) - 1
 			tooLarge, err := probe(tipIdx)
 			if err != nil {
@@ -475,6 +477,17 @@ func shouldProbeTipFirst(limit int64, measuredBytes int, measuredSpan int, remai
 	}
 	estimated := (int64(measuredBytes) * int64(remaining)) / int64(measuredSpan)
 	return estimated <= (limit*9)/10
+}
+
+func shouldSelectTipWithoutProbe(limit int64, measuredBytes int, measuredSpan int, remaining int) bool {
+	if limit <= 0 || measuredBytes <= 0 || measuredSpan <= 0 || remaining <= 0 {
+		return false
+	}
+	if remaining <= measuredSpan {
+		return int64(measuredBytes) <= limit/2
+	}
+	estimated := (int64(measuredBytes) * int64(remaining)) / int64(measuredSpan)
+	return estimated <= limit/2
 }
 
 func fetchPackForProbe(ctx context.Context, p Params, ref planner.DesiredRef, want, have plumbing.Hash, limit int64) ([]byte, bool, error) {

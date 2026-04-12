@@ -244,6 +244,52 @@ func TestShouldProbeTipFirst(t *testing.T) {
 	}
 }
 
+func TestShouldSelectTipWithoutProbe(t *testing.T) {
+	tests := []struct {
+		name         string
+		limit        int64
+		measured     int
+		measuredSpan int
+		remaining    int
+		want         bool
+	}{
+		{
+			name:         "selects tip when estimate is far below limit",
+			limit:        1000,
+			measured:     150,
+			measuredSpan: 4,
+			remaining:    10,
+			want:         true,
+		},
+		{
+			name:         "does not select tip when estimate is only moderately below limit",
+			limit:        1000,
+			measured:     220,
+			measuredSpan: 4,
+			remaining:    10,
+			want:         false,
+		},
+		{
+			name:         "does not select tip without measurements",
+			limit:        1000,
+			measured:     0,
+			measuredSpan: 4,
+			remaining:    10,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldSelectTipWithoutProbe(tt.limit, tt.measured, tt.measuredSpan, tt.remaining)
+			if got != tt.want {
+				t.Fatalf("shouldSelectTipWithoutProbe(%d, %d, %d, %d) = %v, want %v",
+					tt.limit, tt.measured, tt.measuredSpan, tt.remaining, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlanCheckpointsProbeCountVisibility(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -252,10 +298,10 @@ func TestPlanCheckpointsProbeCountVisibility(t *testing.T) {
 		wantProbes int
 	}{
 		{
-			name:       "small early sample jumps directly to tip",
+			name:       "small early sample selects tip without a second probe",
 			batchLimit: 20_000,
 			spanSizes:  map[int]int{1: 1_000, 2: 2_000, 3: 3_000, 4: 4_000, 5: 5_000, 6: 6_000, 7: 7_000, 8: 8_000, 9: 9_000, 10: 10_000},
-			wantProbes: 2,
+			wantProbes: 1,
 		},
 		{
 			name:       "mid-sized spans require repeated exact probes",
