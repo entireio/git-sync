@@ -446,7 +446,8 @@ Current rewrite note:
 - Injected checkpoint pack failure after partial batched progress is now covered end-to-end, including successful resume on retry.
 - `fetchToStoreV2` now also has direct coverage for cancellation after response parsing has started.
 - V1 and v2 fetch paths now also have direct parser-level coverage for malformed sideband framing after a valid response prelude, both for returned streaming readers and for v2 fetch-to-store cleanup.
-- Some harder transport-interruption and broader end-to-end cancellation paths still remain, but the remaining gap is narrower than the original list.
+- Syncer integration coverage now also includes v2 fetch failure and cancellation after a valid fetch response has already started streaming, using the in-memory smart-HTTP harness rather than only protocol-unit stubs.
+- Some harder transport-interruption paths still remain, but the remaining gap is narrower than the original list.
 
 ### 22. No benchmark coverage for the expensive paths
 

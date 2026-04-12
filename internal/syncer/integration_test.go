@@ -164,6 +164,121 @@ func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationV2FetchMalformedMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	sourceServer.uploadPackV2FetchRaw = func(w http.ResponseWriter, _ v2TestCommandRequest, body []byte) bool {
+		var buf bytes.Buffer
+		if _, err := pktline.WriteString(&buf, "packfile\n"); err != nil {
+			t.Fatalf("write packfile prelude: %v", err)
+		}
+		buf.WriteString("zzzz")
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			t.Fatalf("write malformed v2 fetch response: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+	})
+	if err == nil {
+		t.Fatal("expected malformed mid-stream v2 fetch to fail")
+	}
+}
+
+func TestRun_IntegrationV2FetchCanceledMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	sourceServer.uploadPackV2FetchRaw = func(w http.ResponseWriter, _ v2TestCommandRequest, body []byte) bool {
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected flusher")
+		}
+		if _, err := pktline.WriteString(w, "packfile\n"); err != nil {
+			t.Fatalf("write packfile prelude: %v", err)
+		}
+		flusher.Flush()
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		if _, err := io.WriteString(w, "zzzz"); err != nil && !isConnectionCloseError(err) {
+			t.Fatalf("write interrupted packet tail: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), 0, 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, Config{
+			Source:       Endpoint{URL: sourceServer.RepoURL()},
+			Target:       Endpoint{URL: targetServer.RepoURL()},
+			ProtocolMode: protocolModeV2,
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected v2 fetch response to start before cancellation")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected run to return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -1392,6 +1507,7 @@ type smartHTTPRepoServer struct {
 	receivePackNoThin    bool
 	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
 	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
+	uploadPackV2FetchRaw func(http.ResponseWriter, v2TestCommandRequest, []byte) bool
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -1669,6 +1785,10 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 }
 
 func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
+	if s.uploadPackV2FetchRaw != nil && s.uploadPackV2FetchRaw(w, req, body) {
+		return
+	}
+
 	var wants []plumbing.Hash
 	var haves []plumbing.Hash
 	for _, arg := range req.Args {
