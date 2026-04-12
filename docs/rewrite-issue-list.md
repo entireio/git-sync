@@ -164,7 +164,8 @@ Current rewrite note:
 - `gitproto.PushPack` now also has direct closure coverage for cancellation, server-side receive-pack errors, and success.
 - `gitproto` fetch tests now verify response-body closure symmetry for both v1 and v2 decode-failure paths.
 - `fetchToStoreV2` now also has direct cancellation and decode-failure cleanup coverage.
-- This still wants a fuller close-audit around lower-level transport interruption paths before it should be considered fully done.
+- Returned `fetchPackV1` and `fetchPackV2` readers now also have direct interruption/close coverage after valid startup.
+- The remaining gap is mostly real-network behavior that is not easily modeled in unit tests rather than an obvious ownership hole in current strategy/protocol code.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
 

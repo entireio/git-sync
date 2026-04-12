@@ -11,6 +11,7 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
@@ -187,6 +188,27 @@ func (b *blockingPacketBody) Read(p []byte) (int, error) {
 }
 
 func (b *blockingPacketBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+type interruptedBody struct {
+	data   []byte
+	err    error
+	offset int
+	closed bool
+}
+
+func (b *interruptedBody) Read(p []byte) (int, error) {
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		return n, nil
+	}
+	return 0, b.err
+}
+
+func (b *interruptedBody) Close() error {
 	b.closed = true
 	return nil
 }
@@ -563,6 +585,51 @@ func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 	}
 }
 
+func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &interruptedBody{
+		data: []byte("0008NAK\nPACK"),
+		err:  io.ErrUnexpectedEOF,
+	}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	adv := packp.NewAdvRefs()
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil)
+	if err != nil {
+		t.Fatalf("fetchPackV1: %v", err)
+	}
+	data, err := io.ReadAll(rc)
+	if len(data) == 0 {
+		t.Fatal("expected partial pack data before interruption")
+	}
+	if err == nil {
+		t.Fatal("expected interrupted read error")
+	}
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Fatalf("close returned reader: %v", closeErr)
+	}
+	if !body.closed {
+		t.Fatal("expected returned reader close to close underlying body")
+	}
+}
+
 func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 	ep, err := transport.NewEndpoint("https://example.com/repo.git")
 	if err != nil {
@@ -596,6 +663,62 @@ func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 	}
 	if !body.closed {
 		t.Fatal("expected response body to be closed on decode error")
+	}
+}
+
+func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	var wire bytes.Buffer
+	if _, err := pktline.WriteString(&wire, "packfile\n"); err != nil {
+		t.Fatalf("write packfile header: %v", err)
+	}
+	if _, err := pktline.Write(&wire, append([]byte{1}, []byte("PACK")...)); err != nil {
+		t.Fatalf("write sideband packet: %v", err)
+	}
+	body := &interruptedBody{
+		data: wire.Bytes(),
+		err:  io.ErrUnexpectedEOF,
+	}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "",
+		},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil)
+	if err != nil {
+		t.Fatalf("fetchPackV2: %v", err)
+	}
+	data, err := io.ReadAll(rc)
+	if len(data) == 0 {
+		t.Fatal("expected partial pack data before interruption")
+	}
+	if err == nil {
+		t.Fatal("expected interrupted read error")
+	}
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Fatalf("close returned reader: %v", closeErr)
+	}
+	if !body.closed {
+		t.Fatal("expected returned reader close to close underlying body")
 	}
 }
 
