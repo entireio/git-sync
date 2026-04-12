@@ -325,6 +325,7 @@ Comparison check:
 Current rewrite note:
 - The rewrite adds an initial commit-count heuristic and memoizes repeated equivalent probe results within a planning run.
 - Successful under-limit probe packs are now cached and reused during execution, which avoids a second fetch for selected checkpoints.
+- Checkpoint selection now also keeps searching within known fit/too-large probe bounds so it can choose the largest fitting checkpoint once an upper bound is known, instead of stopping at the first fitting sample and leaving obvious headroom unused.
 - The planner still relies on network probes for sizing, so this remains partial rather than fully solved.
 
 ### 15. Materialized fallback path does not scale to large repos

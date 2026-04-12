@@ -290,6 +290,56 @@ func TestShouldSelectTipWithoutProbe(t *testing.T) {
 	}
 }
 
+func TestNextCheckpointProbeCandidate(t *testing.T) {
+	tests := []struct {
+		name             string
+		lo               int
+		hi               int
+		prevSpan         int
+		largestFit       int
+		smallestTooLarge int
+		want             int
+	}{
+		{
+			name:             "probes midpoint between known fit and too large bounds",
+			lo:               0,
+			hi:               19,
+			prevSpan:         8,
+			largestFit:       7,
+			smallestTooLarge: 15,
+			want:             11,
+		},
+		{
+			name:             "projects previous span when no upper bound exists",
+			lo:               5,
+			hi:               19,
+			prevSpan:         4,
+			largestFit:       4,
+			smallestTooLarge: 20,
+			want:             8,
+		},
+		{
+			name:             "falls back to hi when projection is behind known fit",
+			lo:               5,
+			hi:               19,
+			prevSpan:         1,
+			largestFit:       12,
+			smallestTooLarge: 20,
+			want:             19,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nextCheckpointProbeCandidate(tt.lo, tt.hi, tt.prevSpan, tt.largestFit, tt.smallestTooLarge)
+			if got != tt.want {
+				t.Fatalf("nextCheckpointProbeCandidate(%d, %d, %d, %d, %d) = %d, want %d",
+					tt.lo, tt.hi, tt.prevSpan, tt.largestFit, tt.smallestTooLarge, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlanCheckpointsProbeCountVisibility(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -370,6 +420,67 @@ func TestPlanCheckpointsProbeCountVisibility(t *testing.T) {
 				t.Fatalf("FetchPack probe count = %d, want %d", probes, tt.wantProbes)
 			}
 		})
+	}
+}
+
+func TestSearchCheckpointUnderLimitFindsLargestFittingCheckpoint(t *testing.T) {
+	hashes := makeLinearCommitChain(t, 20)
+	indices := make(map[plumbing.Hash]int, len(hashes))
+	for i, h := range hashes {
+		indices[h] = i
+	}
+
+	source := fakeBootstrapSource{
+		fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+			_ = writeLinearCommitChain(t, store, len(hashes))
+			return nil
+		},
+		fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			for _, ref := range desired {
+				wantIdx := indices[ref.SourceHash]
+				haveIdx := -1
+				for _, h := range haves {
+					if h.IsZero() {
+						continue
+					}
+					haveIdx = indices[h]
+				}
+				span := wantIdx - haveIdx
+				size := span * 1000
+				if span > 12 {
+					size = 50_000
+				}
+				return io.NopCloser(bytes.NewReader(make([]byte, size))), nil
+			}
+			t.Fatal("expected single desired ref")
+			return nil, nil
+		},
+	}
+
+	cp := &checkpointPlanner{
+		ctx: context.Background(),
+		params: Params{
+			SourceService: source,
+			BatchMaxPack:  12_000,
+		},
+		ref: planner.DesiredRef{
+			Label:      "main",
+			Kind:       planner.RefKindBranch,
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: hashes[len(hashes)-1],
+		},
+		chain:      hashes,
+		probeCache: make(map[string]probeResult),
+		prefetched: make(map[plumbing.Hash][]byte),
+	}
+
+	bestIdx, err := cp.searchCheckpointUnderLimit(-1, plumbing.ZeroHash, 12)
+	if err != nil {
+		t.Fatalf("searchCheckpointUnderLimit() error = %v", err)
+	}
+	if bestIdx != 11 {
+		t.Fatalf("best checkpoint index = %d, want 11 (largest fitting span of 12 commits)", bestIdx)
 	}
 }
 

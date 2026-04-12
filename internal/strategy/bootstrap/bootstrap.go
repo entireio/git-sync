@@ -445,9 +445,7 @@ func (p *checkpointPlanner) selectNextCheckpoint(prevIdx int, prevHash plumbing.
 	if bestIdx != -1 {
 		return bestIdx, nil
 	}
-	return planner.SampledCheckpointUnderLimit(p.chain, prevIdx, prevSpan, func(idx int) (bool, error) {
-		return p.probe(prevHash, idx)
-	})
+	return p.searchCheckpointUnderLimit(prevIdx, prevHash, prevSpan)
 }
 
 func (p *checkpointPlanner) probe(prevHash plumbing.Hash, idx int) (bool, error) {
@@ -465,6 +463,116 @@ func (p *checkpointPlanner) probe(prevHash plumbing.Hash, idx int) (bool, error)
 func (p *checkpointPlanner) cachedProbe(prevHash plumbing.Hash, idx int) (probeResult, bool) {
 	result, ok := p.probeCache[probeKey(prevHash, idx)]
 	return result, ok
+}
+
+func (p *checkpointPlanner) probeBounds(prevHash plumbing.Hash, lo, hi int) (largestFit int, smallestTooLarge int) {
+	largestFit = lo - 1
+	smallestTooLarge = hi + 1
+	for idx := lo; idx <= hi; idx++ {
+		result, ok := p.cachedProbe(prevHash, idx)
+		if !ok {
+			continue
+		}
+		if result.tooLarge {
+			if idx < smallestTooLarge {
+				smallestTooLarge = idx
+			}
+			continue
+		}
+		if idx > largestFit {
+			largestFit = idx
+		}
+	}
+	return largestFit, smallestTooLarge
+}
+
+func (p *checkpointPlanner) searchCheckpointUnderLimit(prevIdx int, prevHash plumbing.Hash, prevSpan int) (int, error) {
+	lo := prevIdx + 1
+	hi := len(p.chain) - 1
+	if lo > hi {
+		return -1, nil
+	}
+
+	largestFit, smallestTooLarge := p.probeBounds(prevHash, lo, hi)
+	if smallestTooLarge > hi {
+		if largestFit >= lo {
+			return largestFit, nil
+		}
+
+		idx := nextCheckpointProbeCandidate(lo, hi, prevSpan, largestFit, smallestTooLarge)
+		tooLarge, err := p.probe(prevHash, idx)
+		if err != nil {
+			return -1, err
+		}
+		if !tooLarge {
+			return idx, nil
+		}
+		smallestTooLarge = idx
+	}
+
+	for smallestTooLarge-largestFit > 1 {
+		idx := nextCheckpointProbeCandidate(lo, hi, prevSpan, largestFit, smallestTooLarge)
+		if idx <= largestFit {
+			idx = largestFit + 1
+		}
+		if idx >= smallestTooLarge {
+			idx = smallestTooLarge - 1
+		}
+		if idx < lo || idx > hi || idx <= largestFit || idx >= smallestTooLarge {
+			break
+		}
+
+		tooLarge, err := p.probe(prevHash, idx)
+		if err != nil {
+			return -1, err
+		}
+		if tooLarge {
+			smallestTooLarge = idx
+			continue
+		}
+		largestFit = idx
+	}
+
+	if largestFit >= lo {
+		return largestFit, nil
+	}
+
+	tooLarge, err := p.probe(prevHash, lo)
+	if err != nil {
+		return -1, err
+	}
+	if tooLarge {
+		return -1, nil
+	}
+	return lo, nil
+}
+
+func nextCheckpointProbeCandidate(lo, hi, prevSpan, largestFit, smallestTooLarge int) int {
+	if smallestTooLarge <= hi {
+		idx := largestFit + (smallestTooLarge-largestFit)/2
+		if idx <= largestFit {
+			return largestFit + 1
+		}
+		if idx >= smallestTooLarge {
+			return smallestTooLarge - 1
+		}
+		return idx
+	}
+
+	projected := lo
+	if prevSpan > 0 {
+		projected = lo + prevSpan - 1
+	}
+	if projected < lo {
+		projected = lo
+	}
+	if projected > hi {
+		projected = hi
+	}
+	if projected <= largestFit {
+		return hi
+	}
+	return projected
 }
 
 func probeKey(prevHash plumbing.Hash, idx int) string {
