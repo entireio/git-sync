@@ -91,6 +91,40 @@ Protocol v2 is used where it materially improves discovery and fetch behavior. P
 - objects still remain in memory for the duration of materialized paths
 - batched bootstrap is intentionally narrower than normal sync
 
+## Memory Assumptions
+
+The relay paths and the materialized fallback have very different memory stories.
+
+- Relay paths scale with streaming behavior.
+  The source computes the pack, `git-sync` coordinates the transfer, and the target receives it directly. Large repositories are expected to stay viable primarily through bootstrap and incremental relay.
+- Materialized fallback scales with the local object set that must be pushed.
+  Once `git-sync` stops relaying and starts building a local push, it must hold the relevant Git objects in memory long enough to compute object closure and encode the outgoing pack.
+
+Useful rules of thumb:
+
+- Small branch delta fallback:
+  Target already has the old branch tip, source has a few new commits, and the repo is mostly text/code.
+  Memory is driven by the new commits, trees, and blobs above the target tip, not the full repo history.
+  This is the most reasonable non-relay case.
+
+- Broad fallback without shared history:
+  Relay is unavailable and the target is missing most of the history or object graph behind the refs being updated.
+  Memory can approach a large fraction of the pushed object set, especially if the repo contains large blobs.
+  This is the risky case for the in-memory fallback.
+
+- Ref-only delete or tiny tag case:
+  Delete-only operations are effectively ref-only and do not need an object closure.
+  Lightweight tag creation can also be close to ref-only when the target already has the underlying commit/tree/blob objects.
+  These are cheap even without relay.
+
+The important distinction is that "repo size" alone is not a sufficient predictor. For materialized fallback, the practical questions are:
+
+- how many objects need to be sent
+- how large the missing blobs are
+- how much object overlap already exists on the target
+
+That is why the rewrite keeps an explicit `--materialized-max-objects` guardrail. It is not a precise heap model; it is a coarse safety rail for the in-memory fallback path.
+
 ## Related Notes
 
 - [bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md)
