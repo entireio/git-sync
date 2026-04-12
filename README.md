@@ -305,100 +305,19 @@ Push still uses the current low-level `receive-pack` path. Protocol v2 is used w
 
 ## Testing
 
-The default test suite uses in-process smart HTTP servers and does not require a local listener:
+Default suite:
 
 ```bash
 env GOCACHE=/tmp/go-build go test ./...
 ```
 
-There is also an optional end-to-end write test against the system `git-http-backend`:
-
-```bash
-env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run TestRun_GitHTTPBackendSync -v
-```
-
-That path exercises real smart HTTP fetch and push with a local bare source repo and a local bare target repo.
-
-The Phase A batching path also has a dedicated `git-http-backend` test:
-
-```bash
-env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run TestBootstrap_GitHTTPBackendBatchedBranch -v
-```
-
-There is also an optional live Linux bootstrap smoke against the public Linux repository:
-
-```bash
-env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSource -v
-```
-
-That is useful for large-source relay and memory measurement checks while keeping the target local and disposable.
-
-There is also a batched variant of the same Linux smoke:
-
-```bash
-env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap_LiveLinuxSourceBatched -v
-```
-
-The `mise` tasks are:
-
-- `mise run test:linux-smoke`
-- `mise run test:linux-smoke:batched`
-- `mise run test:entire-local-smoke`
-- `mise run test:entire-local-smoke:linux`
-- `mise run test:entire-local-smoke:linux:single`
-
-`test:linux-smoke` and `test:linux-smoke:batched` use a disposable local bare Git target served through `git-http-backend`. They do not talk to a running Entire instance.
-
-The Entire local smoke expects:
-
-- a running Entire local instance reachable at `GITSYNC_E2E_ENTIRE_BASE_URL` or `ENTIRE_BASE_URL`
-- an authenticated local Entire CLI session for that host, so the smoke can discover the active user and OAuth token from `hosts.json` and the keyring
-- `entiredb` on `PATH`, or `GITSYNC_E2E_ENTIREDB_BIN` pointing to it
-
-Useful overrides:
-
-- `GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/entireio/cli.git`
-- `GITSYNC_E2E_ENTIRE_BRANCH=main`
-- `GITSYNC_E2E_ENTIRE_REPO=git-sync-smoke`
-- `GITSYNC_E2E_ENTIRE_USERNAME=...`
-- `GITSYNC_E2E_ENTIRE_TOKEN=...`
-- `GITSYNC_E2E_ENTIRE_SKIP_TLS_VERIFY=true`
-
-To sync the public Linux repo into a local Entire instance, use:
-
-```bash
-mise run test:entire-local-smoke:linux
-```
-
-That task sets:
-
-- `GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/torvalds/linux.git`
-- `GITSYNC_E2E_ENTIRE_BRANCH=master`
-- `GITSYNC_E2E_ENTIRE_PROTOCOL=v2`
-- `GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES=536870912`
-
-The batched default matters for Entire targets with request body limits around `2 GiB`; a single Linux bootstrap push can exceed that. If you explicitly want the old single-pack behavior, use:
-
-```bash
-mise run test:entire-local-smoke:linux:single
-```
-
-If you use `test:entire-local-smoke` directly, the test falls back to `https://github.com/entireio/cli.git` on `main` unless you override both the source URL and branch yourself. The Entire-local smoke also accepts:
-
-- `GITSYNC_E2E_ENTIRE_MAX_PACK_BYTES`
-- `GITSYNC_E2E_ENTIRE_BATCH_MAX_PACK_BYTES`
-- `GITSYNC_E2E_ENTIRE_PROTOCOL`
-
-For local/self-signed targets, `git-sync` also supports:
-
-- `--source-insecure-skip-tls-verify`
-- `--target-insecure-skip-tls-verify`
-- `GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY=true`
-- `GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY=true`
+Extended and environment-specific test instructions are in [docs/testing.md](/Users/soph/Work/entire/devenv/git-sync/docs/testing.md).
 
 ## Design Notes
 
 `bootstrap` is the dedicated path for large initial syncs into an empty target. The goal is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
+
+Current architectural summary and package boundaries are in [docs/architecture.md](/Users/soph/Work/entire/devenv/git-sync/docs/architecture.md).
 
 The design note is in [docs/bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md).
 
