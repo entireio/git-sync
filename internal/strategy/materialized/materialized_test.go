@@ -1,13 +1,17 @@
 package materialized
 
 import (
+	"context"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/storer"
 
 	"github.com/soph/git-sync/internal/convert"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
+	"github.com/soph/git-sync/internal/syncertest"
 )
 
 func TestPlansToPushPlans(t *testing.T) {
@@ -130,4 +134,132 @@ func TestEffectiveMaxObjects(t *testing.T) {
 	if got := effectiveMaxObjects(0); got != DefaultMaxMaterializedObjects {
 		t.Fatalf("effectiveMaxObjects(0) = %d, want %d", got, DefaultMaxMaterializedObjects)
 	}
+}
+
+func TestCollectObjectClosureForBranchUpdateExample(t *testing.T) {
+	repo, fs := syncertest.NewMemoryRepo(t)
+	syncertest.MakeCommits(t, repo, fs, 1)
+
+	head, err := repo.Reference(plumbing.NewBranchReferenceName("master"), true)
+	if err != nil {
+		t.Fatalf("resolve head: %v", err)
+	}
+
+	exec := executor{
+		params: Params{
+			Store: repo.Storer,
+			PushPlans: []planner.BranchPlan{{
+				TargetRef:  plumbing.NewBranchReferenceName("master"),
+				SourceHash: head.Hash(),
+				Action:     planner.ActionCreate,
+				Kind:       planner.RefKindBranch,
+			}},
+		},
+	}
+
+	hashes, err := exec.collectObjectClosure()
+	if err != nil {
+		t.Fatalf("collectObjectClosure: %v", err)
+	}
+	if len(hashes) < 3 {
+		t.Fatalf("expected commit/tree/blob closure, got %d objects: %v", len(hashes), hashes)
+	}
+	if !containsHash(hashes, head.Hash()) {
+		t.Fatalf("expected closure to include commit %s", head.Hash())
+	}
+}
+
+func TestCollectObjectClosureStopsAtTargetHaveExample(t *testing.T) {
+	repo, fs := syncertest.NewMemoryRepo(t)
+	syncertest.MakeCommits(t, repo, fs, 2)
+
+	head, err := repo.Reference(plumbing.NewBranchReferenceName("master"), true)
+	if err != nil {
+		t.Fatalf("resolve head: %v", err)
+	}
+	headCommit, err := object.GetCommit(repo.Storer, head.Hash())
+	if err != nil {
+		t.Fatalf("load head commit: %v", err)
+	}
+	if len(headCommit.ParentHashes) != 1 {
+		t.Fatalf("expected single-parent history, got %d parents", len(headCommit.ParentHashes))
+	}
+	parent := headCommit.ParentHashes[0]
+
+	exec := executor{
+		params: Params{
+			Store: repo.Storer,
+			TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{
+				plumbing.NewBranchReferenceName("master"): parent,
+			},
+			PushPlans: []planner.BranchPlan{{
+				TargetRef:  plumbing.NewBranchReferenceName("master"),
+				TargetHash: parent,
+				SourceHash: head.Hash(),
+				Action:     planner.ActionUpdate,
+				Kind:       planner.RefKindBranch,
+			}},
+		},
+	}
+
+	hashes, err := exec.collectObjectClosure()
+	if err != nil {
+		t.Fatalf("collectObjectClosure: %v", err)
+	}
+	if len(hashes) == 0 {
+		t.Fatal("expected new objects for branch update")
+	}
+	if containsHash(hashes, parent) {
+		t.Fatalf("expected closure to stop at target have %s, got %v", parent, hashes)
+	}
+	if !containsHash(hashes, head.Hash()) {
+		t.Fatalf("expected closure to include new tip %s", head.Hash())
+	}
+}
+
+func TestExecuteDeleteOnlyIsRefOnlyExample(t *testing.T) {
+	var gotCmds []gitproto.PushCommand
+	var gotHashes []plumbing.Hash
+
+	err := Execute(context.Background(), Params{
+		PushPlans: []planner.BranchPlan{{
+			TargetRef:  plumbing.NewBranchReferenceName("old"),
+			TargetHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			Action:     planner.ActionDelete,
+			Kind:       planner.RefKindBranch,
+		}},
+		TargetPusher: fakeTargetPusher{
+			pushObjects: func(_ context.Context, cmds []gitproto.PushCommand, _ storer.Storer, hashes []plumbing.Hash) error {
+				gotCmds = append([]gitproto.PushCommand(nil), cmds...)
+				gotHashes = append([]plumbing.Hash(nil), hashes...)
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(gotCmds) != 1 || !gotCmds[0].Delete {
+		t.Fatalf("expected single delete command, got %+v", gotCmds)
+	}
+	if len(gotHashes) != 0 {
+		t.Fatalf("expected delete-only materialized push to need no objects, got %v", gotHashes)
+	}
+}
+
+type fakeTargetPusher struct {
+	pushObjects func(context.Context, []gitproto.PushCommand, storer.Storer, []plumbing.Hash) error
+}
+
+func (f fakeTargetPusher) PushObjects(ctx context.Context, cmds []gitproto.PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
+	return f.pushObjects(ctx, cmds, store, hashes)
+}
+
+func containsHash(hashes []plumbing.Hash, want plumbing.Hash) bool {
+	for _, h := range hashes {
+		if h == want {
+			return true
+		}
+	}
+	return false
 }
