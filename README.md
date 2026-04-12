@@ -41,7 +41,7 @@ The command surface is:
 - Only smart HTTP remotes are supported.
 - Objects are kept in memory for the duration of the run.
 
-## Usage
+## Quick Start
 
 ```bash
 go run ./cmd/git-sync sync \
@@ -50,6 +50,8 @@ go run ./cmd/git-sync sync \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
 ```
+
+## Commands
 
 Plan a sync without pushing anything:
 
@@ -123,7 +125,9 @@ go run ./cmd/git-sync bootstrap \
   <target-url>
 ```
 
-That is the intended way to compare the bootstrap relay path against the normal sync path on the same fixture or test repo.
+That is useful for one-off measurements on the same fixture or test repo.
+
+## Benchmarking
 
 For repeated benchmark runs, prefer the dedicated benchmark command instead of manually wrapping `git-sync` invocations:
 
@@ -152,7 +156,7 @@ If `--source-url` is a local path, it is converted to `file://...` automatically
 
 For large-repo measurements, use a local bare mirror as the source so the benchmark reflects `git-sync` behavior rather than internet variance. See [docs/benchmarking.md](/Users/soph/Work/entire/devenv/git-sync/docs/benchmarking.md) for details.
 
-`plan` and `sync` JSON output also include `relay`, `relay_mode`, and `relay_reason` so automation can tell whether a relay path was chosen and why.
+## Sync Behavior
 
 When `sync` sees that all managed target refs are absent and the run is compatible with bootstrap semantics, it automatically uses the bootstrap relay path instead of the normal decode-and-repack sync path.
 
@@ -207,18 +211,6 @@ go run ./cmd/git-sync probe \
   <source-url>
 ```
 
-Add `--json` to `probe`, `fetch`, `bootstrap`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
-
-The JSON interface is intentionally stable:
-
-- keys use `snake_case`
-- refs and hashes are serialized as strings, not raw byte arrays
-- `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
-- `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
-- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
-- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, `batch_count`, `planned_batch_count`, and `temp_refs`
-- each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
-
 Probe both source and target remotes to inspect source fetch capabilities and target `receive-pack` capabilities:
 
 ```bash
@@ -255,6 +247,20 @@ Dry run:
 go run ./cmd/git-sync plan --stats <source-url> <target-url>
 ```
 
+## JSON Output
+
+Add `--json` to `probe`, `fetch`, `bootstrap`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
+
+The JSON interface is intentionally stable:
+
+- keys use `snake_case`
+- refs and hashes are serialized as strings, not raw byte arrays
+- `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
+- `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
+- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
+- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, `batch_count`, `planned_batch_count`, and `temp_refs`
+- each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
+
 ## Auth
 
 For GitHub and similar providers, use basic auth with a token as the password.
@@ -265,6 +271,8 @@ Auth is resolved in this order:
 - `GITSYNC_*` environment variables
 - local `git credential fill` helper lookup for `http` and `https` remotes
 - anonymous access
+
+Relevant variables:
 
 - `GITSYNC_SOURCE_TOKEN`
 - `GITSYNC_TARGET_TOKEN`
@@ -278,7 +286,7 @@ Bearer auth is also available:
 
 That means local testing against a dummy GitHub repo can reuse your regular Git credential helper setup without passing tokens on every command.
 
-## Behavior
+## Protocol Notes
 
 - Source refs are listed with `GET /info/refs?service=git-upload-pack`.
 - When the source supports it, the client can negotiate protocol v2 with `Git-Protocol: version=2`, then use `ls-refs` and `fetch`.
@@ -293,16 +301,7 @@ That means local testing against a dummy GitHub repo can reuse your regular Git 
 - `plan` never pushes. If `sync` finds blocked refs, it exits non-zero before pushing anything.
 - `--stats` adds per-service request, byte, want, have, and command counters to the output.
 
-## Why Push Stays V1
-
-Protocol v2 is used where it materially improves this tool: source-side ref discovery and source-side object download.
-
-Push remains on the existing low-level `receive-pack` path for two reasons:
-
-- The tool already builds exact ref update commands and streams the outgoing packfile directly, so push-side control was already good before v2 support.
-- The main transfer and negotiation win is on the source side. That is where `ls-refs` and `fetch` reduce unnecessary work.
-
-In other words, this project uses protocol v2 where it changes the fetch/list behavior in a useful way, and keeps the current push path where switching protocols would mostly add complexity without a comparable payoff.
+Push still uses the current low-level `receive-pack` path. Protocol v2 is used where it materially improves this tool: source-side ref discovery and source-side object download.
 
 ## Testing
 
@@ -397,9 +396,9 @@ For local/self-signed targets, `git-sync` also supports:
 - `GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY=true`
 - `GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY=true`
 
-## Planned Bootstrap Path
+## Design Notes
 
-There is a dedicated `bootstrap` command path for large initial syncs into an empty target. The intent is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
+`bootstrap` is the dedicated path for large initial syncs into an empty target. The goal is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
 
 The design note is in [docs/bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md).
 
