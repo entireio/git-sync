@@ -13,6 +13,8 @@ import (
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
+const maxHTTPErrorBody = 64 * 1024
+
 // httpError checks an HTTP response status and returns an error for non-2xx responses.
 func httpError(res *http.Response) error {
 	if res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices {
@@ -20,9 +22,13 @@ func httpError(res *http.Response) error {
 	}
 	var reason string
 	if res.Body != nil {
-		var buf bytes.Buffer
-		if n, _ := buf.ReadFrom(res.Body); n > 0 {
-			reason = buf.String()
+		limited := io.LimitReader(res.Body, maxHTTPErrorBody+1)
+		data, _ := io.ReadAll(limited)
+		if len(data) > 0 {
+			if len(data) > maxHTTPErrorBody {
+				data = append(data[:maxHTTPErrorBody], []byte("...")...)
+			}
+			reason = string(data)
 		}
 	}
 	return fmt.Errorf("http %d: %s %s", res.StatusCode, res.Request.URL.Redacted(), reason)
@@ -129,9 +135,15 @@ func PostRPC(ctx context.Context, conn *Conn, service transport.Service, body []
 // PostRPCStream sends a POST to the given service and returns the response body
 // as a streaming reader. Caller must close the returned ReadCloser.
 func PostRPCStream(ctx context.Context, conn *Conn, service transport.Service, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
+	return PostRPCStreamBody(ctx, conn, service, bytes.NewReader(body), v2, phase)
+}
+
+// PostRPCStreamBody sends a POST to the given service using a streaming request body.
+// Caller must close the returned ReadCloser.
+func PostRPCStreamBody(ctx context.Context, conn *Conn, service transport.Service, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
 	svc := service.String()
 	url := fmt.Sprintf("%s/%s", conn.Endpoint.String(), svc)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return nil, err
 	}

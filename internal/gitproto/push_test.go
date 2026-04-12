@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
@@ -113,6 +115,54 @@ func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 	}
 }
 
+func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	conn := connForServer(t, srv)
+	adv := packp.NewAdvRefs()
+	adv.Capabilities = capability.NewList()
+
+	pack := &gatedReadCloser{
+		first:   []byte("PACK"),
+		second:  strings.Repeat("x", 1024),
+		release: release,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- PushPack(context.Background(), conn, adv, []PushCommand{{
+			Name: "refs/heads/main",
+			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		}}, pack, false)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not start before full pack was released")
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PushPack returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PushPack did not complete after releasing pack")
+	}
+}
+
 func TestBuildUpdateRequest(t *testing.T) {
 	adv := packp.NewAdvRefs()
 	_ = adv.Capabilities.Set(capability.ReportStatus)
@@ -179,5 +229,32 @@ func (r *trackingReadCloser) Close() error {
 	if r.ReadCloser != nil {
 		return r.ReadCloser.Close()
 	}
+	return nil
+}
+
+type gatedReadCloser struct {
+	first   []byte
+	second  string
+	release <-chan struct{}
+	stage   int
+	closed  bool
+}
+
+func (r *gatedReadCloser) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		r.stage = 1
+		return copy(p, r.first), nil
+	case 1:
+		<-r.release
+		r.stage = 2
+		return copy(p, r.second), nil
+	default:
+		return 0, io.EOF
+	}
+}
+
+func (r *gatedReadCloser) Close() error {
+	r.closed = true
 	return nil
 }

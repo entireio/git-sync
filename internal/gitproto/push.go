@@ -97,16 +97,15 @@ func sendReceivePack(
 	req *packp.UpdateRequests,
 	packData io.Reader,
 ) error {
-	var buf bytes.Buffer
-	if err := req.Encode(&buf); err != nil {
+	var header bytes.Buffer
+	if err := req.Encode(&header); err != nil {
 		return fmt.Errorf("encode update-request: %w", err)
 	}
+	body := io.Reader(bytes.NewReader(header.Bytes()))
 	if packData != nil {
-		if _, err := io.Copy(&buf, packData); err != nil {
-			return fmt.Errorf("buffer pack data: %w", err)
-		}
+		body = io.MultiReader(body, packData)
 	}
-	reader, err := PostRPCStream(ctx, conn, transport.ReceivePackService, buf.Bytes(), false, "receive-pack push")
+	reader, err := PostRPCStreamBody(ctx, conn, transport.ReceivePackService, body, false, "receive-pack push")
 	if err != nil {
 		return fmt.Errorf("target receive-pack: %w", err)
 	}
@@ -151,12 +150,25 @@ func PushObjects(
 	}
 
 	useRefDeltas := !adv.Capabilities.Supports(capability.OFSDelta)
-	var packBuf bytes.Buffer
-	enc := packfile.NewEncoder(&packBuf, store, useRefDeltas)
-	if _, err := enc.Encode(hashes, 10); err != nil {
-		return fmt.Errorf("encode packfile: %w", err)
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+
+	go func() {
+		enc := packfile.NewEncoder(pw, store, useRefDeltas)
+		if _, err := enc.Encode(hashes, 10); err != nil {
+			done <- pw.CloseWithError(fmt.Errorf("encode packfile: %w", err))
+			return
+		}
+		done <- pw.Close()
+	}()
+
+	err = sendReceivePack(ctx, conn, req, pr)
+	_ = pr.Close()
+	encodeErr := <-done
+	if err != nil {
+		return err
 	}
-	return sendReceivePack(ctx, conn, req, &packBuf)
+	return encodeErr
 }
 
 // PushPack pushes a pack stream (relay) to the target.

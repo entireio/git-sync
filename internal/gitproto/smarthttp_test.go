@@ -3,6 +3,7 @@ package gitproto
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -160,8 +161,51 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 	}
 }
 
+func TestHTTPErrorBoundsBodyRead(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	body := &roundTripReader{remaining: maxHTTPErrorBody + 4096}
+	res := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Request:    req,
+		Body:       body,
+	}
+
+	err = httpError(res)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if len(err.Error()) > maxHTTPErrorBody+128 {
+		t.Fatalf("error body was not bounded, len=%d", len(err.Error()))
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+type roundTripReader struct {
+	remaining int
+}
+
+func (r *roundTripReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > r.remaining {
+		n = r.remaining
+	}
+	for i := 0; i < n; i++ {
+		p[i] = 'x'
+	}
+	r.remaining -= n
+	return n, nil
+}
+
+func (r *roundTripReader) Close() error { return nil }
