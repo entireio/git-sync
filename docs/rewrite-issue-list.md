@@ -447,7 +447,8 @@ Current rewrite note:
 - `fetchToStoreV2` now also has direct coverage for cancellation after response parsing has started.
 - V1 and v2 fetch paths now also have direct parser-level coverage for malformed sideband framing after a valid response prelude, both for returned streaming readers and for v2 fetch-to-store cleanup.
 - Syncer integration coverage now also includes both v1 and v2 fetch failure and cancellation after a valid fetch response has already started streaming, using the in-memory smart-HTTP harness rather than only protocol-unit stubs.
-- The remaining gap is now mostly around rarer transport interruption shapes on push/stream teardown rather than missing started-stream fetch coverage.
+- Bootstrap integration coverage now also includes receive-pack cancellation and dropped-connection failures after the target has already started consuming a streamed push body.
+- The remaining gap is now mostly around rarer teardown/reporting variants rather than missing started-stream fetch or push interruption coverage.
 
 ### 22. No benchmark coverage for the expensive paths
 

@@ -389,6 +389,132 @@ func TestRun_IntegrationV1FetchCanceledMidStreamFails(t *testing.T) {
 	}
 }
 
+func TestBootstrap_IntegrationPushCanceledMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 2, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackRaw = func(w http.ResponseWriter, r *http.Request) bool {
+		defer r.Body.Close()
+		buf := make([]byte, 32)
+		n, err := r.Body.Read(buf)
+		if n == 0 && err != nil {
+			t.Fatalf("expected streamed push body bytes before cancellation, got err=%v", err)
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		_, _ = r.Body.Read(buf)
+		return true
+	}
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Bootstrap(ctx, Config{
+			Source: Endpoint{URL: sourceServer.RepoURL()},
+			Target: Endpoint{URL: targetServer.RepoURL()},
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected receive-pack body consumption before cancellation")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected bootstrap to return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestBootstrap_IntegrationPushConnectionDroppedMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 2, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackRaw = func(w http.ResponseWriter, r *http.Request) bool {
+		defer r.Body.Close()
+		buf := make([]byte, 32)
+		n, err := r.Body.Read(buf)
+		if n == 0 && err != nil {
+			t.Fatalf("expected streamed push body bytes before disconnect, got err=%v", err)
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("expected hijacker")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack receive-pack connection: %v", err)
+		}
+		_ = conn.Close()
+		return true
+	}
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Bootstrap(context.Background(), Config{
+			Source: Endpoint{URL: sourceServer.RepoURL()},
+			Target: Endpoint{URL: targetServer.RepoURL()},
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected receive-pack body consumption before disconnect")
+	}
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected bootstrap to return after dropped connection")
+	}
+	if err == nil {
+		t.Fatal("expected push failure after dropped connection")
+	}
+}
+
 func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -1619,6 +1745,7 @@ type smartHTTPRepoServer struct {
 	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
 	uploadPackRaw        func(http.ResponseWriter, *http.Request, []byte) bool
 	uploadPackV2FetchRaw func(http.ResponseWriter, v2TestCommandRequest, []byte) bool
+	receivePackRaw       func(http.ResponseWriter, *http.Request) bool
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -1960,6 +2087,10 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 }
 
 func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.Request) {
+	if s.receivePackRaw != nil && s.receivePackRaw(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
