@@ -279,6 +279,116 @@ func TestRun_IntegrationV2FetchCanceledMidStreamFails(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationV1FetchMalformedMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	sourceServer.uploadPackRaw = func(w http.ResponseWriter, _ *http.Request, body []byte) bool {
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		if _, err := io.WriteString(w, "0008NAK\nzzzz"); err != nil {
+			t.Fatalf("write malformed v1 fetch response: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(len("0008NAK\nzzzz")), 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV1,
+	})
+	if err == nil {
+		t.Fatal("expected malformed mid-stream v1 fetch to fail")
+	}
+}
+
+func TestRun_IntegrationV1FetchCanceledMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	sourceServer.uploadPackRaw = func(w http.ResponseWriter, _ *http.Request, body []byte) bool {
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected flusher")
+		}
+		if _, err := io.WriteString(w, "0008NAK\n"); err != nil {
+			t.Fatalf("write v1 NAK prelude: %v", err)
+		}
+		flusher.Flush()
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		if _, err := io.WriteString(w, "zzzz"); err != nil && !isConnectionCloseError(err) {
+			t.Fatalf("write interrupted v1 packet tail: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), 0, 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, Config{
+			Source:       Endpoint{URL: sourceServer.RepoURL()},
+			Target:       Endpoint{URL: targetServer.RepoURL()},
+			ProtocolMode: protocolModeV1,
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected v1 fetch response to start before cancellation")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected run to return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -1507,6 +1617,7 @@ type smartHTTPRepoServer struct {
 	receivePackNoThin    bool
 	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
 	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
+	uploadPackRaw        func(http.ResponseWriter, *http.Request, []byte) bool
 	uploadPackV2FetchRaw func(http.ResponseWriter, v2TestCommandRequest, []byte) bool
 
 	mu      sync.Mutex
@@ -1709,6 +1820,9 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 	defer r.Body.Close()
 	if s.v2 && strings.Contains(r.Header.Get("Git-Protocol"), "version=2") {
 		s.handleUploadPackV2(w, r, body)
+		return
+	}
+	if s.uploadPackRaw != nil && s.uploadPackRaw(w, r, body) {
 		return
 	}
 
