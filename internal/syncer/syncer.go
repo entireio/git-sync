@@ -313,6 +313,9 @@ type syncSession struct {
 	targetConn      *gitproto.Conn
 	sourceService   *gitproto.RefService
 	targetAdv       *packp.AdvRefs
+	targetFeatures  gitproto.TargetFeatures
+	targetPolicy    planner.RelayTargetPolicy
+	targetPusher    gitproto.Pusher
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	targetRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	measurementDone func() Measurement
@@ -368,6 +371,12 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			return nil, fmt.Errorf("decode target refs: %w", err)
 		}
 		s.targetRefMap = gitproto.RefHashMap(targetRefSlice)
+		s.targetFeatures = gitproto.TargetFeaturesFromAdvRefs(s.targetAdv)
+		s.targetPolicy = planner.RelayTargetPolicy{
+			CapabilitiesKnown: s.targetFeatures.Known,
+			NoThin:            s.targetFeatures.NoThin,
+		}
+		s.targetPusher = gitproto.NewPusher(s.targetConn, s.targetAdv, cfg.Verbose)
 	}
 
 	return s, nil
@@ -386,12 +395,8 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	sourceConn := s.sourceConn
 	sourceService := s.sourceService
 	targetAdv := s.targetAdv
-	targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
-	targetPolicy := planner.RelayTargetPolicy{
-		CapabilitiesKnown: targetFeatures.Known,
-		NoThin:            targetFeatures.NoThin,
-	}
-	targetPusher := gitproto.NewPusher(s.targetConn, s.targetAdv, cfg.Verbose)
+	targetPolicy := s.targetPolicy
+	targetPusher := s.targetPusher
 	sourceRefMap := s.sourceRefMap
 	targetRefMap := s.targetRefMap
 
