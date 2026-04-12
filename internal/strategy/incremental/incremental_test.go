@@ -143,6 +143,28 @@ func (r *trackingReadCloser) Close() error {
 	return nil
 }
 
+type interruptedReadCloser struct {
+	first  []byte
+	err    error
+	stage  int
+	closed bool
+}
+
+func (r *interruptedReadCloser) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		r.stage = 1
+		return copy(p, r.first), nil
+	default:
+		return 0, r.err
+	}
+}
+
+func (r *interruptedReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
@@ -308,6 +330,53 @@ func TestExecuteIncrementalRelayClosesPackOnPushError(t *testing.T) {
 	}
 	if !pack.closed {
 		t.Fatal("expected pack to be closed on push error")
+	}
+}
+
+func TestExecuteIncrementalRelayClosesPackOnReadInterruption(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	newHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+	pack := &interruptedReadCloser{first: []byte("PACK"), err: io.ErrUnexpectedEOF}
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeSourceService{
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return pack, nil
+			},
+		},
+		TargetPusher: fakeTargetPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: newHash,
+				Kind:       planner.RefKindBranch,
+			},
+		},
+		TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: oldHash},
+		PushPlans: []planner.BranchPlan{{
+			SourceRef:  mainRef,
+			TargetRef:  mainRef,
+			SourceHash: newHash,
+			TargetHash: oldHash,
+			Kind:       planner.RefKindBranch,
+			Action:     planner.ActionUpdate,
+		}},
+		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
+			return true, "fast-forward"
+		},
+	}, planner.PlanConfig{})
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected interrupted read error, got %v", err)
+	}
+	if !pack.closed {
+		t.Fatal("expected pack to be closed after read interruption")
 	}
 }
 

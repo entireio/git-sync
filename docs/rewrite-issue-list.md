@@ -157,7 +157,7 @@ Comparison check:
 
 Current rewrite note:
 - Ownership of stream lifecycle is clearer than on `main`, and the rewrite now has direct tests for key pack-stream close behavior on success and error paths.
-- Direct strategy-level error-path tests now verify that relay bootstrap and incremental paths close source pack streams when pushes fail.
+- Direct strategy-level error-path tests now verify that relay bootstrap and incremental paths close source pack streams when pushes fail, and incremental relay now uses the same close-once ownership model as bootstrap instead of relying on the target pusher to close on error.
 - Batched integration coverage now also exercises a failed checkpoint pack push followed by a resume-from-temp-ref retry.
 - Batched bootstrap strategy tests now also cover an actual mid-read checkpoint stream interruption where the target pusher returns the read error without closing the stream.
 - Lower-level `gitproto.PushPack` rejection paths now also close the provided pack stream instead of leaking it on preflight command errors.
