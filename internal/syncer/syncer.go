@@ -27,12 +27,13 @@ import (
 	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
 	"github.com/soph/git-sync/internal/strategy/incremental"
 	"github.com/soph/git-sync/internal/strategy/materialized"
+	"github.com/soph/git-sync/internal/validation"
 )
 
 const (
-	protocolModeAuto = "auto"
-	protocolModeV1   = "v1"
-	protocolModeV2   = "v2"
+	protocolModeAuto = validation.ProtocolAuto
+	protocolModeV1   = validation.ProtocolV1
+	protocolModeV2   = validation.ProtocolV2
 )
 
 // Endpoint holds the connection configuration for a remote.
@@ -317,9 +318,11 @@ type syncSession struct {
 // newSession performs the shared setup: protocol validation, mapping validation,
 // connection creation, and ref discovery.
 func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession, error) {
-	if err := validateProtocol(&cfg); err != nil {
+	mode, err := validation.NormalizeProtocolMode(cfg.ProtocolMode)
+	if err != nil {
 		return nil, err
 	}
+	cfg.ProtocolMode = mode
 	if _, err := planner.ValidateMappings(cfg.Mappings); err != nil {
 		return nil, err
 	}
@@ -335,7 +338,6 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}))
 	}
 
-	var err error
 	s.sourceConn, err = newConn(cfg.Source, "source", s.stats)
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
@@ -590,7 +592,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 
 	targetRefMap := make(map[plumbing.ReferenceName]plumbing.Hash)
 	for _, raw := range haveRefs {
-		name := parseHaveRef(raw)
+		name := validation.ParseHaveRef(raw)
 		hash, ok := sourceRefMap[name]
 		if !ok {
 			return FetchResult{}, fmt.Errorf("have-ref %q not found on source", raw)
@@ -670,28 +672,6 @@ func bootstrapWithInputs(
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
 		Stats: stats.snapshot(), Measurement: measurementDone(), Protocol: sourceService.Protocol,
 	}, nil
-}
-
-// --- Helpers ---
-
-func validateProtocol(cfg *Config) error {
-	if cfg.ProtocolMode == "" {
-		cfg.ProtocolMode = protocolModeAuto
-	}
-	switch cfg.ProtocolMode {
-	case protocolModeAuto, protocolModeV1, protocolModeV2:
-		return nil
-	default:
-		return fmt.Errorf("unsupported protocol mode %q", cfg.ProtocolMode)
-	}
-}
-
-func parseHaveRef(raw string) plumbing.ReferenceName {
-	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "refs/") {
-		return plumbing.ReferenceName(raw)
-	}
-	return plumbing.NewBranchReferenceName(raw)
 }
 
 func countObjects(store storer.EncodedObjectStorer) (int, error) {
