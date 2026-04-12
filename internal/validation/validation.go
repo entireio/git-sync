@@ -33,7 +33,7 @@ func NormalizeProtocolMode(mode string) (string, error) {
 	}
 }
 
-// ParseMapping parses a CLI --map value into a planner mapping.
+// ParseMapping parses a CLI --map value into a ref mapping.
 func ParseMapping(raw string) (RefMapping, error) {
 	parts := strings.SplitN(raw, ":", 2)
 	if len(parts) != 2 {
