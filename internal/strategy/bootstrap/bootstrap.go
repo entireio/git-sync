@@ -348,103 +348,145 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 }
 
 func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, map[plumbing.Hash][]byte, error) {
+	cp, err := newCheckpointPlanner(ctx, p, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cp.plan()
+}
+
+type probeResult struct {
+	tooLarge bool
+	data     []byte
+}
+
+type checkpointPlanner struct {
+	ctx        context.Context
+	params     Params
+	ref        planner.DesiredRef
+	chain      []plumbing.Hash
+	probeCache map[string]probeResult
+	prefetched map[plumbing.Hash][]byte
+}
+
+func newCheckpointPlanner(ctx context.Context, p Params, ref planner.DesiredRef) (*checkpointPlanner, error) {
 	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
-		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+		return nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
 	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+		return nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
 	}
 	if len(chain) == 0 {
-		return nil, nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+		return nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
 	}
+	return &checkpointPlanner{
+		ctx:        ctx,
+		params:     p,
+		ref:        ref,
+		chain:      chain,
+		probeCache: make(map[string]probeResult),
+		prefetched: make(map[plumbing.Hash][]byte),
+	}, nil
+}
 
-	// Issue #14: Use a commit-count heuristic for the initial span estimate
-	// to reduce expensive fetch-and-discard probes. Typical compressed commit
-	// + tree overhead averages ~2-5 KiB per commit in a mature repo.
-	const avgBytesPerCommit = 4096
-	initialSpan := 0
-	if p.BatchMaxPack > 0 {
-		initialSpan = int(p.BatchMaxPack / avgBytesPerCommit)
-		if initialSpan > len(chain) {
-			initialSpan = len(chain)
-		}
-		if initialSpan < 1 {
-			initialSpan = 1
-		}
-	}
-
-	checkpoints := make([]plumbing.Hash, 0, len(chain))
+func (p *checkpointPlanner) plan() ([]plumbing.Hash, map[plumbing.Hash][]byte, error) {
+	checkpoints := make([]plumbing.Hash, 0, len(p.chain))
 	prevIdx := -1
 	prevHash := plumbing.ZeroHash
-	prevSpan := initialSpan
+	prevSpan := initialCheckpointSpan(p.params.BatchMaxPack, len(p.chain))
 	prevMeasuredBytes := 0
-	probeCache := make(map[string]probeResult)
-	prefetched := make(map[plumbing.Hash][]byte)
-	for prevIdx < len(chain)-1 {
-		probe := func(idx int) (bool, error) {
-			cacheKey := prevHash.String() + ":" + strconv.Itoa(idx)
-			if result, ok := probeCache[cacheKey]; ok {
-				return result.tooLarge, nil
-			}
-			data, tooLarge, err := fetchPackForProbe(ctx, p, ref, chain[idx], prevHash, p.BatchMaxPack)
-			if err != nil {
-				return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", ref.TargetRef, planner.ShortHash(chain[idx]), err)
-			}
-			probeCache[cacheKey] = probeResult{tooLarge: tooLarge, data: data}
-			return tooLarge, nil
-		}
-
-		bestIdx := -1
-		remaining := len(chain) - 1 - prevIdx
-		if shouldSelectTipWithoutProbe(p.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
-			bestIdx = len(chain) - 1
-		} else if shouldProbeTipFirst(p.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
-			tipIdx := len(chain) - 1
-			tooLarge, err := probe(tipIdx)
-			if err != nil {
-				return nil, nil, err
-			}
-			if !tooLarge {
-				bestIdx = tipIdx
-			}
-		}
-		if bestIdx == -1 {
-			var err error
-			bestIdx, err = planner.SampledCheckpointUnderLimit(chain, prevIdx, prevSpan, probe)
-			if err != nil {
-				return nil, nil, err
-			}
+	for prevIdx < len(p.chain)-1 {
+		bestIdx, err := p.selectNextCheckpoint(prevIdx, prevHash, prevSpan, prevMeasuredBytes)
+		if err != nil {
+			return nil, nil, err
 		}
 		if bestIdx <= prevIdx {
-			return nil, nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", ref.TargetRef, p.BatchMaxPack)
+			return nil, nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", p.ref.TargetRef, p.params.BatchMaxPack)
 		}
-		if result, ok := probeCache[prevHash.String()+":"+strconv.Itoa(bestIdx)]; ok && !result.tooLarge && len(result.data) > 0 {
-			prefetched[chain[bestIdx]] = result.data
-			prevSpan = adaptiveNextProbeSpan(p.BatchMaxPack, len(result.data), bestIdx-prevIdx, len(chain)-1-bestIdx)
+		if result, ok := p.cachedProbe(prevHash, bestIdx); ok && !result.tooLarge && len(result.data) > 0 {
+			p.prefetched[p.chain[bestIdx]] = result.data
+			prevSpan = adaptiveNextProbeSpan(p.params.BatchMaxPack, len(result.data), bestIdx-prevIdx, len(p.chain)-1-bestIdx)
 			prevMeasuredBytes = len(result.data)
 		} else {
 			prevSpan = bestIdx - prevIdx
 			prevMeasuredBytes = 0
 		}
 		prevIdx = bestIdx
-		prevHash = chain[bestIdx]
+		prevHash = p.chain[bestIdx]
 		checkpoints = append(checkpoints, prevHash)
-		p.log("bootstrap batch planned checkpoint",
-			"branch", ref.TargetRef.String(),
+		p.params.log("bootstrap batch planned checkpoint",
+			"branch", p.ref.TargetRef.String(),
 			"checkpoint", planner.ShortHash(prevHash),
 			"selected", len(checkpoints),
-			"chain_len", len(chain))
+			"chain_len", len(p.chain))
 	}
-	return checkpoints, prefetched, nil
+	return checkpoints, p.prefetched, nil
 }
 
-type probeResult struct {
-	tooLarge bool
-	data     []byte
+func (p *checkpointPlanner) selectNextCheckpoint(prevIdx int, prevHash plumbing.Hash, prevSpan int, prevMeasuredBytes int) (int, error) {
+	bestIdx := -1
+	remaining := len(p.chain) - 1 - prevIdx
+	if shouldSelectTipWithoutProbe(p.params.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
+		bestIdx = len(p.chain) - 1
+	} else if shouldProbeTipFirst(p.params.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
+		tipIdx := len(p.chain) - 1
+		tooLarge, err := p.probe(prevHash, tipIdx)
+		if err != nil {
+			return -1, err
+		}
+		if !tooLarge {
+			bestIdx = tipIdx
+		}
+	}
+	if bestIdx != -1 {
+		return bestIdx, nil
+	}
+	return planner.SampledCheckpointUnderLimit(p.chain, prevIdx, prevSpan, func(idx int) (bool, error) {
+		return p.probe(prevHash, idx)
+	})
+}
+
+func (p *checkpointPlanner) probe(prevHash plumbing.Hash, idx int) (bool, error) {
+	if result, ok := p.cachedProbe(prevHash, idx); ok {
+		return result.tooLarge, nil
+	}
+	data, tooLarge, err := fetchPackForProbe(p.ctx, p.params, p.ref, p.chain[idx], prevHash, p.params.BatchMaxPack)
+	if err != nil {
+		return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", p.ref.TargetRef, planner.ShortHash(p.chain[idx]), err)
+	}
+	p.probeCache[probeKey(prevHash, idx)] = probeResult{tooLarge: tooLarge, data: data}
+	return tooLarge, nil
+}
+
+func (p *checkpointPlanner) cachedProbe(prevHash plumbing.Hash, idx int) (probeResult, bool) {
+	result, ok := p.probeCache[probeKey(prevHash, idx)]
+	return result, ok
+}
+
+func probeKey(prevHash plumbing.Hash, idx int) string {
+	return prevHash.String() + ":" + strconv.Itoa(idx)
+}
+
+func initialCheckpointSpan(batchMaxPack int64, chainLen int) int {
+	// Issue #14: Use a commit-count heuristic for the initial span estimate
+	// to reduce expensive fetch-and-discard probes. Typical compressed commit
+	// + tree overhead averages ~2-5 KiB per commit in a mature repo.
+	const avgBytesPerCommit = 4096
+	if batchMaxPack <= 0 {
+		return 0
+	}
+	initialSpan := int(batchMaxPack / avgBytesPerCommit)
+	if initialSpan > chainLen {
+		initialSpan = chainLen
+	}
+	if initialSpan < 1 {
+		initialSpan = 1
+	}
+	return initialSpan
 }
 
 func adaptiveNextProbeSpan(limit int64, measuredBytes int, selectedSpan int, remaining int) int {
