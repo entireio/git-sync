@@ -158,7 +158,8 @@ Comparison check:
 Current rewrite note:
 - Ownership of stream lifecycle is clearer than on `main`, and the rewrite now has direct tests for key pack-stream close behavior on success and error paths.
 - Direct strategy-level error-path tests now verify that relay bootstrap and incremental paths close source pack streams when pushes fail.
-- This still wants a fuller close-audit around deeper batched failure paths before it should be considered fully done.
+- Batched integration coverage now also exercises a failed checkpoint pack push followed by a resume-from-temp-ref retry.
+- This still wants a fuller close-audit around lower-level transport interruption paths before it should be considered fully done.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
 
@@ -431,7 +432,8 @@ Current rewrite note:
 - Batched bootstrap resume mismatch and final-tip cutover paths now have direct integration coverage.
 - Batched bootstrap reruns now also cover the "target ref already created, temp ref cleanup still pending" recovery path.
 - Injected temp-ref delete failure during batched cutover is now covered end-to-end, including successful recovery on retry.
-- Some harder injected pack-transfer failure paths still remain.
+- Injected checkpoint pack failure after partial batched progress is now covered end-to-end, including successful resume on retry.
+- Some harder transport-interruption and malformed mid-stream failure paths still remain.
 
 ### 22. No benchmark coverage for the expensive paths
 

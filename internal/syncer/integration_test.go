@@ -516,6 +516,107 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 	}
 }
 
+func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	}
+
+	s, err := newSession(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	desired, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
+	if err != nil {
+		t.Fatalf("build desired refs: %v", err)
+	}
+	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
+	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
+		SourceConn:    s.sourceConn,
+		SourceService: s.sourceService,
+		BatchMaxPack:  cfg.BatchMaxPackBytes,
+	}, ref)
+	if err != nil {
+		t.Fatalf("plan checkpoints: %v", err)
+	}
+	if len(checkpoints) < 2 {
+		t.Fatalf("expected multiple checkpoints, got %d", len(checkpoints))
+	}
+
+	targetRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(targetRef)
+	packPushes := 0
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, hasPack bool) *packp.ReportStatus {
+		if !hasPack || len(req.Commands) == 0 || req.Commands[0].Name != tempRef {
+			return nil
+		}
+		packPushes++
+		if packPushes != 2 {
+			return nil
+		}
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ng simulated checkpoint pack failure",
+			})
+		}
+		return report
+	}
+
+	if _, err := Bootstrap(context.Background(), cfg); err == nil {
+		t.Fatal("expected first bootstrap attempt to fail on checkpoint pack push")
+	}
+
+	targetTemp, err := targetRepo.Reference(tempRef, true)
+	if err != nil {
+		t.Fatalf("resolve temp ref after failed checkpoint push: %v", err)
+	}
+	if targetTemp.Hash() != checkpoints[0] {
+		t.Fatalf("expected temp ref at first checkpoint %s after failure, got %s", checkpoints[0], targetTemp.Hash())
+	}
+	if _, err := targetRepo.Reference(targetRef, true); err == nil {
+		t.Fatalf("expected target ref %s to remain absent after failed checkpoint push", targetRef)
+	}
+
+	result, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("bootstrap retry after checkpoint pack failure failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	if result.BatchCount >= result.PlannedBatchCount {
+		t.Fatalf("expected resumed retry to execute fewer batches than planned, got %+v", result)
+	}
+	targetHead, err := targetRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve target ref after retry: %v", err)
+	}
+	if targetHead.Hash() != ref.SourceHash {
+		t.Fatalf("expected target head %s after retry, got %s", ref.SourceHash, targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted after retry", tempRef)
+	}
+}
+
 func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
@@ -1264,6 +1365,7 @@ type smartHTTPRepoServer struct {
 	receivePackBodyLimit int64
 	receivePackNoThin    bool
 	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
+	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -1640,6 +1742,12 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 				return
 			}
 		}
+		if s.receivePackHook != nil {
+			if report := s.receivePackHook(req, false); report != nil {
+				s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+				return
+			}
+		}
 
 		report := packp.NewReportStatus()
 		report.UnpackStatus = "ok"
@@ -1662,6 +1770,18 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 		s.writeReceivePackReport(w, report, req.Capabilities, len(body))
 		return
+	}
+
+	if s.receivePackHook != nil {
+		req := packp.NewUpdateRequests()
+		if err := req.Decode(bytes.NewReader(body)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if report := s.receivePackHook(req, true); report != nil {
+			s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+			return
+		}
 	}
 
 	var buf bytes.Buffer
