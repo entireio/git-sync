@@ -416,6 +416,28 @@ func (r *trackingReadCloser) Close() error {
 	return nil
 }
 
+type interruptedReadCloser struct {
+	first  []byte
+	err    error
+	stage  int
+	closed bool
+}
+
+func (r *interruptedReadCloser) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		r.stage = 1
+		return copy(p, r.first), nil
+	default:
+		return 0, r.err
+	}
+}
+
+func (r *interruptedReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 func (f fakeBootstrapPusher) PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error {
 	return f.pushPack(ctx, cmds, pack)
 }
@@ -582,7 +604,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 			},
 		},
 		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-		BatchMaxPack: 1,
+		BatchMaxPack: 10,
 	}, "empty target")
 	if err == nil || !strings.Contains(err.Error(), "push bootstrap batch") {
 		t.Fatalf("unexpected error: %v", err)
@@ -592,6 +614,60 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 	}
 	if !pack.closed {
 		t.Fatal("expected strategy to close checkpoint pack on push error")
+	}
+}
+
+func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	hashes := makeLinearCommitChain(t, 1)
+	pack := &interruptedReadCloser{first: []byte("PACK"), err: io.ErrUnexpectedEOF}
+	packFetches := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+				writeLinearCommitChain(t, store, 1)
+				return nil
+			},
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				packFetches++
+				for _, ref := range desired {
+					if ref.SourceHash == hashes[len(hashes)-1] {
+						if packFetches == 1 {
+							return io.NopCloser(bytes.NewReader(nil)), nil
+						}
+						return pack, nil
+					}
+				}
+				return io.NopCloser(bytes.NewReader(nil)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef:  mainRef,
+				TargetRef:  mainRef,
+				SourceHash: hashes[len(hashes)-1],
+				Kind:       planner.RefKindBranch,
+				Label:      "main",
+			},
+		},
+		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		BatchMaxPack: 10,
+	}, "empty target")
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected interrupted read error, got %v", err)
+	}
+	if packFetches < 2 {
+		t.Fatalf("expected separate probe and execution fetches, got %d", packFetches)
+	}
+	if !pack.closed {
+		t.Fatal("expected strategy to close checkpoint pack after read interruption")
 	}
 }
 
