@@ -115,6 +115,51 @@ func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 	}
 }
 
+func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
+	started := make(chan struct{}, 1)
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewConn(ep, "target", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		started <- struct{}{}
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}))
+
+	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
+	adv := packp.NewAdvRefs()
+	adv.Capabilities = capability.NewList()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- PushPack(ctx, conn, adv, []PushCommand{{
+			Name: "refs/heads/main",
+			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		}}, pack, false)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach server before timeout")
+	}
+	cancel()
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PushPack did not return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !pack.closed {
+		t.Fatal("expected pack to be closed on cancellation")
+	}
+}
+
 func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
