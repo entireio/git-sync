@@ -2,12 +2,19 @@ package gitproto
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
+	"net/http"
 	"testing"
+	"time"
 
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
 func TestCapabilities(t *testing.T) {
@@ -245,5 +252,94 @@ func TestFetchCommitGraphRequiresFilter(t *testing.T) {
 	err := rs.FetchCommitGraph(nil, nil, nil, DesiredRef{})
 	if err == nil {
 		t.Fatal("expected error when filter not supported")
+	}
+}
+
+func TestFetchPackV1ContextCanceled(t *testing.T) {
+	started := make(chan struct{}, 1)
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		started <- struct{}{}
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}))
+
+	adv := packp.NewAdvRefs()
+	_ = adv.Capabilities.Set(capability.Sideband64k)
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := fetchPackV1(ctx, conn, adv, desired, nil)
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach server before timeout")
+	}
+	cancel()
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fetchPackV1 did not return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("not-a-valid-server-response"))}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	adv := packp.NewAdvRefs()
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	_, err = fetchPackV1(context.Background(), conn, adv, desired, nil)
+	if err == nil {
+		t.Fatal("expected decode error")
+	}
+	if !body.closed {
+		t.Fatal("expected response body to be closed on decode error")
+	}
+}
+
+func TestBuildV1UploadPackBodyEmptyWantSet(t *testing.T) {
+	adv := packp.NewAdvRefs()
+	_, _, err := buildV1UploadPackBody(adv, nil, nil, false)
+	if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		t.Fatalf("expected NoErrAlreadyUpToDate, got %v", err)
 	}
 }
