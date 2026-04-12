@@ -408,6 +408,42 @@ func TestFetchToStoreV2ContextCanceled(t *testing.T) {
 	}
 }
 
+func TestFetchToStoreV2ClosesBodyOnDecodeError(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString(FormatPktLine("bogus\n") + "0000"))}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "",
+		},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	err = fetchToStoreV2(context.Background(), memory.NewStorage(), conn, caps, desired, nil)
+	if err == nil {
+		t.Fatal("expected decode error")
+	}
+	if !body.closed {
+		t.Fatal("expected response body to be closed on decode error")
+	}
+}
+
 func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 	ep, err := transport.NewEndpoint("https://example.com/repo.git")
 	if err != nil {

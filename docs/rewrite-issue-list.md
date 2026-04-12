@@ -162,6 +162,7 @@ Current rewrite note:
 - Lower-level `gitproto.PushPack` rejection paths now also close the provided pack stream instead of leaking it on preflight command errors.
 - `gitproto.PushPack` now also has direct closure coverage for cancellation, server-side receive-pack errors, and success.
 - `gitproto` fetch tests now verify response-body closure symmetry for both v1 and v2 decode-failure paths.
+- `fetchToStoreV2` now also has direct cancellation and decode-failure cleanup coverage.
 - This still wants a fuller close-audit around lower-level transport interruption paths before it should be considered fully done.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
