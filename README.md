@@ -15,6 +15,7 @@ The command surface is:
 - `git-sync bootstrap`: seed an empty target with create-only relay behavior
 - `git-sync plan`: compute source-to-target ref actions without pushing
 - `git-sync sync`: execute the planned changes against the target
+- `git-sync-bench`: run repeatable benchmark scenarios against fresh empty targets
 
 ## Current scope
 
@@ -123,6 +124,33 @@ go run ./cmd/git-sync bootstrap \
 ```
 
 That is the intended way to compare the bootstrap relay path against the normal sync path on the same fixture or test repo.
+
+For repeated benchmark runs, prefer the dedicated benchmark command instead of manually wrapping `git-sync` invocations:
+
+```bash
+go run ./cmd/git-sync-bench \
+  --scenario bootstrap \
+  --source-url /tmp/git-sync-bench/kubernetes.git \
+  --repeat 3 \
+  --batch-max-pack-bytes 104857600 \
+  --stats \
+  --json
+```
+
+`git-sync-bench` creates a fresh bare target repository for each run, executes the selected scenario in-process, and reports:
+
+- per-run wall-clock time
+- per-run `syncer.Result`
+- aggregate min/avg/max wall time
+- aggregate internal elapsed and heap metrics from `--measure-memory`
+- relay modes observed across successful runs
+
+If `--source-url` is a local path, it is converted to `file://...` automatically. The current scenarios are:
+
+- `--scenario bootstrap`
+- `--scenario sync`
+
+For large-repo measurements, use a local bare mirror as the source so the benchmark reflects `git-sync` behavior rather than internet variance. See [docs/benchmarking.md](/Users/soph/Work/entire/devenv/git-sync/docs/benchmarking.md) for details.
 
 `plan` and `sync` JSON output also include `relay`, `relay_mode`, and `relay_reason` so automation can tell whether a relay path was chosen and why.
 
