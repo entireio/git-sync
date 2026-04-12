@@ -69,7 +69,7 @@ func Execute(ctx context.Context, p Params) error {
 		)
 	}
 
-	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
+	cmds := convert.PlansToPushCommands(p.PushPlans)
 	if p.TargetPusher == nil {
 		return fmt.Errorf("materialized strategy requires TargetPusher")
 	}

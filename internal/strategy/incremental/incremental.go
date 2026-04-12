@@ -51,14 +51,14 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 	if p.TargetPusher == nil {
 		return Result{}, fmt.Errorf("incremental strategy requires TargetPusher")
 	}
+	cmds := convert.PlansToPushCommands(p.PushPlans)
 	if ok, reason := canRelay(cfg.Force, cfg.Prune, false, p.PushPlans); ok {
-		desired := convert.DesiredRefs(planner.DesiredSubset(p.DesiredRefs, p.PushPlans))
+		desired := convert.DesiredRefsForPlans(p.DesiredRefs, p.PushPlans)
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, p.TargetRefs)
 		if err != nil {
 			return Result{}, fmt.Errorf("fetch source pack: %w", err)
 		}
 		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-		cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
 		if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 			return Result{}, fmt.Errorf("push target refs: %w", err)
 		}
@@ -69,13 +69,12 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 		return Result{}, fmt.Errorf("incremental strategy requires CanTagRelay")
 	}
 	if ok, reason := p.CanTagRelay(p.PushPlans); ok {
-		desired := convert.DesiredRefs(planner.DesiredSubset(p.DesiredRefs, p.PushPlans))
+		desired := convert.DesiredRefsForPlans(p.DesiredRefs, p.PushPlans)
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, nil)
 		if err != nil {
 			return Result{}, fmt.Errorf("fetch source tag pack: %w", err)
 		}
 		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-		cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(p.PushPlans))
 		if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 			return Result{}, fmt.Errorf("push target refs: %w", err)
 		}

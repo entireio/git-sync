@@ -119,7 +119,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	packReader = closeOnce(packReader)
 
 	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
-	cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(plans))
+	cmds := convert.PlansToPushCommands(plans)
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
@@ -249,7 +249,7 @@ func executeBatched(
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
 			packReader = closeOnce(packReader)
-			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(stagePlans))
+			cmds := convert.PlansToPushCommands(stagePlans)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
@@ -290,7 +290,7 @@ func executeBatched(
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, tagDesired, tagTargetRefs)
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
-				cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
+				cmds := convert.PlansToPushCommands(tagPlans)
 				if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 					return result, fmt.Errorf("create tag refs after bootstrap: %w", err)
 				}
@@ -300,7 +300,7 @@ func executeBatched(
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 			packReader = closeOnce(packReader)
-			cmds := gitproto.ToPushCommands(convert.PlansToPushPlans(tagPlans))
+			cmds := convert.PlansToPushCommands(tagPlans)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
 				return result, fmt.Errorf("push bootstrap tags: %w", err)
