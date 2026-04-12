@@ -160,6 +160,7 @@ Current rewrite note:
 - Direct strategy-level error-path tests now verify that relay bootstrap and incremental paths close source pack streams when pushes fail.
 - Batched integration coverage now also exercises a failed checkpoint pack push followed by a resume-from-temp-ref retry.
 - Lower-level `gitproto.PushPack` rejection paths now also close the provided pack stream instead of leaking it on preflight command errors.
+- `gitproto` fetch tests now verify response-body closure symmetry for both v1 and v2 decode-failure paths.
 - This still wants a fuller close-audit around lower-level transport interruption paths before it should be considered fully done.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
