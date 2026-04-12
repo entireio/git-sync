@@ -299,6 +299,7 @@ Current rewrite note:
 - Bootstrap checkpoint planning now carries its graph, probe cache, and prefetched-pack state inside a dedicated internal planner object instead of one large helper function.
 - The materialized fallback now runs through an explicit executor with separate stages for tag prefetch, object-closure collection, limit enforcement, and push execution.
 - Syncer bootstrap execution now takes a shared session object instead of threading raw source/target transports, stats, logger, measurement, and target advertisement through a wide helper signature.
+- Syncer normal execution now routes both incremental relay and materialized fallback through session-owned helpers instead of rebuilding transport, capability, and policy inputs inline inside `Run`.
 - Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability

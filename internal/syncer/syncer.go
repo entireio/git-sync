@@ -393,8 +393,6 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	measurementDone := s.measurementDone
 	stats := s.stats
 	sourceService := s.sourceService
-	targetPolicy := s.targetPolicy
-	targetPusher := s.targetPusher
 	sourceRefMap := s.sourceRefMap
 	targetRefMap := s.targetRefMap
 
@@ -463,19 +461,11 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
-	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, targetPolicy)
+	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, s.targetPolicy)
 
 	if !cfg.DryRun {
 		// Try incremental relay first
-		incResult, err := incremental.Execute(ctx, incremental.Params{
-			SourceConn: s.sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
-			DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
-			PushPlans: pushPlans, MaxPackBytes: cfg.MaxPackBytes,
-			CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
-				return planner.CanIncrementalRelay(force, prune, dryRun, plans, targetPolicy)
-			},
-			CanTagRelay: planner.CanFullTagCreateRelay,
-		}, planConfig(cfg))
+		incResult, err := s.executeIncremental(ctx, desiredRefs, pushPlans)
 		if err != nil {
 			return result, err
 		}
@@ -485,11 +475,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			result.RelayReason = incResult.RelayReason
 		} else if len(pushPlans) > 0 {
 			// Materialized fallback
-			if err := materialized.Execute(ctx, materialized.Params{
-				Store: repo.Storer, SourceConn: s.sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
-				DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
-				PushPlans: pushPlans, MaxObjects: cfg.MaterializedMaxObjects,
-			}); err != nil {
+			if err := s.executeMaterialized(ctx, repo.Storer, desiredRefs, pushPlans); err != nil {
 				return result, err
 			}
 		}
@@ -676,6 +662,35 @@ func bootstrapWithInputs(
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
 		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
 	}, nil
+}
+
+func (s *syncSession) executeIncremental(
+	ctx context.Context,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	pushPlans []planner.BranchPlan,
+) (incremental.Result, error) {
+	return incremental.Execute(ctx, incremental.Params{
+		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.targetPusher,
+		DesiredRefs: desiredRefs, TargetRefs: s.targetRefMap,
+		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
+		CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
+			return planner.CanIncrementalRelay(force, prune, dryRun, plans, s.targetPolicy)
+		},
+		CanTagRelay: planner.CanFullTagCreateRelay,
+	}, planConfig(s.cfg))
+}
+
+func (s *syncSession) executeMaterialized(
+	ctx context.Context,
+	store storer.Storer,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	pushPlans []planner.BranchPlan,
+) error {
+	return materialized.Execute(ctx, materialized.Params{
+		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.targetPusher,
+		DesiredRefs: desiredRefs, TargetRefs: s.targetRefMap,
+		PushPlans: pushPlans, MaxObjects: s.cfg.MaterializedMaxObjects,
+	})
 }
 
 func countObjects(store storer.EncodedObjectStorer) (int, error) {
