@@ -432,7 +432,7 @@ Known missing cases:
 Current rewrite note:
 - Some of these are now covered, including empty source repo, tag force-retarget, duplicate/conflicting mappings, and tag creation when target objects already exist.
 - Batched lightweight-tag creation without an extra pack is now covered directly.
-- Basic context cancellation coverage now exists.
+- Basic context cancellation coverage now exists for probe and both v1/v2 source fetch paths.
 - Batched bootstrap resume mismatch and final-tip cutover paths now have direct integration coverage.
 - Batched bootstrap reruns now also cover the "target ref already created, temp ref cleanup still pending" recovery path.
 - Injected temp-ref delete failure during batched cutover is now covered end-to-end, including successful recovery on retry.
