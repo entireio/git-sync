@@ -15,7 +15,7 @@ func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
 	b.ReportAllocs()
 
 	sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
-	syncertest.MakeCommits(b, sourceRepo, sourceFS, 8)
+	syncertest.MakeBenchmarkCommits(b, sourceRepo, sourceFS, 8)
 	sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
 	defer sourceServer.Close()
 
@@ -50,7 +50,7 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
-		syncertest.MakeCommits(b, sourceRepo, sourceFS, 2)
+		syncertest.MakeBenchmarkCommits(b, sourceRepo, sourceFS, 2)
 
 		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
@@ -60,7 +60,7 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 			b.Fatalf("copy target baseline: %v", err)
 		}
 
-		syncertest.MakeCommits(b, sourceRepo, sourceFS, 1)
+		syncertest.MakeBenchmarkCommits(b, sourceRepo, sourceFS, 1)
 
 		sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
 		targetServer := newSmartHTTPRepoServer(b, targetRepo)
@@ -88,7 +88,7 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
-		syncertest.MakeCommits(b, sourceRepo, sourceFS, 3)
+		syncertest.MakeBenchmarkCommits(b, sourceRepo, sourceFS, 3)
 
 		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {

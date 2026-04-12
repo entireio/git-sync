@@ -16,7 +16,6 @@ import (
 	"time"
 
 	billy "github.com/go-git/go-billy/v6"
-	"github.com/go-git/go-billy/v6/memfs"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
@@ -33,6 +32,7 @@ import (
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
 	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
+	"github.com/soph/git-sync/internal/syncertest"
 )
 
 const testBranch = "master"
@@ -1208,92 +1208,15 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 }
 
 func newSourceRepo(t *testing.T) (*git.Repository, billy.Filesystem) {
-	t.Helper()
-
-	fs := memfs.New()
-	repo, err := git.Init(memory.NewStorage(), git.WithWorkTree(fs))
-	if err != nil {
-		t.Fatalf("init source repo: %v", err)
-	}
-
-	return repo, fs
+	return syncertest.NewMemoryRepo(t)
 }
 
 func makeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int) {
-	t.Helper()
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("open worktree: %v", err)
-	}
-
-	for i := 0; i < count; i++ {
-		content := strings.Repeat(fmt.Sprintf("line %d %d\n", i, time.Now().UnixNano()), 24)
-		file, err := fs.Create("tracked.txt")
-		if err != nil {
-			t.Fatalf("create file: %v", err)
-		}
-		if _, err := io.WriteString(file, content); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		if err := file.Close(); err != nil {
-			t.Fatalf("close file: %v", err)
-		}
-
-		if _, err := wt.Add("tracked.txt"); err != nil {
-			t.Fatalf("add file: %v", err)
-		}
-
-		_, err = wt.Commit(fmt.Sprintf("commit %d", i), &git.CommitOptions{
-			Author:    &objectSignature,
-			Committer: &objectSignature,
-		})
-		if err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	}
+	syncertest.MakeCommits(t, repo, fs, count)
 }
 
 func makeLargeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int, blobSize int) {
-	t.Helper()
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("open worktree: %v", err)
-	}
-
-	for i := 0; i < count; i++ {
-		name := fmt.Sprintf("blob-%d.bin", i)
-		file, err := fs.Create(name)
-		if err != nil {
-			t.Fatalf("create file: %v", err)
-		}
-		content := make([]byte, blobSize)
-		state := uint32(0x9e3779b9) + uint32(i)*uint32(2654435761)
-		for idx := range content {
-			state ^= state << 13
-			state ^= state >> 17
-			state ^= state << 5
-			content[idx] = byte(state >> 24)
-		}
-		if _, err := file.Write(content); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		if err := file.Close(); err != nil {
-			t.Fatalf("close file: %v", err)
-		}
-		if _, err := wt.Add(name); err != nil {
-			t.Fatalf("add file: %v", err)
-		}
-
-		_, err = wt.Commit(fmt.Sprintf("large commit %d", i), &git.CommitOptions{
-			Author:    &objectSignature,
-			Committer: &objectSignature,
-		})
-		if err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	}
+	syncertest.MakeLargeCommits(t, repo, fs, count, blobSize)
 }
 
 var objectSignature = signature()
@@ -1307,19 +1230,7 @@ func signature() object.Signature {
 }
 
 func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) {
-	t.Helper()
-
-	sourceRef, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err != nil {
-		t.Fatalf("resolve source ref: %v", err)
-	}
-	targetRef, err := targetRepo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err != nil {
-		t.Fatalf("resolve target ref: %v", err)
-	}
-	if sourceRef.Hash() != targetRef.Hash() {
-		t.Fatalf("branch %s mismatch: source=%s target=%s", branch, sourceRef.Hash(), targetRef.Hash())
-	}
+	syncertest.AssertBranchHeadsMatch(t, sourceRepo, targetRepo, branch)
 }
 
 type metricKind string
