@@ -445,7 +445,8 @@ Current rewrite note:
 - Injected temp-ref delete failure during batched cutover is now covered end-to-end, including successful recovery on retry.
 - Injected checkpoint pack failure after partial batched progress is now covered end-to-end, including successful resume on retry.
 - `fetchToStoreV2` now also has direct coverage for cancellation after response parsing has started.
-- Some harder transport-interruption and malformed mid-stream failure paths still remain, but the remaining gap is narrower than the original list.
+- V1 and v2 fetch paths now also have direct parser-level coverage for malformed sideband framing after a valid response prelude, both for returned streaming readers and for v2 fetch-to-store cleanup.
+- Some harder transport-interruption and broader end-to-end cancellation paths still remain, but the remaining gap is narrower than the original list.
 
 ### 22. No benchmark coverage for the expensive paths
 

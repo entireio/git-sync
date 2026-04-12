@@ -630,6 +630,46 @@ func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 	}
 }
 
+func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("0008NAK\nzzzz"))}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	adv := packp.NewAdvRefs()
+	_ = adv.Capabilities.Set(capability.Sideband64k)
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil)
+	if err != nil {
+		t.Fatalf("fetchPackV1: %v", err)
+	}
+	_, err = io.ReadAll(rc)
+	if err == nil {
+		t.Fatal("expected malformed mid-stream sideband error")
+	}
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Fatalf("close returned reader: %v", closeErr)
+	}
+	if !body.closed {
+		t.Fatal("expected returned reader close to close underlying body")
+	}
+}
+
 func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 	ep, err := transport.NewEndpoint("https://example.com/repo.git")
 	if err != nil {
@@ -719,6 +759,85 @@ func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 	}
 	if !body.closed {
 		t.Fatal("expected returned reader close to close underlying body")
+	}
+}
+
+func TestFetchPackV2ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString(FormatPktLine("packfile\n") + "zzzz"))}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "",
+		},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil)
+	if err != nil {
+		t.Fatalf("fetchPackV2: %v", err)
+	}
+	_, err = io.ReadAll(rc)
+	if err == nil {
+		t.Fatal("expected malformed mid-stream sideband error")
+	}
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Fatalf("close returned reader: %v", closeErr)
+	}
+	if !body.closed {
+		t.Fatal("expected returned reader close to close underlying body")
+	}
+}
+
+func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString(FormatPktLine("packfile\n") + "zzzz"))}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "",
+		},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	err = fetchToStoreV2(context.Background(), memory.NewStorage(), conn, caps, desired, nil)
+	if err == nil {
+		t.Fatal("expected malformed mid-stream sideband error")
+	}
+	if !body.closed {
+		t.Fatal("expected response body to be closed on malformed mid-stream packet")
 	}
 }
 
