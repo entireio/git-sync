@@ -8,6 +8,41 @@
 
 That keeps the target side incremental without fetching target objects into the local process first.
 
+## Why This Exists
+
+Git already has pieces of this problem, but not this exact tool shape.
+
+What usually exists today:
+
+- a full local `git clone --mirror` followed by `git push --mirror`
+- host-specific import or migration features
+- CI jobs or shell scripts that glue fetch and push steps together
+- one-off migration tooling tied to a specific platform
+
+What those approaches usually do not give you:
+
+- direct remote-to-remote relay behavior
+- a small standalone CLI with explicit sync semantics
+- front-loaded validation and planning
+- machine-readable output for automation
+- one tool that covers empty-target bootstrap, normal sync, and large-repo bootstrap fallback
+
+That is the gap `git-sync` is trying to fill.
+
+The main value is operational:
+
+- avoid requiring a full local mirror checkout just to move refs between remotes
+- make initial seeding of large repositories cheaper and more predictable
+- keep incremental sync behavior explicit and safe
+- give operators and automation a stable way to inspect, plan, execute, and benchmark the same workflows
+
+This is especially useful when:
+
+- the target is a new hosted Git service or internal Git endpoint
+- bootstrap size matters more than local developer ergonomics
+- you want a repeatable machine-oriented sync primitive rather than an ad hoc migration script
+- you need clearer control over mapping, pruning, force rules, and relay behavior than generic shell glue usually provides
+
 The command surface is:
 
 - `git-sync probe`: inspect a source remote, and optionally a target remote

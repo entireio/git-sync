@@ -2,6 +2,29 @@
 
 `git-sync` is a remote-to-remote Git mirroring CLI over smart HTTP.
 
+## Product Rationale
+
+The point of `git-sync` is not that Git mirroring is impossible without it. The point is that the usual alternatives are awkward at the exact layer operators often need:
+
+- a full local mirror clone and mirror push is simple, but it turns remote-to-remote movement into a local storage and local bandwidth problem
+- host-specific migration tools are useful, but they are not portable and they usually do not expose one consistent sync primitive across providers
+- scripts around `git fetch` and `git push` can work, but they usually lack planning, explicit policy checks, stable machine-readable output, and a clean distinction between bootstrap and incremental sync
+
+`git-sync` is meant to be that missing middle layer:
+
+- provider-agnostic
+- remote-to-remote
+- automation-friendly
+- explicit about safety and relay eligibility
+- capable of handling both first-time seeding and repeat syncs
+
+That is why the design leans so heavily on:
+
+- relay-first strategies
+- front-loaded validation
+- typed results and JSON output
+- explicit execution modes instead of a single opaque "mirror" operation
+
 ## Core Decisions
 
 ### Relay First
