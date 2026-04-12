@@ -108,17 +108,26 @@ func TestPlansToPushPlans(t *testing.T) {
 	}
 }
 
-func TestMaxMaterializedObjectsExported(t *testing.T) {
+func TestDefaultMaxMaterializedObjectsExported(t *testing.T) {
 	// Verify the constant is exported and has a reasonable positive value.
-	if MaxMaterializedObjects <= 0 {
-		t.Fatalf("MaxMaterializedObjects should be positive, got %d", MaxMaterializedObjects)
+	if DefaultMaxMaterializedObjects <= 0 {
+		t.Fatalf("DefaultMaxMaterializedObjects should be positive, got %d", DefaultMaxMaterializedObjects)
 	}
 	// Sanity: it should be at least 1000 to be useful for real repos,
 	// but not so large that it defeats its purpose as a safety limit.
-	if MaxMaterializedObjects < 1_000 {
-		t.Fatalf("MaxMaterializedObjects too small: %d", MaxMaterializedObjects)
+	if DefaultMaxMaterializedObjects < 1_000 {
+		t.Fatalf("DefaultMaxMaterializedObjects too small: %d", DefaultMaxMaterializedObjects)
 	}
-	if MaxMaterializedObjects > 10_000_000 {
-		t.Fatalf("MaxMaterializedObjects unreasonably large: %d", MaxMaterializedObjects)
+	if DefaultMaxMaterializedObjects > 10_000_000 {
+		t.Fatalf("DefaultMaxMaterializedObjects unreasonably large: %d", DefaultMaxMaterializedObjects)
+	}
+}
+
+func TestEffectiveMaxObjects(t *testing.T) {
+	if got := effectiveMaxObjects(123); got != 123 {
+		t.Fatalf("effectiveMaxObjects(123) = %d, want 123", got)
+	}
+	if got := effectiveMaxObjects(0); got != DefaultMaxMaterializedObjects {
+		t.Fatalf("effectiveMaxObjects(0) = %d, want %d", got, DefaultMaxMaterializedObjects)
 	}
 }

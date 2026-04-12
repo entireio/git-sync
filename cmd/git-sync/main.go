@@ -73,6 +73,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
 	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
+	fs.IntVar(&cfg.MaterializedMaxObjects, "materialized-max-objects", syncer.DefaultMaterializedMaxObjects, "abort non-relay materialized syncs above this many objects")
 	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
 

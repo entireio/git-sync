@@ -48,6 +48,7 @@ The current execution modes are:
 - incremental relay
   - narrow fast path for safe updates
 - materialized fallback
+  The fallback remains intentionally bounded: non-relay object materialization is kept in memory and guarded by an explicit object-count limit rather than being treated as unbounded.
   - decode/repack path when relay is not safe
 - batched bootstrap
   - large initial migration fallback

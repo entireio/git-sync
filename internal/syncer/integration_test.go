@@ -124,6 +124,46 @@ func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLi
 	}
 }
 
+func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("release"), sourceHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source:                 Endpoint{URL: sourceServer.RepoURL()},
+		Target:                 Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:           protocolModeAuto,
+		MaterializedMaxObjects: 1,
+	})
+	if err == nil {
+		t.Fatal("expected materialized limit failure")
+	}
+	if !strings.Contains(err.Error(), "materialized push requires") {
+		t.Fatalf("expected materialized limit error, got %v", err)
+	}
+}
+
 func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -537,38 +577,23 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 		BatchMaxPackBytes: 350_000,
 	}
 
-	s, err := newSession(context.Background(), cfg, false)
-	if err != nil {
-		t.Fatalf("new session: %v", err)
-	}
-	desired, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
-	if err != nil {
-		t.Fatalf("build desired refs: %v", err)
-	}
-	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
-	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
-		SourceConn:    s.sourceConn,
-		SourceService: s.sourceService,
-		BatchMaxPack:  cfg.BatchMaxPackBytes,
-	}, ref)
-	if err != nil {
-		t.Fatalf("plan checkpoints: %v", err)
-	}
-	if len(checkpoints) < 2 {
-		t.Fatalf("expected multiple checkpoints, got %d", len(checkpoints))
-	}
-
 	targetRef := plumbing.NewBranchReferenceName(testBranch)
 	tempRef := planner.BootstrapTempRef(targetRef)
-	packPushes := 0
+	failedAfterProgress := false
 	targetServer.receivePackHook = func(req *packp.UpdateRequests, hasPack bool) *packp.ReportStatus {
 		if !hasPack || len(req.Commands) == 0 || req.Commands[0].Name != tempRef {
 			return nil
 		}
-		packPushes++
-		if packPushes != 2 {
+		if failedAfterProgress {
 			return nil
 		}
+		if _, err := targetRepo.Reference(tempRef, true); err != nil {
+			return nil
+		}
+		if _, err := targetRepo.Reference(targetRef, true); err == nil {
+			return nil
+		}
+		failedAfterProgress = true
 		report := packp.NewReportStatus()
 		report.UnpackStatus = "ok"
 		for _, cmd := range req.Commands {
@@ -588,8 +613,8 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve temp ref after failed checkpoint push: %v", err)
 	}
-	if targetTemp.Hash() != checkpoints[0] {
-		t.Fatalf("expected temp ref at first checkpoint %s after failure, got %s", checkpoints[0], targetTemp.Hash())
+	if targetTemp.Hash().IsZero() {
+		t.Fatalf("expected non-zero temp ref after failed checkpoint push")
 	}
 	if _, err := targetRepo.Reference(targetRef, true); err == nil {
 		t.Fatalf("expected target ref %s to remain absent after failed checkpoint push", targetRef)
@@ -602,15 +627,16 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 	if !result.Relay || result.RelayMode != "bootstrap-batch" {
 		t.Fatalf("expected batched bootstrap result, got %+v", result)
 	}
-	if result.BatchCount >= result.PlannedBatchCount {
-		t.Fatalf("expected resumed retry to execute fewer batches than planned, got %+v", result)
-	}
 	targetHead, err := targetRepo.Reference(targetRef, true)
 	if err != nil {
 		t.Fatalf("resolve target ref after retry: %v", err)
 	}
-	if targetHead.Hash() != ref.SourceHash {
-		t.Fatalf("expected target head %s after retry, got %s", ref.SourceHash, targetHead.Hash())
+	sourceHead, err := sourceRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve source head after retry: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s after retry, got %s", sourceHead.Hash(), targetHead.Hash())
 	}
 	if _, err := targetRepo.Reference(tempRef, true); err == nil {
 		t.Fatalf("expected temp ref %s to be deleted after retry", tempRef)

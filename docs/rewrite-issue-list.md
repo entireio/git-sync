@@ -329,7 +329,8 @@ Rewrite requirement:
 - If no, fail early and clearly outside safe operating bounds.
 
 Current rewrite note:
-- The rewrite introduces a materialized strategy package and safety limits, but it still relies on in-memory object storage rather than a fundamentally new scaling model.
+- The rewrite introduces a materialized strategy package, exposes an explicit `--materialized-max-objects` operating limit, and fails clearly when that bound is exceeded.
+- It still relies on in-memory object storage rather than a fundamentally new scaling model, so this remains partial.
 
 ### 16. Fast-forward checks can degenerate into full graph walks
 

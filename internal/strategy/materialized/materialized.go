@@ -29,12 +29,13 @@ type Params struct {
 	DesiredRefs map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs  map[plumbing.ReferenceName]plumbing.Hash
 	PushPlans   []planner.BranchPlan
+	MaxObjects  int
 }
 
-// MaxMaterializedObjects is the safety limit for the materialized fallback path.
+// DefaultMaxMaterializedObjects is the default safety limit for the materialized fallback path.
 // Beyond this count, the in-memory object store would consume excessive memory.
 // Fail early rather than OOM (issue #15).
-const MaxMaterializedObjects = 500_000
+const DefaultMaxMaterializedObjects = 500_000
 
 // Execute runs the materialized fallback: ensures tag objects are local,
 // computes the object closure, and pushes to the target.
@@ -60,10 +61,11 @@ func Execute(ctx context.Context, p Params) error {
 	}
 
 	// Issue #15: guard against unbounded memory usage on large non-relay syncs.
-	if len(hashes) > MaxMaterializedObjects {
+	maxObjects := effectiveMaxObjects(p.MaxObjects)
+	if len(hashes) > maxObjects {
 		return fmt.Errorf(
 			"materialized push requires %d objects (limit %d); use bootstrap for large initial syncs",
-			len(hashes), MaxMaterializedObjects,
+			len(hashes), maxObjects,
 		)
 	}
 
@@ -98,4 +100,11 @@ func ensureTagObjects(ctx context.Context, p Params) error {
 		return err
 	}
 	return nil
+}
+
+func effectiveMaxObjects(limit int) int {
+	if limit > 0 {
+		return limit
+	}
+	return DefaultMaxMaterializedObjects
 }

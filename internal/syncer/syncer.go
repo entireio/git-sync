@@ -36,6 +36,8 @@ const (
 	protocolModeV2   = validation.ProtocolV2
 )
 
+const DefaultMaterializedMaxObjects = materialized.DefaultMaxMaterializedObjects
+
 // Endpoint holds the connection configuration for a remote.
 type Endpoint struct {
 	URL           string
@@ -50,20 +52,21 @@ type RefMapping = validation.RefMapping
 
 // Config holds all configuration for a sync operation.
 type Config struct {
-	Source            Endpoint
-	Target            Endpoint
-	Branches          []string
-	Mappings          []RefMapping
-	IncludeTags       bool
-	DryRun            bool
-	Verbose           bool
-	ShowStats         bool
-	MeasureMemory     bool
-	Force             bool
-	Prune             bool
-	MaxPackBytes      int64
-	BatchMaxPackBytes int64
-	ProtocolMode      string
+	Source                 Endpoint
+	Target                 Endpoint
+	Branches               []string
+	Mappings               []RefMapping
+	IncludeTags            bool
+	DryRun                 bool
+	Verbose                bool
+	ShowStats              bool
+	MeasureMemory          bool
+	Force                  bool
+	Prune                  bool
+	MaxPackBytes           int64
+	BatchMaxPackBytes      int64
+	MaterializedMaxObjects int
+	ProtocolMode           string
 }
 
 // Re-export types from planner for CLI compatibility.
@@ -482,7 +485,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			if err := materialized.Execute(ctx, materialized.Params{
 				Store: repo.Storer, SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
 				DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
-				PushPlans: pushPlans,
+				PushPlans: pushPlans, MaxObjects: cfg.MaterializedMaxObjects,
 			}); err != nil {
 				return result, err
 			}
