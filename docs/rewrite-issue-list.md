@@ -422,14 +422,10 @@ Rewrite requirement:
 
 Status: partial
 
-Known missing cases:
-- empty source repo
-- tag force-retarget
-- duplicate/conflicting mappings
-- context cancellation
-- batch resume mismatch
-- batch cutover partial failure
-- tag creation when target objects already exist
+Remaining notable gaps:
+- harder transport interruption during active pack streaming
+- malformed mid-stream fetch responses after valid startup
+- broader end-to-end cancellation once response parsing has begun
 
 Current rewrite note:
 - Some of these are now covered, including empty source repo, tag force-retarget, duplicate/conflicting mappings, and tag creation when target objects already exist.
