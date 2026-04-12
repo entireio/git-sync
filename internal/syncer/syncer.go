@@ -310,15 +310,19 @@ type syncSession struct {
 	stats           *statsCollector
 	logger          *slog.Logger
 	sourceConn      *gitproto.Conn
-	targetConn      *gitproto.Conn
 	sourceService   *gitproto.RefService
-	targetAdv       *packp.AdvRefs
-	targetFeatures  gitproto.TargetFeatures
-	targetPolicy    planner.RelayTargetPolicy
-	targetPusher    gitproto.Pusher
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
-	targetRefMap    map[plumbing.ReferenceName]plumbing.Hash
+	target          *targetSession
 	measurementDone func() Measurement
+}
+
+type targetSession struct {
+	conn      *gitproto.Conn
+	adv       *packp.AdvRefs
+	refMap    map[plumbing.ReferenceName]plumbing.Hash
+	features  gitproto.TargetFeatures
+	policy    planner.RelayTargetPolicy
+	pusher    gitproto.Pusher
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -358,25 +362,31 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
 
 	if needTarget {
-		s.targetConn, err = newConn(cfg.Target, "target", s.stats)
+		targetConn, err := newConn(cfg.Target, "target", s.stats)
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
-		s.targetAdv, err = gitproto.AdvertisedRefsV1(ctx, s.targetConn, transport.ReceivePackService)
+		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
-		targetRefSlice, err := gitproto.AdvRefsToSlice(s.targetAdv)
+		targetRefSlice, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
 			return nil, fmt.Errorf("decode target refs: %w", err)
 		}
-		s.targetRefMap = gitproto.RefHashMap(targetRefSlice)
-		s.targetFeatures = gitproto.TargetFeaturesFromAdvRefs(s.targetAdv)
-		s.targetPolicy = planner.RelayTargetPolicy{
-			CapabilitiesKnown: s.targetFeatures.Known,
-			NoThin:            s.targetFeatures.NoThin,
+		targetRefMap := gitproto.RefHashMap(targetRefSlice)
+		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
+		s.target = &targetSession{
+			conn:     targetConn,
+			adv:      targetAdv,
+			refMap:   targetRefMap,
+			features: targetFeatures,
+			policy: planner.RelayTargetPolicy{
+				CapabilitiesKnown: targetFeatures.Known,
+				NoThin:            targetFeatures.NoThin,
+			},
+			pusher: gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
 		}
-		s.targetPusher = gitproto.NewPusher(s.targetConn, s.targetAdv, cfg.Verbose)
 	}
 
 	return s, nil
@@ -394,7 +404,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	stats := s.stats
 	sourceService := s.sourceService
 	sourceRefMap := s.sourceRefMap
-	targetRefMap := s.targetRefMap
+	targetRefMap := s.target.refMap
 
 	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(sourceRefMap, planConfig(cfg))
 	if err != nil {
@@ -461,7 +471,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
-	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, s.targetPolicy)
+	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, s.target.policy)
 
 	if !cfg.DryRun {
 		// Try incremental relay first
@@ -519,8 +529,8 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("no source refs matched")
 	}
 
-	_, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, s.targetRefMap)
-	result, err := bootstrapWithInputs(ctx, s, desiredRefs, s.targetRefMap, reason)
+	_, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, s.target.refMap)
+	result, err := bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, reason)
 	result.Measurement = s.measurementDone()
 	return result, err
 }
@@ -555,7 +565,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 
 	if cfg.Target.URL != "" {
 		result.TargetURL = cfg.Target.URL
-		result.TargetCaps = gitproto.AdvRefsCaps(s.targetAdv)
+		result.TargetCaps = gitproto.AdvRefsCaps(s.target.adv)
 		result.Stats = s.stats.snapshot()
 		result.Measurement = s.measurementDone()
 	}
@@ -647,7 +657,7 @@ func bootstrapWithInputs(
 	relayReason string,
 ) (Result, error) {
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
-		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.targetPusher,
+		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
 		MaxPackBytes: s.cfg.MaxPackBytes, BatchMaxPack: s.cfg.BatchMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
@@ -670,11 +680,11 @@ func (s *syncSession) executeIncremental(
 	pushPlans []planner.BranchPlan,
 ) (incremental.Result, error) {
 	return incremental.Execute(ctx, incremental.Params{
-		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.targetPusher,
-		DesiredRefs: desiredRefs, TargetRefs: s.targetRefMap,
+		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
+		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 		CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
-			return planner.CanIncrementalRelay(force, prune, dryRun, plans, s.targetPolicy)
+			return planner.CanIncrementalRelay(force, prune, dryRun, plans, s.target.policy)
 		},
 		CanTagRelay: planner.CanFullTagCreateRelay,
 	}, planConfig(s.cfg))
@@ -687,8 +697,8 @@ func (s *syncSession) executeMaterialized(
 	pushPlans []planner.BranchPlan,
 ) error {
 	return materialized.Execute(ctx, materialized.Params{
-		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.targetPusher,
-		DesiredRefs: desiredRefs, TargetRefs: s.targetRefMap,
+		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
+		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxObjects: s.cfg.MaterializedMaxObjects,
 	})
 }

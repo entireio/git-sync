@@ -300,6 +300,7 @@ Current rewrite note:
 - The materialized fallback now runs through an explicit executor with separate stages for tag prefetch, object-closure collection, limit enforcement, and push execution.
 - Syncer bootstrap execution now takes a shared session object instead of threading raw source/target transports, stats, logger, measurement, and target advertisement through a wide helper signature.
 - Syncer normal execution now routes both incremental relay and materialized fallback through session-owned helpers instead of rebuilding transport, capability, and policy inputs inline inside `Run`.
+- Syncer target-side state is now grouped into a dedicated target session object so advertised refs, derived features, relay policy, and the push executor move together instead of being carried as parallel top-level fields.
 - Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability
@@ -457,7 +458,7 @@ Current rewrite note:
 
 - All mapping validation happens before network activity. Status: done
 - Capability negotiation is centralized and enforced consistently. Status: partial
-  Source-side fetch capability checks now live behind `gitproto.RefService` methods, and sync session setup now owns target advertisement, derived target features, relay policy, and the target pusher together instead of rebuilding those pieces ad hoc in `Run`. Some target-side relay decisions still rely on orchestration wiring rather than a fully unified capability model, so this remains partial.
+  Source-side fetch capability checks now live behind `gitproto.RefService` methods, and sync session setup now owns target advertisement, derived target features, relay policy, and the target pusher together inside a dedicated target session instead of rebuilding those pieces ad hoc in `Run`. Some target-side relay decisions still rely on orchestration wiring rather than a fully unified capability model, so this remains partial.
 - Relay strategies are separate packages with explicit inputs and outputs. Status: done
 - Tag creation is correct whether or not a pack transfer is needed. Status: done
 - Stats are concurrency-safe. Status: done
