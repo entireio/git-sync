@@ -395,8 +395,10 @@ func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.Desired
 		}
 		if result, ok := probeCache[prevHash.String()+":"+strconv.Itoa(bestIdx)]; ok && !result.tooLarge && len(result.data) > 0 {
 			prefetched[chain[bestIdx]] = result.data
+			prevSpan = adaptiveNextProbeSpan(p.BatchMaxPack, len(result.data), bestIdx-prevIdx, len(chain)-1-bestIdx)
+		} else {
+			prevSpan = bestIdx - prevIdx
 		}
-		prevSpan = bestIdx - prevIdx
 		prevIdx = bestIdx
 		prevHash = chain[bestIdx]
 		checkpoints = append(checkpoints, prevHash)
@@ -412,6 +414,30 @@ func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.Desired
 type probeResult struct {
 	tooLarge bool
 	data     []byte
+}
+
+func adaptiveNextProbeSpan(limit int64, measuredBytes int, selectedSpan int, remaining int) int {
+	if selectedSpan < 1 {
+		selectedSpan = 1
+	}
+	if remaining < 1 {
+		return selectedSpan
+	}
+	if limit <= 0 || measuredBytes <= 0 {
+		if selectedSpan > remaining {
+			return remaining
+		}
+		return selectedSpan
+	}
+
+	next := int((int64(selectedSpan) * limit) / int64(measuredBytes))
+	if next < 1 {
+		next = 1
+	}
+	if next > remaining {
+		next = remaining
+	}
+	return next
 }
 
 func fetchPackForProbe(ctx context.Context, p Params, ref planner.DesiredRef, want, have plumbing.Hash, limit int64) ([]byte, bool, error) {

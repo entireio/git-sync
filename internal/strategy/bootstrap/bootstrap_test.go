@@ -123,6 +123,68 @@ func TestTargetBodyLimit(t *testing.T) {
 	}
 }
 
+func TestAdaptiveNextProbeSpan(t *testing.T) {
+	tests := []struct {
+		name         string
+		limit        int64
+		measured     int
+		selectedSpan int
+		remaining    int
+		want         int
+	}{
+		{
+			name:         "grows span when measured pack is far below limit",
+			limit:        1000,
+			measured:     250,
+			selectedSpan: 4,
+			remaining:    20,
+			want:         16,
+		},
+		{
+			name:         "caps growth at remaining commits",
+			limit:        1000,
+			measured:     200,
+			selectedSpan: 4,
+			remaining:    6,
+			want:         6,
+		},
+		{
+			name:         "keeps minimum span of one",
+			limit:        1000,
+			measured:     4000,
+			selectedSpan: 1,
+			remaining:    10,
+			want:         1,
+		},
+		{
+			name:         "falls back to selected span without measurements",
+			limit:        1000,
+			measured:     0,
+			selectedSpan: 3,
+			remaining:    10,
+			want:         3,
+		},
+		{
+			name:         "caps fallback span at remaining",
+			limit:        0,
+			measured:     0,
+			selectedSpan: 8,
+			remaining:    5,
+			want:         5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := adaptiveNextProbeSpan(tt.limit, tt.measured, tt.selectedSpan, tt.remaining)
+			if got != tt.want {
+				t.Fatalf("adaptiveNextProbeSpan(%d, %d, %d, %d) = %d, want %d",
+					tt.limit, tt.measured, tt.selectedSpan, tt.remaining, got, tt.want)
+			}
+		})
+	}
+}
+
 type fakeBootstrapSource struct {
 	fetchPack func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 }
