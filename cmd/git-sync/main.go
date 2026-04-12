@@ -9,8 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/soph/git-sync/internal/syncer"
+	"github.com/soph/git-sync/internal/validation"
 )
 
 func main() {
@@ -72,7 +73,8 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
 	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
+	fs.IntVar(&cfg.MaterializedMaxObjects, "materialized-max-objects", syncer.DefaultMaterializedMaxObjects, "abort non-relay materialized syncs above this many objects")
+	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
@@ -94,7 +96,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 		cfg.Branches = splitCSV(*branches)
 	}
 	for _, raw := range mappings {
-		mapping, err := parseMapping(raw)
+		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
 			return err
 		}
@@ -146,7 +148,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.Int64Var(&cfg.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
 	fs.Int64Var(&cfg.BatchMaxPackBytes, "batch-max-pack-bytes", 0, "split branch bootstrap into relay batches capped at this many bytes per batch")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
+	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
@@ -168,7 +170,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 		cfg.Branches = splitCSV(*branches)
 	}
 	for _, raw := range mappings {
-		mapping, err := parseMapping(raw)
+		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
 			return err
 		}
@@ -204,7 +206,7 @@ func runProbe(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.Source.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
 	fs.BoolVar(&cfg.Target.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tag ref prefixes in probe")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
+	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
 	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
@@ -251,7 +253,7 @@ func runFetch(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.Source.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tags in the fetch request")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", "auto"), "protocol mode: auto, v1, or v2")
+	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
 	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
@@ -324,19 +326,6 @@ func (m *multiStringFlag) Set(value string) error {
 	return nil
 }
 
-func parseMapping(raw string) (syncer.RefMapping, error) {
-	parts := strings.SplitN(raw, ":", 2)
-	if len(parts) != 2 {
-		return syncer.RefMapping{}, fmt.Errorf("invalid --map %q, expected src:dst", raw)
-	}
-	source := strings.TrimSpace(parts[0])
-	target := strings.TrimSpace(parts[1])
-	if source == "" || target == "" {
-		return syncer.RefMapping{}, fmt.Errorf("invalid --map %q, expected src:dst", raw)
-	}
-	return syncer.RefMapping{Source: source, Target: target}, nil
-}
-
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -363,7 +352,7 @@ func envBool(key string) bool {
 }
 
 func usageError(message string) error {
-	usage := "usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync/plan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --batch-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n"
+	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --batch-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", syncer.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}

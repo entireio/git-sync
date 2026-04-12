@@ -15,7 +15,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/soph/git-sync/internal/gitproto"
+	"github.com/soph/git-sync/internal/planner"
+	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
 )
 
 const gitHTTPBackendEnv = "GITSYNC_E2E_GIT_HTTP_BACKEND"
@@ -460,12 +463,12 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	if result.PlannedBatchCount != result.BatchCount {
 		t.Fatalf("expected fresh batched bootstrap to complete all planned batches, got %+v", result)
 	}
-	if len(result.TempRefs) != 1 || result.TempRefs[0] != bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)).String() {
+	if len(result.TempRefs) != 1 || result.TempRefs[0] != planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)).String() {
 		t.Fatalf("unexpected temp refs in batched bootstrap result: %+v", result)
 	}
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
-	assertGitRefAbsent(t, targetBare, bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
+	assertGitRefAbsent(t, targetBare, planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
 }
 
 func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
@@ -512,20 +515,27 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	}
 
 	stats := newStats(false)
-	sourceConn, err := newTransportConn(cfg.Source, "source", stats)
+	sourceConn, err := newConn(cfg.Source, "source", stats)
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}
-	sourceRefs, sourceService, err := listSourceRefs(context.Background(), sourceConn, cfg)
+	sourceRefs, sourceService, err := gitproto.ListSourceRefs(context.Background(), sourceConn, cfg.ProtocolMode, planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags))
 	if err != nil {
 		t.Fatalf("list source refs: %v", err)
 	}
-	desired, _, err := buildDesiredRefs(refHashMap(sourceRefs), cfg)
+	desired, _, err := planner.BuildDesiredRefs(gitproto.RefHashMap(sourceRefs), planner.PlanConfig{
+		Branches: cfg.Branches, Mappings: cfg.Mappings, IncludeTags: cfg.IncludeTags,
+		Force: cfg.Force, Prune: cfg.Prune,
+	})
 	if err != nil {
 		t.Fatalf("build desired refs: %v", err)
 	}
 	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
-	checkpoints, err := planBootstrapBranchCheckpoints(context.Background(), cfg, sourceConn, sourceService, ref)
+	bParams := bstrap.Params{
+		SourceConn: sourceConn, SourceService: sourceService,
+		BatchMaxPack: cfg.BatchMaxPackBytes, Verbose: cfg.Verbose,
+	}
+	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bParams, ref)
 	if err != nil {
 		t.Fatalf("plan checkpoints: %v", err)
 	}
@@ -533,7 +543,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 		t.Fatalf("expected multiple checkpoints for resume test, got %v", checkpoints)
 	}
 
-	tempRef := bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
+	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
 	runGit(t, worktree, "push", targetBare, checkpoints[0].String()+":"+tempRef.String())
 
 	result, err := Bootstrap(context.Background(), cfg)
@@ -558,6 +568,96 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 	assertGitRefAbsent(t, targetBare, tempRef)
+}
+
+func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+	for i := range 8 {
+		writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("limit-%d.bin", i)), int64(180_000+i*29))
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", fmt.Sprintf("limit-%d", i))
+	}
+	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	sourceURL := server.RepoURL("source.git")
+	cfg := Config{
+		Source:       Endpoint{URL: sourceURL},
+		Target:       Endpoint{URL: server.RepoURL("target.git")},
+		ProtocolMode: protocolModeAuto,
+	}
+
+	stats := newStats(false)
+	sourceConn, err := newConn(cfg.Source, "source", stats)
+	if err != nil {
+		t.Fatalf("create source transport: %v", err)
+	}
+	sourceRefs, sourceService, err := gitproto.ListSourceRefs(context.Background(), sourceConn, cfg.ProtocolMode, planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags))
+	if err != nil {
+		t.Fatalf("list source refs: %v", err)
+	}
+	desired, _, err := planner.BuildDesiredRefs(gitproto.RefHashMap(sourceRefs), planner.PlanConfig{
+		Branches: cfg.Branches, Mappings: cfg.Mappings, IncludeTags: cfg.IncludeTags,
+		Force: cfg.Force, Prune: cfg.Prune,
+	})
+	if err != nil {
+		t.Fatalf("build desired refs: %v", err)
+	}
+	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
+
+	plan := func(limit int64) []plumbing.Hash {
+		t.Helper()
+		checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
+			SourceConn:   sourceConn,
+			SourceService: sourceService,
+			BatchMaxPack: limit,
+			Verbose:      cfg.Verbose,
+		}, ref)
+		if err != nil {
+			t.Fatalf("plan checkpoints with limit %d: %v", limit, err)
+		}
+		return checkpoints
+	}
+
+	smaller := plan(250_000)
+	larger := plan(450_000)
+
+	if len(smaller) < 2 {
+		t.Fatalf("expected smaller limit to produce multiple checkpoints, got %d (%v)", len(smaller), smaller)
+	}
+	if len(larger) == 0 {
+		t.Fatal("expected larger limit to produce at least one checkpoint")
+	}
+	if len(smaller) < len(larger) {
+		t.Fatalf("expected smaller batch limit to require at least as many checkpoints as larger limit, got smaller=%d larger=%d", len(smaller), len(larger))
+	}
+	if smaller[len(smaller)-1] != ref.SourceHash || larger[len(larger)-1] != ref.SourceHash {
+		t.Fatalf("expected final checkpoint to be branch tip, got smaller=%s larger=%s tip=%s", smaller[len(smaller)-1], larger[len(larger)-1], ref.SourceHash)
+	}
 }
 
 func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
@@ -617,7 +717,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
 
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewTagReferenceName("v1"))
-	assertGitRefAbsent(t, targetBare, bootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
+	assertGitRefAbsent(t, targetBare, planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)))
 }
 
 type gitHTTPBackendServer struct {

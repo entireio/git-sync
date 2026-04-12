@@ -14,18 +14,14 @@ import (
 	"testing"
 	"time"
 
-	billy "github.com/go-git/go-billy/v5"
-	"github.com/go-git/go-billy/v5/memfs"
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	transportserver "github.com/go-git/go-git/v5/plumbing/transport/server"
-	"github.com/go-git/go-git/v5/storage/memory"
+	billy "github.com/go-git/go-billy/v6"
+	"github.com/go-git/go-billy/v6/memfs"
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/storage/memory"
 	"github.com/soph/git-sync/internal/syncer"
 )
 
@@ -88,7 +84,7 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -179,7 +175,7 @@ func newSourceRepo(t *testing.T) (*git.Repository, billy.Filesystem) {
 	t.Helper()
 
 	fs := memfs.New()
-	repo, err := git.Init(memory.NewStorage(), fs)
+	repo, err := git.Init(memory.NewStorage(), git.WithWorkTree(fs))
 	if err != nil {
 		t.Fatalf("init source repo: %v", err)
 	}
@@ -285,37 +281,14 @@ func (s *smartHTTPRepoServer) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
-	service := r.URL.Query().Get("service")
-	if service != transport.UploadPackServiceName && service != transport.ReceivePackServiceName {
+	service := transport.Service(r.URL.Query().Get("service"))
+	if service != transport.UploadPackService && service != transport.ReceivePackService {
 		http.Error(w, "missing service", http.StatusBadRequest)
 		return
 	}
 
-	session, err := s.newSession(service)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var ar *packp.AdvRefs
-	switch service {
-	case transport.UploadPackServiceName:
-		ar, err = session.(transport.UploadPackSession).AdvertisedReferencesContext(r.Context())
-	case transport.ReceivePackServiceName:
-		ar, err = session.(transport.ReceivePackSession).AdvertisedReferencesContext(r.Context())
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	ar.Prefix = [][]byte{
-		[]byte("# service=" + service),
-		pktline.Flush,
-	}
-
 	var buf bytes.Buffer
-	if err := ar.Encode(&buf); err != nil {
+	if err := transport.AdvertiseReferences(r.Context(), s.repo.Storer, &buf, service, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -327,33 +300,13 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer r.Body.Close()
-
-	session, err := s.newSession(transport.UploadPackServiceName)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	req := packp.NewUploadPackRequest()
-	if err := req.Decode(bytes.NewReader(body)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	resp, err := session.(transport.UploadPackSession).UploadPack(r.Context(), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	var buf bytes.Buffer
-	if err := resp.Encode(&buf); err != nil {
+	wc := nopWriteCloser{&buf}
+
+	err := transport.UploadPack(r.Context(), s.repo.Storer, r.Body, wc, &transport.UploadPackOptions{
+		StatelessRPC: true,
+	})
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -369,70 +322,33 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	s.receivePacks++
 	s.mu.Unlock()
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer r.Body.Close()
+	var buf bytes.Buffer
+	wc := nopWriteCloser{&buf}
 
-	session, err := s.newSession(transport.ReceivePackServiceName)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	err := transport.ReceivePack(r.Context(), s.repo.Storer, r.Body, wc, &transport.ReceivePackOptions{
+		StatelessRPC: true,
+	})
 
-	req := packp.NewReferenceUpdateRequest()
-	if err := req.Decode(bytes.NewReader(body)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	report, err := session.(transport.ReceivePackSession).ReceivePack(r.Context(), req)
-	if report != nil {
-		var buf bytes.Buffer
-		if encErr := report.Encode(&buf); encErr == nil {
-			w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
-			_, _ = w.Write(buf.Bytes())
-		}
+	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+	if buf.Len() > 0 {
+		_, _ = w.Write(buf.Bytes())
 	}
 	if err != nil {
 		return
 	}
 }
 
-func (s *smartHTTPRepoServer) newSession(service string) (interface{}, error) {
-	loader := transportserver.MapLoader{}
+// nopWriteCloser wraps an io.Writer to satisfy io.WriteCloser.
+type nopWriteCloser struct{ io.Writer }
 
-	endpoint, err := transport.NewEndpoint(s.RepoURL())
-	if err != nil {
-		return nil, err
-	}
-	loader[endpoint.String()] = s.repo.Storer
-
-	srv := transportserver.NewServer(loader)
-	switch service {
-	case transport.UploadPackServiceName:
-		return srv.NewUploadPackSession(endpoint, nil)
-	case transport.ReceivePackServiceName:
-		return srv.NewReceivePackSession(endpoint, nil)
-	default:
-		return nil, fmt.Errorf("unknown service %q", service)
-	}
-}
+func (nopWriteCloser) Close() error { return nil }
 
 func TestMain(m *testing.M) {
-	originalHTTP := transportclient.Protocols["http"]
-	originalHTTPS := transportclient.Protocols["https"]
+	customHTTP := transporthttp.NewTransport(&transporthttp.TransportOptions{
+		Client: &http.Client{},
+	})
+	transport.Register("http", customHTTP)
+	transport.Register("https", customHTTP)
 
-	customHTTP := transporthttp.NewClient(&http.Client{})
-	transportclient.InstallProtocol("http", customHTTP)
-	transportclient.InstallProtocol("https", customHTTP)
-
-	code := m.Run()
-
-	transportclient.InstallProtocol("http", originalHTTP)
-	transportclient.InstallProtocol("https", originalHTTPS)
-
-	os.Exit(code)
+	os.Exit(m.Run())
 }

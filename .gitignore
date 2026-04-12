@@ -37,6 +37,7 @@ go.work.sum
 
 # Binary output (only in root)
 /git-sync
+/git-sync-bench
 
 # worktrees
 .worktrees/

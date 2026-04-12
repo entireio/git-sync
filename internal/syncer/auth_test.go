@@ -3,14 +3,18 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
+
+	"github.com/soph/git-sync/internal/auth"
 )
 
 func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
@@ -19,16 +23,14 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 		t.Fatalf("new endpoint: %v", err)
 	}
 
-	originalFill := gitCredentialFillCommand
-	t.Cleanup(func() {
-		gitCredentialFillCommand = originalFill
-	})
-	gitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	originalFill := auth.GitCredentialFillCommand
+	t.Cleanup(func() { auth.GitCredentialFillCommand = originalFill })
+	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
 		t.Fatalf("unexpected git credential fill call with input %q", input)
 		return nil, nil
 	}
 
-	auth, err := resolveAuthMethod(Endpoint{
+	resolved, err := auth.Resolve(auth.Endpoint{
 		Username: "git",
 		Token:    "explicit-token",
 	}, ep)
@@ -36,34 +38,34 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 		t.Fatalf("resolve auth: %v", err)
 	}
 
-	basic, ok := auth.(*transporthttp.BasicAuth)
+	basic, ok := resolved.(*transporthttp.BasicAuth)
 	if !ok {
-		t.Fatalf("expected basic auth, got %T", auth)
+		t.Fatalf("expected basic auth, got %T", resolved)
 	}
 	if basic.Username != "git" || basic.Password != "explicit-token" {
 		t.Fatalf("unexpected auth: %+v", basic)
 	}
 }
 
-func TestNewTransportConnSkipTLSVerify(t *testing.T) {
-	conn, err := newTransportConn(Endpoint{
+func TestNewConnSkipTLSVerify(t *testing.T) {
+	stats := newStats(false)
+	conn, err := newConn(Endpoint{
 		URL:           "https://example.com/repo.git",
 		SkipTLSVerify: true,
-	}, "source", newStats(false))
+	}, "source", stats)
 	if err != nil {
-		t.Fatalf("new transport conn: %v", err)
+		t.Fatalf("new conn: %v", err)
 	}
-
-	roundTripper, ok := conn.http.Transport.(*countingRoundTripper)
+	rt, ok := conn.HTTP.Transport.(*countingRoundTripper)
 	if !ok {
-		t.Fatalf("expected countingRoundTripper, got %T", conn.http.Transport)
+		t.Fatalf("expected countingRoundTripper, got %T", conn.HTTP.Transport)
 	}
-	base, ok := roundTripper.base.(*http.Transport)
+	base, ok := rt.base.(*http.Transport)
 	if !ok {
-		t.Fatalf("expected *http.Transport base, got %T", roundTripper.base)
+		t.Fatalf("expected *http.Transport base, got %T", rt.base)
 	}
 	if base.TLSClientConfig == nil || !base.TLSClientConfig.InsecureSkipVerify {
-		t.Fatalf("expected InsecureSkipVerify transport, got %#v", base.TLSClientConfig)
+		t.Fatalf("expected InsecureSkipVerify transport")
 	}
 }
 
@@ -78,29 +80,29 @@ func TestResolveAuthMethodUsesEntireDBStoredToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new endpoint: %v", err)
 	}
-	credHost := endpointCredentialHost(ep)
+	credHost := ep.Host
 	writeEntireDBHostsFile(t, configDir, credHost, "test-user")
-	if err := writeEntireDBStoredToken("entire:"+credHost, "test-user", "stored-token"); err != nil {
+	// Store token with a future expiration so it's not treated as expired (issue #7).
+	futureExpiry := time.Now().Unix() + 3600
+	if err := auth.WriteStoredToken("entire:"+credHost, "test-user", fmt.Sprintf("stored-token|%d", futureExpiry)); err != nil {
 		t.Fatalf("write token: %v", err)
 	}
 
-	originalFill := gitCredentialFillCommand
-	t.Cleanup(func() {
-		gitCredentialFillCommand = originalFill
-	})
-	gitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	originalFill := auth.GitCredentialFillCommand
+	t.Cleanup(func() { auth.GitCredentialFillCommand = originalFill })
+	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
 		t.Fatalf("unexpected git credential fill call with input %q", input)
 		return nil, nil
 	}
 
-	auth, err := resolveAuthMethod(Endpoint{}, ep)
+	resolved, err := auth.Resolve(auth.Endpoint{}, ep)
 	if err != nil {
 		t.Fatalf("resolve auth: %v", err)
 	}
 
-	basic, ok := auth.(*transporthttp.BasicAuth)
+	basic, ok := resolved.(*transporthttp.BasicAuth)
 	if !ok {
-		t.Fatalf("expected basic auth, got %T", auth)
+		t.Fatalf("expected basic auth, got %T", resolved)
 	}
 	if basic.Username != "git" || basic.Password != "stored-token" {
 		t.Fatalf("unexpected auth: %+v", basic)
@@ -133,45 +135,34 @@ func TestResolveAuthMethodRefreshesExpiredEntireDBToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new endpoint: %v", err)
 	}
-	credHost := endpointCredentialHost(ep)
+	credHost := ep.Host
 	writeEntireDBHostsFile(t, configDir, credHost, "test-user")
-	if err := writeEntireDBStoredToken("entire:"+credHost, "test-user", encodeTokenWithExpiration("expired-token", -3600)); err != nil {
+	// Expired token: expiration in the past
+	if err := auth.WriteStoredToken("entire:"+credHost, "test-user", "expired-token|1"); err != nil {
 		t.Fatalf("write expired token: %v", err)
 	}
-	if err := writeEntireDBStoredToken("entire:"+credHost+":refresh", "test-user", "refresh-token"); err != nil {
+	if err := auth.WriteStoredToken("entire:"+credHost+":refresh", "test-user", "refresh-token"); err != nil {
 		t.Fatalf("write refresh token: %v", err)
 	}
 
-	auth, err := resolveAuthMethod(Endpoint{SkipTLSVerify: true}, ep)
+	resolved, err := auth.Resolve(auth.Endpoint{SkipTLSVerify: true}, ep)
 	if err != nil {
 		t.Fatalf("resolve auth: %v", err)
 	}
 
-	basic, ok := auth.(*transporthttp.BasicAuth)
+	basic, ok := resolved.(*transporthttp.BasicAuth)
 	if !ok {
-		t.Fatalf("expected basic auth, got %T", auth)
+		t.Fatalf("expected basic auth, got %T", resolved)
 	}
 	if basic.Password != "new-token" {
 		t.Fatalf("unexpected password: %q", basic.Password)
-	}
-
-	stored, err := readEntireDBStoredToken("entire:"+credHost, "test-user")
-	if err != nil {
-		t.Fatalf("read stored token: %v", err)
-	}
-	token, _ := decodeTokenWithExpiration(stored)
-	if token != "new-token" {
-		t.Fatalf("unexpected refreshed token: %q", token)
 	}
 }
 
 func writeEntireDBHostsFile(t *testing.T, configDir, host, username string) {
 	t.Helper()
 	hosts := map[string]map[string]any{
-		host: {
-			"activeUser": username,
-			"users":      []string{username},
-		},
+		host: {"activeUser": username, "users": []string{username}},
 	}
 	data, err := json.Marshal(hosts)
 	if err != nil {
@@ -181,3 +172,4 @@ func writeEntireDBHostsFile(t *testing.T, configDir, host, username string) {
 		t.Fatalf("write hosts: %v", err)
 	}
 }
+

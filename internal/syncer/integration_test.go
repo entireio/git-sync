@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,21 +15,24 @@ import (
 	"testing"
 	"time"
 
-	billy "github.com/go-git/go-billy/v5"
-	"github.com/go-git/go-billy/v5/memfs"
-	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/packfile"
-	"github.com/go-git/go-git/v5/plumbing/format/pktline"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/revlist"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
-	transporthttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	transportserver "github.com/go-git/go-git/v5/plumbing/transport/server"
-	"github.com/go-git/go-git/v5/storage/memory"
+	billy "github.com/go-git/go-billy/v6"
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/packfile"
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
+	"github.com/go-git/go-git/v6/plumbing/revlist"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
+	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/soph/git-sync/internal/auth"
+	"github.com/soph/git-sync/internal/gitproto"
+	"github.com/soph/git-sync/internal/planner"
+	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
+	"github.com/soph/git-sync/internal/syncertest"
 )
 
 const testBranch = "master"
@@ -37,7 +41,7 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 6)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -84,7 +88,7 @@ func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLi
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -120,11 +124,402 @@ func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLi
 	}
 }
 
+func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("release"), sourceHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source:                 Endpoint{URL: sourceServer.RepoURL()},
+		Target:                 Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:           protocolModeAuto,
+		MaterializedMaxObjects: 1,
+	})
+	if err == nil {
+		t.Fatal("expected materialized limit failure")
+	}
+	if !strings.Contains(err.Error(), "materialized push requires") {
+		t.Fatalf("expected materialized limit error, got %v", err)
+	}
+}
+
+func TestRun_IntegrationV2FetchMalformedMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	sourceServer.uploadPackV2FetchRaw = func(w http.ResponseWriter, _ v2TestCommandRequest, body []byte) bool {
+		var buf bytes.Buffer
+		if _, err := pktline.WriteString(&buf, "packfile\n"); err != nil {
+			t.Fatalf("write packfile prelude: %v", err)
+		}
+		buf.WriteString("zzzz")
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			t.Fatalf("write malformed v2 fetch response: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+	})
+	if err == nil {
+		t.Fatal("expected malformed mid-stream v2 fetch to fail")
+	}
+}
+
+func TestRun_IntegrationV2FetchCanceledMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	sourceServer.uploadPackV2FetchRaw = func(w http.ResponseWriter, _ v2TestCommandRequest, body []byte) bool {
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected flusher")
+		}
+		if _, err := pktline.WriteString(w, "packfile\n"); err != nil {
+			t.Fatalf("write packfile prelude: %v", err)
+		}
+		flusher.Flush()
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		if _, err := io.WriteString(w, "zzzz"); err != nil && !isConnectionCloseError(err) {
+			t.Fatalf("write interrupted packet tail: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), 0, 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, Config{
+			Source:       Endpoint{URL: sourceServer.RepoURL()},
+			Target:       Endpoint{URL: targetServer.RepoURL()},
+			ProtocolMode: protocolModeV2,
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected v2 fetch response to start before cancellation")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected run to return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRun_IntegrationV1FetchMalformedMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	sourceServer.uploadPackRaw = func(w http.ResponseWriter, _ *http.Request, body []byte) bool {
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		if _, err := io.WriteString(w, "0008NAK\nzzzz"); err != nil {
+			t.Fatalf("write malformed v1 fetch response: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(len("0008NAK\nzzzz")), 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV1,
+	})
+	if err == nil {
+		t.Fatal("expected malformed mid-stream v1 fetch to fail")
+	}
+}
+
+func TestRun_IntegrationV1FetchCanceledMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	sourceServer.uploadPackRaw = func(w http.ResponseWriter, _ *http.Request, body []byte) bool {
+		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected flusher")
+		}
+		if _, err := io.WriteString(w, "0008NAK\n"); err != nil {
+			t.Fatalf("write v1 NAK prelude: %v", err)
+		}
+		flusher.Flush()
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		if _, err := io.WriteString(w, "zzzz"); err != nil && !isConnectionCloseError(err) {
+			t.Fatalf("write interrupted v1 packet tail: %v", err)
+		}
+		sourceServer.recordMetric(serviceUploadPack, metricPack, int64(len(body)), 0, 1, 1)
+		return true
+	}
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, Config{
+			Source:       Endpoint{URL: sourceServer.RepoURL()},
+			Target:       Endpoint{URL: targetServer.RepoURL()},
+			ProtocolMode: protocolModeV1,
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected v1 fetch response to start before cancellation")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected run to return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestBootstrap_IntegrationPushCanceledMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 2, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackRaw = func(w http.ResponseWriter, r *http.Request) bool {
+		defer r.Body.Close()
+		buf := make([]byte, 32)
+		n, err := r.Body.Read(buf)
+		if n == 0 && err != nil {
+			t.Fatalf("expected streamed push body bytes before cancellation, got err=%v", err)
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		_, _ = r.Body.Read(buf)
+		return true
+	}
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Bootstrap(ctx, Config{
+			Source: Endpoint{URL: sourceServer.RepoURL()},
+			Target: Endpoint{URL: targetServer.RepoURL()},
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected receive-pack body consumption before cancellation")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected bootstrap to return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestBootstrap_IntegrationPushConnectionDroppedMidStreamFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 2, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackRaw = func(w http.ResponseWriter, r *http.Request) bool {
+		defer r.Body.Close()
+		buf := make([]byte, 32)
+		n, err := r.Body.Read(buf)
+		if n == 0 && err != nil {
+			t.Fatalf("expected streamed push body bytes before disconnect, got err=%v", err)
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("expected hijacker")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack receive-pack connection: %v", err)
+		}
+		_ = conn.Close()
+		return true
+	}
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Bootstrap(context.Background(), Config{
+			Source: Endpoint{URL: sourceServer.RepoURL()},
+			Target: Endpoint{URL: targetServer.RepoURL()},
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected receive-pack body consumption before disconnect")
+	}
+
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected bootstrap to return after dropped connection")
+	}
+	if err == nil {
+		t.Fatal("expected push failure after dropped connection")
+	}
+}
+
 func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -154,11 +549,50 @@ func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	}
 }
 
+func TestProbe_ContextCanceled(t *testing.T) {
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Probe(ctx, Config{
+			Source: Endpoint{URL: server.URL + "/repo.git"},
+		})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("probe request did not reach server before timeout")
+	}
+	cancel()
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("probe did not return after cancellation")
+	}
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestBootstrap_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -222,11 +656,392 @@ func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
 	}
 }
 
+func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+
+	unrelatedRepo, unrelatedFS := newSourceRepo(t)
+	makeCommits(t, unrelatedRepo, unrelatedFS, 1)
+	unrelatedHead, err := unrelatedRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve unrelated head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(unrelatedRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy unrelated objects: %v", err)
+	}
+	targetHead := unrelatedHead
+	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, targetHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	}
+
+	s, err := newSession(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	desired, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
+	if err != nil {
+		t.Fatalf("build desired refs: %v", err)
+	}
+	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
+	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
+		SourceConn:    s.sourceConn,
+		SourceService: s.sourceService,
+		BatchMaxPack:  cfg.BatchMaxPackBytes,
+	}, ref)
+	if err != nil {
+		t.Fatalf("plan checkpoints: %v", err)
+	}
+	if len(checkpoints) == 0 {
+		t.Fatal("expected checkpoints for batched bootstrap")
+	}
+	for _, checkpoint := range checkpoints {
+		if checkpoint == targetHead.Hash() {
+			t.Fatalf("expected unrelated temp ref hash, got checkpoint collision at %s", checkpoint)
+		}
+	}
+
+	_, err = Bootstrap(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected batched bootstrap resume mismatch to fail")
+	}
+	if !strings.Contains(err.Error(), "does not match any planned checkpoint") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBootstrap_IntegrationBatchedResumeAtFinalTipCutsOver(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy source objects: %v", err)
+	}
+	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap final-tip cutover failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve target head: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s, got %s", sourceHead.Hash(), targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted", tempRef)
+	}
+}
+
+func TestBootstrap_IntegrationBatchedResumeAfterCutoverOnlyDeletesTempRef(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy source objects: %v", err)
+	}
+	targetRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(targetRef)
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(targetRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set target ref: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap cleanup rerun failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	targetHead, err := targetRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve target head: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s, got %s", sourceHead.Hash(), targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted", tempRef)
+	}
+}
+
+func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy source objects: %v", err)
+	}
+	targetRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(targetRef)
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set temp ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	failDeleteOnce := true
+	targetServer.commandHook = func(req *packp.UpdateRequests) *packp.ReportStatus {
+		if !failDeleteOnce || len(req.Commands) != 1 {
+			return nil
+		}
+		cmd := req.Commands[0]
+		if cmd.Name != tempRef || !cmd.New.IsZero() {
+			return nil
+		}
+		failDeleteOnce = false
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+			ReferenceName: cmd.Name,
+			Status:        "ng simulated temp-ref delete failure",
+		})
+		return report
+	}
+
+	cfg := Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	}
+
+	if _, err := Bootstrap(context.Background(), cfg); err == nil {
+		t.Fatal("expected first bootstrap retry to fail on temp-ref delete")
+	}
+	targetHead, err := targetRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve target head after failed delete: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s after failed delete, got %s", sourceHead.Hash(), targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err != nil {
+		t.Fatalf("expected temp ref %s to remain after failed delete: %v", tempRef, err)
+	}
+
+	result, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("bootstrap retry after delete failure failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted after retry", tempRef)
+	}
+}
+
+func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 350_000,
+	}
+
+	targetRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(targetRef)
+	failedAfterProgress := false
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, hasPack bool) *packp.ReportStatus {
+		if !hasPack || len(req.Commands) == 0 || req.Commands[0].Name != tempRef {
+			return nil
+		}
+		if failedAfterProgress {
+			return nil
+		}
+		if _, err := targetRepo.Reference(tempRef, true); err != nil {
+			return nil
+		}
+		if _, err := targetRepo.Reference(targetRef, true); err == nil {
+			return nil
+		}
+		failedAfterProgress = true
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ng simulated checkpoint pack failure",
+			})
+		}
+		return report
+	}
+
+	if _, err := Bootstrap(context.Background(), cfg); err == nil {
+		t.Fatal("expected first bootstrap attempt to fail on checkpoint pack push")
+	}
+
+	targetTemp, err := targetRepo.Reference(tempRef, true)
+	if err != nil {
+		t.Fatalf("resolve temp ref after failed checkpoint push: %v", err)
+	}
+	if targetTemp.Hash().IsZero() {
+		t.Fatalf("expected non-zero temp ref after failed checkpoint push")
+	}
+	if _, err := targetRepo.Reference(targetRef, true); err == nil {
+		t.Fatalf("expected target ref %s to remain absent after failed checkpoint push", targetRef)
+	}
+
+	result, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("bootstrap retry after checkpoint pack failure failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("expected batched bootstrap result, got %+v", result)
+	}
+	targetHead, err := targetRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve target ref after retry: %v", err)
+	}
+	sourceHead, err := sourceRepo.Reference(targetRef, true)
+	if err != nil {
+		t.Fatalf("resolve source head after retry: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target head %s after retry, got %s", sourceHead.Hash(), targetHead.Hash())
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected temp ref %s to be deleted after retry", tempRef)
+	}
+}
+
+func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewTagReferenceName("v1"), sourceHead.Hash())); err != nil {
+		t.Fatalf("set lightweight tag: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:      protocolModeAuto,
+		IncludeTags:       true,
+		BatchMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap with lightweight tag failed: %v", err)
+	}
+	if result.Pushed != 2 || !result.Batching || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	tagRef, err := targetRepo.Reference(plumbing.NewTagReferenceName("v1"), true)
+	if err != nil {
+		t.Fatalf("resolve target tag: %v", err)
+	}
+	if tagRef.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target tag %s, got %s", sourceHead.Hash(), tagRef.Hash())
+	}
+}
+
 func TestBootstrap_IntegrationBranchMapping(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -277,7 +1092,7 @@ func TestBootstrap_IntegrationTags(t *testing.T) {
 		t.Fatalf("set source tag: %v", err)
 	}
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -308,7 +1123,7 @@ func TestBootstrap_IntegrationPackLimit(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -339,7 +1154,7 @@ func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 10)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -442,7 +1257,7 @@ func TestRun_IntegrationDryRunPlansWithoutPush(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -483,7 +1298,7 @@ func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -496,11 +1311,11 @@ func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	originalFill := gitCredentialFillCommand
+	originalFill := auth.GitCredentialFillCommand
 	t.Cleanup(func() {
-		gitCredentialFillCommand = originalFill
+		auth.GitCredentialFillCommand = originalFill
 	})
-	gitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
 		if !strings.Contains(input, "protocol=http\n") {
 			t.Fatalf("expected protocol in credential input, got %q", input)
 		}
@@ -531,7 +1346,7 @@ func TestRun_IntegrationProtocolV2Source(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -619,7 +1434,7 @@ func TestProbe_IntegrationTargetCapabilities(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -766,7 +1581,7 @@ func TestRun_IntegrationAddAnnotatedTagAfterInitialBranchSync(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -816,7 +1631,7 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil)
+	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
 	}
@@ -839,7 +1654,7 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 	if err != nil {
 		t.Fatalf("source head: %v", err)
 	}
-	chain, err := firstParentChain(sourceRepo, head.Hash())
+	chain, err := planner.FirstParentChain(sourceRepo.Storer, head.Hash())
 	if err != nil {
 		t.Fatalf("build commit chain: %v", err)
 	}
@@ -871,92 +1686,15 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 }
 
 func newSourceRepo(t *testing.T) (*git.Repository, billy.Filesystem) {
-	t.Helper()
-
-	fs := memfs.New()
-	repo, err := git.Init(memory.NewStorage(), fs)
-	if err != nil {
-		t.Fatalf("init source repo: %v", err)
-	}
-
-	return repo, fs
+	return syncertest.NewMemoryRepo(t)
 }
 
 func makeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int) {
-	t.Helper()
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("open worktree: %v", err)
-	}
-
-	for i := 0; i < count; i++ {
-		content := strings.Repeat(fmt.Sprintf("line %d %d\n", i, time.Now().UnixNano()), 24)
-		file, err := fs.Create("tracked.txt")
-		if err != nil {
-			t.Fatalf("create file: %v", err)
-		}
-		if _, err := io.WriteString(file, content); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		if err := file.Close(); err != nil {
-			t.Fatalf("close file: %v", err)
-		}
-
-		if _, err := wt.Add("tracked.txt"); err != nil {
-			t.Fatalf("add file: %v", err)
-		}
-
-		_, err = wt.Commit(fmt.Sprintf("commit %d", i), &git.CommitOptions{
-			Author:    &objectSignature,
-			Committer: &objectSignature,
-		})
-		if err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	}
+	syncertest.MakeCommits(t, repo, fs, count)
 }
 
 func makeLargeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int, blobSize int) {
-	t.Helper()
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("open worktree: %v", err)
-	}
-
-	for i := 0; i < count; i++ {
-		name := fmt.Sprintf("blob-%d.bin", i)
-		file, err := fs.Create(name)
-		if err != nil {
-			t.Fatalf("create file: %v", err)
-		}
-		content := make([]byte, blobSize)
-		state := uint32(0x9e3779b9) + uint32(i)*uint32(2654435761)
-		for idx := range content {
-			state ^= state << 13
-			state ^= state >> 17
-			state ^= state << 5
-			content[idx] = byte(state >> 24)
-		}
-		if _, err := file.Write(content); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		if err := file.Close(); err != nil {
-			t.Fatalf("close file: %v", err)
-		}
-		if _, err := wt.Add(name); err != nil {
-			t.Fatalf("add file: %v", err)
-		}
-
-		_, err = wt.Commit(fmt.Sprintf("large commit %d", i), &git.CommitOptions{
-			Author:    &objectSignature,
-			Committer: &objectSignature,
-		})
-		if err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-	}
+	syncertest.MakeLargeCommits(t, repo, fs, count, blobSize)
 }
 
 var objectSignature = signature()
@@ -970,26 +1708,14 @@ func signature() object.Signature {
 }
 
 func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) {
-	t.Helper()
-
-	sourceRef, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err != nil {
-		t.Fatalf("resolve source ref: %v", err)
-	}
-	targetRef, err := targetRepo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err != nil {
-		t.Fatalf("resolve target ref: %v", err)
-	}
-	if sourceRef.Hash() != targetRef.Hash() {
-		t.Fatalf("branch %s mismatch: source=%s target=%s", branch, sourceRef.Hash(), targetRef.Hash())
-	}
+	syncertest.AssertBranchHeadsMatch(t, sourceRepo, targetRepo, branch)
 }
 
 type metricKind string
 
 const (
-	serviceUploadPack  = transport.UploadPackServiceName
-	serviceReceivePack = transport.ReceivePackServiceName
+	serviceUploadPack  = string(transport.UploadPackService)
+	serviceReceivePack = string(transport.ReceivePackService)
 
 	metricInfoRefs metricKind = "info_refs"
 	metricPack     metricKind = "pack"
@@ -1005,7 +1731,7 @@ type exchangeMetric struct {
 }
 
 type smartHTTPRepoServer struct {
-	t        *testing.T
+	tb       testing.TB
 	server   *httptest.Server
 	repo     *git.Repository
 	repoPath string
@@ -1015,16 +1741,21 @@ type smartHTTPRepoServer struct {
 
 	receivePackBodyLimit int64
 	receivePackNoThin    bool
+	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
+	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
+	uploadPackRaw        func(http.ResponseWriter, *http.Request, []byte) bool
+	uploadPackV2FetchRaw func(http.ResponseWriter, v2TestCommandRequest, []byte) bool
+	receivePackRaw       func(http.ResponseWriter, *http.Request) bool
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
 }
 
-func newSmartHTTPRepoServer(t *testing.T, repo *git.Repository) *smartHTTPRepoServer {
-	t.Helper()
+func newSmartHTTPRepoServer(tb testing.TB, repo *git.Repository) *smartHTTPRepoServer {
+	tb.Helper()
 
 	s := &smartHTTPRepoServer{
-		t:        t,
+		tb:       tb,
 		repo:     repo,
 		repoPath: "/repo.git",
 	}
@@ -1032,18 +1763,18 @@ func newSmartHTTPRepoServer(t *testing.T, repo *git.Repository) *smartHTTPRepoSe
 	return s
 }
 
-func newSmartHTTPRepoServerV2(t *testing.T, repo *git.Repository) *smartHTTPRepoServer {
-	t.Helper()
+func newSmartHTTPRepoServerV2(tb testing.TB, repo *git.Repository) *smartHTTPRepoServer {
+	tb.Helper()
 
-	s := newSmartHTTPRepoServer(t, repo)
+	s := newSmartHTTPRepoServer(tb, repo)
 	s.v2 = true
 	return s
 }
 
-func newAuthenticatedSmartHTTPRepoServer(t *testing.T, repo *git.Repository, username, password string) *smartHTTPRepoServer {
-	t.Helper()
+func newAuthenticatedSmartHTTPRepoServer(tb testing.TB, repo *git.Repository, username, password string) *smartHTTPRepoServer {
+	tb.Helper()
 
-	s := newSmartHTTPRepoServer(t, repo)
+	s := newSmartHTTPRepoServer(tb, repo)
 	s.username = username
 	s.password = password
 	return s
@@ -1155,41 +1886,26 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	session, err := s.newSession(service)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var ar *packp.AdvRefs
-	switch service {
-	case serviceUploadPack:
-		ar, err = session.(transport.UploadPackSession).AdvertisedReferencesContext(r.Context())
-	case serviceReceivePack:
-		ar, err = session.(transport.ReceivePackSession).AdvertisedReferencesContext(r.Context())
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if service == serviceReceivePack && s.receivePackNoThin {
-		_ = ar.Capabilities.Set(capability.Capability("no-thin"))
-	}
-
-	ar.Prefix = [][]byte{
-		[]byte("# service=" + service),
-		pktline.Flush,
-	}
-
 	var buf bytes.Buffer
-	if err := ar.Encode(&buf); err != nil {
+	svc := transport.Service(service)
+	if err := transport.AdvertiseReferences(r.Context(), s.repo.Storer, &buf, svc, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if service == serviceReceivePack && s.receivePackNoThin {
+		// For no-thin, we need to decode, modify capabilities, and re-encode
+		ar := packp.NewAdvRefs()
+		if err := ar.Decode(bytes.NewReader(buf.Bytes())); err == nil {
+			_ = ar.Capabilities.Set(capability.Capability("no-thin"))
+			buf.Reset()
+			_ = ar.Encode(&buf)
+		}
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write advertised refs: %v", err)
+		s.tb.Fatalf("write advertised refs: %v", err)
 	}
 
 	s.recordMetric(service, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
@@ -1197,7 +1913,6 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 
 func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Request) {
 	var buf bytes.Buffer
-	enc := pktline.NewEncoder(&buf)
 	lines := []string{
 		"version 2\n",
 		"ls-refs=unborn\n",
@@ -1205,19 +1920,19 @@ func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Re
 		"agent=test-server\n",
 	}
 	for _, line := range lines {
-		if err := enc.EncodeString(line); err != nil {
+		if _, err := pktline.WriteString(&buf, line); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
-	if err := enc.Flush(); err != nil {
+	if err := pktline.WriteFlush(&buf); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write v2 advertised refs: %v", err)
+		s.tb.Fatalf("write v2 advertised refs: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
@@ -1234,37 +1949,29 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 		s.handleUploadPackV2(w, r, body)
 		return
 	}
-
-	session, err := s.newSession(serviceUploadPack)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if s.uploadPackRaw != nil && s.uploadPackRaw(w, r, body) {
 		return
 	}
 
-	req := packp.NewUploadPackRequest()
-	if err := req.Decode(bytes.NewReader(body)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	resp, err := session.(transport.UploadPackSession).UploadPack(r.Context(), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	wantCount := strings.Count(string(body), "want ")
+	haveCount := strings.Count(string(body), "have ")
 
 	var buf bytes.Buffer
-	if err := resp.Encode(&buf); err != nil {
+	reader := io.NopCloser(bytes.NewReader(body))
+	writer := nopWriteCloser{&buf}
+	if err := transport.UploadPack(r.Context(), s.repo.Storer, reader, writer, &transport.UploadPackOptions{
+		StatelessRPC: true,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write upload-pack response: %v", err)
+		s.tb.Fatalf("write upload-pack response: %v", err)
 	}
 
-	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), len(req.Wants), strings.Count(string(body), "have "))
+	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), wantCount, haveCount)
 }
 
 func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -1299,27 +2006,30 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	}
 
 	var buf bytes.Buffer
-	enc := pktline.NewEncoder(&buf)
 	for _, ref := range refs {
-		if err := enc.EncodeString(ref.Hash().String() + " " + ref.Name().String() + "\n"); err != nil {
+		if _, err := pktline.WriteString(&buf, ref.Hash().String()+" "+ref.Name().String()+"\n"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
-	if err := enc.Flush(); err != nil {
+	if err := pktline.WriteFlush(&buf); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceUploadPack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write v2 ls-refs response: %v", err)
+		s.tb.Fatalf("write v2 ls-refs response: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 }
 
 func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
+	if s.uploadPackV2FetchRaw != nil && s.uploadPackV2FetchRaw(w, req, body) {
+		return
+	}
+
 	var wants []plumbing.Hash
 	var haves []plumbing.Hash
 	for _, arg := range req.Args {
@@ -1345,8 +2055,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 	}
 
 	var buf bytes.Buffer
-	pkt := pktline.NewEncoder(&buf)
-	if err := pkt.EncodeString("packfile\n"); err != nil {
+	if _, err := pktline.WriteString(&buf, "packfile\n"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1356,12 +2065,12 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 			end = pack.Len()
 		}
 		payload := append([]byte{1}, pack.Bytes()[offset:end]...)
-		if err := pkt.Encode(payload); err != nil {
+		if _, err := pktline.Write(&buf, payload); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
-	if err := pkt.Flush(); err != nil {
+	if err := pktline.WriteFlush(&buf); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1371,13 +2080,17 @@ func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req
 		if isConnectionCloseError(err) {
 			return
 		}
-		s.t.Fatalf("write v2 fetch response: %v", err)
+		s.tb.Fatalf("write v2 fetch response: %v", err)
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), len(wants), len(haves))
 }
 
 func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.Request) {
+	if s.receivePackRaw != nil && s.receivePackRaw(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1397,99 +2110,125 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
 		if _, err := w.Write(buf.Bytes()); err != nil {
-			s.t.Fatalf("write receive-pack rejection: %v", err)
+			s.tb.Fatalf("write receive-pack rejection: %v", err)
 		}
 		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 		return
 	}
 
-	session, err := s.newSession(serviceReceivePack)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	hasPack := bytes.Contains(body, []byte("PACK"))
 
-	req := packp.NewReferenceUpdateRequest()
-	if err := req.Decode(bytes.NewReader(body)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+	// For no-PACK requests, handle manually since transport.ReceivePack
+	// expects a packfile when there are create/update commands.
+	if !hasPack {
+		req := packp.NewUpdateRequests()
+		if err := req.Decode(bytes.NewReader(body)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-	if !bytes.Contains(body, []byte("PACK")) {
-		report := packp.NewReportStatus()
-		report.UnpackStatus = "ok"
-		for _, cmd := range req.Commands {
-			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
-				ReferenceName: cmd.Name,
-				Status:        "ok",
-			})
-			if cmd.New.IsZero() {
-				if err := s.repo.Storer.RemoveReference(cmd.Name); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				continue
+		if s.commandHook != nil {
+			if report := s.commandHook(req); report != nil {
+				s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+				return
 			}
-			if err := s.repo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		if s.receivePackHook != nil {
+			if report := s.receivePackHook(req, false); report != nil {
+				s.writeReceivePackReport(w, report, req.Capabilities, len(body))
 				return
 			}
 		}
 
-		var buf bytes.Buffer
-		if err := report.Encode(&buf); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			status := "ok"
+			if cmd.New.IsZero() {
+				if err := s.repo.Storer.RemoveReference(cmd.Name); err != nil {
+					status = err.Error()
+				}
+			} else {
+				if err := s.repo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
+					status = err.Error()
+				}
+			}
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        status,
+			})
 		}
 
-		w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
-		if _, err := w.Write(buf.Bytes()); err != nil {
-			s.t.Fatalf("write receive-pack command response: %v", err)
-		}
-		s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+		s.writeReceivePackReport(w, report, req.Capabilities, len(body))
 		return
 	}
 
-	report, err := session.(transport.ReceivePackSession).ReceivePack(r.Context(), req)
-
-	var buf bytes.Buffer
-	if report != nil {
-		if err := report.Encode(&buf); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+	if s.receivePackHook != nil {
+		req := packp.NewUpdateRequests()
+		if err := req.Decode(bytes.NewReader(body)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if report := s.receivePackHook(req, true); report != nil {
+			s.writeReceivePackReport(w, report, req.Capabilities, len(body))
 			return
 		}
 	}
 
+	var buf bytes.Buffer
+	reader := io.NopCloser(bytes.NewReader(body))
+	writer := nopWriteCloser{&buf}
+	rpErr := transport.ReceivePack(r.Context(), s.repo.Storer, reader, writer, &transport.ReceivePackOptions{
+		StatelessRPC: true,
+	})
+
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.t.Fatalf("write receive-pack response: %v", err)
+		s.tb.Fatalf("write receive-pack response: %v", err)
 	}
-	if err != nil {
+	if rpErr != nil {
 		return
 	}
 
 	s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
 }
 
-func (s *smartHTTPRepoServer) newSession(service string) (interface{}, error) {
-	loader := transportserver.MapLoader{}
-
-	endpoint, err := transport.NewEndpoint(s.RepoURL())
-	if err != nil {
-		return nil, err
+// writeReceivePackReport encodes a report-status, optionally wrapped in
+// sideband (matching what transport.ReceivePack would produce), and writes it.
+func (s *smartHTTPRepoServer) writeReceivePackReport(w http.ResponseWriter, report *packp.ReportStatus, caps *capability.List, bodyLen int) {
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	useSideband := false
+	if caps != nil && !caps.Supports(capability.NoProgress) {
+		if caps.Supports(capability.Sideband64k) {
+			writer = sideband.NewMuxer(sideband.Sideband64k, &buf)
+			useSideband = true
+		} else if caps.Supports(capability.Sideband) {
+			writer = sideband.NewMuxer(sideband.Sideband, &buf)
+			useSideband = true
+		}
 	}
-	loader[endpoint.String()] = s.repo.Storer
 
-	srv := transportserver.NewServer(loader)
-	switch service {
-	case serviceUploadPack:
-		return srv.NewUploadPackSession(endpoint, nil)
-	case serviceReceivePack:
-		return srv.NewReceivePackSession(endpoint, nil)
-	default:
-		return nil, fmt.Errorf("unknown service %q", service)
+	wc := nopWriteCloser{writer}
+	if err := report.Encode(wc); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	if useSideband {
+		_ = pktline.WriteFlush(&buf)
+	}
+
+	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.tb.Fatalf("write receive-pack report: %v", err)
+	}
+	s.recordMetric(serviceReceivePack, metricPack, int64(bodyLen), int64(buf.Len()), 0, 0)
 }
+
+// nopWriteCloser wraps an io.Writer to satisfy io.WriteCloser.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 func (s *smartHTTPRepoServer) recordMetric(service string, kind metricKind, in, out int64, wants, haves int) {
 	s.mu.Lock()
@@ -1556,7 +2295,7 @@ type v2TestCommandRequest struct {
 }
 
 func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
-	reader := newPacketReader(bytes.NewReader(body))
+	reader := gitproto.NewPacketReader(bytes.NewReader(body))
 	req := v2TestCommandRequest{}
 	inArgs := false
 
@@ -1566,11 +2305,11 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 			return req, err
 		}
 		switch kind {
-		case packetTypeFlush:
+		case gitproto.PacketFlush:
 			return req, nil
-		case packetTypeDelim:
+		case gitproto.PacketDelim:
 			inArgs = true
-		case packetTypeData:
+		case gitproto.PacketData:
 			line := strings.TrimSuffix(string(payload), "\n")
 			if strings.HasPrefix(line, "command=") {
 				req.Command = strings.TrimPrefix(line, "command=")
@@ -1586,17 +2325,21 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 }
 
 func TestMain(m *testing.M) {
-	originalHTTP := transportclient.Protocols["http"]
-	originalHTTPS := transportclient.Protocols["https"]
+	originalHTTP, _ := transport.Get("http")
+	originalHTTPS, _ := transport.Get("https")
 
-	customHTTP := transporthttp.NewClient(&http.Client{})
-	transportclient.InstallProtocol("http", customHTTP)
-	transportclient.InstallProtocol("https", customHTTP)
+	customHTTP := transporthttp.NewTransport(&transporthttp.TransportOptions{Client: &http.Client{}})
+	transport.Register("http", customHTTP)
+	transport.Register("https", customHTTP)
 
 	code := m.Run()
 
-	transportclient.InstallProtocol("http", originalHTTP)
-	transportclient.InstallProtocol("https", originalHTTPS)
+	if originalHTTP != nil {
+		transport.Register("http", originalHTTP)
+	}
+	if originalHTTPS != nil {
+		transport.Register("https", originalHTTPS)
+	}
 
 	os.Exit(code)
 }
