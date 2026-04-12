@@ -10,7 +10,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/validation"
 )
 
@@ -715,7 +714,7 @@ func TestCanIncrementalRelayMixed(t *testing.T) {
 		},
 	}
 
-	ok, reason := CanIncrementalRelay(false, false, false, plans, gitproto.TargetFeatures{Known: true})
+	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true})
 	if ok {
 		t.Fatalf("expected CanIncrementalRelay=false for tag with ActionUpdate")
 	}
@@ -735,7 +734,7 @@ func TestCanIncrementalRelayRejectsNoThin(t *testing.T) {
 		Action:     ActionUpdate,
 	}}
 
-	ok, reason := CanIncrementalRelay(false, false, false, plans, gitproto.TargetFeatures{Known: true, NoThin: true})
+	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true})
 	if ok {
 		t.Fatal("expected CanIncrementalRelay=false when target advertises no-thin")
 	}
@@ -755,7 +754,7 @@ func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
 		Action:     ActionCreate,
 	}}
 
-	ok, reason := CanIncrementalRelay(false, false, false, plans, gitproto.TargetFeatures{Known: true})
+	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true})
 	if ok {
 		t.Fatal("expected CanIncrementalRelay=false for branch create")
 	}
@@ -795,7 +794,7 @@ func TestRelayFallbackReason(t *testing.T) {
 		Action:     ActionCreate,
 	}}
 
-	target := gitproto.TargetFeatures{Known: true}
+	target := RelayTargetPolicy{CapabilitiesKnown: true}
 	if got := RelayFallbackReason(false, false, false, tagCreate, target); got != "fast-forward-branch-or-tag-create" {
 		t.Fatalf("expected fast-forward-branch-or-tag-create, got %s", got)
 	}

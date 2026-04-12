@@ -449,7 +449,7 @@ Current rewrite note:
 
 - All mapping validation happens before network activity. Status: done
 - Capability negotiation is centralized and enforced consistently. Status: partial
-  Source-side fetch capability checks now live behind `gitproto.RefService` methods, but some target-side relay gating still relies on orchestration wiring rather than a fully typed capability boundary.
+  Source-side fetch capability checks now live behind `gitproto.RefService` methods, and planner relay gating now consumes a narrower syncer-level policy instead of importing `gitproto` types directly. Some target-side relay decisions still rely on orchestration wiring rather than a fully unified capability model, so this remains partial.
 - Relay strategies are separate packages with explicit inputs and outputs. Status: done
 - Tag creation is correct whether or not a pack transfer is needed. Status: done
 - Stats are concurrency-safe. Status: done
