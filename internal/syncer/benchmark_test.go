@@ -2,24 +2,20 @@ package syncer
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"testing"
-	"time"
-
-	billy "github.com/go-git/go-billy/v6"
-	"github.com/go-git/go-billy/v6/memfs"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/soph/git-sync/internal/syncertest"
+	"io"
+	"testing"
 )
 
 func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
 	b.ReportAllocs()
 
-	sourceRepo, sourceFS := newBenchRepo(b)
-	makeBenchCommits(b, sourceRepo, sourceFS, 8)
+	sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
+	syncertest.MakeCommits(b, sourceRepo, sourceFS, 8)
 	sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
 	defer sourceServer.Close()
 
@@ -53,8 +49,8 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		sourceRepo, sourceFS := newBenchRepo(b)
-		makeBenchCommits(b, sourceRepo, sourceFS, 2)
+		sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
+		syncertest.MakeCommits(b, sourceRepo, sourceFS, 2)
 
 		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
@@ -64,7 +60,7 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 			b.Fatalf("copy target baseline: %v", err)
 		}
 
-		makeBenchCommits(b, sourceRepo, sourceFS, 1)
+		syncertest.MakeCommits(b, sourceRepo, sourceFS, 1)
 
 		sourceServer := newSmartHTTPRepoServerV2(b, sourceRepo)
 		targetServer := newSmartHTTPRepoServer(b, targetRepo)
@@ -91,8 +87,8 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		sourceRepo, sourceFS := newBenchRepo(b)
-		makeBenchCommits(b, sourceRepo, sourceFS, 3)
+		sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
+		syncertest.MakeCommits(b, sourceRepo, sourceFS, 3)
 
 		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
@@ -126,47 +122,6 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 			b.Fatalf("materialized benchmark run failed: %v", err)
 		}
 		b.StartTimer()
-	}
-}
-
-func newBenchRepo(b *testing.B) (*git.Repository, billy.Filesystem) {
-	b.Helper()
-	fs := memfs.New()
-	repo, err := git.Init(memory.NewStorage(), git.WithWorkTree(fs))
-	if err != nil {
-		b.Fatalf("init repo: %v", err)
-	}
-	return repo, fs
-}
-
-func makeBenchCommits(b *testing.B, repo *git.Repository, fs billy.Filesystem, count int) {
-	b.Helper()
-	wt, err := repo.Worktree()
-	if err != nil {
-		b.Fatalf("open worktree: %v", err)
-	}
-
-	for i := 0; i < count; i++ {
-		content := fmt.Sprintf("bench line %d %d\n", i, time.Now().UnixNano())
-		file, err := fs.Create("tracked.txt")
-		if err != nil {
-			b.Fatalf("create file: %v", err)
-		}
-		if _, err := io.WriteString(file, content); err != nil {
-			b.Fatalf("write file: %v", err)
-		}
-		if err := file.Close(); err != nil {
-			b.Fatalf("close file: %v", err)
-		}
-		if _, err := wt.Add("tracked.txt"); err != nil {
-			b.Fatalf("add file: %v", err)
-		}
-		if _, err := wt.Commit(fmt.Sprintf("bench commit %d", i), &git.CommitOptions{
-			Author:    &objectSignature,
-			Committer: &objectSignature,
-		}); err != nil {
-			b.Fatalf("commit: %v", err)
-		}
 	}
 }
 
