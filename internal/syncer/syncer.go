@@ -392,9 +392,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 	measurementDone := s.measurementDone
 	stats := s.stats
-	sourceConn := s.sourceConn
 	sourceService := s.sourceService
-	targetAdv := s.targetAdv
 	targetPolicy := s.targetPolicy
 	targetPusher := s.targetPusher
 	sourceRefMap := s.sourceRefMap
@@ -421,7 +419,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, cfg, stats, s.logger, sourceConn, s.targetConn, sourceService, targetAdv, desiredRefs, targetRefMap, reason, measurementDone)
+		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason)
 	}
 
 	// Normal sync: allocate in-memory repo and fetch objects
@@ -430,7 +428,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
 	gpDesired := convert.DesiredRefs(desiredRefs)
-	if err := sourceService.FetchToStore(ctx, repo.Storer, sourceConn, gpDesired, targetRefMap); err != nil {
+	if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return Result{}, err
 		}
@@ -470,7 +468,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if !cfg.DryRun {
 		// Try incremental relay first
 		incResult, err := incremental.Execute(ctx, incremental.Params{
-			SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
+			SourceConn: s.sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
 			DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
 			PushPlans: pushPlans, MaxPackBytes: cfg.MaxPackBytes,
 			CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
@@ -488,7 +486,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		} else if len(pushPlans) > 0 {
 			// Materialized fallback
 			if err := materialized.Execute(ctx, materialized.Params{
-				Store: repo.Storer, SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
+				Store: repo.Storer, SourceConn: s.sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
 				DesiredRefs: desiredRefs, TargetRefs: targetRefMap,
 				PushPlans: pushPlans, MaxObjects: cfg.MaterializedMaxObjects,
 			}); err != nil {
@@ -536,7 +534,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	_, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, s.targetRefMap)
-	result, err := bootstrapWithInputs(ctx, cfg, s.stats, s.logger, s.sourceConn, s.targetConn, s.sourceService, s.targetAdv, desiredRefs, s.targetRefMap, reason, s.measurementDone)
+	result, err := bootstrapWithInputs(ctx, s, desiredRefs, s.targetRefMap, reason)
 	result.Measurement = s.measurementDone()
 	return result, err
 }
@@ -657,23 +655,16 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 
 func bootstrapWithInputs(
 	ctx context.Context,
-	cfg Config,
-	stats *statsCollector,
-	logger *slog.Logger,
-	sourceConn, targetConn *gitproto.Conn,
-	sourceService *gitproto.RefService,
-	targetAdv *packp.AdvRefs,
+	s *syncSession,
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	relayReason string,
-	measurementDone func() Measurement,
 ) (Result, error) {
-	targetPusher := gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
-		SourceConn: sourceConn, SourceService: sourceService, TargetPusher: targetPusher,
+		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.targetPusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
-		MaxPackBytes: cfg.MaxPackBytes, BatchMaxPack: cfg.BatchMaxPackBytes,
-		Verbose: cfg.Verbose, Logger: logger,
+		MaxPackBytes: s.cfg.MaxPackBytes, BatchMaxPack: s.cfg.BatchMaxPackBytes,
+		Verbose: s.cfg.Verbose, Logger: s.logger,
 	}, relayReason)
 	if err != nil {
 		return Result{}, err
@@ -683,7 +674,7 @@ func bootstrapWithInputs(
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
-		Stats: stats.snapshot(), Measurement: measurementDone(), Protocol: sourceService.Protocol,
+		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
 	}, nil
 }
 

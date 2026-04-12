@@ -298,6 +298,7 @@ Current rewrite note:
 - Incremental relay policy decisions are now injected consistently instead of splitting between one injected check and one hard-coded planner call.
 - Bootstrap checkpoint planning now carries its graph, probe cache, and prefetched-pack state inside a dedicated internal planner object instead of one large helper function.
 - The materialized fallback now runs through an explicit executor with separate stages for tag prefetch, object-closure collection, limit enforcement, and push execution.
+- Syncer bootstrap execution now takes a shared session object instead of threading raw source/target transports, stats, logger, measurement, and target advertisement through a wide helper signature.
 - Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability
