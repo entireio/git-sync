@@ -217,6 +217,9 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for delete in pack push")
 	}
+	if !pack.closed {
+		t.Fatal("expected pack to be closed when delete commands are rejected")
+	}
 }
 
 type trackingReadCloser struct {

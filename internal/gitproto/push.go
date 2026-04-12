@@ -182,6 +182,7 @@ func PushPack(
 ) error {
 	for _, cmd := range commands {
 		if cmd.Delete {
+			_ = pack.Close()
 			return fmt.Errorf("pack push only supports create and update actions")
 		}
 	}

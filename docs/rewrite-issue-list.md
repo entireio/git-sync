@@ -159,6 +159,7 @@ Current rewrite note:
 - Ownership of stream lifecycle is clearer than on `main`, and the rewrite now has direct tests for key pack-stream close behavior on success and error paths.
 - Direct strategy-level error-path tests now verify that relay bootstrap and incremental paths close source pack streams when pushes fail.
 - Batched integration coverage now also exercises a failed checkpoint pack push followed by a resume-from-temp-ref retry.
+- Lower-level `gitproto.PushPack` rejection paths now also close the provided pack stream instead of leaking it on preflight command errors.
 - This still wants a fuller close-audit around lower-level transport interruption paths before it should be considered fully done.
 
 ### 6. Protocol v2 tag fetches request `include-tag` without capability gating
