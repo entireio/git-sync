@@ -198,7 +198,7 @@ If `--source-url` is a local path, it is converted to `file://...` automatically
 - `--scenario bootstrap`
 - `--scenario sync`
 
-For large-repo measurements, use a local bare mirror as the source so the benchmark reflects `git-sync` behavior rather than internet variance. See [docs/benchmarking.md](/Users/soph/Work/entire/devenv/git-sync/docs/benchmarking.md) for details.
+For large-repo measurements, use a local bare mirror as the source so the benchmark reflects `git-sync` behavior rather than internet variance. See [docs/benchmarking.md](docs/benchmarking.md) for details.
 
 ## Sync Behavior
 
@@ -357,14 +357,14 @@ Default suite:
 env GOCACHE=/tmp/go-build go test ./...
 ```
 
-Extended and environment-specific test instructions are in [docs/testing.md](/Users/soph/Work/entire/devenv/git-sync/docs/testing.md).
+Extended and environment-specific test instructions are in [docs/testing.md](docs/testing.md).
 
 ## Design Notes
 
 `bootstrap` is the dedicated path for large initial syncs into an empty target. The goal is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
 
-Current architectural summary and package boundaries are in [docs/architecture.md](/Users/soph/Work/entire/devenv/git-sync/docs/architecture.md).
+Current architectural summary and package boundaries are in [docs/architecture.md](docs/architecture.md).
 
-The design note is in [docs/bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md).
+The design note is in [docs/bootstrap.md](docs/bootstrap.md).
 
-For very large single-branch repositories, there is also a batching design and initial implementation note in [docs/bootstrap-batching.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap-batching.md).
+For very large single-branch repositories, there is also a batching design and initial implementation note in [docs/bootstrap-batching.md](docs/bootstrap-batching.md).

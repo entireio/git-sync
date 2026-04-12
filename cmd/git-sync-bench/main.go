@@ -93,7 +93,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&workDir, "work-dir", "", "directory for temporary target repositories")
 	fs.IntVar(&repeat, "repeat", 1, "number of runs to execute")
 	fs.BoolVar(&keepTargets, "keep-targets", false, "retain generated target repositories after the run")
-	fs.BoolVar(&jsonOutput, "json", true, "print JSON output")
+	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")

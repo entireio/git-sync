@@ -152,6 +152,6 @@ That is why the rewrite keeps an explicit `--materialized-max-objects` guardrail
 
 ## Related Notes
 
-- [bootstrap.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap.md)
-- [bootstrap-batching.md](/Users/soph/Work/entire/devenv/git-sync/docs/bootstrap-batching.md)
-- [benchmarking.md](/Users/soph/Work/entire/devenv/git-sync/docs/benchmarking.md)
+- [bootstrap.md](bootstrap.md)
+- [bootstrap-batching.md](bootstrap-batching.md)
+- [benchmarking.md](benchmarking.md)
