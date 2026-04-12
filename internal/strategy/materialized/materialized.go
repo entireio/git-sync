@@ -37,55 +37,41 @@ type Params struct {
 // Fail early rather than OOM (issue #15).
 const DefaultMaxMaterializedObjects = 500_000
 
+type executor struct {
+	ctx    context.Context
+	params Params
+}
+
 // Execute runs the materialized fallback: ensures tag objects are local,
 // computes the object closure, and pushes to the target.
 func Execute(ctx context.Context, p Params) error {
 	if len(p.PushPlans) == 0 {
 		return nil
 	}
+	return (&executor{ctx: ctx, params: p}).run()
+}
 
-	// Ensure tag objects are fetched locally
-	if err := ensureTagObjects(ctx, p); err != nil {
+func (e *executor) run() error {
+	if err := e.ensureTagObjects(); err != nil {
 		return fmt.Errorf("prepare local objects for push: %w", err)
 	}
-
-	objects := make([]plumbing.Hash, 0, len(p.PushPlans))
-	for _, plan := range p.PushPlans {
-		if plan.Action == planner.ActionCreate || plan.Action == planner.ActionUpdate {
-			objects = append(objects, plan.SourceHash)
-		}
-	}
-	hashes, err := planner.ObjectsToPush(p.Store, objects, p.TargetRefs)
+	hashes, err := e.collectObjectClosure()
 	if err != nil {
 		return fmt.Errorf("compute objects to push: %w", err)
 	}
-
-	// Issue #15: guard against unbounded memory usage on large non-relay syncs.
-	maxObjects := effectiveMaxObjects(p.MaxObjects)
-	if len(hashes) > maxObjects {
-		return fmt.Errorf(
-			"materialized push requires %d objects (limit %d); use bootstrap for large initial syncs",
-			len(hashes), maxObjects,
-		)
+	if err := e.enforceObjectLimit(hashes); err != nil {
+		return err
 	}
-
-	cmds := convert.PlansToPushCommands(p.PushPlans)
-	if p.TargetPusher == nil {
-		return fmt.Errorf("materialized strategy requires TargetPusher")
-	}
-	if err := p.TargetPusher.PushObjects(ctx, cmds, p.Store, hashes); err != nil {
-		return fmt.Errorf("push target refs: %w", err)
-	}
-	return nil
+	return e.push(hashes)
 }
 
-func ensureTagObjects(ctx context.Context, p Params) error {
+func (e *executor) ensureTagObjects() error {
 	tagDesired := make(map[plumbing.ReferenceName]gitproto.DesiredRef)
-	for _, plan := range p.PushPlans {
+	for _, plan := range e.params.PushPlans {
 		if plan.Kind != planner.RefKindTag {
 			continue
 		}
-		if d, ok := p.DesiredRefs[plan.TargetRef]; ok {
+		if d, ok := e.params.DesiredRefs[plan.TargetRef]; ok {
 			tagDesired[plan.TargetRef] = gitproto.DesiredRef{
 				SourceRef: d.SourceRef, TargetRef: d.TargetRef,
 				SourceHash: d.SourceHash, IsTag: true,
@@ -95,9 +81,41 @@ func ensureTagObjects(ctx context.Context, p Params) error {
 	if len(tagDesired) == 0 {
 		return nil
 	}
-	err := p.SourceService.FetchToStore(ctx, p.Store, p.SourceConn, tagDesired, nil)
+	err := e.params.SourceService.FetchToStore(e.ctx, e.params.Store, e.params.SourceConn, tagDesired, nil)
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return err
+	}
+	return nil
+}
+
+func (e *executor) collectObjectClosure() ([]plumbing.Hash, error) {
+	objects := make([]plumbing.Hash, 0, len(e.params.PushPlans))
+	for _, plan := range e.params.PushPlans {
+		if plan.Action == planner.ActionCreate || plan.Action == planner.ActionUpdate {
+			objects = append(objects, plan.SourceHash)
+		}
+	}
+	return planner.ObjectsToPush(e.params.Store, objects, e.params.TargetRefs)
+}
+
+func (e *executor) enforceObjectLimit(hashes []plumbing.Hash) error {
+	maxObjects := effectiveMaxObjects(e.params.MaxObjects)
+	if len(hashes) <= maxObjects {
+		return nil
+	}
+	return fmt.Errorf(
+		"materialized push requires %d objects (limit %d); use bootstrap for large initial syncs",
+		len(hashes), maxObjects,
+	)
+}
+
+func (e *executor) push(hashes []plumbing.Hash) error {
+	cmds := convert.PlansToPushCommands(e.params.PushPlans)
+	if e.params.TargetPusher == nil {
+		return fmt.Errorf("materialized strategy requires TargetPusher")
+	}
+	if err := e.params.TargetPusher.PushObjects(e.ctx, cmds, e.params.Store, hashes); err != nil {
+		return fmt.Errorf("push target refs: %w", err)
 	}
 	return nil
 }

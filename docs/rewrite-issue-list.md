@@ -295,6 +295,7 @@ Current rewrite note:
 - The strategies now also depend on a narrower target-side push executor instead of raw target transport state, and direct strategy tests exercise those boundaries.
 - Incremental relay policy decisions are now injected consistently instead of splitting between one injected check and one hard-coded planner call.
 - Bootstrap checkpoint planning now carries its graph, probe cache, and prefetched-pack state inside a dedicated internal planner object instead of one large helper function.
+- The materialized fallback now runs through an explicit executor with separate stages for tag prefetch, object-closure collection, limit enforcement, and push execution.
 - Some helpers still carry broad parameter structs, so this remains partial rather than fully complete.
 
 ## Performance And Scalability
