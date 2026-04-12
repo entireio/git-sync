@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/go-git/go-git/v6/storage/memory"
 
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
@@ -239,8 +243,92 @@ func TestShouldProbeTipFirst(t *testing.T) {
 	}
 }
 
+func TestPlanCheckpointsProbeCountVisibility(t *testing.T) {
+	tests := []struct {
+		name       string
+		batchLimit int64
+		spanSizes  map[int]int
+		wantProbes int
+	}{
+		{
+			name:       "small early sample jumps directly to tip",
+			batchLimit: 20_000,
+			spanSizes:  map[int]int{1: 1_000, 2: 2_000, 3: 3_000, 4: 4_000, 5: 5_000, 6: 6_000, 7: 7_000, 8: 8_000, 9: 9_000, 10: 10_000},
+			wantProbes: 2,
+		},
+		{
+			name:       "mid-sized spans require repeated exact probes",
+			batchLimit: 10_000,
+			spanSizes:  map[int]int{1: 4_500, 2: 9_000, 3: 20_000, 4: 20_000, 5: 20_000, 6: 20_000, 7: 20_000, 8: 20_000, 9: 20_000, 10: 20_000},
+			wantProbes: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hashes := makeLinearCommitChain(t, 10)
+			indices := make(map[plumbing.Hash]int, len(hashes))
+			for i, h := range hashes {
+				indices[h] = i
+			}
+
+			probes := 0
+			source := fakeBootstrapSource{
+				fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+					_ = writeLinearCommitChain(t, store, len(hashes))
+					return nil
+				},
+				fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+					probes++
+					for _, ref := range desired {
+						wantIdx, ok := indices[ref.SourceHash]
+						if !ok {
+							t.Fatalf("unexpected probe hash %s", ref.SourceHash)
+						}
+						haveIdx := -1
+						for _, h := range haves {
+							if h.IsZero() {
+								continue
+							}
+							if idx, ok := indices[h]; ok {
+								haveIdx = idx
+							}
+						}
+						span := wantIdx - haveIdx
+						size, ok := tt.spanSizes[span]
+						if !ok {
+							t.Fatalf("missing synthetic pack size for span %d", span)
+						}
+						return io.NopCloser(bytes.NewReader(make([]byte, size))), nil
+					}
+					t.Fatal("expected single desired ref")
+					return nil, nil
+				},
+			}
+
+			_, err := PlanCheckpoints(context.Background(), Params{
+				SourceService: source,
+				BatchMaxPack:  tt.batchLimit,
+			}, planner.DesiredRef{
+				Label:      "main",
+				Kind:       planner.RefKindBranch,
+				SourceRef:  plumbing.NewBranchReferenceName("main"),
+				TargetRef:  plumbing.NewBranchReferenceName("main"),
+				SourceHash: hashes[len(hashes)-1],
+			})
+			if err != nil {
+				t.Fatalf("PlanCheckpoints() error = %v", err)
+			}
+			if probes != tt.wantProbes {
+				t.Fatalf("FetchPack probe count = %d, want %d", probes, tt.wantProbes)
+			}
+		})
+	}
+}
+
 type fakeBootstrapSource struct {
-	fetchPack func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchPack        func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
 }
 
 func (f fakeBootstrapSource) FetchPack(
@@ -252,7 +340,15 @@ func (f fakeBootstrapSource) FetchPack(
 	return f.fetchPack(ctx, conn, desired, targetRefs)
 }
 
-func (fakeBootstrapSource) FetchCommitGraph(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error {
+func (f fakeBootstrapSource) FetchCommitGraph(
+	ctx context.Context,
+	store storer.Storer,
+	conn *gitproto.Conn,
+	ref gitproto.DesiredRef,
+) error {
+	if f.fetchCommitGraph != nil {
+		return f.fetchCommitGraph(ctx, store, conn, ref)
+	}
 	return nil
 }
 
@@ -453,4 +549,39 @@ func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
 	if requests != 0 {
 		t.Fatalf("expected no GitHub preflight requests, got %d", requests)
 	}
+}
+
+func makeLinearCommitChain(tb testing.TB, count int) []plumbing.Hash {
+	tb.Helper()
+	store := memory.NewStorage()
+	return writeLinearCommitChain(tb, store, count)
+}
+
+func writeLinearCommitChain(tb testing.TB, store storer.Storer, count int) []plumbing.Hash {
+	tb.Helper()
+	hashes := make([]plumbing.Hash, 0, count)
+	for i := 0; i < count; i++ {
+		obj := store.NewEncodedObject()
+		var parents []plumbing.Hash
+		if len(hashes) > 0 {
+			parents = []plumbing.Hash{hashes[len(hashes)-1]}
+		}
+		when := time.Unix(int64(i+1), 0).UTC()
+		commit := &object.Commit{
+			Author:       object.Signature{Name: "test", Email: "test@example.com", When: when},
+			Committer:    object.Signature{Name: "test", Email: "test@example.com", When: when},
+			Message:      fmt.Sprintf("commit-%d", i),
+			TreeHash:     plumbing.ZeroHash,
+			ParentHashes: parents,
+		}
+		if err := commit.Encode(obj); err != nil {
+			tb.Fatalf("encode commit %d: %v", i, err)
+		}
+		hash, err := store.SetEncodedObject(obj)
+		if err != nil {
+			tb.Fatalf("store commit %d: %v", i, err)
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes
 }
