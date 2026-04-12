@@ -43,6 +43,14 @@ This is especially useful when:
 - you want a repeatable machine-oriented sync primitive rather than an ad hoc migration script
 - you need clearer control over mapping, pruning, force rules, and relay behavior than generic shell glue usually provides
 
+Compared to a service that keeps persistent local clones, `git-sync` is the better fit when:
+
+- relay is common enough that streaming source-to-target is the normal case
+- avoiding persistent local repo storage is an operational advantage
+- remote-to-remote efficiency matters more than full local Git generality
+
+If you need arbitrary complex reconciliation through one always-warm local full-state model, a local-clone service is still the more general tool.
+
 The command surface is:
 
 - `git-sync probe`: inspect a source remote, and optionally a target remote
