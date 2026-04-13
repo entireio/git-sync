@@ -38,7 +38,7 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	return fromSyncerProbeResult(result), nil
+	return internalbridge.FromProbeResult(result), nil
 }
 
 // Plan computes ref actions without pushing.
@@ -54,7 +54,7 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	if err != nil {
 		return PlanResult{}, err
 	}
-	return fromSyncerResult(result), nil
+	return internalbridge.FromSyncResult(result), nil
 }
 
 // Sync executes a sync between two remotes.
@@ -70,7 +70,7 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	if err != nil {
 		return SyncResult{}, err
 	}
-	return fromSyncerResult(result), nil
+	return internalbridge.FromSyncResult(result), nil
 }
 
 func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (internalbridge.Config, error) {

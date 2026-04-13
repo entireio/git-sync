@@ -10,6 +10,7 @@ import (
 
 	"github.com/soph/git-sync/internal/planner"
 	"github.com/soph/git-sync/internal/syncer"
+	"github.com/soph/git-sync/pkg/gitsync/internalbridge"
 )
 
 func TestBuildSyncConfigUsesDefaultProtocolAndMaterializedLimit(t *testing.T) {
@@ -87,7 +88,7 @@ func TestValidateRequests(t *testing.T) {
 }
 
 func TestFromSyncerResultZeroHashesAreEmptyStrings(t *testing.T) {
-	got := hashString(plumbing.ZeroHash)
+	got := internalbridge.HashString(plumbing.ZeroHash)
 	if got != "" {
 		t.Fatalf("hashString(zero) = %q, want empty string", got)
 	}
@@ -103,7 +104,7 @@ func TestClientReturnsAuthProviderErrors(t *testing.T) {
 }
 
 func TestFromSyncerResultShapesStableSummary(t *testing.T) {
-	got := fromSyncerResult(syncer.Result{
+	got := internalbridge.FromSyncResult(syncer.Result{
 		Plans: []planner.BranchPlan{
 			{
 				Branch:     "main",
