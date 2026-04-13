@@ -846,10 +846,25 @@ func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
 	}
 }
 
-func TestCanReplicateRelayRejectsNoThin(t *testing.T) {
-	if ok, reason := SupportsReplicateRelay(RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true}); ok {
-		t.Fatal("expected SupportsReplicateRelay=false when target advertises no-thin")
-	} else if reason != "replicate-target-no-thin" {
+func TestSupportsReplicateRelayToleratesNoThin(t *testing.T) {
+	// replicate tolerates "no-thin" targets because gitproto.FetchPack never
+	// requests the thin-pack capability, so the relayed pack is always
+	// self-contained and safe for no-thin receive-pack servers.
+	ok, reason := SupportsReplicateRelay(RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true})
+	if !ok {
+		t.Fatalf("expected SupportsReplicateRelay to accept no-thin target, got reason=%s", reason)
+	}
+	if reason != "replicate-target-capable-no-thin" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestSupportsReplicateRelayRejectsUnknownCapabilities(t *testing.T) {
+	ok, reason := SupportsReplicateRelay(RelayTargetPolicy{CapabilitiesKnown: false})
+	if ok {
+		t.Fatal("expected SupportsReplicateRelay=false when target capabilities are unknown")
+	}
+	if reason != "replicate-missing-target-capabilities" {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }

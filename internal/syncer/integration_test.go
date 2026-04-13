@@ -1579,9 +1579,15 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-func TestRun_IntegrationReplicateRejectsNoThinTarget(t *testing.T) {
+func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
+	// Replicate must tolerate targets that advertise no-thin. Source upload-pack
+	// never receives a thin-pack request from us (see gitproto/fetch.go), so
+	// the relayed pack is self-contained and acceptable to a no-thin
+	// receive-pack. This is the main reason the capability was reconsidered:
+	// go-git's own receive-pack advertises no-thin, and so does any server
+	// built on it (e.g. entire-server).
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeCommits(t, sourceRepo, sourceFS, 1)
+	makeCommits(t, sourceRepo, sourceFS, 2)
 
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
@@ -1594,17 +1600,22 @@ func TestRun_IntegrationReplicateRejectsNoThinTarget(t *testing.T) {
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	_, err = Run(context.Background(), Config{
+	result, err := Run(context.Background(), Config{
 		Source: Endpoint{URL: sourceServer.RepoURL()},
 		Target: Endpoint{URL: targetServer.RepoURL()},
 		Mode:   modeReplicate,
 	})
-	if err == nil {
-		t.Fatal("expected replicate to fail against no-thin target")
+	if err != nil {
+		t.Fatalf("replicate against no-thin target failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "use sync instead") || !strings.Contains(err.Error(), "replicate-target-no-thin") {
-		t.Fatalf("unexpected replicate error: %v", err)
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
 	}
+	if !result.Relay {
+		t.Fatalf("expected relay execution against no-thin target, got %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
 func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {

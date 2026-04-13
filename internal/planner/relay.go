@@ -13,12 +13,20 @@ type RelayTargetPolicy struct {
 
 // SupportsReplicateRelay checks target-side capabilities required by
 // replication mode before looking at planned ref actions.
+//
+// Replicate tolerates targets that advertise "no-thin" because our
+// upload-pack client (gitproto.FetchPack) never requests the "thin-pack"
+// capability, so the source never emits a thin pack. The relayed pack is
+// always self-contained and safe to push to a no-thin receive-pack.
+// If gitproto.FetchPack ever begins requesting thin-pack, this check must
+// gain a matching fallback (omit the request, or explicitly advertise
+// NoThin on the source request) when target.NoThin is set.
 func SupportsReplicateRelay(target RelayTargetPolicy) (bool, string) {
 	if !target.CapabilitiesKnown {
 		return false, "replicate-missing-target-capabilities"
 	}
 	if target.NoThin {
-		return false, "replicate-target-no-thin"
+		return true, "replicate-target-capable-no-thin"
 	}
 	return true, "replicate-target-capable"
 }

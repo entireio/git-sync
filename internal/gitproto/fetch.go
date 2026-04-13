@@ -150,6 +150,10 @@ func fetchToStoreV2(
 	}
 
 	cmdArgs := make([]string, 0, len(wants)+len(haves)+4)
+	// NOTE: no "thin-pack" argument. The relayed pack must stay
+	// self-contained so callers (e.g. replicate) can forward it to
+	// receive-pack servers that may advertise "no-thin". See
+	// planner.SupportsReplicateRelay for the matching invariant.
 	cmdArgs = append(cmdArgs, "ofs-delta", "no-progress")
 	for _, h := range wants {
 		cmdArgs = append(cmdArgs, "want "+h.String())
@@ -185,6 +189,10 @@ func fetchPackV2(
 	}
 
 	cmdArgs := make([]string, 0, len(wants)+len(haves)+4)
+	// NOTE: no "thin-pack" argument. The relayed pack must stay
+	// self-contained so callers (e.g. replicate) can forward it to
+	// receive-pack servers that may advertise "no-thin". See
+	// planner.SupportsReplicateRelay for the matching invariant.
 	cmdArgs = append(cmdArgs, "ofs-delta", "no-progress")
 	// Only request include-tag if the server supports it (issue #6).
 	if hasTag(desired) && caps.FetchSupports("include-tag") {
@@ -310,6 +318,11 @@ func buildV1UploadPackBody(
 	if adv.Capabilities.Supports(capability.OFSDelta) {
 		_ = req.Capabilities.Set(capability.OFSDelta)
 	}
+	// NOTE: we intentionally do not request capability.ThinPack. The relayed
+	// pack must stay self-contained because callers (e.g. replicate) forward
+	// it to receive-pack servers that may advertise "no-thin".
+	// planner.SupportsReplicateRelay depends on this invariant — if you add
+	// thin-pack support here, update that check to gate on target NoThin.
 
 	var buf bytes.Buffer
 	if err := req.Encode(&buf); err != nil {

@@ -9,9 +9,11 @@ Entries are grouped per release. Unreleased changes sit at the top.
 - `git-sync replicate` subcommand and `git-sync plan --mode replicate` for
   source-authoritative, relay-only replication. Divergent branches and tags
   are retargeted against the source; `--prune` deletes orphan managed refs.
-  Relay-only by design: incompatible targets (e.g. advertising `no-thin`)
-  fail with a "use sync instead" message rather than falling back to a
-  materialized push.
+  Relay-only by design: no materialized fallback. Replicate works against
+  targets that advertise `no-thin` (including any server built on go-git's
+  receive-pack, e.g. `entire-server`) because the relayed pack is always
+  self-contained — our upload-pack client never requests the `thin-pack`
+  capability from the source.
 - `gitsync.Client.Replicate` on the stable embedding surface.
 - `gitsync.OperationMode`, `gitsync.ModeSync`, `gitsync.ModeReplicate`, and
   `SyncPolicy.Mode` for selecting the mode from library callers.
