@@ -192,6 +192,83 @@ func TestRun_Plan_ReplicateMode_JSONShowsReplicate(t *testing.T) {
 	}
 }
 
+func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"replicate",
+			"--json",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run replicate subcommand: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode replicate json: %v\noutput=%s", err, output)
+	}
+	if result["dry_run"] != false {
+		t.Fatalf("expected dry_run=false, got %#v", result["dry_run"])
+	}
+	if result["operation_mode"] != "replicate" {
+		t.Fatalf("expected operation_mode=replicate, got %#v", result["operation_mode"])
+	}
+	if result["pushed"] != float64(1) {
+		t.Fatalf("expected pushed=1, got %#v", result["pushed"])
+	}
+	if result["relay"] != true {
+		t.Fatalf("expected relay=true, got %#v", result["relay"])
+	}
+	if result["relay_reason"] != "empty-target-managed-refs" {
+		t.Fatalf("expected relay_reason=empty-target-managed-refs, got %#v", result["relay_reason"])
+	}
+
+	if got := targetServer.Count("git-receive-pack"); got != 1 {
+		t.Fatalf("expected one receive-pack POST, got %d", got)
+	}
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head: %v", err)
+	}
+	if sourceHead.Hash() != targetHead.Hash() {
+		t.Fatalf("expected target head %s to match source head %s", targetHead.Hash(), sourceHead.Hash())
+	}
+}
+
+func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
+	err := run(context.Background(), []string{
+		"replicate",
+		"--force",
+		"http://127.0.0.1:1/source.git",
+		"http://127.0.0.1:1/target.git",
+	})
+	if err == nil {
+		t.Fatal("expected replicate --force to be rejected")
+	}
+	if !strings.Contains(err.Error(), "replicate does not support --force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func captureStdout(fn func() error) (string, error) {
 	old := os.Stdout
 	r, w, err := os.Pipe()
