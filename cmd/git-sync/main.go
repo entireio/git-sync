@@ -10,8 +10,9 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/soph/git-sync/internal/syncer"
 	"github.com/soph/git-sync/internal/validation"
+	"github.com/soph/git-sync/pkg/gitsync"
+	"github.com/soph/git-sync/pkg/gitsync/unstable"
 )
 
 func main() {
@@ -48,66 +49,81 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	cfg := syncer.Config{DryRun: dryRun}
 	var mappings multiStringFlag
 	var jsonOutput bool
+	var sourceAuth gitsync.EndpointAuth
+	var targetAuth gitsync.EndpointAuth
+	req := unstable.SyncRequest{DryRun: dryRun}
 
-	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
-	fs.StringVar(&cfg.Target.URL, "target-url", "", "target repository URL")
+	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
+	fs.StringVar(&req.Target.URL, "target-url", "", "target repository URL")
 
-	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
-	fs.StringVar(&cfg.Target.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
-	fs.StringVar(&cfg.Source.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
-	fs.StringVar(&cfg.Target.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
-	fs.BoolVar(&cfg.Source.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
-	fs.BoolVar(&cfg.Target.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
+	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
+	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
+	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
+	fs.StringVar(&targetAuth.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
+	fs.BoolVar(&sourceAuth.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
+	fs.BoolVar(&targetAuth.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
 
-	fs.StringVar(&cfg.Source.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
-	fs.StringVar(&cfg.Target.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
+	fs.StringVar(&sourceAuth.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
+	fs.StringVar(&targetAuth.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
 
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")
-	fs.BoolVar(&cfg.IncludeTags, "tags", false, "mirror tags")
-	fs.BoolVar(&cfg.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
-	fs.BoolVar(&cfg.Prune, "prune", false, "delete managed target refs that no longer exist on source")
-	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
-	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
+	fs.BoolVar(&req.Policy.IncludeTags, "tags", false, "mirror tags")
+	fs.BoolVar(&req.Policy.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
+	fs.BoolVar(&req.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
+	fs.BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
-	fs.IntVar(&cfg.MaterializedMaxObjects, "materialized-max-objects", syncer.DefaultMaterializedMaxObjects, "abort non-relay materialized syncs above this many objects")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
-	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
+	fs.IntVar(&req.Options.MaterializedMaxObjects, "materialized-max-objects", unstable.DefaultMaterializedMaxObjects, "abort non-relay materialized syncs above this many objects")
+	protocolValue := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
+	fs.Var(&protocolValue, "protocol", "protocol mode: auto, v1, or v2")
+	fs.BoolVar(&req.Options.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	req.Policy.Protocol = gitsync.ProtocolMode(protocolValue)
 
 	positional := fs.Args()
-	if cfg.Source.URL == "" && len(positional) > 0 {
-		cfg.Source.URL = positional[0]
+	if req.Source.URL == "" && len(positional) > 0 {
+		req.Source.URL = positional[0]
 	}
-	if cfg.Target.URL == "" && len(positional) > 1 {
-		cfg.Target.URL = positional[1]
+	if req.Target.URL == "" && len(positional) > 1 {
+		req.Target.URL = positional[1]
 	}
 	if len(positional) > 2 {
 		return usageError("too many positional arguments")
 	}
 
 	if *branches != "" {
-		cfg.Branches = splitCSV(*branches)
+		req.Scope.Branches = splitCSV(*branches)
 	}
 	for _, raw := range mappings {
 		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
 			return err
 		}
-		cfg.Mappings = append(cfg.Mappings, mapping)
+		req.Scope.Mappings = append(req.Scope.Mappings, mapping)
 	}
 
-	if cfg.Source.URL == "" || cfg.Target.URL == "" {
+	if req.Source.URL == "" || req.Target.URL == "" {
 		return usageError(name + " requires source and target repository URLs")
 	}
 
-	result, err := syncer.Run(ctx, cfg)
+	client := unstable.New(unstable.Options{
+		Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
+	})
+	var (
+		result unstable.Result
+		err    error
+	)
+	if dryRun {
+		result, err = client.Plan(ctx, req)
+	} else {
+		result, err = client.Sync(ctx, req)
+	}
 	if err != nil {
 		return err
 	}
@@ -123,65 +139,71 @@ func runBootstrap(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	cfg := syncer.Config{}
 	var mappings multiStringFlag
 	var jsonOutput bool
+	var sourceAuth gitsync.EndpointAuth
+	var targetAuth gitsync.EndpointAuth
+	req := unstable.BootstrapRequest{}
 
-	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
-	fs.StringVar(&cfg.Target.URL, "target-url", "", "target repository URL")
+	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
+	fs.StringVar(&req.Target.URL, "target-url", "", "target repository URL")
 
-	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
-	fs.StringVar(&cfg.Target.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
-	fs.StringVar(&cfg.Source.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
-	fs.StringVar(&cfg.Target.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
-	fs.BoolVar(&cfg.Source.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
-	fs.BoolVar(&cfg.Target.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
+	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
+	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
+	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
+	fs.StringVar(&targetAuth.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
+	fs.BoolVar(&sourceAuth.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
+	fs.BoolVar(&targetAuth.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
 
-	fs.StringVar(&cfg.Source.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
-	fs.StringVar(&cfg.Target.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
+	fs.StringVar(&sourceAuth.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
+	fs.StringVar(&targetAuth.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
 
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")
-	fs.BoolVar(&cfg.IncludeTags, "tags", false, "mirror tags")
-	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
-	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
+	fs.BoolVar(&req.IncludeTags, "tags", false, "mirror tags")
+	fs.BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
-	fs.Int64Var(&cfg.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
-	fs.Int64Var(&cfg.BatchMaxPackBytes, "batch-max-pack-bytes", 0, "split branch bootstrap into relay batches capped at this many bytes per batch")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
-	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
+	fs.Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
+	fs.Int64Var(&req.Options.BatchMaxPackBytes, "batch-max-pack-bytes", 0, "split branch bootstrap into relay batches capped at this many bytes per batch")
+	bootstrapProtocol := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
+	fs.Var(&bootstrapProtocol, "protocol", "protocol mode: auto, v1, or v2")
+	fs.BoolVar(&req.Options.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	req.Protocol = gitsync.ProtocolMode(bootstrapProtocol)
 
 	positional := fs.Args()
-	if cfg.Source.URL == "" && len(positional) > 0 {
-		cfg.Source.URL = positional[0]
+	if req.Source.URL == "" && len(positional) > 0 {
+		req.Source.URL = positional[0]
 	}
-	if cfg.Target.URL == "" && len(positional) > 1 {
-		cfg.Target.URL = positional[1]
+	if req.Target.URL == "" && len(positional) > 1 {
+		req.Target.URL = positional[1]
 	}
 	if len(positional) > 2 {
 		return usageError("too many positional arguments")
 	}
 
 	if *branches != "" {
-		cfg.Branches = splitCSV(*branches)
+		req.Scope.Branches = splitCSV(*branches)
 	}
 	for _, raw := range mappings {
 		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
 			return err
 		}
-		cfg.Mappings = append(cfg.Mappings, mapping)
+		req.Scope.Mappings = append(req.Scope.Mappings, mapping)
 	}
 
-	if cfg.Source.URL == "" || cfg.Target.URL == "" {
+	if req.Source.URL == "" || req.Target.URL == "" {
 		return usageError("bootstrap requires source and target repository URLs")
 	}
 
-	result, err := syncer.Bootstrap(ctx, cfg)
+	result, err := unstable.New(unstable.Options{
+		Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
+	}).Bootstrap(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -193,43 +215,52 @@ func runProbe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	cfg := syncer.Config{}
 	var jsonOutput bool
-	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
-	fs.StringVar(&cfg.Target.URL, "target-url", "", "optional target repository URL")
-	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
-	fs.StringVar(&cfg.Target.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
-	fs.StringVar(&cfg.Source.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
-	fs.StringVar(&cfg.Target.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
-	fs.StringVar(&cfg.Source.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
-	fs.StringVar(&cfg.Target.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
-	fs.BoolVar(&cfg.Source.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
-	fs.BoolVar(&cfg.Target.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
-	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tag ref prefixes in probe")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
-	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
-	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
+	var sourceAuth gitsync.EndpointAuth
+	var targetAuth gitsync.EndpointAuth
+	req := unstable.ProbeRequest{}
+	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
+	targetURL := fs.String("target-url", "", "optional target repository URL")
+	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
+	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
+	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
+	fs.StringVar(&targetAuth.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
+	fs.StringVar(&sourceAuth.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
+	fs.StringVar(&targetAuth.BearerToken, "target-bearer-token", envOr("GITSYNC_TARGET_BEARER_TOKEN", ""), "target bearer token")
+	fs.BoolVar(&sourceAuth.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
+	fs.BoolVar(&targetAuth.SkipTLSVerify, "target-insecure-skip-tls-verify", envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the target")
+	fs.BoolVar(&req.IncludeTags, "tags", false, "include tag ref prefixes in probe")
+	probeProtocol := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
+	fs.Var(&probeProtocol, "protocol", "protocol mode: auto, v1, or v2")
+	fs.BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	req.Protocol = gitsync.ProtocolMode(probeProtocol)
 
 	positional := fs.Args()
-	if cfg.Source.URL == "" && len(positional) > 0 {
-		cfg.Source.URL = positional[0]
+	if req.Source.URL == "" && len(positional) > 0 {
+		req.Source.URL = positional[0]
 	}
-	if cfg.Target.URL == "" && len(positional) > 1 {
-		cfg.Target.URL = positional[1]
+	if *targetURL == "" && len(positional) > 1 {
+		*targetURL = positional[1]
 	}
 	if len(positional) > 2 {
 		return usageError("too many positional arguments")
 	}
-	if cfg.Source.URL == "" {
+	if req.Source.URL == "" {
 		return usageError("probe requires a source repository URL")
 	}
+	if *targetURL != "" {
+		req.Target = &gitsync.Endpoint{URL: *targetURL}
+	}
 
-	result, err := syncer.Probe(ctx, cfg)
+	result, err := unstable.New(unstable.Options{
+		Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
+	}).Probe(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -241,21 +272,23 @@ func runFetch(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("fetch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	cfg := syncer.Config{}
 	var haveRefs multiStringFlag
 	var haveHashesRaw multiStringFlag
 	var jsonOutput bool
+	var sourceAuth gitsync.EndpointAuth
+	req := unstable.FetchRequest{}
 
-	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL")
-	fs.StringVar(&cfg.Source.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
-	fs.StringVar(&cfg.Source.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
-	fs.StringVar(&cfg.Source.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
-	fs.BoolVar(&cfg.Source.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
+	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
+	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
+	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
+	fs.StringVar(&sourceAuth.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
+	fs.BoolVar(&sourceAuth.SkipTLSVerify, "source-insecure-skip-tls-verify", envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"), "skip TLS certificate verification for the source")
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
-	fs.BoolVar(&cfg.IncludeTags, "tags", false, "include tags in the fetch request")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto), "protocol mode: auto, v1, or v2")
-	fs.BoolVar(&cfg.ShowStats, "stats", false, "print transfer statistics")
-	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
+	fs.BoolVar(&req.IncludeTags, "tags", false, "include tags in the fetch request")
+	fetchProtocol := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
+	fs.Var(&fetchProtocol, "protocol", "protocol mode: auto, v1, or v2")
+	fs.BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
+	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.Var(&haveRefs, "have-ref", "source ref name to advertise as have; short names map to branches")
 	fs.Var(&haveHashesRaw, "have", "explicit object hash to advertise as have")
@@ -263,19 +296,20 @@ func runFetch(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	req.Protocol = gitsync.ProtocolMode(fetchProtocol)
 
 	positional := fs.Args()
-	if cfg.Source.URL == "" && len(positional) > 0 {
-		cfg.Source.URL = positional[0]
+	if req.Source.URL == "" && len(positional) > 0 {
+		req.Source.URL = positional[0]
 	}
 	if len(positional) > 1 {
 		return usageError("too many positional arguments")
 	}
-	if cfg.Source.URL == "" {
+	if req.Source.URL == "" {
 		return usageError("fetch requires a source repository URL")
 	}
 	if *branches != "" {
-		cfg.Branches = splitCSV(*branches)
+		req.Scope.Branches = splitCSV(*branches)
 	}
 
 	haveHashes := make([]plumbing.Hash, 0, len(haveHashesRaw))
@@ -287,7 +321,11 @@ func runFetch(ctx context.Context, args []string) error {
 		haveHashes = append(haveHashes, hash)
 	}
 
-	result, err := syncer.Fetch(ctx, cfg, haveRefs, haveHashes)
+	req.HaveRefs = append(req.HaveRefs, haveRefs...)
+	req.HaveHashes = append(req.HaveHashes, haveHashes...)
+	result, err := unstable.New(unstable.Options{
+		Auth: gitsync.StaticAuthProvider{Source: sourceAuth},
+	}).Fetch(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -352,9 +390,26 @@ func envBool(key string) bool {
 }
 
 func usageError(message string) error {
-	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --batch-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", syncer.DefaultMaterializedMaxObjects)
+	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --batch-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", unstable.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}
 	return fmt.Errorf("%s\n\n%s", message, usage)
+}
+
+type protocolMode gitsync.ProtocolMode
+
+type protocolModeFlag protocolMode
+
+func (p *protocolModeFlag) String() string {
+	return string(*p)
+}
+
+func (p *protocolModeFlag) Set(value string) error {
+	mode, err := validation.NormalizeProtocolMode(value)
+	if err != nil {
+		return err
+	}
+	*p = protocolModeFlag(protocolMode(gitsync.ProtocolMode(mode)))
+	return nil
 }

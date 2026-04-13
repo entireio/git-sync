@@ -15,8 +15,9 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 
-	"github.com/soph/git-sync/internal/syncer"
 	"github.com/soph/git-sync/internal/validation"
+	"github.com/soph/git-sync/pkg/gitsync"
+	"github.com/soph/git-sync/pkg/gitsync/unstable"
 )
 
 type scenario string
@@ -27,12 +28,12 @@ const (
 )
 
 type runSummary struct {
-	Index      int           `json:"index"`
-	TargetPath string        `json:"target_path"`
-	TargetURL  string        `json:"target_url"`
-	WallMillis int64         `json:"wall_millis"`
-	Result     syncer.Result `json:"result"`
-	Error      string        `json:"error,omitempty"`
+	Index      int             `json:"index"`
+	TargetPath string          `json:"target_path"`
+	TargetURL  string          `json:"target_url"`
+	WallMillis int64           `json:"wall_millis"`
+	Result     unstable.Result `json:"result"`
+	Error      string          `json:"error,omitempty"`
 }
 
 type aggregateSummary struct {
@@ -64,9 +65,16 @@ type benchmarkReport struct {
 	Repeat      int              `json:"repeat"`
 	KeepTargets bool             `json:"keep_targets"`
 	WorkDir     string           `json:"work_dir"`
-	Config      syncer.Config    `json:"config"`
+	Config      benchmarkConfig  `json:"config"`
 	Aggregate   aggregateSummary `json:"aggregate"`
 	Runs        []runSummary     `json:"runs"`
+}
+
+type benchmarkConfig struct {
+	SourceURL string                   `json:"source_url"`
+	Scope     gitsync.RefScope         `json:"scope"`
+	Policy    gitsync.SyncPolicy       `json:"policy"`
+	Options   unstable.AdvancedOptions `json:"options"`
 }
 
 func main() {
@@ -80,16 +88,16 @@ func run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("git-sync-bench", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	var cfg syncer.Config
 	var scenarioName string
 	var workDir string
 	var repeat int
 	var keepTargets bool
 	var jsonOutput bool
 	var mappings multiStringFlag
+	cfg := benchmarkConfig{}
 
 	fs.StringVar(&scenarioName, "scenario", string(scenarioBootstrap), "benchmark scenario: bootstrap or sync")
-	fs.StringVar(&cfg.Source.URL, "source-url", "", "source repository URL or local path")
+	fs.StringVar(&cfg.SourceURL, "source-url", "", "source repository URL or local path")
 	fs.StringVar(&workDir, "work-dir", "", "directory for temporary target repositories")
 	fs.IntVar(&repeat, "repeat", 1, "number of runs to execute")
 	fs.BoolVar(&keepTargets, "keep-targets", false, "retain generated target repositories after the run")
@@ -97,19 +105,21 @@ func run(ctx context.Context, args []string) error {
 
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")
-	fs.BoolVar(&cfg.IncludeTags, "tags", false, "mirror tags")
-	fs.BoolVar(&cfg.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
-	fs.BoolVar(&cfg.Prune, "prune", false, "delete managed target refs that no longer exist on source")
-	fs.BoolVar(&cfg.ShowStats, "stats", false, "collect transfer statistics")
-	fs.BoolVar(&cfg.MeasureMemory, "measure-memory", true, "sample elapsed time and Go heap usage")
-	fs.Int64Var(&cfg.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
-	fs.Int64Var(&cfg.BatchMaxPackBytes, "batch-max-pack-bytes", 0, "split branch bootstrap into relay batches capped at this many bytes per batch")
-	fs.StringVar(&cfg.ProtocolMode, "protocol", validation.ProtocolAuto, "protocol mode: auto, v1, or v2")
-	fs.BoolVar(&cfg.Verbose, "v", false, "verbose logging")
+	fs.BoolVar(&cfg.Policy.IncludeTags, "tags", false, "mirror tags")
+	fs.BoolVar(&cfg.Policy.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
+	fs.BoolVar(&cfg.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
+	fs.BoolVar(&cfg.Options.CollectStats, "stats", false, "collect transfer statistics")
+	fs.BoolVar(&cfg.Options.MeasureMemory, "measure-memory", true, "sample elapsed time and Go heap usage")
+	fs.Int64Var(&cfg.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
+	fs.Int64Var(&cfg.Options.BatchMaxPackBytes, "batch-max-pack-bytes", 0, "split branch bootstrap into relay batches capped at this many bytes per batch")
+	benchProtocol := benchProtocolModeFlag(benchProtocolMode(validation.ProtocolAuto))
+	fs.Var(&benchProtocol, "protocol", "protocol mode: auto, v1, or v2")
+	fs.BoolVar(&cfg.Options.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	cfg.Policy.Protocol = gitsync.ProtocolMode(benchProtocol)
 	if len(fs.Args()) > 0 {
 		return usageError("unexpected positional arguments")
 	}
@@ -117,35 +127,29 @@ func run(ctx context.Context, args []string) error {
 		return usageError("--repeat must be at least 1")
 	}
 
-	mode, err := validation.NormalizeProtocolMode(cfg.ProtocolMode)
-	if err != nil {
-		return err
-	}
-	cfg.ProtocolMode = mode
-
 	if *branches != "" {
-		cfg.Branches = splitCSV(*branches)
+		cfg.Scope.Branches = splitCSV(*branches)
 	}
 	for _, raw := range mappings {
 		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
 			return err
 		}
-		cfg.Mappings = append(cfg.Mappings, mapping)
+		cfg.Scope.Mappings = append(cfg.Scope.Mappings, mapping)
 	}
 
-	srcURL, err := normalizeRepoURL(cfg.Source.URL)
+	srcURL, err := normalizeRepoURL(cfg.SourceURL)
 	if err != nil {
 		return err
 	}
-	cfg.Source.URL = srcURL
+	cfg.SourceURL = srcURL
 
 	sc, err := parseScenario(scenarioName)
 	if err != nil {
 		return err
 	}
 	if sc == scenarioBootstrap {
-		if cfg.Force || cfg.Prune {
+		if cfg.Policy.Force || cfg.Policy.Prune {
 			return usageError("bootstrap benchmarks do not support --force or --prune")
 		}
 	}
@@ -163,7 +167,7 @@ func run(ctx context.Context, args []string) error {
 
 	report := benchmarkReport{
 		Scenario:    sc,
-		SourceURL:   cfg.Source.URL,
+		SourceURL:   cfg.SourceURL,
 		Repeat:      repeat,
 		KeepTargets: keepTargets,
 		WorkDir:     workDir,
@@ -184,10 +188,8 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		runCfg.Target.URL = targetURL
-
 		start := time.Now()
-		runResult, runErr := executeScenario(ctx, sc, runCfg)
+		runResult, runErr := executeScenario(ctx, sc, runCfg, targetURL)
 		summary := runSummary{
 			Index:      i + 1,
 			TargetPath: targetPath,
@@ -222,14 +224,28 @@ func run(ctx context.Context, args []string) error {
 	return nil
 }
 
-func executeScenario(ctx context.Context, sc scenario, cfg syncer.Config) (syncer.Result, error) {
+func executeScenario(ctx context.Context, sc scenario, cfg benchmarkConfig, targetURL string) (unstable.Result, error) {
+	client := unstable.New(unstable.Options{})
 	switch sc {
 	case scenarioBootstrap:
-		return syncer.Bootstrap(ctx, cfg)
+		return client.Bootstrap(ctx, unstable.BootstrapRequest{
+			Source:      gitsync.Endpoint{URL: cfg.SourceURL},
+			Target:      gitsync.Endpoint{URL: targetURL},
+			Scope:       cfg.Scope,
+			IncludeTags: cfg.Policy.IncludeTags,
+			Protocol:    cfg.Policy.Protocol,
+			Options:     cfg.Options,
+		})
 	case scenarioSync:
-		return syncer.Run(ctx, cfg)
+		return client.Sync(ctx, unstable.SyncRequest{
+			Source:  gitsync.Endpoint{URL: cfg.SourceURL},
+			Target:  gitsync.Endpoint{URL: targetURL},
+			Scope:   cfg.Scope,
+			Policy:  cfg.Policy,
+			Options: cfg.Options,
+		})
 	default:
-		return syncer.Result{}, fmt.Errorf("unsupported scenario %q", sc)
+		return unstable.Result{}, fmt.Errorf("unsupported scenario %q", sc)
 	}
 }
 
@@ -428,4 +444,21 @@ func usageError(message string) error {
 		return errors.New(strings.TrimSpace(usage))
 	}
 	return fmt.Errorf("%s\n\n%s", message, usage)
+}
+
+type benchProtocolMode gitsync.ProtocolMode
+
+type benchProtocolModeFlag benchProtocolMode
+
+func (p *benchProtocolModeFlag) String() string {
+	return string(*p)
+}
+
+func (p *benchProtocolModeFlag) Set(value string) error {
+	mode, err := validation.NormalizeProtocolMode(value)
+	if err != nil {
+		return err
+	}
+	*p = benchProtocolModeFlag(benchProtocolMode(gitsync.ProtocolMode(mode)))
+	return nil
 }
