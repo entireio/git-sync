@@ -74,6 +74,15 @@ The command surface is:
 
 If you are embedding `git-sync` outside this repo, prefer `pkg/gitsync`. The CLI and benchmark command use `pkg/gitsync/unstable` because they still need direct access to advanced engine controls that are intentionally not part of the stable API.
 
+The stable `pkg/gitsync` results are shaped for workers:
+
+- `Refs`
+  - per-ref outcomes
+- `Counts`
+  - aggregate applied/skipped/blocked/deleted counts
+- `Execution`
+  - execution mode, protocol, relay summary, and batch summary
+
 ## Current scope
 
 - Smart HTTP only

@@ -115,6 +115,15 @@ The project now separates embedding concerns from first-party tooling concerns:
 - `pkg/gitsync/unstable` is the escape hatch for advanced controls.
   It exists so the CLI and benchmark tool can use batching limits, memory measurement, verbose progress, bootstrap, and fetch without widening the stable API prematurely.
 
+The stable result contract is also intentionally worker-oriented:
+
+- `Refs`
+  per-ref outcomes and reasons
+- `Counts`
+  aggregate applied/skipped/blocked/deleted counts
+- `Execution`
+  protocol, relay summary, execution mode, and batch summary
+
 That split is intentional:
 
 - external embedders should depend on `pkg/gitsync`
