@@ -76,6 +76,42 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 	}
 }
 
+func TestPlanReplicationRefOverwritesDivergence(t *testing.T) {
+	target := plumbing.NewHash("1111111111111111111111111111111111111111")
+	source := plumbing.NewHash("2222222222222222222222222222222222222222")
+	plan := PlanReplicationRef(DesiredRef{
+		Kind:       RefKindBranch,
+		Label:      "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: source,
+	}, target, true)
+	if plan.Action != ActionUpdate {
+		t.Fatalf("expected update, got %s", plan.Action)
+	}
+	if plan.Reason == "" {
+		t.Fatalf("expected overwrite reason")
+	}
+}
+
+func TestPlanReplicationRefOverwritesTagRetarget(t *testing.T) {
+	target := plumbing.NewHash("1111111111111111111111111111111111111111")
+	source := plumbing.NewHash("2222222222222222222222222222222222222222")
+	plan := PlanReplicationRef(DesiredRef{
+		Kind:       RefKindTag,
+		Label:      "v1",
+		SourceRef:  plumbing.NewTagReferenceName("v1"),
+		TargetRef:  plumbing.NewTagReferenceName("v1"),
+		SourceHash: source,
+	}, target, true)
+	if plan.Action != ActionUpdate {
+		t.Fatalf("expected update, got %s", plan.Action)
+	}
+	if plan.Reason != "11111111 -> 22222222 (replicate tag overwrite)" {
+		t.Fatalf("unexpected reason: %s", plan.Reason)
+	}
+}
+
 func TestValidateMappingsRejectsDuplicateTargets(t *testing.T) {
 	_, err := validation.ValidateMappings([]RefMapping{
 		{Source: "main", Target: "stable"},
@@ -759,6 +795,34 @@ func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
 		t.Fatal("expected CanIncrementalRelay=false for branch create")
 	}
 	if reason != "incremental-branch-action-not-update" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanReplicateRelayRejectsNoThin(t *testing.T) {
+	if ok, reason := SupportsReplicateRelay(RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true}); ok {
+		t.Fatal("expected SupportsReplicateRelay=false when target advertises no-thin")
+	} else if reason != "replicate-target-no-thin" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanReplicateRelayRejectsInvalidPlanAction(t *testing.T) {
+	plans := []BranchPlan{{
+		Branch:     "main",
+		SourceRef:  "refs/heads/main",
+		TargetRef:  "refs/heads/main",
+		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		TargetHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		Kind:       RefKindBranch,
+		Action:     ActionDelete,
+	}}
+
+	ok, reason := CanReplicateRelay(plans)
+	if ok {
+		t.Fatal("expected CanReplicateRelay=false for delete action")
+	}
+	if reason != "replicate-branch-action-not-create-or-update" {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }

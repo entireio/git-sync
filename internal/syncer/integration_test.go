@@ -48,6 +48,7 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 
 	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
@@ -1161,6 +1162,7 @@ func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 
 	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
@@ -1577,6 +1579,58 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+func TestRun_IntegrationReplicateRejectsNoThinTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackNoThin = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	_, err = Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+	})
+	if err == nil {
+		t.Fatal("expected replicate to fail against no-thin target")
+	}
+	if !strings.Contains(err.Error(), "use sync instead") || !strings.Contains(err.Error(), "replicate-target-no-thin") {
+		t.Fatalf("unexpected replicate error: %v", err)
+	}
+}
+
+func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {
+	s := &syncSession{
+		cfg: Config{
+			Prune: true,
+		},
+		target: &targetSession{
+			refMap: map[plumbing.ReferenceName]plumbing.Hash{
+				plumbing.NewBranchReferenceName("stale"): plumbing.NewHash("1111111111111111111111111111111111111111"),
+			},
+		},
+	}
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+			Kind:       planner.RefKindBranch,
+		},
+	}
+	if s.replicateCanBootstrap(desired) {
+		t.Fatal("expected bootstrap shortcut to be disabled when prune would delete managed refs")
+	}
+}
+
 func TestRun_IntegrationAddAnnotatedTagAfterInitialBranchSync(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -1741,6 +1795,7 @@ type smartHTTPRepoServer struct {
 
 	receivePackBodyLimit int64
 	receivePackNoThin    bool
+	receivePackThinCap   bool
 	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
 	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
 	uploadPackRaw        func(http.ResponseWriter, *http.Request, []byte) bool
@@ -1893,14 +1948,20 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if service == serviceReceivePack && s.receivePackNoThin {
-		// For no-thin, we need to decode, modify capabilities, and re-encode
-		ar := packp.NewAdvRefs()
-		if err := ar.Decode(bytes.NewReader(buf.Bytes())); err == nil {
-			_ = ar.Capabilities.Set(capability.Capability("no-thin"))
-			buf.Reset()
-			_ = ar.Encode(&buf)
+	if service == serviceReceivePack && (s.receivePackNoThin || s.receivePackThinCap) {
+		rewritten, err := rewriteReceivePackAdvertisement(buf.Bytes(), func(caps *capability.List) {
+			if s.receivePackThinCap {
+				caps.Delete(capability.Capability("no-thin"))
+			}
+			if s.receivePackNoThin {
+				_ = caps.Set(capability.Capability("no-thin"))
+			}
+		})
+		if err != nil {
+			s.tb.Fatalf("rewrite receive-pack advertisement: %v", err)
 		}
+		buf.Reset()
+		_, _ = buf.Write(rewritten)
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
@@ -1909,6 +1970,37 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 	}
 
 	s.recordMetric(service, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
+}
+
+func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List)) ([]byte, error) {
+	ar := packp.NewAdvRefs()
+	if err := ar.Decode(bytes.NewReader(data)); err == nil {
+		mutate(ar.Capabilities)
+		var buf bytes.Buffer
+		if err := ar.Encode(&buf); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	rd := bytes.NewReader(data)
+	var smart packp.SmartReply
+	if err := smart.Decode(rd); err != nil {
+		return nil, err
+	}
+	ar = packp.NewAdvRefs()
+	if err := ar.Decode(rd); err != nil {
+		return nil, err
+	}
+	mutate(ar.Capabilities)
+	var buf bytes.Buffer
+	if err := smart.Encode(&buf); err != nil {
+		return nil, err
+	}
+	if err := ar.Encode(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Request) {

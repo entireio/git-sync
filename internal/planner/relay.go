@@ -11,6 +11,18 @@ type RelayTargetPolicy struct {
 	NoThin            bool
 }
 
+// SupportsReplicateRelay checks target-side capabilities required by
+// replication mode before looking at planned ref actions.
+func SupportsReplicateRelay(target RelayTargetPolicy) (bool, string) {
+	if !target.CapabilitiesKnown {
+		return false, "replicate-missing-target-capabilities"
+	}
+	if target.NoThin {
+		return false, "replicate-target-no-thin"
+	}
+	return true, "replicate-target-capable"
+}
+
 // CanBootstrapRelay checks whether all desired target refs are absent on the target,
 // making a bootstrap relay possible.
 func CanBootstrapRelay(
@@ -103,4 +115,30 @@ func RelayFallbackReason(force, prune, dryRun bool, plans []BranchPlan, target R
 	} else {
 		return reason
 	}
+}
+
+// CanReplicateRelay checks whether replication mode can execute as a relay-only
+// overwrite sync against the target.
+func CanReplicateRelay(plans []BranchPlan) (bool, string) {
+	for _, plan := range plans {
+		switch plan.Kind {
+		case RefKindBranch:
+			if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
+				return false, "replicate-non-branch-mapping"
+			}
+			if plan.Action != ActionCreate && plan.Action != ActionUpdate {
+				return false, "replicate-branch-action-not-create-or-update"
+			}
+		case RefKindTag:
+			if !plan.SourceRef.IsTag() || !plan.TargetRef.IsTag() {
+				return false, "replicate-non-tag-mapping"
+			}
+			if plan.Action != ActionCreate && plan.Action != ActionUpdate {
+				return false, "replicate-tag-action-not-create-or-update"
+			}
+		default:
+			return false, "replicate-unsupported-ref-kind"
+		}
+	}
+	return true, "replicate-overwrite-relay"
 }
