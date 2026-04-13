@@ -136,6 +136,7 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		ShowStats:     req.Options.CollectStats,
 		MeasureMemory: req.Options.MeasureMemory,
 		ProtocolMode:  protocolString(req.Protocol),
+		Verbose:       req.Options.Verbose,
 	}
 	if req.Target != nil {
 		target, err := c.resolveEndpoint(ctx, *req.Target, gitsync.TargetRole)
