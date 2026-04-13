@@ -11,16 +11,18 @@ import (
 // Options configures a Client. It is intentionally small in the first public cut.
 type Options struct {
 	HTTPClient *http.Client
+	Auth       AuthProvider
 }
 
 // Client provides the public orchestration API for git-sync.
 type Client struct {
 	httpClient *http.Client
+	auth       AuthProvider
 }
 
 // New constructs a new Client.
 func New(opts Options) *Client {
-	return &Client{httpClient: opts.HTTPClient}
+	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth}
 }
 
 // Probe inspects a source remote and optional target remote.
@@ -28,7 +30,11 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if err := req.Validate(); err != nil {
 		return ProbeResult{}, err
 	}
-	result, err := syncer.Probe(ctx, c.buildProbeConfig(req))
+	cfg, err := c.buildProbeConfig(ctx, req)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	result, err := syncer.Probe(ctx, cfg)
 	if err != nil {
 		return ProbeResult{}, err
 	}
@@ -40,7 +46,11 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
 	}
-	result, err := syncer.Run(ctx, c.buildSyncConfig(req.Source, req.SourceAuth, req.Target, req.TargetAuth, req.Scope, req.Policy, req.CollectStats, true))
+	cfg, err := c.buildSyncConfig(ctx, req.Source, req.Target, req.Scope, req.Policy, req.CollectStats, true)
+	if err != nil {
+		return PlanResult{}, err
+	}
+	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -52,33 +62,48 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	if err := req.Validate(); err != nil {
 		return SyncResult{}, err
 	}
-	result, err := syncer.Run(ctx, c.buildSyncConfig(req.Source, req.SourceAuth, req.Target, req.TargetAuth, req.Scope, req.Policy, req.CollectStats, false))
+	cfg, err := c.buildSyncConfig(ctx, req.Source, req.Target, req.Scope, req.Policy, req.CollectStats, false)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
 		return SyncResult{}, err
 	}
 	return fromSyncerResult(result), nil
 }
 
-func buildProbeConfig(req ProbeRequest) syncer.Config {
+func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer.Config, error) {
+	sourceAuth, err := c.authFor(ctx, req.Source, SourceRole)
+	if err != nil {
+		return syncer.Config{}, err
+	}
 	cfg := syncer.Config{
-		Source:       syncer.Endpoint{URL: req.Source.URL, Username: req.SourceAuth.Username, Token: req.SourceAuth.Token, BearerToken: req.SourceAuth.BearerToken, SkipTLSVerify: req.SourceAuth.SkipTLSVerify},
+		Source:       syncer.Endpoint{URL: req.Source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
+		HTTPClient:   c.httpClient,
 		IncludeTags:  req.IncludeTags,
 		ShowStats:    req.CollectStats,
 		ProtocolMode: string(req.Protocol),
 	}
 	if req.Target != nil {
-		cfg.Target = syncer.Endpoint{URL: req.Target.URL, Username: req.TargetAuth.Username, Token: req.TargetAuth.Token, BearerToken: req.TargetAuth.BearerToken, SkipTLSVerify: req.TargetAuth.SkipTLSVerify}
+		targetAuth, err := c.authFor(ctx, *req.Target, TargetRole)
+		if err != nil {
+			return syncer.Config{}, err
+		}
+		cfg.Target = syncer.Endpoint{URL: req.Target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify}
 	}
-	return cfg
+	return cfg, nil
 }
 
-func (c *Client) buildProbeConfig(req ProbeRequest) syncer.Config {
-	cfg := buildProbeConfig(req)
-	cfg.HTTPClient = c.httpClient
-	return cfg
-}
-
-func (c *Client) buildSyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targetAuth EndpointAuth, scope RefScope, policy SyncPolicy, collectStats, dryRun bool) syncer.Config {
+func (c *Client) buildSyncConfig(ctx context.Context, source Endpoint, target Endpoint, scope RefScope, policy SyncPolicy, collectStats, dryRun bool) (syncer.Config, error) {
+	sourceAuth, err := c.authFor(ctx, source, SourceRole)
+	if err != nil {
+		return syncer.Config{}, err
+	}
+	targetAuth, err := c.authFor(ctx, target, TargetRole)
+	if err != nil {
+		return syncer.Config{}, err
+	}
 	return syncer.Config{
 		Source:                 syncer.Endpoint{URL: source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
 		Target:                 syncer.Endpoint{URL: target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify},
@@ -92,7 +117,14 @@ func (c *Client) buildSyncConfig(source Endpoint, sourceAuth EndpointAuth, targe
 		Prune:                  policy.Prune,
 		ProtocolMode:           protocolString(policy.Protocol),
 		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
+	}, nil
+}
+
+func (c *Client) authFor(ctx context.Context, endpoint Endpoint, role EndpointRole) (EndpointAuth, error) {
+	if c.auth == nil {
+		return EndpointAuth{}, nil
 	}
+	return c.auth.AuthFor(ctx, endpoint, role)
 }
 
 func protocolString(mode ProtocolMode) string {

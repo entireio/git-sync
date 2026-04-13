@@ -1,6 +1,8 @@
 package gitsync
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -8,16 +10,21 @@ import (
 )
 
 func TestBuildSyncConfigUsesDefaultProtocolAndMaterializedLimit(t *testing.T) {
-	cfg := New(Options{}).buildSyncConfig(
+	cfg, err := New(Options{Auth: StaticAuthProvider{
+		Source: EndpointAuth{Token: "src"},
+		Target: EndpointAuth{Token: "dst"},
+	}}).buildSyncConfig(
+		context.Background(),
 		Endpoint{URL: "https://source.example/repo.git"},
-		EndpointAuth{Token: "src"},
 		Endpoint{URL: "https://target.example/repo.git"},
-		EndpointAuth{Token: "dst"},
 		RefScope{Branches: []string{"main"}},
 		SyncPolicy{},
 		true,
 		false,
 	)
+	if err != nil {
+		t.Fatalf("buildSyncConfig: %v", err)
+	}
 
 	if cfg.ProtocolMode != string(ProtocolAuto) {
 		t.Fatalf("protocol mode = %q, want %q", cfg.ProtocolMode, ProtocolAuto)
@@ -38,19 +45,30 @@ func TestBuildSyncConfigUsesDefaultProtocolAndMaterializedLimit(t *testing.T) {
 
 func TestClientCarriesHTTPClientIntoSyncerConfig(t *testing.T) {
 	base := &http.Client{}
-	cfg := New(Options{HTTPClient: base}).buildSyncConfig(
+	cfg, err := New(Options{
+		HTTPClient: base,
+		Auth:       StaticAuthProvider{},
+	}).buildSyncConfig(
+		context.Background(),
 		Endpoint{URL: "https://source.example/repo.git"},
-		EndpointAuth{},
 		Endpoint{URL: "https://target.example/repo.git"},
-		EndpointAuth{},
 		RefScope{},
 		SyncPolicy{},
 		false,
 		false,
 	)
+	if err != nil {
+		t.Fatalf("buildSyncConfig: %v", err)
+	}
 	if cfg.HTTPClient != base {
 		t.Fatalf("http client = %p, want %p", cfg.HTTPClient, base)
 	}
+}
+
+type errAuthProvider struct{}
+
+func (errAuthProvider) AuthFor(_ context.Context, _ Endpoint, _ EndpointRole) (EndpointAuth, error) {
+	return EndpointAuth{}, fmt.Errorf("boom")
 }
 
 func TestValidateRequests(t *testing.T) {
@@ -69,5 +87,14 @@ func TestFromSyncerResultZeroHashesAreEmptyStrings(t *testing.T) {
 	got := hashString(plumbing.ZeroHash)
 	if got != "" {
 		t.Fatalf("hashString(zero) = %q, want empty string", got)
+	}
+}
+
+func TestClientReturnsAuthProviderErrors(t *testing.T) {
+	_, err := New(Options{Auth: errAuthProvider{}}).buildProbeConfig(context.Background(), ProbeRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+	})
+	if err == nil {
+		t.Fatalf("expected auth provider error")
 	}
 }

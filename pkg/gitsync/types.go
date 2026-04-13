@@ -1,6 +1,8 @@
 package gitsync
 
 import (
+	"context"
+
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/soph/git-sync/internal/planner"
@@ -23,13 +25,40 @@ type Endpoint struct {
 }
 
 // EndpointAuth carries explicit per-request auth and TLS settings.
-// It is separate from Endpoint so endpoint identity does not also become
-// the public auth-precedence boundary.
+// It is resolved through an AuthProvider rather than embedded in Endpoint so
+// endpoint identity does not also become the public auth-precedence boundary.
 type EndpointAuth struct {
 	Username      string
 	Token         string
 	BearerToken   string
 	SkipTLSVerify bool
+}
+
+// EndpointRole identifies whether auth is being resolved for the source or target.
+type EndpointRole string
+
+const (
+	SourceRole EndpointRole = "source"
+	TargetRole EndpointRole = "target"
+)
+
+// AuthProvider resolves auth for a request endpoint.
+type AuthProvider interface {
+	AuthFor(ctx context.Context, endpoint Endpoint, role EndpointRole) (EndpointAuth, error)
+}
+
+// StaticAuthProvider returns fixed source and target auth values.
+type StaticAuthProvider struct {
+	Source EndpointAuth
+	Target EndpointAuth
+}
+
+// AuthFor implements AuthProvider.
+func (p StaticAuthProvider) AuthFor(_ context.Context, _ Endpoint, role EndpointRole) (EndpointAuth, error) {
+	if role == TargetRole {
+		return p.Target, nil
+	}
+	return p.Source, nil
 }
 
 // RefMapping is an explicit source-to-target ref mapping.
@@ -52,9 +81,7 @@ type SyncPolicy struct {
 // ProbeRequest inspects source refs and optional target capabilities.
 type ProbeRequest struct {
 	Source       Endpoint
-	SourceAuth   EndpointAuth
 	Target       *Endpoint
-	TargetAuth   EndpointAuth
 	IncludeTags  bool
 	Protocol     ProtocolMode
 	CollectStats bool
@@ -63,9 +90,7 @@ type ProbeRequest struct {
 // PlanRequest computes ref actions without pushing.
 type PlanRequest struct {
 	Source       Endpoint
-	SourceAuth   EndpointAuth
 	Target       Endpoint
-	TargetAuth   EndpointAuth
 	Scope        RefScope
 	Policy       SyncPolicy
 	CollectStats bool
@@ -74,9 +99,7 @@ type PlanRequest struct {
 // SyncRequest executes a sync between two remotes.
 type SyncRequest struct {
 	Source       Endpoint
-	SourceAuth   EndpointAuth
 	Target       Endpoint
-	TargetAuth   EndpointAuth
 	Scope        RefScope
 	Policy       SyncPolicy
 	CollectStats bool
