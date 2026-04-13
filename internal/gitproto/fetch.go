@@ -1,6 +1,7 @@
 package gitproto
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -340,11 +341,15 @@ func fetchToStoreV1(
 	defer ioutil.CheckClose(reader, &err)
 
 	// Decode server response (ACK/NAK) then read pack with sideband demux.
+	buffered := bufio.NewReader(reader)
 	var srvResp packp.ServerResponse
-	if decErr := srvResp.Decode(reader); decErr != nil {
+	if decErr := srvResp.Decode(buffered); decErr != nil {
 		return fmt.Errorf("decode server response: %w", decErr)
 	}
-	sbReader := buildSidebandReader(caps, reader, nil)
+	if drainErr := drainTrailingNAKs(buffered); drainErr != nil {
+		return fmt.Errorf("drain server response: %w", drainErr)
+	}
+	sbReader := buildSidebandReader(caps, buffered, nil)
 	return packfile.UpdateObjectStorage(store, sbReader)
 }
 
@@ -364,15 +369,43 @@ func fetchPackV1(
 		return nil, fmt.Errorf("source upload-pack: %w", err)
 	}
 
+	buffered := bufio.NewReader(reader)
 	var srvResp packp.ServerResponse
-	if decErr := srvResp.Decode(reader); decErr != nil {
+	if decErr := srvResp.Decode(buffered); decErr != nil {
 		_ = reader.Close()
 		return nil, fmt.Errorf("decode server response: %w", decErr)
 	}
+	if drainErr := drainTrailingNAKs(buffered); drainErr != nil {
+		_ = reader.Close()
+		return nil, fmt.Errorf("drain server response: %w", drainErr)
+	}
 	return &wrappedRC{
-		Reader: buildSidebandReader(caps, reader, nil),
+		Reader: buildSidebandReader(caps, buffered, nil),
 		Closer: reader,
 	}, nil
+}
+
+// drainTrailingNAKs consumes any extra "NAK\n" pktlines left in the stream
+// after ServerResponse.Decode. go-git's upload-pack server emits a second NAK
+// when haves were sent but none were reachable from the wants (see
+// plumbing/transport/upload_pack.go), while go-git's ServerResponse.Decode
+// stops after the first NAK. The remainder would otherwise be misread by the
+// sideband demuxer as a frame with channel byte 'N' ("unknown channel NAK").
+//
+// A stream that runs out before we can peek 8 bytes carries no trailing NAK
+// to drain, so we silently stop. The downstream consumer observes the same
+// underlying read error on its first read.
+func drainTrailingNAKs(r *bufio.Reader) error {
+	for {
+		header, err := r.Peek(8)
+		if len(header) < 8 || !bytes.Equal(header, []byte("0008NAK\n")) {
+			_ = err
+			return nil
+		}
+		if _, err := r.Discard(8); err != nil {
+			return err
+		}
+	}
 }
 
 // buildSidebandReader wraps a reader with sideband demuxing if the negotiated

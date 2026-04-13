@@ -670,6 +670,56 @@ func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 	}
 }
 
+func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
+	// go-git's upload-pack server emits two NAKs when haves were sent but none
+	// were reachable from the wants. ServerResponse.Decode only consumes the
+	// first; the second must be drained before sideband demux or the demuxer
+	// misreads "NAK\n" as a sideband frame with channel 'N'.
+	// This simulates that double-NAK followed by a sideband-wrapped PACK header
+	// (channel 0x01 + "PACK" magic).
+	payload := []byte("0008NAK\n0008NAK\n0009\x01PACK")
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewReader(payload))}
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       body,
+		}, nil
+	}))
+
+	adv := packp.NewAdvRefs()
+	_ = adv.Capabilities.Set(capability.Sideband64k)
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		},
+	}
+
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil)
+	if err != nil {
+		t.Fatalf("fetchPackV1 should tolerate double-NAK preamble, got: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	// Reader will error (or hit EOF) after the truncated sideband frame; what
+	// we care about is that the demuxed payload started with PACK, proving the
+	// second NAK was drained rather than fed into the demuxer.
+	if !bytes.HasPrefix(got, []byte("PACK")) {
+		t.Fatalf("expected demuxed pack bytes to start with PACK, got %q (err=%v)", got, err)
+	}
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Fatalf("close returned reader: %v", closeErr)
+	}
+	if !body.closed {
+		t.Fatal("expected returned reader close to close underlying body")
+	}
+}
+
 func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 	ep, err := transport.NewEndpoint("https://example.com/repo.git")
 	if err != nil {

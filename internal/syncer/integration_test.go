@@ -1636,7 +1636,7 @@ func TestRun_IntegrationReplicateOverwritesDivergentBranch(t *testing.T) {
 	targetRepo, _ := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
 
-	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
 	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
