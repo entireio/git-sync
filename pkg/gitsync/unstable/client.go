@@ -127,7 +127,7 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		return syncer.Config{}, err
 	}
 	cfg := syncer.Config{
-		Source:        syncer.Endpoint{URL: req.Source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
+		Source:        syncerEndpoint(req.Source, sourceAuth),
 		HTTPClient:    c.httpClient,
 		IncludeTags:   req.IncludeTags,
 		ShowStats:     req.Options.CollectStats,
@@ -139,7 +139,7 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		if err != nil {
 			return syncer.Config{}, err
 		}
-		cfg.Target = syncer.Endpoint{URL: req.Target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify}
+		cfg.Target = syncerEndpoint(*req.Target, targetAuth)
 	}
 	return cfg, nil
 }
@@ -158,8 +158,8 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		maxObjects = DefaultMaterializedMaxObjects
 	}
 	return syncer.Config{
-		Source:                 syncer.Endpoint{URL: req.Source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
-		Target:                 syncer.Endpoint{URL: req.Target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify},
+		Source:                 syncerEndpoint(req.Source, sourceAuth),
+		Target:                 syncerEndpoint(req.Target, targetAuth),
 		HTTPClient:             c.httpClient,
 		Branches:               append([]string(nil), req.Scope.Branches...),
 		Mappings:               append([]gitsync.RefMapping(nil), req.Scope.Mappings...),
@@ -185,8 +185,8 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:            syncer.Endpoint{URL: req.Source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
-		Target:            syncer.Endpoint{URL: req.Target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify},
+		Source:            syncerEndpoint(req.Source, sourceAuth),
+		Target:            syncerEndpoint(req.Target, targetAuth),
 		HTTPClient:        c.httpClient,
 		Branches:          append([]string(nil), req.Scope.Branches...),
 		Mappings:          append([]gitsync.RefMapping(nil), req.Scope.Mappings...),
@@ -206,7 +206,7 @@ func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:        syncer.Endpoint{URL: req.Source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
+		Source:        syncerEndpoint(req.Source, sourceAuth),
 		HTTPClient:    c.httpClient,
 		Branches:      append([]string(nil), req.Scope.Branches...),
 		IncludeTags:   req.IncludeTags,
@@ -229,4 +229,14 @@ func protocolString(mode gitsync.ProtocolMode) string {
 		return string(gitsync.ProtocolAuto)
 	}
 	return string(mode)
+}
+
+func syncerEndpoint(endpoint gitsync.Endpoint, auth gitsync.EndpointAuth) syncer.Endpoint {
+	return syncer.Endpoint{
+		URL:           endpoint.URL,
+		Username:      auth.Username,
+		Token:         auth.Token,
+		BearerToken:   auth.BearerToken,
+		SkipTLSVerify: auth.SkipTLSVerify,
+	}
 }

@@ -78,16 +78,18 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (intern
 	if err != nil {
 		return internalbridge.Config{}, err
 	}
+	source := bridgeEndpoint(req.Source)
+	sourceResolved := bridgeEndpointAuth(sourceAuth)
 	if req.Target != nil {
 		targetAuth, err := c.authFor(ctx, *req.Target, TargetRole)
 		if err != nil {
 			return internalbridge.Config{}, err
 		}
 		return internalbridge.ProbeConfig(
-			internalbridge.Endpoint{URL: req.Source.URL},
-			internalbridge.EndpointAuth(sourceAuth),
-			&internalbridge.Endpoint{URL: req.Target.URL},
-			internalbridge.EndpointAuth(targetAuth),
+			source,
+			sourceResolved,
+			ptr(bridgeEndpoint(*req.Target)),
+			bridgeEndpointAuth(targetAuth),
 			internalbridge.ProtocolMode(req.Protocol),
 			req.IncludeTags,
 			req.CollectStats,
@@ -95,8 +97,8 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (intern
 		), nil
 	}
 	return internalbridge.ProbeConfig(
-		internalbridge.Endpoint{URL: req.Source.URL},
-		internalbridge.EndpointAuth(sourceAuth),
+		source,
+		sourceResolved,
 		nil,
 		internalbridge.EndpointAuth{},
 		internalbridge.ProtocolMode(req.Protocol),
@@ -116,17 +118,12 @@ func (c *Client) buildSyncConfig(ctx context.Context, source Endpoint, target En
 		return internalbridge.Config{}, err
 	}
 	return internalbridge.SyncConfig(
-		internalbridge.Endpoint{URL: source.URL},
-		internalbridge.EndpointAuth(sourceAuth),
-		internalbridge.Endpoint{URL: target.URL},
-		internalbridge.EndpointAuth(targetAuth),
-		internalbridge.RefScope{Branches: append([]string(nil), scope.Branches...), Mappings: append([]internalbridge.RefMapping(nil), scope.Mappings...)},
-		internalbridge.SyncPolicy{
-			IncludeTags: policy.IncludeTags,
-			Force:       policy.Force,
-			Prune:       policy.Prune,
-			Protocol:    internalbridge.ProtocolMode(policy.Protocol),
-		},
+		bridgeEndpoint(source),
+		bridgeEndpointAuth(sourceAuth),
+		bridgeEndpoint(target),
+		bridgeEndpointAuth(targetAuth),
+		bridgeScope(scope),
+		bridgePolicy(policy),
 		collectStats,
 		dryRun,
 		c.httpClient,
@@ -165,4 +162,37 @@ func (r ProbeRequest) Validate() error {
 		return fmt.Errorf("source URL is required")
 	}
 	return nil
+}
+
+func bridgeEndpoint(ep Endpoint) internalbridge.Endpoint {
+	return internalbridge.Endpoint{URL: ep.URL}
+}
+
+func bridgeEndpointAuth(auth EndpointAuth) internalbridge.EndpointAuth {
+	return internalbridge.EndpointAuth{
+		Username:      auth.Username,
+		Token:         auth.Token,
+		BearerToken:   auth.BearerToken,
+		SkipTLSVerify: auth.SkipTLSVerify,
+	}
+}
+
+func bridgeScope(scope RefScope) internalbridge.RefScope {
+	return internalbridge.RefScope{
+		Branches: append([]string(nil), scope.Branches...),
+		Mappings: append([]internalbridge.RefMapping(nil), scope.Mappings...),
+	}
+}
+
+func bridgePolicy(policy SyncPolicy) internalbridge.SyncPolicy {
+	return internalbridge.SyncPolicy{
+		IncludeTags: policy.IncludeTags,
+		Force:       policy.Force,
+		Prune:       policy.Prune,
+		Protocol:    internalbridge.ProtocolMode(policy.Protocol),
+	}
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }
