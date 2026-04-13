@@ -16,6 +16,7 @@ type (
 	Result      = syncer.Result
 	ProbeResult = syncer.ProbeResult
 	FetchResult = syncer.FetchResult
+	RefInfo     = syncer.RefInfo
 	Stats       = syncer.Stats
 	Measurement = syncer.Measurement
 )

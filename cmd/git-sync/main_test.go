@@ -22,20 +22,20 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/soph/git-sync/internal/syncer"
+	"github.com/soph/git-sync/pkg/gitsync/unstable"
 )
 
 const testBranch = "master"
 
 func TestMarshalOutput_JSONShape(t *testing.T) {
-	data, err := marshalOutput(syncer.FetchResult{
+	data, err := marshalOutput(unstable.FetchResult{
 		SourceURL:      "https://example.com/source.git",
 		RequestedMode:  "auto",
 		Protocol:       "v2",
-		Wants:          []syncer.RefInfo{{Name: "refs/heads/main", Hash: plumbing.NewHash("1111111111111111111111111111111111111111")}},
+		Wants:          []unstable.RefInfo{{Name: "refs/heads/main", Hash: plumbing.NewHash("1111111111111111111111111111111111111111")}},
 		Haves:          []plumbing.Hash{plumbing.NewHash("2222222222222222222222222222222222222222")},
 		FetchedObjects: 42,
-		Measurement: syncer.Measurement{
+		Measurement: unstable.Measurement{
 			Enabled:            true,
 			ElapsedMillis:      12,
 			PeakAllocBytes:     100,
