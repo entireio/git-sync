@@ -1631,6 +1631,270 @@ func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationReplicateOverwritesDivergentBranch(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	targetRepo, _ := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Seed: both sides at the latest commit.
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	headCommit, err := sourceRepo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("load head commit: %v", err)
+	}
+	if len(headCommit.ParentHashes) == 0 {
+		t.Fatalf("expected head to have a parent")
+	}
+	olderHash := headCommit.ParentHashes[0]
+
+	// Rewind source's branch to an earlier commit. All objects still exist on
+	// both sides, but the refs now disagree in a non-fast-forward way from the
+	// target's perspective.
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(branchRef, olderHash)); err != nil {
+		t.Fatalf("rewind source branch: %v", err)
+	}
+
+	// Baseline: plain sync refuses the non-fast-forward rewind without force.
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err == nil {
+		t.Fatal("expected plain sync to refuse non-fast-forward overwrite without force")
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+	})
+	if err != nil {
+		t.Fatalf("replicate failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 || result.Deleted != 0 {
+		t.Fatalf("unexpected result counts: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "replicate" || result.RelayReason != "replicate-overwrite-relay" {
+		t.Fatalf("expected replicate relay execution, got %+v", result)
+	}
+
+	got, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("read target branch: %v", err)
+	}
+	if got.Hash() != olderHash {
+		t.Fatalf("expected target branch retargeted to %s, got %s", olderHash, got.Hash())
+	}
+}
+
+func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+	})
+	if err != nil {
+		t.Fatalf("replicate against empty target failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate carried through bootstrap, got %q", result.OperationMode)
+	}
+	if !result.Relay {
+		t.Fatalf("expected bootstrap relay to run, got %+v", result)
+	}
+	if result.RelayReason != "empty-target-managed-refs" {
+		t.Fatalf("expected empty-target bootstrap reason, got %+v", result)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected one pushed ref, got %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestRun_IntegrationReplicateOverwritesDivergentTag(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	targetRepo, _ := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head: %v", err)
+	}
+	// Parent of source head — exists on both sides after the seed sync.
+	sourceCommit, err := sourceRepo.CommitObject(sourceHead.Hash())
+	if err != nil {
+		t.Fatalf("load source head commit: %v", err)
+	}
+	if len(sourceCommit.ParentHashes) == 0 {
+		t.Fatalf("expected source head to have a parent")
+	}
+	olderHash := sourceCommit.ParentHashes[0]
+
+	tagRef := plumbing.NewTagReferenceName("v1")
+	// Source tag points to HEAD, target tag points to HEAD's parent: divergent.
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(tagRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tagRef, olderHash)); err != nil {
+		t.Fatalf("set target tag: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected seed sync to equalize branch heads")
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		Mode:        modeReplicate,
+		IncludeTags: true,
+	})
+	if err != nil {
+		t.Fatalf("replicate tag overwrite failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected exactly one tag overwrite push, got %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "replicate" {
+		t.Fatalf("expected replicate relay execution, got %+v", result)
+	}
+
+	got, err := targetRepo.Reference(tagRef, true)
+	if err != nil {
+		t.Fatalf("read target tag: %v", err)
+	}
+	if got.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target tag to be retargeted to %s, got %s", sourceHead.Hash(), got.Hash())
+	}
+}
+
+func TestRun_IntegrationReplicatePruneDeletesOrphanedManagedRef(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	targetRepo, _ := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head: %v", err)
+	}
+	orphanRef := plumbing.NewBranchReferenceName("stale")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanRef, targetHead.Hash())); err != nil {
+		t.Fatalf("set orphan branch: %v", err)
+	}
+
+	// Advance source so we have at least one real overwrite plan alongside the delete,
+	// keeping the replicate path out of the empty-target bootstrap shortcut.
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+		Prune:  true,
+	})
+	if err != nil {
+		t.Fatalf("replicate --prune failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref, got %+v", result)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected exactly one pushed ref alongside the delete, got %+v", result)
+	}
+
+	if _, err := targetRepo.Reference(orphanRef, true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected orphan branch to be pruned, got err=%v", err)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestRun_ReplicateRejectsForceAtSessionConstruction(t *testing.T) {
+	// The Force-with-replicate check happens before any network I/O, so the URLs
+	// never get dialed. Using obviously-invalid URLs also asserts that fact.
+	_, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: "http://127.0.0.1:1/source.git"},
+		Target: Endpoint{URL: "http://127.0.0.1:1/target.git"},
+		Mode:   modeReplicate,
+		Force:  true,
+	})
+	if err == nil {
+		t.Fatal("expected replicate+force to be rejected")
+	}
+	if !strings.Contains(err.Error(), "replicate does not support --force") ||
+		!strings.Contains(err.Error(), "use sync instead") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRun_IntegrationAddAnnotatedTagAfterInitialBranchSync(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
