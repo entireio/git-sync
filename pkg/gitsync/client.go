@@ -166,6 +166,9 @@ func (r ProbeRequest) Validate() error {
 	if r.Source.URL == "" {
 		return fmt.Errorf("source URL is required")
 	}
+	if r.Target != nil && r.Target.URL == "" {
+		return fmt.Errorf("target URL is required when target endpoint is provided")
+	}
 	if _, err := validation.NormalizeProtocolMode(string(r.Protocol)); err != nil {
 		return err
 	}

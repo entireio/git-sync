@@ -66,7 +66,7 @@ func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targe
 		Target:                 ToSyncerEndpoint(target, targetAuth),
 		HTTPClient:             httpClient,
 		Branches:               append([]string(nil), scope.Branches...),
-		Mappings:               validationMappings(scope.Mappings),
+		Mappings:               ToValidationMappings(scope.Mappings),
 		IncludeTags:            policy.IncludeTags,
 		DryRun:                 dryRun,
 		ShowStats:              collectStats,
@@ -102,7 +102,7 @@ func protocolString(mode ProtocolMode) string {
 	return string(mode)
 }
 
-func validationMappings(mappings []RefMapping) []validation.RefMapping {
+func ToValidationMappings(mappings []RefMapping) []validation.RefMapping {
 	out := make([]validation.RefMapping, 0, len(mappings))
 	for _, mapping := range mappings {
 		out = append(out, validation.RefMapping{

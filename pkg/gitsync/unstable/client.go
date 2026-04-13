@@ -125,12 +125,12 @@ func (c *Client) Fetch(ctx context.Context, req FetchRequest) (FetchResult, erro
 }
 
 func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer.Config, error) {
-	sourceAuth, err := c.authFor(ctx, req.Source, gitsync.SourceRole)
+	source, err := c.resolveEndpoint(ctx, req.Source, gitsync.SourceRole)
 	if err != nil {
 		return syncer.Config{}, err
 	}
 	cfg := syncer.Config{
-		Source:        syncerEndpoint(req.Source, sourceAuth),
+		Source:        source,
 		HTTPClient:    c.httpClient,
 		IncludeTags:   req.IncludeTags,
 		ShowStats:     req.Options.CollectStats,
@@ -138,21 +138,21 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		ProtocolMode:  protocolString(req.Protocol),
 	}
 	if req.Target != nil {
-		targetAuth, err := c.authFor(ctx, *req.Target, gitsync.TargetRole)
+		target, err := c.resolveEndpoint(ctx, *req.Target, gitsync.TargetRole)
 		if err != nil {
 			return syncer.Config{}, err
 		}
-		cfg.Target = syncerEndpoint(*req.Target, targetAuth)
+		cfg.Target = target
 	}
 	return cfg, nil
 }
 
 func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.Config, error) {
-	sourceAuth, err := c.authFor(ctx, req.Source, gitsync.SourceRole)
+	source, err := c.resolveEndpoint(ctx, req.Source, gitsync.SourceRole)
 	if err != nil {
 		return syncer.Config{}, err
 	}
-	targetAuth, err := c.authFor(ctx, req.Target, gitsync.TargetRole)
+	target, err := c.resolveEndpoint(ctx, req.Target, gitsync.TargetRole)
 	if err != nil {
 		return syncer.Config{}, err
 	}
@@ -161,8 +161,8 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		maxObjects = DefaultMaterializedMaxObjects
 	}
 	return syncer.Config{
-		Source:                 syncerEndpoint(req.Source, sourceAuth),
-		Target:                 syncerEndpoint(req.Target, targetAuth),
+		Source:                 source,
+		Target:                 target,
 		HTTPClient:             c.httpClient,
 		Branches:               append([]string(nil), req.Scope.Branches...),
 		Mappings:               validationMappings(req.Scope.Mappings),
@@ -179,17 +179,17 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 }
 
 func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest) (syncer.Config, error) {
-	sourceAuth, err := c.authFor(ctx, req.Source, gitsync.SourceRole)
+	source, err := c.resolveEndpoint(ctx, req.Source, gitsync.SourceRole)
 	if err != nil {
 		return syncer.Config{}, err
 	}
-	targetAuth, err := c.authFor(ctx, req.Target, gitsync.TargetRole)
+	target, err := c.resolveEndpoint(ctx, req.Target, gitsync.TargetRole)
 	if err != nil {
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:            syncerEndpoint(req.Source, sourceAuth),
-		Target:            syncerEndpoint(req.Target, targetAuth),
+		Source:            source,
+		Target:            target,
 		HTTPClient:        c.httpClient,
 		Branches:          append([]string(nil), req.Scope.Branches...),
 		Mappings:          validationMappings(req.Scope.Mappings),
@@ -204,12 +204,12 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 }
 
 func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer.Config, error) {
-	sourceAuth, err := c.authFor(ctx, req.Source, gitsync.SourceRole)
+	source, err := c.resolveEndpoint(ctx, req.Source, gitsync.SourceRole)
 	if err != nil {
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:        syncerEndpoint(req.Source, sourceAuth),
+		Source:        source,
 		HTTPClient:    c.httpClient,
 		Branches:      append([]string(nil), req.Scope.Branches...),
 		IncludeTags:   req.IncludeTags,
@@ -225,6 +225,14 @@ func (c *Client) authFor(ctx context.Context, endpoint gitsync.Endpoint, role gi
 		return gitsync.EndpointAuth{}, nil
 	}
 	return c.auth.AuthFor(ctx, endpoint, role)
+}
+
+func (c *Client) resolveEndpoint(ctx context.Context, endpoint gitsync.Endpoint, role gitsync.EndpointRole) (syncer.Endpoint, error) {
+	auth, err := c.authFor(ctx, endpoint, role)
+	if err != nil {
+		return syncer.Endpoint{}, err
+	}
+	return syncerEndpoint(endpoint, auth), nil
 }
 
 func protocolString(mode gitsync.ProtocolMode) string {
@@ -247,12 +255,12 @@ func syncerEndpoint(endpoint gitsync.Endpoint, auth gitsync.EndpointAuth) syncer
 }
 
 func validationMappings(mappings []gitsync.RefMapping) []validation.RefMapping {
-	out := make([]validation.RefMapping, 0, len(mappings))
+	bridgeMappings := make([]internalbridge.RefMapping, 0, len(mappings))
 	for _, mapping := range mappings {
-		out = append(out, validation.RefMapping{
+		bridgeMappings = append(bridgeMappings, internalbridge.RefMapping{
 			Source: mapping.Source,
 			Target: mapping.Target,
 		})
 	}
-	return out
+	return internalbridge.ToValidationMappings(bridgeMappings)
 }
