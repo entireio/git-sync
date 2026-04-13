@@ -72,7 +72,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, d
 
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")
-	modeValue := operationModeFlag(defaultOperationMode(name, defaultMode))
+	modeValue := operationModeFlag(defaultOperationMode(defaultMode))
 	if name == "plan" {
 		fs.Var(&modeValue, "mode", "operation mode: sync or replicate")
 	}
@@ -447,7 +447,10 @@ func (m *operationModeFlag) Set(value string) error {
 	}
 }
 
-func defaultOperationMode(name string, defaultMode gitsync.OperationMode) operationMode {
+// defaultOperationMode returns the starting value for the --mode flag.
+// Subcommands that pin a mode (sync, replicate) pass it in; plan passes ""
+// and gets sync as the default, letting --mode override it.
+func defaultOperationMode(defaultMode gitsync.OperationMode) operationMode {
 	if defaultMode != "" {
 		return operationMode(defaultMode)
 	}

@@ -112,6 +112,53 @@ func TestPlanReplicationRefOverwritesTagRetarget(t *testing.T) {
 	}
 }
 
+func TestBuildReplicationPlansDoesNotMutateManaged(t *testing.T) {
+	// BuildReplicationPlans inserts prune-eligible orphan refs into a local
+	// copy of `managed`. Regression guard: it must not mutate the caller's map.
+	orphan := plumbing.NewBranchReferenceName("stale")
+	main := plumbing.NewBranchReferenceName("main")
+	managed := map[plumbing.ReferenceName]ManagedTarget{
+		main: {Kind: RefKindBranch, Label: "main"},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		main: {
+			Kind:       RefKindBranch,
+			Label:      "main",
+			SourceRef:  main,
+			TargetRef:  main,
+			SourceHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		},
+	}
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		main:   plumbing.NewHash("1111111111111111111111111111111111111111"),
+		orphan: plumbing.NewHash("3333333333333333333333333333333333333333"),
+	}
+
+	plans, err := BuildReplicationPlans(desired, targetRefs, managed, PlanConfig{Prune: true})
+	if err != nil {
+		t.Fatalf("BuildReplicationPlans: %v", err)
+	}
+
+	// The returned plans should include the orphan delete...
+	var sawDelete bool
+	for _, p := range plans {
+		if p.TargetRef == orphan && p.Action == ActionDelete {
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("expected prune delete for orphan, got plans=%+v", plans)
+	}
+
+	// ...but the caller's managed map must remain unchanged.
+	if len(managed) != 1 {
+		t.Fatalf("caller's managed map was mutated: %+v", managed)
+	}
+	if _, ok := managed[orphan]; ok {
+		t.Fatalf("orphan leaked into caller's managed map")
+	}
+}
+
 func TestValidateMappingsRejectsDuplicateTargets(t *testing.T) {
 	_, err := validation.ValidateMappings([]RefMapping{
 		{Source: "main", Target: "stable"},
