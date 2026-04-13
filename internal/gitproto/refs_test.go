@@ -2,11 +2,15 @@ package gitproto
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
 func TestRefHashMap(t *testing.T) {
@@ -121,10 +125,34 @@ func TestDecodeV1AdvRefs(t *testing.T) {
 	}
 }
 
+func TestDecodeV1AdvRefsSmartEmptyAdvertisement(t *testing.T) {
+	var body strings.Builder
+	if _, err := pktline.Writef(&body, "# service=%s\n", transport.ReceivePackService); err != nil {
+		t.Fatalf("write smart service line: %v", err)
+	}
+	if err := pktline.WriteFlush(&body); err != nil {
+		t.Fatalf("write smart flush: %v", err)
+	}
+
+	_, err := decodeV1AdvRefs([]byte(body.String()))
+	if !errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		t.Fatalf("expected empty remote repository, got %v", err)
+	}
+}
+
+func TestDecodeV1AdvRefsMalformedIncludesPreview(t *testing.T) {
+	_, err := decodeV1AdvRefs([]byte("# service=git-receive-pack"))
+	if err == nil {
+		t.Fatal("expected malformed decode error")
+	}
+	if !strings.Contains(err.Error(), `body-prefix="# service=git-receive-pack"`) {
+		t.Fatalf("expected body preview in error, got %v", err)
+	}
+}
+
 func TestListSourceRefsUnsupportedProtocol(t *testing.T) {
 	_, _, err := ListSourceRefs(context.Background(), nil, "v99", nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported protocol mode")
 	}
 }
-

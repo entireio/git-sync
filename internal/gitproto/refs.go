@@ -1,12 +1,16 @@
 package gitproto
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
@@ -166,14 +170,61 @@ func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, error) {
 }
 
 func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
+	rd := bufio.NewReader(bytes.NewReader(data))
+	consumedSmartHeader, err := consumeSmartInfoRefsHeader(rd)
+	if err != nil {
+		return nil, fmt.Errorf("%w; body-prefix=%q", err, bodyPreview(data))
+	}
+	if consumedSmartHeader {
+		if _, err := rd.Peek(1); errors.Is(err, io.EOF) {
+			return nil, transport.ErrEmptyRemoteRepository
+		}
+	}
+
 	ar := packp.NewAdvRefs()
-	if err := ar.Decode(bytes.NewReader(data)); err != nil {
+	if err := ar.Decode(rd); err != nil {
 		if err == packp.ErrEmptyAdvRefs {
 			return nil, transport.ErrEmptyRemoteRepository
 		}
-		return nil, err
+		return nil, fmt.Errorf("%w; body-prefix=%q", err, bodyPreview(data))
 	}
 	return ar, nil
+}
+
+func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {
+	_, prefix, err := pktline.PeekLine(rd)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.HasPrefix(prefix, []byte("# service=")) {
+		return false, nil
+	}
+
+	var reply packp.SmartReply
+	if err := reply.Decode(rd); err != nil {
+		return true, err
+	}
+	if reply.Service == "" {
+		return true, errors.New("missing smart HTTP service name")
+	}
+	return true, nil
+}
+
+func bodyPreview(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	limit := 200
+	if len(data) < limit {
+		limit = len(data)
+	}
+	preview := string(data[:limit])
+	preview = strings.ReplaceAll(preview, "\n", `\n`)
+	preview = strings.ReplaceAll(preview, "\r", `\r`)
+	if len(data) > limit {
+		preview += "..."
+	}
+	return preview
 }
 
 // RefHashMap converts a reference slice to a map of name→hash.
