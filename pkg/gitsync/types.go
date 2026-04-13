@@ -125,7 +125,7 @@ const (
 )
 
 // RefPlan describes the outcome for a single ref.
-type RefPlan struct {
+type RefResult struct {
 	Branch     string  `json:"branch"`
 	SourceRef  string  `json:"source_ref"`
 	TargetRef  string  `json:"target_ref"`
@@ -135,6 +135,10 @@ type RefPlan struct {
 	Action     Action  `json:"action"`
 	Reason     string  `json:"reason"`
 }
+
+// RefPlan is kept as an alias for early adopters while the stable result
+// surface converges on the more explicit RefResult name.
+type RefPlan = RefResult
 
 // RefInfo identifies a named ref.
 type RefInfo struct {
@@ -183,25 +187,39 @@ type ProbeResult struct {
 	Measurement   Measurement `json:"measurement"`
 }
 
+// SyncCounts summarizes per-run ref outcomes.
+type SyncCounts struct {
+	Applied int `json:"applied"`
+	Skipped int `json:"skipped"`
+	Blocked int `json:"blocked"`
+	Deleted int `json:"deleted"`
+}
+
+// BatchSummary describes batching behavior when it was used.
+type BatchSummary struct {
+	Enabled bool `json:"enabled"`
+	Planned int  `json:"planned"`
+	Done    int  `json:"done"`
+}
+
+// ExecutionSummary describes how a sync was carried out.
+type ExecutionSummary struct {
+	DryRun             bool         `json:"dry_run"`
+	Protocol           string       `json:"protocol"`
+	Relay              bool         `json:"relay"`
+	Mode               string       `json:"mode"`
+	Reason             string       `json:"reason"`
+	BootstrapSuggested bool         `json:"bootstrap_suggested"`
+	Batch              BatchSummary `json:"batch"`
+}
+
 // SyncResult holds structured sync output suitable for workers.
 type SyncResult struct {
-	Plans              []RefPlan   `json:"plans"`
-	Pushed             int         `json:"pushed"`
-	Skipped            int         `json:"skipped"`
-	Blocked            int         `json:"blocked"`
-	Deleted            int         `json:"deleted"`
-	DryRun             bool        `json:"dry_run"`
-	Relay              bool        `json:"relay"`
-	RelayMode          string      `json:"relay_mode"`
-	RelayReason        string      `json:"relay_reason"`
-	Batching           bool        `json:"batching"`
-	BatchCount         int         `json:"batch_count"`
-	PlannedBatchCount  int         `json:"planned_batch_count"`
-	TempRefs           []string    `json:"temp_refs"`
-	BootstrapSuggested bool        `json:"bootstrap_suggested"`
-	Stats              Stats       `json:"stats"`
-	Measurement        Measurement `json:"measurement"`
-	Protocol           string      `json:"protocol"`
+	Refs        []RefResult      `json:"refs"`
+	Counts      SyncCounts       `json:"counts"`
+	Execution   ExecutionSummary `json:"execution"`
+	Stats       Stats            `json:"stats"`
+	Measurement Measurement      `json:"measurement"`
 }
 
 // PlanResult is the dry-run form of SyncResult.
@@ -228,26 +246,31 @@ func fromSyncerProbeResult(result syncer.ProbeResult) ProbeResult {
 
 func fromSyncerResult(result syncer.Result) SyncResult {
 	out := SyncResult{
-		Plans:              make([]RefPlan, 0, len(result.Plans)),
-		Pushed:             result.Pushed,
-		Skipped:            result.Skipped,
-		Blocked:            result.Blocked,
-		Deleted:            result.Deleted,
-		DryRun:             result.DryRun,
-		Relay:              result.Relay,
-		RelayMode:          result.RelayMode,
-		RelayReason:        result.RelayReason,
-		Batching:           result.Batching,
-		BatchCount:         result.BatchCount,
-		PlannedBatchCount:  result.PlannedBatchCount,
-		TempRefs:           append([]string(nil), result.TempRefs...),
-		BootstrapSuggested: result.BootstrapSuggested,
-		Stats:              fromSyncerStats(result.Stats),
-		Measurement:        fromSyncerMeasurement(result.Measurement),
-		Protocol:           result.Protocol,
+		Refs: make([]RefResult, 0, len(result.Plans)),
+		Counts: SyncCounts{
+			Applied: result.Pushed,
+			Skipped: result.Skipped,
+			Blocked: result.Blocked,
+			Deleted: result.Deleted,
+		},
+		Execution: ExecutionSummary{
+			DryRun:             result.DryRun,
+			Protocol:           result.Protocol,
+			Relay:              result.Relay,
+			Mode:               result.RelayMode,
+			Reason:             result.RelayReason,
+			BootstrapSuggested: result.BootstrapSuggested,
+			Batch: BatchSummary{
+				Enabled: result.Batching,
+				Planned: result.PlannedBatchCount,
+				Done:    result.BatchCount,
+			},
+		},
+		Stats:       fromSyncerStats(result.Stats),
+		Measurement: fromSyncerMeasurement(result.Measurement),
 	}
 	for _, plan := range result.Plans {
-		out.Plans = append(out.Plans, RefPlan{
+		out.Refs = append(out.Refs, RefResult{
 			Branch:     plan.Branch,
 			SourceRef:  plan.SourceRef.String(),
 			TargetRef:  plan.TargetRef.String(),
