@@ -317,12 +317,12 @@ type syncSession struct {
 }
 
 type targetSession struct {
-	conn      *gitproto.Conn
-	adv       *packp.AdvRefs
-	refMap    map[plumbing.ReferenceName]plumbing.Hash
-	features  gitproto.TargetFeatures
-	policy    planner.RelayTargetPolicy
-	pusher    gitproto.Pusher
+	conn     *gitproto.Conn
+	adv      *packp.AdvRefs
+	refMap   map[plumbing.ReferenceName]plumbing.Hash
+	features gitproto.TargetFeatures
+	policy   planner.RelayTargetPolicy
+	pusher   gitproto.Pusher
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -436,7 +436,8 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
 	gpDesired := convert.DesiredRefs(desiredRefs)
-	if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
+	fetchStore := storer.Storer(newLimitedStorer(repo.Storer, effectiveMaterializedMaxObjects(cfg.MaterializedMaxObjects)))
+	if err := sourceService.FetchToStore(ctx, fetchStore, s.sourceConn, gpDesired, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return Result{}, err
 		}

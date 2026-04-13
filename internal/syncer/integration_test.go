@@ -159,7 +159,7 @@ func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected materialized limit failure")
 	}
-	if !strings.Contains(err.Error(), "materialized push requires") {
+	if !strings.Contains(err.Error(), "materialized") || !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("expected materialized limit error, got %v", err)
 	}
 }
