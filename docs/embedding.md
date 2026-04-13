@@ -14,6 +14,7 @@ Use `pkg/gitsync` when you want a durable worker-facing API:
 - `Probe`
 - `Plan`
 - `Sync`
+- `Replicate`
 - typed requests and results
 - injected auth and HTTP client support
 
@@ -118,7 +119,8 @@ The stable `SyncResult` is organized for worker consumption:
 - `Counts`
   aggregate applied/skipped/blocked/deleted totals
 - `Execution`
-  protocol, relay summary, execution mode, and batch summary
+  protocol, `operation_mode` (sync or replicate), relay summary,
+  `transfer_mode` (the engine path that executed), and batch summary
 - `Stats`
   transfer counters when requested
 - `Measurement`
@@ -146,7 +148,8 @@ For many workers, a useful pattern is:
 
 - retry on returned `error`
 - do not blindly retry on `Counts.Blocked > 0`
-- log `Execution.Mode` and `Execution.Reason` for operator visibility
+- log `Execution.OperationMode`, `Execution.TransferMode`, and
+  `Execution.Reason` for operator visibility
 
 ## What Not To Depend On
 
