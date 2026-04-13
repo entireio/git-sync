@@ -1,6 +1,6 @@
 # Architecture
 
-`git-sync` is a remote-to-remote Git mirroring CLI over smart HTTP.
+`git-sync` is a remote-to-remote Git mirroring tool and library over smart HTTP.
 
 ## Product Rationale
 
@@ -80,6 +80,13 @@ The current execution modes are:
 
 ## Package Model
 
+- `pkg/gitsync`
+  - stable public embedding API
+  - typed `Probe`, `Plan`, and `Sync` requests/results
+  - auth and HTTP client injection for worker-style callers
+- `pkg/gitsync/unstable`
+  - explicitly non-stable first-party tooling surface
+  - advanced controls, `Bootstrap`, `Fetch`, and CLI-oriented knobs
 - `internal/gitproto`
   - smart HTTP, pkt-line, fetch/push request handling, capability negotiation
 - `internal/planner`
@@ -98,6 +105,21 @@ The current execution modes are:
   - top-level orchestration and result shaping
 - `internal/syncertest`
   - shared in-memory test fixtures
+
+## Public API Boundary
+
+The project now separates embedding concerns from first-party tooling concerns:
+
+- `pkg/gitsync` is the stable library boundary.
+  Callers express orchestration intent through typed probe, plan, and sync requests. Auth and transport are injected. Execution strategy remains internal.
+- `pkg/gitsync/unstable` is the escape hatch for advanced controls.
+  It exists so the CLI and benchmark tool can use batching limits, memory measurement, verbose progress, bootstrap, and fetch without widening the stable API prematurely.
+
+That split is intentional:
+
+- external embedders should depend on `pkg/gitsync`
+- first-party tools inside this repo may use `pkg/gitsync/unstable`
+- strategy selection, batching heuristics, and materialized fallback controls are not yet treated as stable product contracts
 
 ## Protocol Boundaries
 
