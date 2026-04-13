@@ -83,6 +83,8 @@ The stable `pkg/gitsync` results are shaped for workers:
 - `Execution`
   - execution mode, protocol, relay summary, and batch summary
 
+See [docs/embedding.md](docs/embedding.md) for worker-oriented guidance.
+
 ## Current scope
 
 - Smart HTTP only
