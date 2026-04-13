@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -54,6 +55,7 @@ type RefMapping = validation.RefMapping
 type Config struct {
 	Source                 Endpoint
 	Target                 Endpoint
+	HTTPClient             *http.Client
 	Branches               []string
 	Mappings               []RefMapping
 	IncludeTags            bool
@@ -271,7 +273,7 @@ func measurementLine(m Measurement) []string {
 
 // --- Session setup ---
 
-func newConn(raw Endpoint, label string, stats *statsCollector) (*gitproto.Conn, error) {
+func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.Conn, error) {
 	ep, err := transport.NewEndpoint(raw.URL)
 	if err != nil {
 		return nil, err
@@ -286,9 +288,21 @@ func newConn(raw Endpoint, label string, stats *statsCollector) (*gitproto.Conn,
 	if err != nil {
 		return nil, err
 	}
-	baseRT := gitproto.NewHTTPTransport(raw.SkipTLSVerify)
-	rt := &countingRoundTripper{base: baseRT, label: label, stats: stats}
-	return gitproto.NewConn(ep, label, authMethod, rt), nil
+	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
+	return gitproto.NewConnWithHTTPClient(ep, label, authMethod, client), nil
+}
+
+func instrumentHTTPClient(base *http.Client, skipTLS bool, label string, stats *statsCollector) *http.Client {
+	if base == nil {
+		base = &http.Client{Transport: gitproto.NewHTTPTransport(skipTLS)}
+	}
+	clone := *base
+	baseRT := clone.Transport
+	if baseRT == nil {
+		baseRT = gitproto.NewHTTPTransport(skipTLS)
+	}
+	clone.Transport = &countingRoundTripper{base: baseRT, label: label, stats: stats}
+	return &clone
 }
 
 func planConfig(cfg Config) planner.PlanConfig {
@@ -317,12 +331,12 @@ type syncSession struct {
 }
 
 type targetSession struct {
-	conn      *gitproto.Conn
-	adv       *packp.AdvRefs
-	refMap    map[plumbing.ReferenceName]plumbing.Hash
-	features  gitproto.TargetFeatures
-	policy    planner.RelayTargetPolicy
-	pusher    gitproto.Pusher
+	conn     *gitproto.Conn
+	adv      *packp.AdvRefs
+	refMap   map[plumbing.ReferenceName]plumbing.Hash
+	features gitproto.TargetFeatures
+	policy   planner.RelayTargetPolicy
+	pusher   gitproto.Pusher
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -348,7 +362,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}))
 	}
 
-	s.sourceConn, err = newConn(cfg.Source, "source", s.stats)
+	s.sourceConn, err = newConn(cfg.Source, "source", s.stats, cfg.HTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
@@ -362,7 +376,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
 
 	if needTarget {
-		targetConn, err := newConn(cfg.Target, "target", s.stats)
+		targetConn, err := newConn(cfg.Target, "target", s.stats, cfg.HTTPClient)
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}

@@ -515,7 +515,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	}
 
 	stats := newStats(false)
-	sourceConn, err := newConn(cfg.Source, "source", stats)
+	sourceConn, err := newConn(cfg.Source, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 	}
 
 	stats := newStats(false)
-	sourceConn, err := newConn(cfg.Source, "source", stats)
+	sourceConn, err := newConn(cfg.Source, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}
@@ -632,10 +632,10 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 	plan := func(limit int64) []plumbing.Hash {
 		t.Helper()
 		checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
-			SourceConn:   sourceConn,
+			SourceConn:    sourceConn,
 			SourceService: sourceService,
-			BatchMaxPack: limit,
-			Verbose:      cfg.Verbose,
+			BatchMaxPack:  limit,
+			Verbose:       cfg.Verbose,
 		}, ref)
 		if err != nil {
 			t.Fatalf("plan checkpoints with limit %d: %v", limit, err)

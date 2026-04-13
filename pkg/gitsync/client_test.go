@@ -1,13 +1,14 @@
 package gitsync
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
 func TestBuildSyncConfigUsesDefaultProtocolAndMaterializedLimit(t *testing.T) {
-	cfg := buildSyncConfig(
+	cfg := New(Options{}).buildSyncConfig(
 		Endpoint{URL: "https://source.example/repo.git"},
 		EndpointAuth{Token: "src"},
 		Endpoint{URL: "https://target.example/repo.git"},
@@ -32,6 +33,23 @@ func TestBuildSyncConfigUsesDefaultProtocolAndMaterializedLimit(t *testing.T) {
 	}
 	if cfg.Source.Token != "src" || cfg.Target.Token != "dst" {
 		t.Fatalf("unexpected token mapping: %+v %+v", cfg.Source, cfg.Target)
+	}
+}
+
+func TestClientCarriesHTTPClientIntoSyncerConfig(t *testing.T) {
+	base := &http.Client{}
+	cfg := New(Options{HTTPClient: base}).buildSyncConfig(
+		Endpoint{URL: "https://source.example/repo.git"},
+		EndpointAuth{},
+		Endpoint{URL: "https://target.example/repo.git"},
+		EndpointAuth{},
+		RefScope{},
+		SyncPolicy{},
+		false,
+		false,
+	)
+	if cfg.HTTPClient != base {
+		t.Fatalf("http client = %p, want %p", cfg.HTTPClient, base)
 	}
 }
 

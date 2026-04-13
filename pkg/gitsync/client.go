@@ -3,20 +3,24 @@ package gitsync
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/soph/git-sync/internal/syncer"
 )
 
 // Options configures a Client. It is intentionally small in the first public cut.
-type Options struct{}
+type Options struct {
+	HTTPClient *http.Client
+}
 
 // Client provides the public orchestration API for git-sync.
-type Client struct{}
+type Client struct {
+	httpClient *http.Client
+}
 
 // New constructs a new Client.
 func New(opts Options) *Client {
-	_ = opts
-	return &Client{}
+	return &Client{httpClient: opts.HTTPClient}
 }
 
 // Probe inspects a source remote and optional target remote.
@@ -24,7 +28,7 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if err := req.Validate(); err != nil {
 		return ProbeResult{}, err
 	}
-	result, err := syncer.Probe(ctx, buildProbeConfig(req))
+	result, err := syncer.Probe(ctx, c.buildProbeConfig(req))
 	if err != nil {
 		return ProbeResult{}, err
 	}
@@ -36,7 +40,7 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
 	}
-	result, err := syncer.Run(ctx, buildSyncConfig(req.Source, req.SourceAuth, req.Target, req.TargetAuth, req.Scope, req.Policy, req.CollectStats, true))
+	result, err := syncer.Run(ctx, c.buildSyncConfig(req.Source, req.SourceAuth, req.Target, req.TargetAuth, req.Scope, req.Policy, req.CollectStats, true))
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -48,7 +52,7 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	if err := req.Validate(); err != nil {
 		return SyncResult{}, err
 	}
-	result, err := syncer.Run(ctx, buildSyncConfig(req.Source, req.SourceAuth, req.Target, req.TargetAuth, req.Scope, req.Policy, req.CollectStats, false))
+	result, err := syncer.Run(ctx, c.buildSyncConfig(req.Source, req.SourceAuth, req.Target, req.TargetAuth, req.Scope, req.Policy, req.CollectStats, false))
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -68,10 +72,17 @@ func buildProbeConfig(req ProbeRequest) syncer.Config {
 	return cfg
 }
 
-func buildSyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targetAuth EndpointAuth, scope RefScope, policy SyncPolicy, collectStats, dryRun bool) syncer.Config {
+func (c *Client) buildProbeConfig(req ProbeRequest) syncer.Config {
+	cfg := buildProbeConfig(req)
+	cfg.HTTPClient = c.httpClient
+	return cfg
+}
+
+func (c *Client) buildSyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targetAuth EndpointAuth, scope RefScope, policy SyncPolicy, collectStats, dryRun bool) syncer.Config {
 	return syncer.Config{
 		Source:                 syncer.Endpoint{URL: source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
 		Target:                 syncer.Endpoint{URL: target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify},
+		HTTPClient:             c.httpClient,
 		Branches:               append([]string(nil), scope.Branches...),
 		Mappings:               append([]RefMapping(nil), scope.Mappings...),
 		IncludeTags:            policy.IncludeTags,
