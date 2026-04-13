@@ -74,6 +74,12 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	return internalbridge.FromSyncResult(result), nil
 }
 
+// Replicate executes source-authoritative relay-only replication between two remotes.
+func (c *Client) Replicate(ctx context.Context, req SyncRequest) (SyncResult, error) {
+	req.Policy.Mode = ModeReplicate
+	return c.Sync(ctx, req)
+}
+
 func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (internalbridge.Config, error) {
 	sourceAuth, err := c.authFor(ctx, req.Source, SourceRole)
 	if err != nil {
@@ -137,6 +143,9 @@ func (r SyncRequest) Validate() error {
 	if r.Target.URL == "" {
 		return fmt.Errorf("target URL is required")
 	}
+	if err := validateOperationMode(r.Policy.Mode); err != nil {
+		return err
+	}
 	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
 		return err
 	}
@@ -152,6 +161,9 @@ func (r PlanRequest) Validate() error {
 	}
 	if r.Target.URL == "" {
 		return fmt.Errorf("target URL is required")
+	}
+	if err := validateOperationMode(r.Policy.Mode); err != nil {
+		return err
 	}
 	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
 		return err
@@ -204,10 +216,20 @@ func bridgeScope(scope RefScope) internalbridge.RefScope {
 
 func bridgePolicy(policy SyncPolicy) internalbridge.SyncPolicy {
 	return internalbridge.SyncPolicy{
+		Mode:        internalbridge.OperationMode(policy.Mode),
 		IncludeTags: policy.IncludeTags,
 		Force:       policy.Force,
 		Prune:       policy.Prune,
 		Protocol:    internalbridge.ProtocolMode(policy.Protocol),
+	}
+}
+
+func validateOperationMode(mode OperationMode) error {
+	switch mode {
+	case "", ModeSync, ModeReplicate:
+		return nil
+	default:
+		return fmt.Errorf("unsupported operation mode %q", mode)
 	}
 }
 

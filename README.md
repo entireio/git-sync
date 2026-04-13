@@ -56,8 +56,9 @@ The command surface is:
 - `git-sync probe`: inspect a source remote, and optionally a target remote
 - `git-sync fetch`: exercise source-side fetch negotiation without pushing
 - `git-sync bootstrap`: seed an empty target with create-only relay behavior
-- `git-sync plan`: compute source-to-target ref actions without pushing
+- `git-sync plan`: compute source-to-target ref actions without pushing, with `--mode sync|replicate`
 - `git-sync sync`: execute the planned changes against the target
+- `git-sync replicate`: execute source-authoritative relay-only replication against the target
 - `git-sync-bench`: run repeatable benchmark scenarios against fresh empty targets
 
 ## Library API
@@ -66,7 +67,7 @@ The command surface is:
 
 - `pkg/gitsync`
   - stable embedding surface for queue workers and other external callers
-  - typed `Probe`, `Plan`, and `Sync` requests/results
+  - typed `Probe`, `Plan`, `Sync`, and `Replicate` requests/results
   - injected auth and HTTP client support
 - `pkg/gitsync/unstable`
   - explicitly non-stable surface for first-party tooling and advanced controls
@@ -94,6 +95,7 @@ See [docs/embedding.md](docs/embedding.md) for worker-oriented guidance.
 - Optional exact ref mapping with `--map`
 - Fast-forward safety by default
 - Optional forced retargeting with `--force`
+- Optional source-authoritative relay-only replication with `replicate` / `plan --mode replicate`
 - Optional managed-ref deletion with `--prune`
 - Optional transfer stats output with `--stats`
 - Optional machine-readable output with `--json`
@@ -130,6 +132,27 @@ go run ./cmd/git-sync plan \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
 ```
+
+Plan a source-authoritative replication without pushing anything:
+
+```bash
+go run ./cmd/git-sync plan \
+  --mode replicate \
+  --stats \
+  https://github.com/source-org/source-repo.git \
+  https://github.com/target-org/target-repo.git
+```
+
+Execute relay-only replication that overwrites differing managed refs and fails instead of materializing locally:
+
+```bash
+go run ./cmd/git-sync replicate \
+  --stats \
+  https://github.com/source-org/source-repo.git \
+  https://github.com/target-org/target-repo.git
+```
+
+If `replicate` cannot use relay against the target, it fails and tells you to rerun with `sync`.
 
 Bootstrap an empty target without using the normal local object-store sync path:
 

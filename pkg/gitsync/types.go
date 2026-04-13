@@ -14,6 +14,14 @@ const (
 	ProtocolV2   ProtocolMode = "v2"
 )
 
+// OperationMode controls high-level sync semantics.
+type OperationMode string
+
+const (
+	ModeSync      OperationMode = "sync"
+	ModeReplicate OperationMode = "replicate"
+)
+
 // Endpoint identifies a remote Git endpoint.
 type Endpoint struct {
 	URL string
@@ -70,6 +78,7 @@ type RefScope struct {
 
 // SyncPolicy controls high-level sync behavior.
 type SyncPolicy struct {
+	Mode        OperationMode
 	IncludeTags bool
 	Force       bool
 	Prune       bool

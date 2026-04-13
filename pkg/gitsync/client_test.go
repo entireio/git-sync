@@ -109,6 +109,17 @@ func TestClientSyncEndToEndWithLocalRepos(t *testing.T) {
 	}
 }
 
+func TestClientReplicateRejectsUnsupportedMode(t *testing.T) {
+	err := (SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+		Policy: SyncPolicy{Mode: "bogus"},
+	}).Validate()
+	if err == nil {
+		t.Fatalf("expected invalid operation mode validation error")
+	}
+}
+
 type smartHTTPRepoServer struct {
 	tb       testing.TB
 	repo     *git.Repository

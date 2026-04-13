@@ -67,6 +67,7 @@ func TestFromSyncResultShapesStableSummary(t *testing.T) {
 		Blocked:            3,
 		Deleted:            4,
 		DryRun:             true,
+		OperationMode:      "replicate",
 		Relay:              true,
 		RelayMode:          "incremental-relay",
 		RelayReason:        "fast-forward",
@@ -84,7 +85,7 @@ func TestFromSyncResultShapesStableSummary(t *testing.T) {
 	if got.Counts.Applied != 1 || got.Counts.Skipped != 2 || got.Counts.Blocked != 3 || got.Counts.Deleted != 4 {
 		t.Fatalf("unexpected counts: %+v", got.Counts)
 	}
-	if !got.Execution.DryRun || !got.Execution.Relay || got.Execution.Mode != "incremental-relay" || got.Execution.Reason != "fast-forward" {
+	if !got.Execution.DryRun || !got.Execution.Relay || got.Execution.OperationMode != "replicate" || got.Execution.Mode != "incremental-relay" || got.Execution.TransferMode != "incremental-relay" || got.Execution.Reason != "fast-forward" {
 		t.Fatalf("unexpected execution summary: %+v", got.Execution)
 	}
 	if !got.Execution.Batch.Enabled || got.Execution.Batch.Done != 5 || got.Execution.Batch.Planned != 6 {

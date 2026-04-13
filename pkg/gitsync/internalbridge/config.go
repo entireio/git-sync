@@ -9,6 +9,7 @@ import (
 )
 
 type ProtocolMode string
+type OperationMode string
 
 type Config struct {
 	raw syncer.Config
@@ -17,6 +18,9 @@ type Config struct {
 const ProtocolAuto ProtocolMode = validation.ProtocolAuto
 const ProtocolV1 ProtocolMode = validation.ProtocolV1
 const ProtocolV2 ProtocolMode = validation.ProtocolV2
+
+const ModeSync OperationMode = "sync"
+const ModeReplicate OperationMode = "replicate"
 
 type RefMapping struct {
 	Source string
@@ -40,6 +44,7 @@ type RefScope struct {
 }
 
 type SyncPolicy struct {
+	Mode        OperationMode
 	IncludeTags bool
 	Force       bool
 	Prune       bool
@@ -70,6 +75,7 @@ func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targe
 		IncludeTags:            policy.IncludeTags,
 		DryRun:                 dryRun,
 		ShowStats:              collectStats,
+		Mode:                   operationModeString(policy.Mode),
 		Force:                  policy.Force,
 		Prune:                  policy.Prune,
 		ProtocolMode:           protocolString(policy.Protocol),
@@ -98,6 +104,13 @@ func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {
 func protocolString(mode ProtocolMode) string {
 	if mode == "" {
 		return string(ProtocolAuto)
+	}
+	return string(mode)
+}
+
+func operationModeString(mode OperationMode) string {
+	if mode == "" {
+		return string(ModeSync)
 	}
 	return string(mode)
 }

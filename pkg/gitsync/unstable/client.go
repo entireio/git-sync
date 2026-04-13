@@ -108,6 +108,15 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (Result, error) {
 	return syncer.Run(ctx, cfg)
 }
 
+func (c *Client) Replicate(ctx context.Context, req SyncRequest) (Result, error) {
+	req.Policy.Mode = gitsync.ModeReplicate
+	cfg, err := c.buildSyncConfig(ctx, req)
+	if err != nil {
+		return Result{}, err
+	}
+	return syncer.Run(ctx, cfg)
+}
+
 func (c *Client) Bootstrap(ctx context.Context, req BootstrapRequest) (Result, error) {
 	cfg, err := c.buildBootstrapConfig(ctx, req)
 	if err != nil {
@@ -171,6 +180,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		DryRun:                 req.DryRun,
 		ShowStats:              req.Options.CollectStats,
 		MeasureMemory:          req.Options.MeasureMemory,
+		Mode:                   operationModeString(req.Policy.Mode),
 		Force:                  req.Policy.Force,
 		Prune:                  req.Policy.Prune,
 		MaterializedMaxObjects: maxObjects,
@@ -239,6 +249,13 @@ func (c *Client) resolveEndpoint(ctx context.Context, endpoint gitsync.Endpoint,
 func protocolString(mode gitsync.ProtocolMode) string {
 	if mode == "" {
 		return string(gitsync.ProtocolAuto)
+	}
+	return string(mode)
+}
+
+func operationModeString(mode gitsync.OperationMode) string {
+	if mode == "" {
+		return string(gitsync.ModeSync)
 	}
 	return string(mode)
 }
