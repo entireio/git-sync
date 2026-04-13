@@ -61,9 +61,9 @@ func (s *RefService) FetchToStore(
 ) error {
 	switch s.Protocol {
 	case "v2":
-		return fetchToStoreV2(ctx, store, conn, s.V2Caps, desired, targetRefs)
+		return fetchToStoreV2(ctx, store, conn, s.V2Caps, desired, targetRefs, s.Verbose)
 	case "v1":
-		return fetchToStoreV1(ctx, store, conn, s.V1Adv, desired, targetRefs)
+		return fetchToStoreV1(ctx, store, conn, s.V1Adv, desired, targetRefs, s.Verbose)
 	default:
 		return fmt.Errorf("unsupported source protocol %q", s.Protocol)
 	}
@@ -79,9 +79,9 @@ func (s *RefService) FetchPack(
 ) (io.ReadCloser, error) {
 	switch s.Protocol {
 	case "v2":
-		return fetchPackV2(ctx, conn, s.V2Caps, desired, targetRefs)
+		return fetchPackV2(ctx, conn, s.V2Caps, desired, targetRefs, s.Verbose)
 	case "v1":
-		return fetchPackV1(ctx, conn, s.V1Adv, desired, targetRefs)
+		return fetchPackV1(ctx, conn, s.V1Adv, desired, targetRefs, s.Verbose)
 	default:
 		return nil, fmt.Errorf("unsupported source protocol %q", s.Protocol)
 	}
@@ -118,7 +118,8 @@ func (s *RefService) FetchCommitGraph(
 		return err
 	}
 	defer ioutil.CheckClose(reader, &err)
-	return storeV2FetchPack(store, reader)
+	// Commit-graph fetches are short and not user-facing; skip progress.
+	return storeV2FetchPack(store, reader, false)
 }
 
 // Capabilities returns the sorted capability list for display.
@@ -142,6 +143,7 @@ func fetchToStoreV2(
 	caps *V2Capabilities,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	verbose bool,
 ) error {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
@@ -154,7 +156,10 @@ func fetchToStoreV2(
 	// self-contained so callers (e.g. replicate) can forward it to
 	// receive-pack servers that may advertise "no-thin". See
 	// planner.SupportsReplicateRelay for the matching invariant.
-	cmdArgs = append(cmdArgs, "ofs-delta", "no-progress")
+	cmdArgs = append(cmdArgs, "ofs-delta")
+	if !verbose {
+		cmdArgs = append(cmdArgs, "no-progress")
+	}
 	for _, h := range wants {
 		cmdArgs = append(cmdArgs, "want "+h.String())
 	}
@@ -172,7 +177,7 @@ func fetchToStoreV2(
 		return err
 	}
 	defer ioutil.CheckClose(reader, &err)
-	return storeV2FetchPack(store, reader)
+	return storeV2FetchPack(store, reader, verbose)
 }
 
 func fetchPackV2(
@@ -181,6 +186,7 @@ func fetchPackV2(
 	caps *V2Capabilities,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	verbose bool,
 ) (io.ReadCloser, error) {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
@@ -193,7 +199,10 @@ func fetchPackV2(
 	// self-contained so callers (e.g. replicate) can forward it to
 	// receive-pack servers that may advertise "no-thin". See
 	// planner.SupportsReplicateRelay for the matching invariant.
-	cmdArgs = append(cmdArgs, "ofs-delta", "no-progress")
+	cmdArgs = append(cmdArgs, "ofs-delta")
+	if !verbose {
+		cmdArgs = append(cmdArgs, "no-progress")
+	}
 	// Only request include-tag if the server supports it (issue #6).
 	if hasTag(desired) && caps.FetchSupports("include-tag") {
 		cmdArgs = append(cmdArgs, "include-tag")
@@ -214,7 +223,7 @@ func fetchPackV2(
 	if err != nil {
 		return nil, err
 	}
-	packStream, err := openV2PackStream(reader)
+	packStream, err := openV2PackStream(reader, verbose)
 	if err != nil {
 		_ = reader.Close()
 		return nil, err
@@ -222,7 +231,7 @@ func fetchPackV2(
 	return packStream, nil
 }
 
-func storeV2FetchPack(store storer.Storer, r io.Reader) error {
+func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 	reader := NewPacketReader(r)
 	for {
 		kind, payload, err := reader.ReadPacket()
@@ -242,6 +251,7 @@ func storeV2FetchPack(store storer.Storer, r io.Reader) error {
 			switch line {
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
+				demux.Progress = progressSink(verbose, "source: ")
 				return packfile.UpdateObjectStorage(store, demux)
 			case "acknowledgments\n", "shallow-info\n":
 				if err := SkipSection(reader); err != nil {
@@ -254,7 +264,7 @@ func storeV2FetchPack(store storer.Storer, r io.Reader) error {
 	}
 }
 
-func openV2PackStream(body io.ReadCloser) (io.ReadCloser, error) {
+func openV2PackStream(body io.ReadCloser, verbose bool) (io.ReadCloser, error) {
 	reader := NewPacketReader(body)
 	for {
 		kind, payload, err := reader.ReadPacket()
@@ -273,8 +283,10 @@ func openV2PackStream(body io.ReadCloser) (io.ReadCloser, error) {
 			line := string(payload)
 			switch line {
 			case "packfile\n":
+				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
+				demux.Progress = progressSink(verbose, "source: ")
 				return &wrappedRC{
-					Reader: sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader()),
+					Reader: demux,
 					Closer: body,
 				}, nil
 			case "acknowledgments\n", "shallow-info\n":
@@ -296,6 +308,7 @@ func buildV1UploadPackBody(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	includeTags bool,
+	verbose bool,
 ) ([]byte, *capability.List, error) {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
@@ -305,7 +318,7 @@ func buildV1UploadPackBody(
 
 	req := packp.NewUploadRequest()
 	req.Wants = wants
-	if adv.Capabilities.Supports(capability.NoProgress) {
+	if !verbose && adv.Capabilities.Supports(capability.NoProgress) {
 		_ = req.Capabilities.Set(capability.NoProgress)
 	}
 	if includeTags && adv.Capabilities.Supports(capability.IncludeTag) {
@@ -342,8 +355,9 @@ func fetchToStoreV1(
 	adv *packp.AdvRefs,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	verbose bool,
 ) error {
-	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired))
+	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose)
 	if err != nil {
 		return err
 	}
@@ -362,7 +376,7 @@ func fetchToStoreV1(
 	if drainErr := drainTrailingNAKs(buffered); drainErr != nil {
 		return fmt.Errorf("drain server response: %w", drainErr)
 	}
-	sbReader := buildSidebandReader(caps, buffered, nil)
+	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: "))
 	return packfile.UpdateObjectStorage(store, sbReader)
 }
 
@@ -372,8 +386,9 @@ func fetchPackV1(
 	adv *packp.AdvRefs,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	verbose bool,
 ) (io.ReadCloser, error) {
-	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired))
+	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose)
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +408,7 @@ func fetchPackV1(
 		return nil, fmt.Errorf("drain server response: %w", drainErr)
 	}
 	return &wrappedRC{
-		Reader: buildSidebandReader(caps, buffered, nil),
+		Reader: buildSidebandReader(caps, buffered, progressSink(verbose, "source: ")),
 		Closer: reader,
 	}, nil
 }

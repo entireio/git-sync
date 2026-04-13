@@ -331,7 +331,7 @@ func TestFetchPackV1ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := fetchPackV1(ctx, conn, adv, desired, nil)
+		_, err := fetchPackV1(ctx, conn, adv, desired, nil, false)
 		done <- err
 	}()
 
@@ -383,7 +383,7 @@ func TestFetchPackV2ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := fetchPackV2(ctx, conn, caps, desired, nil)
+		_, err := fetchPackV2(ctx, conn, caps, desired, nil, false)
 		done <- err
 	}()
 
@@ -435,7 +435,7 @@ func TestFetchToStoreV2ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- fetchToStoreV2(ctx, memory.NewStorage(), conn, caps, desired, nil)
+		done <- fetchToStoreV2(ctx, memory.NewStorage(), conn, caps, desired, nil, false)
 	}()
 
 	select {
@@ -485,7 +485,7 @@ func TestFetchToStoreV2ClosesBodyOnDecodeError(t *testing.T) {
 		},
 	}
 
-	err = fetchToStoreV2(context.Background(), memory.NewStorage(), conn, caps, desired, nil)
+	err = fetchToStoreV2(context.Background(), memory.NewStorage(), conn, caps, desired, nil, false)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -530,7 +530,7 @@ func TestFetchToStoreV2ContextCanceledMidStream(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- fetchToStoreV2(ctx, memory.NewStorage(), conn, caps, desired, nil)
+		done <- fetchToStoreV2(ctx, memory.NewStorage(), conn, caps, desired, nil, false)
 	}()
 
 	select {
@@ -576,7 +576,7 @@ func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 		},
 	}
 
-	_, err = fetchPackV1(context.Background(), conn, adv, desired, nil)
+	_, err = fetchPackV1(context.Background(), conn, adv, desired, nil, false)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -611,7 +611,7 @@ func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		},
 	}
 
-	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil)
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false)
 	if err != nil {
 		t.Fatalf("fetchPackV1: %v", err)
 	}
@@ -654,7 +654,7 @@ func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		},
 	}
 
-	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil)
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false)
 	if err != nil {
 		t.Fatalf("fetchPackV1: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 		},
 	}
 
-	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil)
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false)
 	if err != nil {
 		t.Fatalf("fetchPackV1 should tolerate double-NAK preamble, got: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 		},
 	}
 
-	_, err = fetchPackV2(context.Background(), conn, caps, desired, nil)
+	_, err = fetchPackV2(context.Background(), conn, caps, desired, nil, false)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -793,7 +793,7 @@ func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		},
 	}
 
-	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil)
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil, false)
 	if err != nil {
 		t.Fatalf("fetchPackV2: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestFetchPackV2ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		},
 	}
 
-	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil)
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil, false)
 	if err != nil {
 		t.Fatalf("fetchPackV2: %v", err)
 	}
@@ -882,7 +882,7 @@ func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
 		},
 	}
 
-	err = fetchToStoreV2(context.Background(), memory.NewStorage(), conn, caps, desired, nil)
+	err = fetchToStoreV2(context.Background(), memory.NewStorage(), conn, caps, desired, nil, false)
 	if err == nil {
 		t.Fatal("expected malformed mid-stream sideband error")
 	}
@@ -893,7 +893,7 @@ func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
 
 func TestBuildV1UploadPackBodyEmptyWantSet(t *testing.T) {
 	adv := packp.NewAdvRefs()
-	_, _, err := buildV1UploadPackBody(adv, nil, nil, false)
+	_, _, err := buildV1UploadPackBody(adv, nil, nil, false, false)
 	if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		t.Fatalf("expected NoErrAlreadyUpToDate, got %v", err)
 	}

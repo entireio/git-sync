@@ -387,6 +387,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err != nil {
 		return nil, fmt.Errorf("list source refs: %w", err)
 	}
+	sourceService.Verbose = cfg.Verbose
 	s.sourceService = sourceService
 	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
 

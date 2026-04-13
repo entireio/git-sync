@@ -21,6 +21,10 @@ type RefService struct {
 	Protocol string // "v1" or "v2"
 	V1Adv    *packp.AdvRefs
 	V2Caps   *V2Capabilities
+	// Verbose, when true, streams source-side sideband progress ("Counting
+	// objects", "Compressing objects", ...) to stderr and asks the source
+	// upload-pack to emit progress by not sending the no-progress option.
+	Verbose bool
 }
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.

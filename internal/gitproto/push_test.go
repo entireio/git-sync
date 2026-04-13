@@ -16,6 +16,68 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
+func TestPrefixedLineWriter(t *testing.T) {
+	tests := []struct {
+		name   string
+		writes []string
+		want   string
+	}{
+		{
+			name:   "single line with newline",
+			writes: []string{"counting objects: 42\n"},
+			want:   "target: counting objects: 42\n",
+		},
+		{
+			name:   "carriage returns are line terminators for in-place updates",
+			writes: []string{"resolving deltas: 10%\rresolving deltas: 50%\rresolving deltas: 100%\n"},
+			want:   "target: resolving deltas: 10%\rtarget: resolving deltas: 50%\rtarget: resolving deltas: 100%\n",
+		},
+		{
+			name:   "split across multiple writes",
+			writes: []string{"count", "ing ", "objects: 100\nresolving "},
+			want:   "target: counting objects: 100\ntarget: resolving ",
+		},
+		{
+			name:   "no trailing prefix when stream ends mid-line",
+			writes: []string{"partial progress"},
+			want:   "target: partial progress",
+		},
+		{
+			name:   "empty write is a noop",
+			writes: []string{"", "visible\n"},
+			want:   "target: visible\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			pw := &prefixedLineWriter{w: &buf, prefix: "target: ", atLineStart: true}
+			for _, chunk := range tc.writes {
+				n, err := pw.Write([]byte(chunk))
+				if err != nil {
+					t.Fatalf("Write(%q): %v", chunk, err)
+				}
+				if n != len(chunk) {
+					t.Fatalf("Write(%q) consumed %d, want %d", chunk, n, len(chunk))
+				}
+			}
+			if got := buf.String(); got != tc.want {
+				t.Fatalf("output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProgressSinkNilWhenNotVerbose(t *testing.T) {
+	if got := progressSink(false, "anything: "); got != nil {
+		t.Fatalf("progressSink(false) = %T, want nil", got)
+	}
+	if got := progressSink(true, "source: "); got == nil {
+		t.Fatal("progressSink(true) returned nil, want non-nil writer")
+	}
+}
+
 func TestOpenV2PackStreamCloseClosesBody(t *testing.T) {
 	body := &trackingReadCloser{
 		ReadCloser: io.NopCloser(bytes.NewBufferString(
@@ -23,7 +85,7 @@ func TestOpenV2PackStreamCloseClosesBody(t *testing.T) {
 		)),
 	}
 
-	rc, err := openV2PackStream(body)
+	rc, err := openV2PackStream(body, false)
 	if err != nil {
 		t.Fatalf("openV2PackStream: %v", err)
 	}
