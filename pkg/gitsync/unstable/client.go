@@ -183,6 +183,8 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		Mode:                   operationModeString(req.Policy.Mode),
 		Force:                  req.Policy.Force,
 		Prune:                  req.Policy.Prune,
+		MaxPackBytes:           req.Options.MaxPackBytes,
+		BatchMaxPackBytes:      req.Options.BatchMaxPackBytes,
 		MaterializedMaxObjects: maxObjects,
 		ProtocolMode:           protocolString(req.Policy.Protocol),
 		Verbose:                req.Options.Verbose,

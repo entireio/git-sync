@@ -1717,6 +1717,48 @@ func TestRun_IntegrationReplicateOverwritesDivergentBranch(t *testing.T) {
 	}
 }
 
+func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
+	// Large bootstrap-relay pushes can overwhelm targets with body-size
+	// limits (e.g. go-git-based receive-pack on raft-backed storage).
+	// Replicate falls back through the bootstrap strategy for empty targets,
+	// and must honor BatchMaxPackBytes so callers can split a huge push
+	// into tractable receive-pack POSTs. Without this plumbing the replicate
+	// CLI flag would be silently ignored.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		Mode:              modeReplicate,
+		ProtocolMode:      protocolModeAuto,
+		BatchMaxPackBytes: 500_000, // force > 1 batch for the generated pack
+	})
+	if err != nil {
+		t.Fatalf("replicate with batched bootstrap failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if !result.Batching || result.BatchCount < 2 {
+		t.Fatalf("expected batched bootstrap inside replicate, got batching=%t batch_count=%d result=%+v",
+			result.Batching, result.BatchCount, result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
 func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
