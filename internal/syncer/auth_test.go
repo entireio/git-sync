@@ -52,7 +52,7 @@ func TestNewConnSkipTLSVerify(t *testing.T) {
 	conn, err := newConn(Endpoint{
 		URL:           "https://example.com/repo.git",
 		SkipTLSVerify: true,
-	}, "source", stats)
+	}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -66,6 +66,27 @@ func TestNewConnSkipTLSVerify(t *testing.T) {
 	}
 	if base.TLSClientConfig == nil || !base.TLSClientConfig.InsecureSkipVerify {
 		t.Fatalf("expected InsecureSkipVerify transport")
+	}
+}
+
+func TestNewConnUsesProvidedHTTPClient(t *testing.T) {
+	stats := newStats(false)
+	baseTransport := http.DefaultTransport
+	baseClient := &http.Client{Transport: baseTransport}
+
+	conn, err := newConn(Endpoint{URL: "https://example.com/repo.git"}, "source", stats, baseClient)
+	if err != nil {
+		t.Fatalf("new conn: %v", err)
+	}
+	if conn.HTTP == baseClient {
+		t.Fatalf("expected cloned HTTP client, got original pointer")
+	}
+	rt, ok := conn.HTTP.Transport.(*countingRoundTripper)
+	if !ok {
+		t.Fatalf("expected countingRoundTripper, got %T", conn.HTTP.Transport)
+	}
+	if rt.base != baseTransport {
+		t.Fatalf("wrapped base transport = %T, want %T", rt.base, baseTransport)
 	}
 }
 
@@ -172,4 +193,3 @@ func writeEntireDBHostsFile(t *testing.T, configDir, host, username string) {
 		t.Fatalf("write hosts: %v", err)
 	}
 }
-

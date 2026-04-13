@@ -50,6 +50,16 @@ type Conn struct {
 // NewConn creates a new connection to the given endpoint.
 func NewConn(ep *transport.Endpoint, label string, auth transport.AuthMethod, rt http.RoundTripper) *Conn {
 	httpClient := &http.Client{Transport: rt}
+	return NewConnWithHTTPClient(ep, label, auth, httpClient)
+}
+
+// NewConnWithHTTPClient creates a new connection using the provided HTTP client.
+// Passing nil falls back to a default client and is intended only for direct
+// callers outside git-sync's normal instrumented session setup.
+func NewConnWithHTTPClient(ep *transport.Endpoint, label string, auth transport.AuthMethod, httpClient *http.Client) *Conn {
+	if httpClient == nil {
+		httpClient = &http.Client{Transport: http.DefaultTransport}
+	}
 	return &Conn{
 		Label:     label,
 		Endpoint:  ep,

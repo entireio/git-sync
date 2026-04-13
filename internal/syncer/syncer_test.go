@@ -8,7 +8,7 @@ import (
 
 func TestGitHubOwnerRepo(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", stats)
+	conn, err := newConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestGitHubOwnerRepo(t *testing.T) {
 
 func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", stats)
+	conn, err := newConn(Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -31,4 +31,3 @@ func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
 		t.Fatalf("expected non-github source to be rejected")
 	}
 }
-

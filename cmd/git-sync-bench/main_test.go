@@ -3,17 +3,17 @@ package main
 import (
 	"testing"
 
-	"github.com/soph/git-sync/internal/syncer"
+	"github.com/soph/git-sync/pkg/gitsync/unstable"
 )
 
 func TestSummarizeRuns(t *testing.T) {
 	runs := []runSummary{
 		{
 			WallMillis: 100,
-			Result: syncer.Result{
+			Result: unstable.Result{
 				RelayMode: "bootstrap",
 				Batching:  false,
-				Measurement: syncer.Measurement{
+				Measurement: unstable.Measurement{
 					ElapsedMillis:      90,
 					PeakAllocBytes:     10,
 					PeakHeapInuseBytes: 20,
@@ -24,12 +24,12 @@ func TestSummarizeRuns(t *testing.T) {
 		},
 		{
 			WallMillis: 140,
-			Result: syncer.Result{
+			Result: unstable.Result{
 				RelayMode:         "bootstrap-batch",
 				Batching:          true,
 				BatchCount:        3,
 				PlannedBatchCount: 4,
-				Measurement: syncer.Measurement{
+				Measurement: unstable.Measurement{
 					ElapsedMillis:      130,
 					PeakAllocBytes:     50,
 					PeakHeapInuseBytes: 60,
