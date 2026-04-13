@@ -10,11 +10,18 @@ import (
 
 type ProtocolMode string
 
-type Config = syncer.Config
+type Config struct {
+	raw syncer.Config
+}
 
 const ProtocolAuto ProtocolMode = validation.ProtocolAuto
+const ProtocolV1 ProtocolMode = validation.ProtocolV1
+const ProtocolV2 ProtocolMode = validation.ProtocolV2
 
-type RefMapping = validation.RefMapping
+type RefMapping struct {
+	Source string
+	Target string
+}
 
 type Endpoint struct {
 	URL string
@@ -39,27 +46,27 @@ type SyncPolicy struct {
 	Protocol    ProtocolMode
 }
 
-func ProbeConfig(source Endpoint, sourceAuth EndpointAuth, target *Endpoint, targetAuth EndpointAuth, protocol ProtocolMode, includeTags, collectStats bool, httpClient *http.Client) syncer.Config {
+func ProbeConfig(source Endpoint, sourceAuth EndpointAuth, target *Endpoint, targetAuth EndpointAuth, protocol ProtocolMode, includeTags, collectStats bool, httpClient *http.Client) Config {
 	cfg := syncer.Config{
-		Source:       syncer.Endpoint{URL: source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
+		Source:       ToSyncerEndpoint(source, sourceAuth),
 		HTTPClient:   httpClient,
 		IncludeTags:  includeTags,
 		ShowStats:    collectStats,
 		ProtocolMode: protocolString(protocol),
 	}
 	if target != nil {
-		cfg.Target = syncer.Endpoint{URL: target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify}
+		cfg.Target = ToSyncerEndpoint(*target, targetAuth)
 	}
-	return cfg
+	return Config{raw: cfg}
 }
 
-func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targetAuth EndpointAuth, scope RefScope, policy SyncPolicy, collectStats, dryRun bool, httpClient *http.Client) syncer.Config {
-	return syncer.Config{
-		Source:                 syncer.Endpoint{URL: source.URL, Username: sourceAuth.Username, Token: sourceAuth.Token, BearerToken: sourceAuth.BearerToken, SkipTLSVerify: sourceAuth.SkipTLSVerify},
-		Target:                 syncer.Endpoint{URL: target.URL, Username: targetAuth.Username, Token: targetAuth.Token, BearerToken: targetAuth.BearerToken, SkipTLSVerify: targetAuth.SkipTLSVerify},
+func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targetAuth EndpointAuth, scope RefScope, policy SyncPolicy, collectStats, dryRun bool, httpClient *http.Client) Config {
+	return Config{raw: syncer.Config{
+		Source:                 ToSyncerEndpoint(source, sourceAuth),
+		Target:                 ToSyncerEndpoint(target, targetAuth),
 		HTTPClient:             httpClient,
 		Branches:               append([]string(nil), scope.Branches...),
-		Mappings:               append([]RefMapping(nil), scope.Mappings...),
+		Mappings:               validationMappings(scope.Mappings),
 		IncludeTags:            policy.IncludeTags,
 		DryRun:                 dryRun,
 		ShowStats:              collectStats,
@@ -67,15 +74,25 @@ func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targe
 		Prune:                  policy.Prune,
 		ProtocolMode:           protocolString(policy.Protocol),
 		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
+	}}
+}
+
+func Probe(ctx context.Context, cfg Config) (syncer.ProbeResult, error) {
+	return syncer.Probe(ctx, cfg.raw)
+}
+
+func Run(ctx context.Context, cfg Config) (syncer.Result, error) {
+	return syncer.Run(ctx, cfg.raw)
+}
+
+func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {
+	return syncer.Endpoint{
+		URL:           endpoint.URL,
+		Username:      auth.Username,
+		Token:         auth.Token,
+		BearerToken:   auth.BearerToken,
+		SkipTLSVerify: auth.SkipTLSVerify,
 	}
-}
-
-func Probe(ctx context.Context, cfg syncer.Config) (syncer.ProbeResult, error) {
-	return syncer.Probe(ctx, cfg)
-}
-
-func Run(ctx context.Context, cfg syncer.Config) (syncer.Result, error) {
-	return syncer.Run(ctx, cfg)
 }
 
 func protocolString(mode ProtocolMode) string {
@@ -83,4 +100,15 @@ func protocolString(mode ProtocolMode) string {
 		return string(ProtocolAuto)
 	}
 	return string(mode)
+}
+
+func validationMappings(mappings []RefMapping) []validation.RefMapping {
+	out := make([]validation.RefMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		out = append(out, validation.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
+	}
+	return out
 }

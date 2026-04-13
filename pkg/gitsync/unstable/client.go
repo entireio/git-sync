@@ -7,7 +7,9 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/soph/git-sync/internal/syncer"
+	"github.com/soph/git-sync/internal/validation"
 	"github.com/soph/git-sync/pkg/gitsync"
+	"github.com/soph/git-sync/pkg/gitsync/internalbridge"
 )
 
 const DefaultMaterializedMaxObjects = syncer.DefaultMaterializedMaxObjects
@@ -89,8 +91,9 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 }
 
 func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
-	req.DryRun = true
-	cfg, err := c.buildSyncConfig(ctx, req)
+	planReq := req
+	planReq.DryRun = true
+	cfg, err := c.buildSyncConfig(ctx, planReq)
 	if err != nil {
 		return Result{}, err
 	}
@@ -162,7 +165,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		Target:                 syncerEndpoint(req.Target, targetAuth),
 		HTTPClient:             c.httpClient,
 		Branches:               append([]string(nil), req.Scope.Branches...),
-		Mappings:               append([]gitsync.RefMapping(nil), req.Scope.Mappings...),
+		Mappings:               validationMappings(req.Scope.Mappings),
 		IncludeTags:            req.Policy.IncludeTags,
 		DryRun:                 req.DryRun,
 		ShowStats:              req.Options.CollectStats,
@@ -189,7 +192,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		Target:            syncerEndpoint(req.Target, targetAuth),
 		HTTPClient:        c.httpClient,
 		Branches:          append([]string(nil), req.Scope.Branches...),
-		Mappings:          append([]gitsync.RefMapping(nil), req.Scope.Mappings...),
+		Mappings:          validationMappings(req.Scope.Mappings),
 		IncludeTags:       req.IncludeTags,
 		ShowStats:         req.Options.CollectStats,
 		MeasureMemory:     req.Options.MeasureMemory,
@@ -232,11 +235,24 @@ func protocolString(mode gitsync.ProtocolMode) string {
 }
 
 func syncerEndpoint(endpoint gitsync.Endpoint, auth gitsync.EndpointAuth) syncer.Endpoint {
-	return syncer.Endpoint{
-		URL:           endpoint.URL,
-		Username:      auth.Username,
-		Token:         auth.Token,
-		BearerToken:   auth.BearerToken,
-		SkipTLSVerify: auth.SkipTLSVerify,
+	return internalbridge.ToSyncerEndpoint(
+		internalbridge.Endpoint{URL: endpoint.URL},
+		internalbridge.EndpointAuth{
+			Username:      auth.Username,
+			Token:         auth.Token,
+			BearerToken:   auth.BearerToken,
+			SkipTLSVerify: auth.SkipTLSVerify,
+		},
+	)
+}
+
+func validationMappings(mappings []gitsync.RefMapping) []validation.RefMapping {
+	out := make([]validation.RefMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		out = append(out, validation.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
 	}
+	return out
 }

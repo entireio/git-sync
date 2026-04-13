@@ -2,7 +2,6 @@ package gitsync
 
 import (
 	"context"
-	"github.com/soph/git-sync/internal/validation"
 	"github.com/soph/git-sync/pkg/gitsync/internalbridge"
 )
 
@@ -10,9 +9,9 @@ import (
 type ProtocolMode string
 
 const (
-	ProtocolAuto ProtocolMode = validation.ProtocolAuto
-	ProtocolV1   ProtocolMode = validation.ProtocolV1
-	ProtocolV2   ProtocolMode = validation.ProtocolV2
+	ProtocolAuto ProtocolMode = "auto"
+	ProtocolV1   ProtocolMode = "v1"
+	ProtocolV2   ProtocolMode = "v2"
 )
 
 // Endpoint identifies a remote Git endpoint.
@@ -58,7 +57,10 @@ func (p StaticAuthProvider) AuthFor(_ context.Context, _ Endpoint, role Endpoint
 }
 
 // RefMapping is an explicit source-to-target ref mapping.
-type RefMapping = validation.RefMapping
+type RefMapping struct {
+	Source string
+	Target string
+}
 
 // RefScope constrains which refs a request manages.
 type RefScope struct {

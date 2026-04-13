@@ -135,7 +135,10 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg.Scope.Mappings = append(cfg.Scope.Mappings, mapping)
+		cfg.Scope.Mappings = append(cfg.Scope.Mappings, gitsync.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
 	}
 
 	srcURL, err := normalizeRepoURL(cfg.SourceURL)

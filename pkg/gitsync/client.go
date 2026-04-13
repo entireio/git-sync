@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/soph/git-sync/internal/validation"
 	"github.com/soph/git-sync/pkg/gitsync/internalbridge"
 )
 
@@ -78,29 +79,21 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (intern
 	if err != nil {
 		return internalbridge.Config{}, err
 	}
-	source := bridgeEndpoint(req.Source)
-	sourceResolved := bridgeEndpointAuth(sourceAuth)
+	var target *internalbridge.Endpoint
+	targetAuth := internalbridge.EndpointAuth{}
 	if req.Target != nil {
-		targetAuth, err := c.authFor(ctx, *req.Target, TargetRole)
+		resolvedTargetAuth, err := c.authFor(ctx, *req.Target, TargetRole)
 		if err != nil {
 			return internalbridge.Config{}, err
 		}
-		return internalbridge.ProbeConfig(
-			source,
-			sourceResolved,
-			ptr(bridgeEndpoint(*req.Target)),
-			bridgeEndpointAuth(targetAuth),
-			internalbridge.ProtocolMode(req.Protocol),
-			req.IncludeTags,
-			req.CollectStats,
-			c.httpClient,
-		), nil
+		target = ptr(bridgeEndpoint(*req.Target))
+		targetAuth = bridgeEndpointAuth(resolvedTargetAuth)
 	}
 	return internalbridge.ProbeConfig(
-		source,
-		sourceResolved,
-		nil,
-		internalbridge.EndpointAuth{},
+		bridgeEndpoint(req.Source),
+		bridgeEndpointAuth(sourceAuth),
+		target,
+		targetAuth,
 		internalbridge.ProtocolMode(req.Protocol),
 		req.IncludeTags,
 		req.CollectStats,
@@ -144,6 +137,12 @@ func (r SyncRequest) Validate() error {
 	if r.Target.URL == "" {
 		return fmt.Errorf("target URL is required")
 	}
+	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
+		return err
+	}
+	if _, err := validation.ValidateMappings(validationMappings(r.Scope.Mappings)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -154,12 +153,21 @@ func (r PlanRequest) Validate() error {
 	if r.Target.URL == "" {
 		return fmt.Errorf("target URL is required")
 	}
+	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
+		return err
+	}
+	if _, err := validation.ValidateMappings(validationMappings(r.Scope.Mappings)); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (r ProbeRequest) Validate() error {
 	if r.Source.URL == "" {
 		return fmt.Errorf("source URL is required")
+	}
+	if _, err := validation.NormalizeProtocolMode(string(r.Protocol)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -178,9 +186,16 @@ func bridgeEndpointAuth(auth EndpointAuth) internalbridge.EndpointAuth {
 }
 
 func bridgeScope(scope RefScope) internalbridge.RefScope {
+	mappings := make([]internalbridge.RefMapping, 0, len(scope.Mappings))
+	for _, mapping := range scope.Mappings {
+		mappings = append(mappings, internalbridge.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
+	}
 	return internalbridge.RefScope{
 		Branches: append([]string(nil), scope.Branches...),
-		Mappings: append([]internalbridge.RefMapping(nil), scope.Mappings...),
+		Mappings: mappings,
 	}
 }
 
@@ -195,4 +210,15 @@ func bridgePolicy(policy SyncPolicy) internalbridge.SyncPolicy {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func validationMappings(mappings []RefMapping) []validation.RefMapping {
+	out := make([]validation.RefMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		out = append(out, validation.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
+	}
+	return out
 }

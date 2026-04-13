@@ -105,7 +105,10 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 		if err != nil {
 			return err
 		}
-		req.Scope.Mappings = append(req.Scope.Mappings, mapping)
+		req.Scope.Mappings = append(req.Scope.Mappings, gitsync.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
 	}
 
 	if req.Source.URL == "" || req.Target.URL == "" {
@@ -194,7 +197,10 @@ func runBootstrap(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		req.Scope.Mappings = append(req.Scope.Mappings, mapping)
+		req.Scope.Mappings = append(req.Scope.Mappings, gitsync.RefMapping{
+			Source: mapping.Source,
+			Target: mapping.Target,
+		})
 	}
 
 	if req.Source.URL == "" || req.Target.URL == "" {
