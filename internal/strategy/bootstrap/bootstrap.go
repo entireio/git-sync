@@ -424,7 +424,13 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 	return checkpoints, err
 }
 
-const estimatedBytesPerCommit = 8192
+// estimatedBytesPerCommit is the heuristic for estimating pack size from commit
+// count. Real repos range from ~5 KiB/commit (small web apps) to ~120 KiB
+// (blob-heavy monorepos); most mature repos fall in 20–80 KiB. 64 KiB produces
+// accurate batch counts for large repos (linux is ~66 KiB/commit) while
+// slightly overestimating for small ones (harmless — extra batches finish fast).
+// The PACK header pre-check and target-rejection retry catch remaining error.
+const estimatedBytesPerCommit = 65536
 
 func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, []plumbing.Hash, error) {
 	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
