@@ -197,10 +197,13 @@ func executeBatched(
 		}
 	}
 
-	batchLimit := p.BatchMaxPack
-	if p.MaxPackBytes > 0 && (batchLimit == 0 || p.MaxPackBytes < batchLimit) {
-		batchLimit = p.MaxPackBytes
-	}
+	// MaxPackBytes is the hard abort threshold for any single source fetch.
+	// BatchMaxPack controls checkpoint *placement* (how many batches) but
+	// should not cap individual fetches — the estimate may undercount, and
+	// the actual pack for a batch can legitimately exceed the planning
+	// heuristic. If the resulting pack is too large for the target's
+	// receive-pack, the push itself fails and resume handles retry.
+	fetchLimit := p.MaxPackBytes
 
 	for _, batch := range batches {
 		result.PlannedBatchCount += len(batch.Checkpoints)
@@ -242,7 +245,7 @@ func executeBatched(
 				})
 			}
 
-			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, batchLimit)
+			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, fetchLimit)
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
