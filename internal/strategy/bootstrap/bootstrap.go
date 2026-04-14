@@ -222,7 +222,10 @@ func executeBatched(
 			return result, fmt.Errorf("resume bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 		}
 
-		for idx := startIdx; idx < len(batch.Checkpoints); idx++ {
+		// Manual index loop: subdivide may insert checkpoints at the current
+		// index, so we must not auto-increment after a retry.
+		idx := startIdx
+		for idx < len(batch.Checkpoints) {
 			checkpoint := batch.Checkpoints[idx]
 			p.log("bootstrap batch push checkpoint",
 				"branch", batch.Plan.TargetRef.String(),
@@ -258,6 +261,7 @@ func executeBatched(
 			// immediately instead of pushing a pack the target will reject.
 			// This avoids wasting a multi-GiB transfer on a doomed push.
 			if p.BatchMaxPack > 0 && len(batch.chain) > 0 {
+				subdivided := false
 				packReader, err = checkPackSizeAndSubdivide(packReader, p.BatchMaxPack, func() bool {
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
@@ -266,6 +270,7 @@ func executeBatched(
 							"old_remaining", len(batch.Checkpoints[idx:]),
 							"new_remaining", len(expanded))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
+						subdivided = true
 						return true
 					}
 					return false
@@ -273,8 +278,8 @@ func executeBatched(
 				if err != nil {
 					return result, fmt.Errorf("check pack size for %s: %w", batch.Plan.TargetRef, err)
 				}
-				if packReader == nil {
-					continue // subdivided, retry at same idx
+				if subdivided {
+					continue // retry at same idx with new (smaller) checkpoint
 				}
 			}
 
@@ -290,7 +295,7 @@ func executeBatched(
 							"new_remaining", len(expanded),
 							"error", err.Error())
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
-						continue // retry with finer checkpoints, same idx
+						continue // retry at same idx with new (smaller) checkpoint
 					}
 				}
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
@@ -302,6 +307,7 @@ func executeBatched(
 				"batch_total", len(batch.Checkpoints))
 			current = checkpoint
 			result.BatchCount++
+			idx++
 		}
 
 		if current.IsZero() {

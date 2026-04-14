@@ -99,22 +99,31 @@ If failure happens mid-run:
 
 ## Checkpoint Selection
 
-The most practical first heuristic is first-parent checkpointing.
+Checkpoints are placed using a commit-count estimate, not measured pack sizes.
 
 For a branch tip:
 
-1. Walk first-parent ancestry backward.
-2. Sample candidate checkpoint commits.
-3. Starting from the oldest candidate, estimate each batch by doing a source fetch against the previous checkpoint as `have`.
-4. Pick the largest checkpoint whose pack stays under `--batch-max-pack-bytes`.
-5. Repeat until the branch tip is reached.
+1. Fetch the commit graph (tree:0 filter, one round-trip — commits only, no blobs/trees).
+2. Walk first-parent ancestry backward to get the chain length.
+3. Estimate total pack size: `chainLen × 8 KiB/commit`.
+4. Compute number of batches: `ceil(estimated / --batch-max-pack-bytes)`.
+5. Place checkpoints evenly along the first-parent chain.
 
-This is only a heuristic:
+This is a heuristic — real bytes-per-commit varies widely (2–100+ KiB depending on blob churn). The estimate intentionally errs toward more batches.
 
-- actual pack size depends on delta choices and object reuse
-- merges and deep side histories can make batch sizes uneven
+### Adaptive size correction
 
-But it is much simpler than exact graph partitioning and good enough for a first implementation.
+If the estimate is too optimistic (fewer batches than needed), two safeguards catch it:
+
+1. **PACK header pre-check**: after starting a fetch, peek at the first 12 bytes of the pack to read the object count. Multiply by ~750 bytes/object. If the estimate exceeds `--batch-max-pack-bytes`, abort the fetch (12 bytes wasted, not gigabytes), insert a midpoint checkpoint, and retry. This avoids a full transfer for obviously-oversized batches.
+
+2. **Target rejection retry**: if the target's receive-pack rejects a push for exceeding its body-size limit, detect the error, insert a midpoint checkpoint from the stored chain, and retry. This catches cases where the PACK header estimate was close but the real pack was slightly over.
+
+Both safeguards converge in O(log n) splits — each failure halves the commit range.
+
+### Why not probe (the previous design)
+
+The previous implementation did full `FetchPack` round-trips per probe candidate to measure actual pack sizes. For linux/master (75k commits) this required 13+ fetch-and-discard cycles, downloading gigabytes of throwaway data and taking minutes before any real push started. The estimate approach reduces planning to one commit-graph fetch (~20 seconds) plus arithmetic.
 
 ## Batch Flow For One Branch
 
@@ -231,10 +240,11 @@ JSON should include:
 
 ## Practical Risks
 
-- pack-size estimation may require extra source fetches before actual execution
-- checkpoint search may be slow on very deep histories
+- the 8 KiB/commit estimate can be significantly off for blob-heavy repos (linux is ~66 KiB/commit); the PACK header pre-check and target-rejection retry handle this adaptively
+- object density is not uniform along the commit chain — recent history often has more objects per commit than early history, so evenly-spaced checkpoints produce uneven pack sizes
 - target-side unpack/index cost may still be high even after batching, just smaller
 - temp refs add cleanup and restart complexity
+- the source builds the full pack even if we abort after the PACK header; this wastes source CPU but not network
 
 This is still likely worthwhile for very large initial migrations because it changes a single huge risky operation into several bounded ones.
 
