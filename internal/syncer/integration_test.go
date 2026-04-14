@@ -690,7 +690,7 @@ func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	}
 
 	s, err := newSession(context.Background(), cfg, false)
@@ -705,7 +705,7 @@ func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
 	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
 		SourceConn:    s.sourceConn,
 		SourceService: s.sourceService,
-		BatchMaxPack:  cfg.BatchMaxPackBytes,
+		TargetMaxPack:  cfg.TargetMaxPackBytes,
 	}, ref)
 	if err != nil {
 		t.Fatalf("plan checkpoints: %v", err)
@@ -757,7 +757,7 @@ func TestBootstrap_IntegrationBatchedResumeAtFinalTipCutsOver(t *testing.T) {
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap final-tip cutover failed: %v", err)
@@ -810,7 +810,7 @@ func TestBootstrap_IntegrationBatchedResumeAfterCutoverOnlyDeletesTempRef(t *tes
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap cleanup rerun failed: %v", err)
@@ -879,7 +879,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	}
 
 	if _, err := Bootstrap(context.Background(), cfg); err == nil {
@@ -926,7 +926,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	}
 
 	targetRef := plumbing.NewBranchReferenceName(testBranch)
@@ -1021,7 +1021,7 @@ func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *te
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
 		IncludeTags:       true,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap with lightweight tag failed: %v", err)
@@ -1721,7 +1721,7 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	// Large bootstrap-relay pushes can overwhelm targets with body-size
 	// limits (e.g. go-git-based receive-pack on raft-backed storage).
 	// Replicate falls back through the bootstrap strategy for empty targets,
-	// and must honor BatchMaxPackBytes so callers can split a huge push
+	// and must honor TargetMaxPackBytes so callers can split a huge push
 	// into tractable receive-pack POSTs. Without this plumbing the replicate
 	// CLI flag would be silently ignored.
 	sourceRepo, sourceFS := newSourceRepo(t)
@@ -1743,7 +1743,7 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		Mode:              modeReplicate,
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000, // force > 1 batch for the generated pack
+		TargetMaxPackBytes: 350_000, // force > 1 batch for the generated pack
 	})
 	if err != nil {
 		t.Fatalf("replicate with batched bootstrap failed: %v", err)

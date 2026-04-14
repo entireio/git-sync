@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	defaultAutoBatchMaxPackBytes = 512 * 1024 * 1024
+	defaultTargetMaxPackBytes = 512 * 1024 * 1024
 	githubLargeRepoThresholdKB   = 1536 * 1024
 )
 
@@ -52,7 +52,7 @@ type Params struct {
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
 	MaxPackBytes int64
-	BatchMaxPack int64
+	TargetMaxPack int64
 	Verbose      bool
 	Logger       *slog.Logger
 }
@@ -83,13 +83,13 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 
 	// GitHub large-repo preflight
 	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
-		p.BatchMaxPack = batchLimit
+		p.TargetMaxPack = batchLimit
 		p.log("bootstrap github preflight selected batched mode",
-			"batch_max_pack_bytes", p.BatchMaxPack)
+			"target_max_pack_bytes", p.TargetMaxPack)
 	}
 
 	planTargetRefs := p.TargetRefs
-	if p.BatchMaxPack > 0 {
+	if p.TargetMaxPack > 0 {
 		planTargetRefs = adjustedBootstrapTargetRefs(p.DesiredRefs, p.TargetRefs)
 	}
 	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, planTargetRefs)
@@ -101,7 +101,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		Plans: plans, Relay: true, RelayMode: "bootstrap", RelayReason: relayReason,
 	}
 
-	if p.BatchMaxPack > 0 {
+	if p.TargetMaxPack > 0 {
 		return executeBatched(ctx, p, plans, result)
 	}
 
@@ -123,13 +123,13 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
-		autoBatch, ok := autoBatchMaxPackBytes(p, pushErr)
+		autoBatch, ok := autoTargetMaxPackBytes(p, pushErr)
 		if !ok {
 			return result, fmt.Errorf("push target refs: %w", pushErr)
 		}
 		p.log("bootstrap retrying with batched mode after target rejection",
-			"batch_max_pack_bytes", autoBatch)
-		p.BatchMaxPack = autoBatch
+			"target_max_pack_bytes", autoBatch)
+		p.TargetMaxPack = autoBatch
 		return executeBatched(ctx, p, plans, result)
 	}
 
@@ -200,7 +200,7 @@ func executeBatched(
 	}
 
 	// MaxPackBytes is the hard abort threshold for any single source fetch.
-	// BatchMaxPack controls checkpoint *placement* (how many batches) but
+	// TargetMaxPack controls checkpoint *placement* (how many batches) but
 	// should not cap individual fetches — the estimate may undercount, and
 	// the actual pack for a batch can legitimately exceed the planning
 	// heuristic. If the resulting pack is too large for the target's
@@ -260,9 +260,9 @@ func executeBatched(
 			// If the estimated pack size exceeds the batch limit, subdivide
 			// immediately instead of pushing a pack the target will reject.
 			// This avoids wasting a multi-GiB transfer on a doomed push.
-			if p.BatchMaxPack > 0 && len(batch.chain) > 0 {
+			if p.TargetMaxPack > 0 && len(batch.chain) > 0 {
 				subdivided := false
-				packReader, err = checkPackSizeAndSubdivide(packReader, p.BatchMaxPack, func() bool {
+				packReader, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, func() bool {
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						p.log("bootstrap batch subdividing before push (pack header estimate)",
@@ -411,7 +411,7 @@ func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.Desired
 		return nil, nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
 	}
 
-	numBatches := estimateBatchCount(int64(len(chain)), p.BatchMaxPack)
+	numBatches := estimateBatchCount(int64(len(chain)), p.TargetMaxPack)
 	checkpoints := evenCheckpoints(chain, numBatches)
 
 	p.log("bootstrap batch planned checkpoints",
@@ -554,7 +554,7 @@ func packReaderForCheckpoint(
 // --- GitHub preflight ---
 
 func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
-	if p.BatchMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
+	if p.TargetMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
 		return 0, false
 	}
 	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
@@ -564,7 +564,7 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	if !ok || repoSizeKB < githubLargeRepoThresholdKB {
 		return 0, false
 	}
-	limit := int64(defaultAutoBatchMaxPackBytes)
+	limit := int64(defaultTargetMaxPackBytes)
 	if p.MaxPackBytes > 0 && p.MaxPackBytes < limit {
 		limit = p.MaxPackBytes
 	}
@@ -625,14 +625,14 @@ func GitHubOwnerRepo(conn *gitproto.Conn) (string, string, bool) {
 	return parts[0], parts[1], true
 }
 
-func autoBatchMaxPackBytes(p Params, err error) (int64, bool) {
-	if p.BatchMaxPack > 0 || !isTargetBodyLimitError(err) {
+func autoTargetMaxPackBytes(p Params, err error) (int64, bool) {
+	if p.TargetMaxPack > 0 || !isTargetBodyLimitError(err) {
 		return 0, false
 	}
 	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
 		return 0, false
 	}
-	limit := int64(defaultAutoBatchMaxPackBytes)
+	limit := int64(defaultTargetMaxPackBytes)
 	if targetLimit := targetBodyLimit(err); targetLimit > 0 {
 		derived := targetLimit / 2
 		if derived <= 0 {

@@ -24,7 +24,7 @@ Against a local mirror:
   --scenario bootstrap \
   --source-url /tmp/git-sync-bench/kubernetes.git \
   --repeat 3 \
-  --batch-max-pack-bytes 104857600 \
+  --target-max-pack-bytes 104857600 \
   --stats \
   --json
 ```

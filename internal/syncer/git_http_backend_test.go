@@ -446,7 +446,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	result, err := Bootstrap(context.Background(), Config{
 		Source:            Endpoint{URL: sourceURL},
 		Target:            Endpoint{URL: targetURL},
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
@@ -510,7 +510,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	cfg := Config{
 		Source:            Endpoint{URL: sourceURL},
 		Target:            Endpoint{URL: targetURL},
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 		ProtocolMode:      protocolModeAuto,
 	}
 
@@ -533,7 +533,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
 	bParams := bstrap.Params{
 		SourceConn: sourceConn, SourceService: sourceService,
-		BatchMaxPack: cfg.BatchMaxPackBytes, Verbose: cfg.Verbose,
+		TargetMaxPack: cfg.TargetMaxPackBytes, Verbose: cfg.Verbose,
 	}
 	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bParams, ref)
 	if err != nil {
@@ -634,7 +634,7 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 		checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
 			SourceConn:    sourceConn,
 			SourceService: sourceService,
-			BatchMaxPack:  limit,
+			TargetMaxPack:  limit,
 			Verbose:       cfg.Verbose,
 		}, ref)
 		if err != nil {
@@ -703,7 +703,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
 		Source:            Endpoint{URL: sourceURL},
 		Target:            Endpoint{URL: targetURL},
 		IncludeTags:       true,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap with tags failed: %v\nbackend-stderr:\n%s", err, server.Stderr())

@@ -38,7 +38,7 @@ type AdvancedOptions struct {
 	MeasureMemory          bool
 	Verbose                bool
 	MaxPackBytes           int64
-	BatchMaxPackBytes      int64
+	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 }
 
@@ -184,7 +184,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		Force:                  req.Policy.Force,
 		Prune:                  req.Policy.Prune,
 		MaxPackBytes:           req.Options.MaxPackBytes,
-		BatchMaxPackBytes:      req.Options.BatchMaxPackBytes,
+		TargetMaxPackBytes:     req.Options.TargetMaxPackBytes,
 		MaterializedMaxObjects: maxObjects,
 		ProtocolMode:           protocolString(req.Policy.Protocol),
 		Verbose:                req.Options.Verbose,
@@ -210,7 +210,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		ShowStats:         req.Options.CollectStats,
 		MeasureMemory:     req.Options.MeasureMemory,
 		MaxPackBytes:      req.Options.MaxPackBytes,
-		BatchMaxPackBytes: req.Options.BatchMaxPackBytes,
+		TargetMaxPackBytes: req.Options.TargetMaxPackBytes,
 		ProtocolMode:      protocolString(req.Protocol),
 		Verbose:           req.Options.Verbose,
 	}, nil

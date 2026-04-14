@@ -17,13 +17,13 @@ Entries are grouped per release. Unreleased changes sit at the top.
 - `gitsync.Client.Replicate` on the stable embedding surface.
 - `gitsync.OperationMode`, `gitsync.ModeSync`, `gitsync.ModeReplicate`, and
   `SyncPolicy.Mode` for selecting the mode from library callers.
-- `--max-pack-bytes` and `--batch-max-pack-bytes` flags on `sync`,
+- `--max-pack-bytes` and `--target-max-pack-bytes` flags on `sync`,
   `replicate`, and `plan`. Previously only `bootstrap` exposed them, but
   replicate's bootstrap-fallback path internally honors both — without
   these flags, users couldn't split a huge initial replicate push into
   tractable receive-pack POSTs for size-limited targets. The unstable
   library `buildSyncConfig` now forwards `MaxPackBytes` and
-  `BatchMaxPackBytes` from `AdvancedOptions` to `syncer.Config`.
+  `TargetMaxPackBytes` from `AdvancedOptions` to `syncer.Config`.
 
 ### Changed (stable API, breaking)
 

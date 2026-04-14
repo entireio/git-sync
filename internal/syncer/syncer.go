@@ -70,7 +70,7 @@ type Config struct {
 	Force                  bool
 	Prune                  bool
 	MaxPackBytes           int64
-	BatchMaxPackBytes      int64
+	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 	ProtocolMode           string
 }
@@ -756,7 +756,7 @@ func bootstrapWithInputs(
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
-		MaxPackBytes: s.cfg.MaxPackBytes, BatchMaxPack: s.cfg.BatchMaxPackBytes,
+		MaxPackBytes: s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
 	}, relayReason)
 	if err != nil {

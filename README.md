@@ -172,11 +172,11 @@ go run ./cmd/git-sync bootstrap \
   <target-url>
 ```
 
-Add `--batch-max-pack-bytes` to split large branch bootstraps into multiple relay batches with temporary refs:
+Add `--target-max-pack-bytes` to split large branch bootstraps into multiple relay batches with temporary refs:
 
 ```bash
 go run ./cmd/git-sync bootstrap \
-  --batch-max-pack-bytes 1073741824 \
+  --target-max-pack-bytes 1073741824 \
   <source-url> \
   <target-url>
 ```
@@ -193,14 +193,14 @@ This mode is intended as an advanced large-repo fallback, not the default bootst
 
 A practical starting point is:
 
-- `--batch-max-pack-bytes 536870912` for a conservative `512 MiB` target-side batch size
-- `--batch-max-pack-bytes 1073741824` when you want fewer, larger batches and the target has more headroom
+- `--target-max-pack-bytes 536870912` for a conservative `512 MiB` target-side batch size
+- `--target-max-pack-bytes 1073741824` when you want fewer, larger batches and the target has more headroom
 
 For example:
 
 ```bash
 go run ./cmd/git-sync bootstrap \
-  --batch-max-pack-bytes 536870912 \
+  --target-max-pack-bytes 536870912 \
   --protocol v2 \
   -v \
   <source-url> \
@@ -228,7 +228,7 @@ go run ./cmd/git-sync-bench \
   --scenario bootstrap \
   --source-url /tmp/git-sync-bench/kubernetes.git \
   --repeat 3 \
-  --batch-max-pack-bytes 104857600 \
+  --target-max-pack-bytes 104857600 \
   --stats \
   --json
 ```

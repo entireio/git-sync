@@ -601,7 +601,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 			},
 		},
 		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-		BatchMaxPack: 10,
+		TargetMaxPack: 10,
 	}, "empty target")
 	if err == nil || !strings.Contains(err.Error(), "push bootstrap batch") {
 		t.Fatalf("unexpected error: %v", err)
@@ -642,7 +642,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 			},
 		},
 		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-		BatchMaxPack: 10,
+		TargetMaxPack: 10,
 	}, "empty target")
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("expected interrupted read error, got %v", err)
@@ -683,7 +683,7 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 					},
 				},
 				TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-				BatchMaxPack: tt.batchMaxPack,
+				TargetMaxPack: tt.batchMaxPack,
 			}, "missing pusher")
 			if err == nil || err.Error() != "bootstrap strategy requires TargetPusher" {
 				t.Fatalf("Execute() error = %v, want missing TargetPusher", err)
