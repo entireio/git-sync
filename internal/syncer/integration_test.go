@@ -31,7 +31,6 @@ import (
 	"github.com/soph/git-sync/internal/auth"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
-	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
 	"github.com/soph/git-sync/internal/syncertest"
 )
 
@@ -657,9 +656,13 @@ func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
 	}
 }
 
-func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
+func TestBootstrap_IntegrationBatchedResumeMismatchClearsAndRetries(t *testing.T) {
+	// When a temp ref from a previous run doesn't match any planned checkpoint
+	// (e.g., the user changed --target-max-pack-bytes between runs), bootstrap
+	// should delete the stale temp ref and start the branch fresh rather than
+	// failing with a resume mismatch error.
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 100, 5_000)
 
 	unrelatedRepo, unrelatedFS := newSourceRepo(t)
 	makeCommits(t, unrelatedRepo, unrelatedFS, 1)
@@ -675,56 +678,38 @@ func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
 	if err := copyRefsAndObjects(unrelatedRepo.Storer, targetRepo.Storer, nil); err != nil {
 		t.Fatalf("copy unrelated objects: %v", err)
 	}
-	targetHead := unrelatedHead
 	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
-	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, targetHead.Hash())); err != nil {
-		t.Fatalf("set temp ref: %v", err)
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, unrelatedHead.Hash())); err != nil {
+		t.Fatalf("set stale temp ref: %v", err)
 	}
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	cfg := Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
+	result, err := Bootstrap(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
 		TargetMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("expected bootstrap to clear stale temp ref and succeed, got: %v", err)
+	}
+	if !result.Batching {
+		t.Fatalf("expected batched bootstrap, got %+v", result)
+	}
+	if result.Pushed == 0 {
+		t.Fatalf("expected pushed > 0, got %+v", result)
 	}
 
-	s, err := newSession(context.Background(), cfg, false)
-	if err != nil {
-		t.Fatalf("new session: %v", err)
-	}
-	desired, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
-	if err != nil {
-		t.Fatalf("build desired refs: %v", err)
-	}
-	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
-	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
-		SourceConn:    s.sourceConn,
-		SourceService: s.sourceService,
-		TargetMaxPack:  cfg.TargetMaxPackBytes,
-	}, ref)
-	if err != nil {
-		t.Fatalf("plan checkpoints: %v", err)
-	}
-	if len(checkpoints) == 0 {
-		t.Fatal("expected checkpoints for batched bootstrap")
-	}
-	for _, checkpoint := range checkpoints {
-		if checkpoint == targetHead.Hash() {
-			t.Fatalf("expected unrelated temp ref hash, got checkpoint collision at %s", checkpoint)
-		}
-	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 
-	_, err = Bootstrap(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected batched bootstrap resume mismatch to fail")
-	}
-	if !strings.Contains(err.Error(), "does not match any planned checkpoint") {
-		t.Fatalf("unexpected error: %v", err)
+	// Stale temp ref should have been cleaned up.
+	if _, err := targetRepo.Reference(tempRef, true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected stale temp ref to be deleted, got err=%v", err)
 	}
 }
 

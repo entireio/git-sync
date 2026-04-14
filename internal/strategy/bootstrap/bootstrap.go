@@ -219,7 +219,18 @@ func executeBatched(
 		current := batch.ResumeHash
 		startIdx, err := planner.BootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
 		if err != nil {
-			return result, fmt.Errorf("resume bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+			// Stale temp ref from a previous run with different parameters.
+			// Delete it and start the branch fresh.
+			p.log("bootstrap batch clearing stale temp ref",
+				"branch", batch.Plan.TargetRef.String(),
+				"temp_ref", batch.TempRef.String(),
+				"stale_hash", planner.ShortHash(batch.ResumeHash))
+			delCmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: batch.ResumeHash, Delete: true}}
+			if delErr := p.TargetPusher.PushCommands(ctx, delCmds); delErr != nil {
+				return result, fmt.Errorf("delete stale temp ref %s: %w (original: %w)", batch.TempRef, delErr, err)
+			}
+			current = plumbing.ZeroHash
+			startIdx = 0
 		}
 
 		// Manual index loop: subdivide may insert checkpoints at the current
