@@ -218,9 +218,28 @@ func executeBatched(
 
 		current := batch.ResumeHash
 		startIdx, err := planner.BootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
-		if err != nil {
-			// Stale temp ref from a previous run with different parameters.
-			// Delete it and start the branch fresh.
+		if err != nil && !batch.ResumeHash.IsZero() && len(batch.chain) > 0 {
+			// Temp ref doesn't match any planned checkpoint (e.g., the user
+			// changed --target-max-pack-bytes between runs). If the hash is
+			// in the commit chain, reuse it as the starting point and re-plan
+			// remaining checkpoints — preserving already-pushed data.
+			if chainIdx := chainPosition(batch.chain, batch.ResumeHash); chainIdx >= 0 {
+				remaining := batch.chain[chainIdx+1:]
+				if len(remaining) > 0 {
+					numBatches := estimateBatchCount(int64(len(remaining)), p.TargetMaxPack)
+					batch.Checkpoints = evenCheckpoints(remaining, numBatches)
+					p.log("bootstrap batch resuming from stale temp ref",
+						"branch", batch.Plan.TargetRef.String(),
+						"resume_hash", planner.ShortHash(batch.ResumeHash),
+						"remaining_commits", len(remaining),
+						"new_batches", len(batch.Checkpoints))
+					startIdx = 0
+					err = nil
+				}
+			}
+		}
+		if err != nil && !batch.ResumeHash.IsZero() {
+			// Temp ref hash not in the chain at all — truly stale. Delete and start fresh.
 			p.log("bootstrap batch clearing stale temp ref",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
@@ -491,6 +510,16 @@ type wrappedMultiRC struct {
 }
 
 func (w *wrappedMultiRC) Read(p []byte) (int, error) { return w.Reader.Read(p) }
+
+// chainPosition returns the index of hash in chain, or -1 if not found.
+func chainPosition(chain []plumbing.Hash, hash plumbing.Hash) int {
+	for i, h := range chain {
+		if h == hash {
+			return i
+		}
+	}
+	return -1
+}
 
 // subdivideCheckpoints splits each remaining checkpoint range in half using
 // the full commit chain. Called when a batch push is rejected for exceeding
