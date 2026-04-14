@@ -229,7 +229,7 @@ func TestEvenCheckpoints(t *testing.T) {
 		}
 	})
 
-	t.Run("more batches than chain returns just tip", func(t *testing.T) {
+	t.Run("more batches than chain with single element returns just tip", func(t *testing.T) {
 		chain := makeHashes(1)
 		got := evenCheckpoints(chain, 5)
 		if len(got) != 1 {
@@ -237,6 +237,17 @@ func TestEvenCheckpoints(t *testing.T) {
 		}
 		if got[0] != chain[0] {
 			t.Fatalf("got %s, want tip %s", got[0], chain[0])
+		}
+	})
+
+	t.Run("more batches than chain with multi-element chain returns just tip", func(t *testing.T) {
+		chain := makeHashes(3)
+		got := evenCheckpoints(chain, 10)
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1", len(got))
+		}
+		if got[0] != chain[2] {
+			t.Fatalf("got %s, want tip %s", got[0], chain[2])
 		}
 	})
 }

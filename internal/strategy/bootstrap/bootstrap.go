@@ -581,7 +581,7 @@ func subdivideCheckpoints(chain []plumbing.Hash, current plumbing.Hash, remainin
 }
 
 func evenCheckpoints(chain []plumbing.Hash, numBatches int) []plumbing.Hash {
-	if numBatches <= 1 || len(chain) <= 1 {
+	if numBatches <= 1 || len(chain) <= 1 || numBatches >= len(chain) {
 		return []plumbing.Hash{chain[len(chain)-1]}
 	}
 	checkpoints := make([]plumbing.Hash, 0, numBatches)

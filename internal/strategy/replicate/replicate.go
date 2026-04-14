@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/go-git/go-git/v6/plumbing"
 
@@ -82,15 +83,15 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 
 type closeOnceReadCloser struct {
 	io.ReadCloser
-	closed bool
+	once sync.Once
 }
 
 func (c *closeOnceReadCloser) Close() error {
-	if c.closed {
-		return nil
-	}
-	c.closed = true
-	return c.ReadCloser.Close()
+	var err error
+	c.once.Do(func() {
+		err = c.ReadCloser.Close()
+	})
+	return err
 }
 
 func closeOnce(rc io.ReadCloser) io.ReadCloser {

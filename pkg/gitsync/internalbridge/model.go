@@ -97,7 +97,6 @@ type ExecutionSummary struct {
 	Protocol           string       `json:"protocol"`
 	OperationMode      string       `json:"operation_mode"`
 	Relay              bool         `json:"relay"`
-	Mode               string       `json:"mode,omitempty"`
 	TransferMode       string       `json:"transfer_mode"`
 	Reason             string       `json:"reason"`
 	BootstrapSuggested bool         `json:"bootstrap_suggested"`
@@ -147,7 +146,6 @@ func FromSyncResult(result syncer.Result) SyncResult {
 			Protocol:           result.Protocol,
 			OperationMode:      result.OperationMode,
 			Relay:              result.Relay,
-			Mode:               result.RelayMode,
 			TransferMode:       result.RelayMode,
 			Reason:             result.RelayReason,
 			BootstrapSuggested: result.BootstrapSuggested,
