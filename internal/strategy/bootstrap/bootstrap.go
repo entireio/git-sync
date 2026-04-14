@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -441,12 +442,21 @@ const estimatedBytesPerCommit = 65536
 
 func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, []plumbing.Hash, error) {
 	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
+
+	// Fetch all commits (tree:0 filter) into a temporary in-memory store.
+	// For linux this is ~1.4M commits at ~3.3 KiB each = ~4.6 GB transient.
+	// We extract the first-parent chain (~75k hashes, ~3 MB) immediately
+	// and discard the store so GC can reclaim the 4.6 GB. The transient
+	// spike is unavoidable with git protocol v2 (no first-parent-only
+	// fetch) and go-git's pack parser (needs full store for delta resolution).
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
 		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
 	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
+	graphStore = nil // allow GC to reclaim the commit graph store (~4.6 GB for linux)
+	runtime.GC()
 	if err != nil {
 		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
 	}
