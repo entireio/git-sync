@@ -87,7 +87,7 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 
 func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLimit(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 100, 5_000)
 
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
@@ -96,7 +96,7 @@ func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLi
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
-	targetServer.receivePackBodyLimit = 1_000_000
+	targetServer.receivePackBodyLimit = 300_000
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
@@ -910,7 +910,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 
 func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
 
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
@@ -997,7 +997,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 
 func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
 	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
 	if err != nil {
 		t.Fatalf("resolve source head: %v", err)
@@ -1725,7 +1725,7 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	// into tractable receive-pack POSTs. Without this plumbing the replicate
 	// CLI flag would be silently ignored.
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 100, 5_000)
 
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
@@ -1743,7 +1743,7 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		Mode:              modeReplicate,
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 500_000, // force > 1 batch for the generated pack
+		BatchMaxPackBytes: 350_000, // force > 1 batch for the generated pack
 	})
 	if err != nil {
 		t.Fatalf("replicate with batched bootstrap failed: %v", err)
