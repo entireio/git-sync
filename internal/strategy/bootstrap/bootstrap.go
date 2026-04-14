@@ -206,6 +206,11 @@ func executeBatched(
 	// heuristic. If the resulting pack is too large for the target's
 	// receive-pack, the push itself fails and resume handles retry.
 	fetchLimit := p.MaxPackBytes
+	// Track branch tips already pushed to the target so subsequent branches
+	// can advertise them as haves. Without this, the second branch in a
+	// multi-branch bootstrap re-sends all shared objects (e.g., linux's
+	// master and nocache-cleanup share ~99% of history).
+	completedRefs := planner.CopyRefHashMap(p.TargetRefs)
 
 	for _, batch := range batches {
 		result.PlannedBatchCount += len(batch.Checkpoints)
@@ -280,7 +285,7 @@ func executeBatched(
 				})
 			}
 
-			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, fetchLimit)
+			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, completedRefs, fetchLimit)
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
@@ -354,6 +359,8 @@ func executeBatched(
 		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
 		}
+		completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
+		completedRefs[batch.TempRef] = batch.Plan.SourceHash
 		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
 	}
 
@@ -586,10 +593,17 @@ func packReaderForCheckpoint(
 	batch plannedBatch,
 	checkpoint plumbing.Hash,
 	current plumbing.Hash,
+	completedRefs map[plumbing.ReferenceName]plumbing.Hash,
 	batchLimit int64,
 ) (io.ReadCloser, error) {
 	desired := singleGP(batch.Plan.SourceRef, batch.TempRef, checkpoint)
-	haves := planner.SingleHaveMap(current)
+	// Merge the current checkpoint (within this branch) with any
+	// already-completed branch tips so the source can delta-compress
+	// against objects the target already has from previous branches.
+	haves := planner.CopyRefHashMap(completedRefs)
+	if !current.IsZero() {
+		haves[batch.TempRef] = current
+	}
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
 	if err != nil {
 		return nil, err
