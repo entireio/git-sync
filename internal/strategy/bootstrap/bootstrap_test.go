@@ -241,6 +241,78 @@ func TestEvenCheckpoints(t *testing.T) {
 	})
 }
 
+func TestCheckPackSizeAndSubdivide(t *testing.T) {
+	// Build a minimal PACK header: "PACK" + version 2 + object count
+	makePackHeader := func(objectCount uint32) []byte {
+		var h [12]byte
+		copy(h[:4], "PACK")
+		h[4], h[5], h[6], h[7] = 0, 0, 0, 2 // version 2
+		h[8] = byte(objectCount >> 24)
+		h[9] = byte(objectCount >> 16)
+		h[10] = byte(objectCount >> 8)
+		h[11] = byte(objectCount)
+		return h[:]
+	}
+
+	t.Run("small pack proceeds without subdivide", func(t *testing.T) {
+		header := makePackHeader(100) // 100 * 750 = 75000 bytes estimated
+		body := append(header, []byte("packdata")...)
+		r := io.NopCloser(bytes.NewReader(body))
+		subdivided := false
+		got, err := checkPackSizeAndSubdivide(r, 1_000_000, func() bool {
+			subdivided = true
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected non-nil reader")
+		}
+		if subdivided {
+			t.Fatal("should not subdivide small pack")
+		}
+		// Verify the PACK header was prepended back
+		out, _ := io.ReadAll(got)
+		if string(out[:4]) != "PACK" {
+			t.Fatalf("expected PACK header preserved, got %q", out[:4])
+		}
+	})
+
+	t.Run("large pack triggers subdivide", func(t *testing.T) {
+		header := makePackHeader(5_000_000) // 5M * 750 = 3.75 GiB estimated
+		r := io.NopCloser(bytes.NewReader(header))
+		subdivided := false
+		got, err := checkPackSizeAndSubdivide(r, 2_000_000_000, func() bool {
+			subdivided = true
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != nil {
+			t.Fatal("expected nil reader after subdivide")
+		}
+		if !subdivided {
+			t.Fatal("expected subdivide for large pack")
+		}
+	})
+
+	t.Run("non-PACK data proceeds without subdivide", func(t *testing.T) {
+		r := io.NopCloser(bytes.NewReader([]byte("not a pack file at all")))
+		got, err := checkPackSizeAndSubdivide(r, 100, func() bool {
+			t.Fatal("should not subdivide non-pack data")
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected non-nil reader for non-pack data")
+		}
+	})
+}
+
 func TestSubdivideCheckpoints(t *testing.T) {
 	makeHashes := func(n int) []plumbing.Hash {
 		hashes := make([]plumbing.Hash, n)

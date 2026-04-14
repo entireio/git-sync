@@ -3,6 +3,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -251,6 +252,32 @@ func executeBatched(
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
 			packReader = closeOnce(packReader)
+
+			// Peek at the PACK header (12 bytes) to get the object count.
+			// If the estimated pack size exceeds the batch limit, subdivide
+			// immediately instead of pushing a pack the target will reject.
+			// This avoids wasting a multi-GiB transfer on a doomed push.
+			if p.BatchMaxPack > 0 && len(batch.chain) > 0 {
+				packReader, err = checkPackSizeAndSubdivide(packReader, p.BatchMaxPack, func() bool {
+					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
+					if len(expanded) > len(batch.Checkpoints[idx:]) {
+						p.log("bootstrap batch subdividing before push (pack header estimate)",
+							"branch", batch.Plan.TargetRef.String(),
+							"old_remaining", len(batch.Checkpoints[idx:]),
+							"new_remaining", len(expanded))
+						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
+						return true
+					}
+					return false
+				})
+				if err != nil {
+					return result, fmt.Errorf("check pack size for %s: %w", batch.Plan.TargetRef, err)
+				}
+				if packReader == nil {
+					continue // subdivided, retry at same idx
+				}
+			}
+
 			cmds := convert.PlansToPushCommands(stagePlans)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
@@ -400,6 +427,53 @@ func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
 	}
 	return n
 }
+
+// estimatedBytesPerObject is a conservative average for compressed git objects
+// in a packfile. Used with the PACK header's object count to estimate total
+// pack size before streaming the full pack. Real values range from ~200 bytes
+// (tiny commits in a sparse repo) to ~2 KiB (blob-heavy repos), with most
+// mature repos averaging 500–1000 bytes. 750 is a reasonable middle ground.
+const estimatedBytesPerObject = 750
+
+// checkPackSizeAndSubdivide reads the 12-byte PACK header to get the object
+// count, estimates total pack size, and if it exceeds batchLimit, closes the
+// reader and calls subdivide(). Returns (nil, nil) when subdivided (caller
+// should continue to retry), or (prepended reader, nil) to proceed with push.
+func checkPackSizeAndSubdivide(
+	r io.ReadCloser,
+	batchLimit int64,
+	subdivide func() bool,
+) (io.ReadCloser, error) {
+	var header [12]byte
+	n, err := io.ReadFull(r, header[:])
+	if err != nil {
+		// Short pack or error — let the push handle it
+		prefixed := io.MultiReader(bytes.NewReader(header[:n]), r)
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+	}
+	if string(header[:4]) != "PACK" {
+		// Not a standard packfile — can't estimate, proceed
+		prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+	}
+	objectCount := int64(header[8])<<24 | int64(header[9])<<16 | int64(header[10])<<8 | int64(header[11])
+	estimated := objectCount * estimatedBytesPerObject
+
+	if estimated > batchLimit && subdivide() {
+		_ = r.Close()
+		return nil, nil
+	}
+
+	prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
+	return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+}
+
+type wrappedMultiRC struct {
+	io.Reader
+	io.Closer
+}
+
+func (w *wrappedMultiRC) Read(p []byte) (int, error) { return w.Reader.Read(p) }
 
 // subdivideCheckpoints splits each remaining checkpoint range in half using
 // the full commit chain. Called when a batch push is rejected for exceeding
