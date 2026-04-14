@@ -128,360 +128,267 @@ func TestTargetBodyLimit(t *testing.T) {
 	}
 }
 
-func TestAdaptiveNextProbeSpan(t *testing.T) {
+func TestEstimateBatchCount(t *testing.T) {
 	tests := []struct {
 		name         string
-		limit        int64
-		measured     int
-		selectedSpan int
-		remaining    int
+		chainLen     int64
+		batchMaxPack int64
 		want         int
 	}{
 		{
-			name:         "grows span when measured pack is far below limit",
-			limit:        1000,
-			measured:     250,
-			selectedSpan: 4,
-			remaining:    20,
-			want:         16,
-		},
-		{
-			name:         "caps growth at remaining commits",
-			limit:        1000,
-			measured:     200,
-			selectedSpan: 4,
-			remaining:    6,
-			want:         6,
-		},
-		{
-			name:         "keeps minimum span of one",
-			limit:        1000,
-			measured:     4000,
-			selectedSpan: 1,
-			remaining:    10,
+			name:         "zero chain length returns 1",
+			chainLen:     0,
+			batchMaxPack: 1024 * 1024,
 			want:         1,
 		},
 		{
-			name:         "falls back to selected span without measurements",
-			limit:        1000,
-			measured:     0,
-			selectedSpan: 3,
-			remaining:    10,
-			want:         3,
+			name:         "negative chain length returns 1",
+			chainLen:     -5,
+			batchMaxPack: 1024 * 1024,
+			want:         1,
 		},
 		{
-			name:         "caps fallback span at remaining",
-			limit:        0,
-			measured:     0,
-			selectedSpan: 8,
-			remaining:    5,
-			want:         5,
+			name:         "zero batch max pack returns 1",
+			chainLen:     100,
+			batchMaxPack: 0,
+			want:         1,
+		},
+		{
+			name:         "negative batch max pack returns 1",
+			chainLen:     100,
+			batchMaxPack: -1,
+			want:         1,
+		},
+		{
+			name:         "small chain fitting in one batch",
+			chainLen:     10,
+			batchMaxPack: 10 * estimatedBytesPerCommit,
+			want:         1,
+		},
+		{
+			name:         "large chain needing multiple batches",
+			chainLen:     1000,
+			batchMaxPack: 100 * estimatedBytesPerCommit,
+			want:         10,
+		},
+		{
+			name:         "ceil division when not evenly divisible",
+			chainLen:     101,
+			batchMaxPack: 100 * estimatedBytesPerCommit,
+			want:         2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := adaptiveNextProbeSpan(tt.limit, tt.measured, tt.selectedSpan, tt.remaining)
+			got := estimateBatchCount(tt.chainLen, tt.batchMaxPack)
 			if got != tt.want {
-				t.Fatalf("adaptiveNextProbeSpan(%d, %d, %d, %d) = %d, want %d",
-					tt.limit, tt.measured, tt.selectedSpan, tt.remaining, got, tt.want)
+				t.Fatalf("estimateBatchCount(%d, %d) = %d, want %d",
+					tt.chainLen, tt.batchMaxPack, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestShouldProbeTipFirst(t *testing.T) {
-	tests := []struct {
-		name         string
-		limit        int64
-		measured     int
-		measuredSpan int
-		remaining    int
-		want         bool
-	}{
-		{
-			name:         "probes tip when estimate is comfortably under limit",
-			limit:        1000,
-			measured:     200,
-			measuredSpan: 4,
-			remaining:    10,
-			want:         true,
-		},
-		{
-			name:         "does not probe tip when estimate is too close to limit",
-			limit:        1000,
-			measured:     400,
-			measuredSpan: 4,
-			remaining:    10,
-			want:         false,
-		},
-		{
-			name:         "does not probe tip without measurements",
-			limit:        1000,
-			measured:     0,
-			measuredSpan: 4,
-			remaining:    10,
-			want:         false,
-		},
-		{
-			name:         "does not probe tip when remaining span is not larger",
-			limit:        1000,
-			measured:     200,
-			measuredSpan: 4,
-			remaining:    4,
-			want:         false,
-		},
+func TestEvenCheckpoints(t *testing.T) {
+	makeHashes := func(n int) []plumbing.Hash {
+		hashes := make([]plumbing.Hash, n)
+		for i := range hashes {
+			hashes[i] = plumbing.NewHash(fmt.Sprintf("%040d", i))
+		}
+		return hashes
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shouldProbeTipFirst(tt.limit, tt.measured, tt.measuredSpan, tt.remaining)
-			if got != tt.want {
-				t.Fatalf("shouldProbeTipFirst(%d, %d, %d, %d) = %v, want %v",
-					tt.limit, tt.measured, tt.measuredSpan, tt.remaining, got, tt.want)
-			}
-		})
-	}
+	t.Run("1 batch returns just tip", func(t *testing.T) {
+		chain := makeHashes(10)
+		got := evenCheckpoints(chain, 1)
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1", len(got))
+		}
+		if got[0] != chain[9] {
+			t.Fatalf("got %s, want tip %s", got[0], chain[9])
+		}
+	})
+
+	t.Run("3 batches on 10-element chain", func(t *testing.T) {
+		chain := makeHashes(10)
+		got := evenCheckpoints(chain, 3)
+		// batchSize = 10/3 = 3
+		// checkpoints at indices: (1)*3-1=2, (2)*3-1=5, then tip=9
+		if len(got) != 3 {
+			t.Fatalf("len = %d, want 3", len(got))
+		}
+		if got[0] != chain[2] {
+			t.Fatalf("got[0] = %s, want chain[2] = %s", got[0], chain[2])
+		}
+		if got[1] != chain[5] {
+			t.Fatalf("got[1] = %s, want chain[5] = %s", got[1], chain[5])
+		}
+		if got[2] != chain[9] {
+			t.Fatalf("got[2] = %s, want chain[9] (tip) = %s", got[2], chain[9])
+		}
+	})
+
+	t.Run("more batches than chain with single element returns just tip", func(t *testing.T) {
+		chain := makeHashes(1)
+		got := evenCheckpoints(chain, 5)
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1", len(got))
+		}
+		if got[0] != chain[0] {
+			t.Fatalf("got %s, want tip %s", got[0], chain[0])
+		}
+	})
+
+	t.Run("more batches than chain with multi-element chain returns just tip", func(t *testing.T) {
+		chain := makeHashes(3)
+		got := evenCheckpoints(chain, 10)
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1", len(got))
+		}
+		if got[0] != chain[2] {
+			t.Fatalf("got %s, want tip %s", got[0], chain[2])
+		}
+	})
 }
 
-func TestShouldSelectTipWithoutProbe(t *testing.T) {
-	tests := []struct {
-		name         string
-		limit        int64
-		measured     int
-		measuredSpan int
-		remaining    int
-		want         bool
-	}{
-		{
-			name:         "selects tip when estimate is far below limit",
-			limit:        1000,
-			measured:     150,
-			measuredSpan: 4,
-			remaining:    10,
-			want:         true,
-		},
-		{
-			name:         "does not select tip when estimate is only moderately below limit",
-			limit:        1000,
-			measured:     220,
-			measuredSpan: 4,
-			remaining:    10,
-			want:         false,
-		},
-		{
-			name:         "does not select tip without measurements",
-			limit:        1000,
-			measured:     0,
-			measuredSpan: 4,
-			remaining:    10,
-			want:         false,
-		},
+func TestCheckPackSizeAndSubdivide(t *testing.T) {
+	// Build a minimal PACK header: "PACK" + version 2 + object count
+	makePackHeader := func(objectCount uint32) []byte {
+		var h [12]byte
+		copy(h[:4], "PACK")
+		h[4], h[5], h[6], h[7] = 0, 0, 0, 2 // version 2
+		h[8] = byte(objectCount >> 24)
+		h[9] = byte(objectCount >> 16)
+		h[10] = byte(objectCount >> 8)
+		h[11] = byte(objectCount)
+		return h[:]
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shouldSelectTipWithoutProbe(tt.limit, tt.measured, tt.measuredSpan, tt.remaining)
-			if got != tt.want {
-				t.Fatalf("shouldSelectTipWithoutProbe(%d, %d, %d, %d) = %v, want %v",
-					tt.limit, tt.measured, tt.measuredSpan, tt.remaining, got, tt.want)
-			}
+	t.Run("small pack proceeds without subdivide", func(t *testing.T) {
+		header := makePackHeader(100) // 100 * 750 = 75000 bytes estimated
+		body := append(header, []byte("packdata")...)
+		r := io.NopCloser(bytes.NewReader(body))
+		subdivided := false
+		got, err := checkPackSizeAndSubdivide(r, 1_000_000, func() bool {
+			subdivided = true
+			return true
 		})
-	}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected non-nil reader")
+		}
+		if subdivided {
+			t.Fatal("should not subdivide small pack")
+		}
+		// Verify the PACK header was prepended back
+		out, _ := io.ReadAll(got)
+		if string(out[:4]) != "PACK" {
+			t.Fatalf("expected PACK header preserved, got %q", out[:4])
+		}
+	})
+
+	t.Run("large pack triggers subdivide", func(t *testing.T) {
+		header := makePackHeader(5_000_000) // 5M * 750 = 3.75 GiB estimated
+		r := io.NopCloser(bytes.NewReader(header))
+		subdivided := false
+		got, err := checkPackSizeAndSubdivide(r, 2_000_000_000, func() bool {
+			subdivided = true
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != nil {
+			t.Fatal("expected nil reader after subdivide")
+		}
+		if !subdivided {
+			t.Fatal("expected subdivide for large pack")
+		}
+	})
+
+	t.Run("non-PACK data proceeds without subdivide", func(t *testing.T) {
+		r := io.NopCloser(bytes.NewReader([]byte("not a pack file at all")))
+		got, err := checkPackSizeAndSubdivide(r, 100, func() bool {
+			t.Fatal("should not subdivide non-pack data")
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected non-nil reader for non-pack data")
+		}
+	})
 }
 
-func TestNextCheckpointProbeCandidate(t *testing.T) {
-	tests := []struct {
-		name             string
-		lo               int
-		hi               int
-		prevSpan         int
-		largestFit       int
-		smallestTooLarge int
-		want             int
-	}{
-		{
-			name:             "probes midpoint between known fit and too large bounds",
-			lo:               0,
-			hi:               19,
-			prevSpan:         8,
-			largestFit:       7,
-			smallestTooLarge: 15,
-			want:             11,
-		},
-		{
-			name:             "projects previous span when no upper bound exists",
-			lo:               5,
-			hi:               19,
-			prevSpan:         4,
-			largestFit:       4,
-			smallestTooLarge: 20,
-			want:             8,
-		},
-		{
-			name:             "falls back to hi when projection is behind known fit",
-			lo:               5,
-			hi:               19,
-			prevSpan:         1,
-			largestFit:       12,
-			smallestTooLarge: 20,
-			want:             19,
-		},
+func TestSubdivideCheckpoints(t *testing.T) {
+	makeHashes := func(n int) []plumbing.Hash {
+		hashes := make([]plumbing.Hash, n)
+		for i := range hashes {
+			hashes[i] = plumbing.NewHash(fmt.Sprintf("%040d", i))
+		}
+		return hashes
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := nextCheckpointProbeCandidate(tt.lo, tt.hi, tt.prevSpan, tt.largestFit, tt.smallestTooLarge)
-			if got != tt.want {
-				t.Fatalf("nextCheckpointProbeCandidate(%d, %d, %d, %d, %d) = %d, want %d",
-					tt.lo, tt.hi, tt.prevSpan, tt.largestFit, tt.smallestTooLarge, got, tt.want)
-			}
-		})
-	}
-}
+	chain := makeHashes(10) // indices 0..9
 
-func TestPlanCheckpointsProbeCountVisibility(t *testing.T) {
-	tests := []struct {
-		name       string
-		batchLimit int64
-		spanSizes  map[int]int
-		wantProbes int
-	}{
-		{
-			name:       "small early sample selects tip without a second probe",
-			batchLimit: 20_000,
-			spanSizes:  map[int]int{1: 1_000, 2: 2_000, 3: 3_000, 4: 4_000, 5: 5_000, 6: 6_000, 7: 7_000, 8: 8_000, 9: 9_000, 10: 10_000},
-			wantProbes: 1,
-		},
-		{
-			name:       "mid-sized spans require repeated exact probes",
-			batchLimit: 10_000,
-			spanSizes:  map[int]int{1: 4_500, 2: 9_000, 3: 20_000, 4: 20_000, 5: 20_000, 6: 20_000, 7: 20_000, 8: 20_000, 9: 20_000, 10: 20_000},
-			wantProbes: 5,
-		},
-	}
+	t.Run("splits single checkpoint at midpoint", func(t *testing.T) {
+		// current=chain[0], remaining=[chain[9]] → insert chain[4] as midpoint
+		got := subdivideCheckpoints(chain, chain[0], []plumbing.Hash{chain[9]})
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2: %v", len(got), got)
+		}
+		if got[0] != chain[4] {
+			t.Fatalf("got[0] = %s, want midpoint chain[4] = %s", got[0], chain[4])
+		}
+		if got[1] != chain[9] {
+			t.Fatalf("got[1] = %s, want tip chain[9] = %s", got[1], chain[9])
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			hashes := makeLinearCommitChain(t, 10)
-			indices := make(map[plumbing.Hash]int, len(hashes))
-			for i, h := range hashes {
-				indices[h] = i
-			}
+	t.Run("zero current starts from beginning", func(t *testing.T) {
+		// current=zero, remaining=[chain[9]] → insert chain[4] as midpoint
+		got := subdivideCheckpoints(chain, plumbing.ZeroHash, []plumbing.Hash{chain[9]})
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2", len(got))
+		}
+		if got[0] != chain[4] {
+			t.Fatalf("got[0] = %s, want chain[4]", got[0])
+		}
+	})
 
-			probes := 0
-			source := fakeBootstrapSource{
-				fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
-					_ = writeLinearCommitChain(t, store, len(hashes))
-					return nil
-				},
-				fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
-					probes++
-					for _, ref := range desired {
-						wantIdx, ok := indices[ref.SourceHash]
-						if !ok {
-							t.Fatalf("unexpected probe hash %s", ref.SourceHash)
-						}
-						haveIdx := -1
-						for _, h := range haves {
-							if h.IsZero() {
-								continue
-							}
-							if idx, ok := indices[h]; ok {
-								haveIdx = idx
-							}
-						}
-						span := wantIdx - haveIdx
-						size, ok := tt.spanSizes[span]
-						if !ok {
-							t.Fatalf("missing synthetic pack size for span %d", span)
-						}
-						return io.NopCloser(bytes.NewReader(make([]byte, size))), nil
-					}
-					t.Fatal("expected single desired ref")
-					return nil, nil
-				},
-			}
+	t.Run("adjacent commits cannot split further", func(t *testing.T) {
+		// current=chain[8], remaining=[chain[9]] → gap=1, no midpoint
+		got := subdivideCheckpoints(chain, chain[8], []plumbing.Hash{chain[9]})
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1", len(got))
+		}
+	})
 
-			_, err := PlanCheckpoints(context.Background(), Params{
-				SourceService: source,
-				BatchMaxPack:  tt.batchLimit,
-			}, planner.DesiredRef{
-				Label:      "main",
-				Kind:       planner.RefKindBranch,
-				SourceRef:  plumbing.NewBranchReferenceName("main"),
-				TargetRef:  plumbing.NewBranchReferenceName("main"),
-				SourceHash: hashes[len(hashes)-1],
-			})
-			if err != nil {
-				t.Fatalf("PlanCheckpoints() error = %v", err)
-			}
-			if probes != tt.wantProbes {
-				t.Fatalf("FetchPack probe count = %d, want %d", probes, tt.wantProbes)
-			}
-		})
-	}
-}
-
-func TestSearchCheckpointUnderLimitFindsLargestFittingCheckpoint(t *testing.T) {
-	hashes := makeLinearCommitChain(t, 20)
-	indices := make(map[plumbing.Hash]int, len(hashes))
-	for i, h := range hashes {
-		indices[h] = i
-	}
-
-	source := fakeBootstrapSource{
-		fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
-			_ = writeLinearCommitChain(t, store, len(hashes))
-			return nil
-		},
-		fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
-			for _, ref := range desired {
-				wantIdx := indices[ref.SourceHash]
-				haveIdx := -1
-				for _, h := range haves {
-					if h.IsZero() {
-						continue
-					}
-					haveIdx = indices[h]
-				}
-				span := wantIdx - haveIdx
-				size := span * 1000
-				if span > 12 {
-					size = 50_000
-				}
-				return io.NopCloser(bytes.NewReader(make([]byte, size))), nil
-			}
-			t.Fatal("expected single desired ref")
-			return nil, nil
-		},
-	}
-
-	cp := &checkpointPlanner{
-		ctx: context.Background(),
-		params: Params{
-			SourceService: source,
-			BatchMaxPack:  12_000,
-		},
-		ref: planner.DesiredRef{
-			Label:      "main",
-			Kind:       planner.RefKindBranch,
-			SourceRef:  plumbing.NewBranchReferenceName("main"),
-			TargetRef:  plumbing.NewBranchReferenceName("main"),
-			SourceHash: hashes[len(hashes)-1],
-		},
-		chain:      hashes,
-		probeCache: make(map[string]probeResult),
-		prefetched: make(map[plumbing.Hash][]byte),
-	}
-
-	bestIdx, err := cp.searchCheckpointUnderLimit(-1, plumbing.ZeroHash, 12)
-	if err != nil {
-		t.Fatalf("searchCheckpointUnderLimit() error = %v", err)
-	}
-	if bestIdx != 11 {
-		t.Fatalf("best checkpoint index = %d, want 11 (largest fitting span of 12 commits)", bestIdx)
-	}
+	t.Run("multiple remaining checkpoints each get split", func(t *testing.T) {
+		// current=zero, remaining=[chain[4], chain[9]]
+		// first: gap(-1→4)=5, mid=chain[1]
+		// second: gap(4→9)=5, mid=chain[6]
+		got := subdivideCheckpoints(chain, plumbing.ZeroHash, []plumbing.Hash{chain[4], chain[9]})
+		if len(got) != 4 {
+			t.Fatalf("len = %d, want 4: %v", len(got), got)
+		}
+		if got[0] != chain[1] {
+			t.Fatalf("got[0] = %s, want chain[1]", got[0])
+		}
+		if got[1] != chain[4] {
+			t.Fatalf("got[1] = %s, want chain[4]", got[1])
+		}
+		if got[2] != chain[6] {
+			t.Fatalf("got[2] = %s, want chain[6]", got[2])
+		}
+		if got[3] != chain[9] {
+			t.Fatalf("got[3] = %s, want chain[9]", got[3])
+		}
+	})
 }
 
 type fakeBootstrapSource struct {
@@ -679,7 +586,6 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	hashes := makeLinearCommitChain(t, 1)
 	pack := &trackingReadCloser{Reader: bytes.NewReader([]byte("PACK"))}
-	packFetches := 0
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
@@ -688,16 +594,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 				return nil
 			},
 			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
-				packFetches++
-				for _, ref := range desired {
-					if ref.SourceHash == hashes[len(hashes)-1] {
-						if packFetches == 1 {
-							return io.NopCloser(bytes.NewReader(nil)), nil
-						}
-						return pack, nil
-					}
-				}
-				return io.NopCloser(bytes.NewReader(nil)), nil
+				return pack, nil
 			},
 		},
 		TargetPusher: fakeBootstrapPusher{
@@ -715,13 +612,10 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 			},
 		},
 		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-		BatchMaxPack: 10,
+		TargetMaxPack: 10,
 	}, "empty target")
 	if err == nil || !strings.Contains(err.Error(), "push bootstrap batch") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if packFetches < 2 {
-		t.Fatalf("expected separate probe and execution fetches, got %d", packFetches)
 	}
 	if !pack.closed {
 		t.Fatal("expected strategy to close checkpoint pack on push error")
@@ -732,7 +626,6 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	hashes := makeLinearCommitChain(t, 1)
 	pack := &interruptedReadCloser{first: []byte("PACK"), err: io.ErrUnexpectedEOF}
-	packFetches := 0
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
@@ -741,16 +634,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 				return nil
 			},
 			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
-				packFetches++
-				for _, ref := range desired {
-					if ref.SourceHash == hashes[len(hashes)-1] {
-						if packFetches == 1 {
-							return io.NopCloser(bytes.NewReader(nil)), nil
-						}
-						return pack, nil
-					}
-				}
-				return io.NopCloser(bytes.NewReader(nil)), nil
+				return pack, nil
 			},
 		},
 		TargetPusher: fakeBootstrapPusher{
@@ -769,13 +653,10 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 			},
 		},
 		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-		BatchMaxPack: 10,
+		TargetMaxPack: 10,
 	}, "empty target")
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("expected interrupted read error, got %v", err)
-	}
-	if packFetches < 2 {
-		t.Fatalf("expected separate probe and execution fetches, got %d", packFetches)
 	}
 	if !pack.closed {
 		t.Fatal("expected strategy to close checkpoint pack after read interruption")
@@ -813,7 +694,7 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 					},
 				},
 				TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
-				BatchMaxPack: tt.batchMaxPack,
+				TargetMaxPack: tt.batchMaxPack,
 			}, "missing pusher")
 			if err == nil || err.Error() != "bootstrap strategy requires TargetPusher" {
 				t.Fatalf("Execute() error = %v, want missing TargetPusher", err)

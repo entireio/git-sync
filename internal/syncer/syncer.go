@@ -28,6 +28,7 @@ import (
 	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
 	"github.com/soph/git-sync/internal/strategy/incremental"
 	"github.com/soph/git-sync/internal/strategy/materialized"
+	repstrat "github.com/soph/git-sync/internal/strategy/replicate"
 	"github.com/soph/git-sync/internal/validation"
 )
 
@@ -35,6 +36,8 @@ const (
 	protocolModeAuto = validation.ProtocolAuto
 	protocolModeV1   = validation.ProtocolV1
 	protocolModeV2   = validation.ProtocolV2
+	modeSync         = "sync"
+	modeReplicate    = "replicate"
 )
 
 const DefaultMaterializedMaxObjects = materialized.DefaultMaxMaterializedObjects
@@ -63,10 +66,11 @@ type Config struct {
 	Verbose                bool
 	ShowStats              bool
 	MeasureMemory          bool
+	Mode                   string
 	Force                  bool
 	Prune                  bool
 	MaxPackBytes           int64
-	BatchMaxPackBytes      int64
+	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 	ProtocolMode           string
 }
@@ -109,6 +113,7 @@ type Result struct {
 	Blocked            int          `json:"blocked"`
 	Deleted            int          `json:"deleted"`
 	DryRun             bool         `json:"dry_run"`
+	OperationMode      string       `json:"operation_mode"`
 	Relay              bool         `json:"relay"`
 	RelayMode          string       `json:"relay_mode"`
 	RelayReason        string       `json:"relay_reason"`
@@ -128,8 +133,8 @@ func (r Result) Lines() []string {
 		lines = append(lines, planner.FormatPlanLine(plan))
 	}
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d planned-batches=%d",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount, r.PlannedBatchCount,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d mode=%s protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d planned-batches=%d",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.OperationMode, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount, r.PlannedBatchCount,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -347,8 +352,18 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		return nil, err
 	}
 	cfg.ProtocolMode = mode
+	switch cfg.Mode {
+	case "", modeSync:
+		cfg.Mode = modeSync
+	case modeReplicate:
+	default:
+		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
+	}
 	if _, err := validation.ValidateMappings(cfg.Mappings); err != nil {
 		return nil, err
+	}
+	if cfg.Mode == modeReplicate && cfg.Force {
+		return nil, fmt.Errorf("replicate does not support --force; use sync instead")
 	}
 
 	s := &syncSession{
@@ -372,6 +387,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err != nil {
 		return nil, fmt.Errorf("list source refs: %w", err)
 	}
+	sourceService.Verbose = cfg.Verbose
 	s.sourceService = sourceService
 	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
 
@@ -414,13 +430,20 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if s.cfg.Mode == modeReplicate {
+		return s.runReplicate(ctx)
+	}
+	return s.runSync(ctx)
+}
+
+func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	measurementDone := s.measurementDone
 	stats := s.stats
 	sourceService := s.sourceService
 	sourceRefMap := s.sourceRefMap
 	targetRefMap := s.target.refMap
 
-	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(sourceRefMap, planConfig(cfg))
+	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(sourceRefMap, planConfig(s.cfg))
 	if err != nil {
 		return Result{}, err
 	}
@@ -429,15 +452,15 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	// Check for bootstrap opportunity (before allocating in-memory repo)
-	if ok, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, targetRefMap); ok {
-		if cfg.DryRun {
+	if ok, reason := planner.CanBootstrapRelay(s.cfg.Force, s.cfg.Prune, desiredRefs, targetRefMap); ok {
+		if s.cfg.DryRun {
 			plans, err := planner.BuildBootstrapPlans(desiredRefs, targetRefMap)
 			if err != nil {
 				return Result{}, err
 			}
 			return Result{
 				Plans: plans, DryRun: true, RelayReason: reason,
-				BootstrapSuggested: true, Stats: stats.snapshot(),
+				OperationMode: modeSync, BootstrapSuggested: true, Stats: stats.snapshot(),
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
 			}, nil
 		}
@@ -456,13 +479,13 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
-	plans, err := planner.BuildPlans(repo.Storer, desiredRefs, targetRefMap, managedTargets, planConfig(cfg))
+	plans, err := planner.BuildPlans(repo.Storer, desiredRefs, targetRefMap, managedTargets, planConfig(s.cfg))
 	if err != nil {
 		return Result{}, err
 	}
 
 	result := Result{
-		Plans: plans, DryRun: cfg.DryRun, Protocol: sourceService.Protocol,
+		Plans: plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: sourceService.Protocol,
 		Stats: stats.snapshot(), Measurement: measurementDone(),
 	}
 
@@ -470,7 +493,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	for _, plan := range plans {
 		switch plan.Action {
 		case ActionCreate, ActionUpdate, ActionDelete:
-			if cfg.DryRun {
+			if s.cfg.DryRun {
 				result.Skipped++
 				continue
 			}
@@ -482,12 +505,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
-	if !cfg.DryRun && result.Blocked > 0 {
+	if !s.cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force where appropriate", result.Blocked)
 	}
-	result.RelayReason = planner.RelayFallbackReason(cfg.Force, cfg.Prune, cfg.DryRun, pushPlans, s.target.policy)
+	result.RelayReason = planner.RelayFallbackReason(s.cfg.Force, s.cfg.Prune, s.cfg.DryRun, pushPlans, s.target.policy)
 
-	if !cfg.DryRun {
+	if !s.cfg.DryRun {
 		// Try incremental relay first
 		incResult, err := s.executeIncremental(ctx, desiredRefs, pushPlans)
 		if err != nil {
@@ -516,6 +539,127 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	result.Stats = stats.snapshot()
 	result.Measurement = measurementDone()
 	return result, nil
+}
+
+func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
+	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
+	if err != nil {
+		return Result{}, err
+	}
+	if len(desiredRefs) == 0 {
+		return Result{}, fmt.Errorf("no source refs matched")
+	}
+
+	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {
+		return Result{OperationMode: modeReplicate}, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+	}
+
+	allAbsent := s.replicateCanBootstrap(desiredRefs)
+	if allAbsent {
+		if s.cfg.DryRun {
+			plans, err := planner.BuildBootstrapPlans(desiredRefs, s.target.refMap)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{
+				Plans:              plans,
+				DryRun:             true,
+				OperationMode:      modeReplicate,
+				RelayReason:        "empty-target-managed-refs",
+				BootstrapSuggested: true,
+				Stats:              s.stats.snapshot(),
+				Measurement:        s.measurementDone(),
+				Protocol:           s.sourceService.Protocol,
+			}, nil
+		}
+		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, "empty-target-managed-refs")
+	}
+
+	plans, err := planner.BuildReplicationPlans(desiredRefs, s.target.refMap, managedTargets, planConfig(s.cfg))
+	if err != nil {
+		return Result{}, err
+	}
+
+	result := Result{
+		Plans:         plans,
+		DryRun:        s.cfg.DryRun,
+		OperationMode: modeReplicate,
+		Protocol:      s.sourceService.Protocol,
+		Stats:         s.stats.snapshot(),
+		Measurement:   s.measurementDone(),
+	}
+
+	pushPlans := make([]BranchPlan, 0, len(plans))
+	relayPlans := make([]BranchPlan, 0, len(plans))
+	for _, plan := range plans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate, ActionDelete:
+			if s.cfg.DryRun {
+				result.Skipped++
+				continue
+			}
+			pushPlans = append(pushPlans, plan)
+			if plan.Action != ActionDelete {
+				relayPlans = append(relayPlans, plan)
+			}
+		case ActionSkip:
+			result.Skipped++
+		case ActionBlock:
+			result.Blocked++
+		}
+	}
+
+	if !s.cfg.DryRun && len(relayPlans) > 0 {
+		ok, reason := planner.CanReplicateRelay(relayPlans)
+		if !ok {
+			return result, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+		}
+		repResult, err := s.executeReplicate(ctx, desiredRefs, pushPlans)
+		if err != nil {
+			return result, fmt.Errorf("replicate relay failed: %w; use sync instead", err)
+		}
+		result.Relay = repResult.Relay
+		result.RelayMode = repResult.RelayMode
+		result.RelayReason = repResult.RelayReason
+	}
+
+	for _, plan := range pushPlans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			result.Pushed++
+		case ActionDelete:
+			result.Deleted++
+		}
+	}
+	result.Stats = s.stats.snapshot()
+	result.Measurement = s.measurementDone()
+	return result, nil
+}
+
+func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+	for targetRef := range desiredRefs {
+		if !s.target.refMap[targetRef].IsZero() {
+			return false
+		}
+	}
+	if !s.cfg.Prune {
+		return true
+	}
+	for targetRef, hash := range s.target.refMap {
+		if hash.IsZero() {
+			continue
+		}
+		if _, ok := desiredRefs[targetRef]; ok {
+			continue
+		}
+		switch {
+		case targetRef.IsTag() && s.cfg.IncludeTags:
+			return false
+		case targetRef.IsBranch() && len(s.cfg.Mappings) == 0 && len(s.cfg.Branches) == 0:
+			return false
+		}
+	}
+	return true
 }
 
 // Bootstrap seeds an empty target with relay behavior.
@@ -612,14 +756,14 @@ func bootstrapWithInputs(
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
-		MaxPackBytes: s.cfg.MaxPackBytes, BatchMaxPack: s.cfg.BatchMaxPackBytes,
+		MaxPackBytes: s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
 	}, relayReason)
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{
-		Plans: bResult.Plans, Pushed: bResult.Pushed,
+		Plans: bResult.Plans, Pushed: bResult.Pushed, OperationMode: s.cfg.Mode,
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
@@ -653,6 +797,18 @@ func (s *syncSession) executeMaterialized(
 		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxObjects: s.cfg.MaterializedMaxObjects,
+	})
+}
+
+func (s *syncSession) executeReplicate(
+	ctx context.Context,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	pushPlans []planner.BranchPlan,
+) (repstrat.Result, error) {
+	return repstrat.Execute(ctx, repstrat.Params{
+		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
+		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
+		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 	})
 }
 

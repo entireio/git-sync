@@ -30,7 +30,7 @@ Batch-planning sensitivity experiment for `#14`:
 env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit -v
 ```
 
-That test uses a real `git-http-backend` source/target pair and checks that a smaller `--batch-max-pack-bytes` planning limit produces at least as many planned checkpoints as a larger one, while still planning to the branch tip.
+That test uses a real `git-http-backend` source/target pair and checks that a smaller `--target-max-pack-bytes` planning limit produces at least as many planned checkpoints as a larger one, while still planning to the branch tip.
 
 ## Live Linux Smokes
 

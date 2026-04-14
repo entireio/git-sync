@@ -95,8 +95,9 @@ type BatchSummary struct {
 type ExecutionSummary struct {
 	DryRun             bool         `json:"dry_run"`
 	Protocol           string       `json:"protocol"`
+	OperationMode      string       `json:"operation_mode"`
 	Relay              bool         `json:"relay"`
-	Mode               string       `json:"mode"`
+	TransferMode       string       `json:"transfer_mode"`
 	Reason             string       `json:"reason"`
 	BootstrapSuggested bool         `json:"bootstrap_suggested"`
 	Batch              BatchSummary `json:"batch"`
@@ -143,8 +144,9 @@ func FromSyncResult(result syncer.Result) SyncResult {
 		Execution: ExecutionSummary{
 			DryRun:             result.DryRun,
 			Protocol:           result.Protocol,
+			OperationMode:      result.OperationMode,
 			Relay:              result.Relay,
-			Mode:               result.RelayMode,
+			TransferMode:       result.RelayMode,
 			Reason:             result.RelayReason,
 			BootstrapSuggested: result.BootstrapSuggested,
 			Batch: BatchSummary{

@@ -42,6 +42,34 @@ func FirstParentChain(store storer.EncodedObjectStorer, tip plumbing.Hash) ([]pl
 	return chain, nil
 }
 
+// FirstParentChainFromMap walks a first-parent map from tip back to root.
+// The map key is a commit hash, the value is its first parent hash.
+// A zero-value parent marks the root. Returns the chain in root-to-tip order.
+func FirstParentChainFromMap(parents map[plumbing.Hash]plumbing.Hash, tip plumbing.Hash) ([]plumbing.Hash, error) {
+	chain := make([]plumbing.Hash, 0, len(parents))
+	current := tip
+	seen := make(map[plumbing.Hash]struct{}, len(parents))
+	for {
+		if _, ok := seen[current]; ok {
+			return nil, fmt.Errorf("cycle detected at %s", current)
+		}
+		seen[current] = struct{}{}
+		chain = append(chain, current)
+		parent, ok := parents[current]
+		if !ok {
+			return nil, fmt.Errorf("commit %s not found in parent map", current)
+		}
+		if parent.IsZero() {
+			break
+		}
+		current = parent
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
 // SampledCheckpointCandidates generates a set of candidate indices to probe,
 // sorted from largest (preferred) to smallest.
 func SampledCheckpointCandidates(lo, hi int, prevSpan int) []int {

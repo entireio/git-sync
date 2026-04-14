@@ -96,6 +96,7 @@ func sendReceivePack(
 	conn *Conn,
 	req *packp.UpdateRequests,
 	packData io.Reader,
+	verbose bool,
 ) error {
 	var header bytes.Buffer
 	if err := req.Encode(&header); err != nil {
@@ -111,12 +112,18 @@ func sendReceivePack(
 	}
 	defer reader.Close()
 
-	// Unwrap sideband if negotiated.
+	// Unwrap sideband if negotiated; stream server-side progress to stderr
+	// when verbose so long-running pushes show "Resolving deltas ..." etc.
 	var respReader io.Reader = reader
-	if req.Capabilities.Supports(capability.Sideband64k) {
-		respReader = sideband.NewDemuxer(sideband.Sideband64k, reader)
-	} else if req.Capabilities.Supports(capability.Sideband) {
-		respReader = sideband.NewDemuxer(sideband.Sideband, reader)
+	switch {
+	case req.Capabilities.Supports(capability.Sideband64k):
+		dem := sideband.NewDemuxer(sideband.Sideband64k, reader)
+		dem.Progress = progressSink(verbose, "target: ")
+		respReader = dem
+	case req.Capabilities.Supports(capability.Sideband):
+		dem := sideband.NewDemuxer(sideband.Sideband, reader)
+		dem.Progress = progressSink(verbose, "target: ")
+		respReader = dem
 	}
 
 	if req.Capabilities.Supports(capability.ReportStatus) {
@@ -146,7 +153,7 @@ func PushObjects(
 		return err
 	}
 	if !hasUpdates {
-		return sendReceivePack(ctx, conn, req, nil)
+		return sendReceivePack(ctx, conn, req, nil, verbose)
 	}
 
 	useRefDeltas := !adv.Capabilities.Supports(capability.OFSDelta)
@@ -162,7 +169,7 @@ func PushObjects(
 		done <- pw.Close()
 	}()
 
-	err = sendReceivePack(ctx, conn, req, pr)
+	err = sendReceivePack(ctx, conn, req, pr, verbose)
 	_ = pr.Close()
 	encodeErr := <-done
 	if err != nil {
@@ -193,7 +200,7 @@ func PushPack(
 		return err
 	}
 
-	err = sendReceivePack(ctx, conn, req, pack)
+	err = sendReceivePack(ctx, conn, req, pack, verbose)
 	closeErr := pack.Close()
 	if err != nil {
 		return err
@@ -213,7 +220,7 @@ func PushCommands(
 	if err != nil {
 		return err
 	}
-	return sendReceivePack(ctx, conn, req, nil)
+	return sendReceivePack(ctx, conn, req, nil, verbose)
 }
 
 func progressWriter(verbose bool) io.Writer {
@@ -221,4 +228,52 @@ func progressWriter(verbose bool) io.Writer {
 		return nil
 	}
 	return os.Stderr
+}
+
+// progressSink returns a line-prefixing io.Writer suitable for
+// sideband.Demuxer.Progress. When verbose is false it returns nil so the
+// demuxer discards progress frames without allocating.
+func progressSink(verbose bool, prefix string) io.Writer {
+	if !verbose {
+		return nil
+	}
+	return &prefixedLineWriter{w: os.Stderr, prefix: prefix, atLineStart: true}
+}
+
+// prefixedLineWriter prepends a fixed prefix to each line of input written
+// to the wrapped writer. Git sideband progress arrives as chunks that may
+// contain '\n' between full lines or '\r' for in-place updates ("Resolving
+// deltas:  12%\r"); both are treated as line terminators so the next chunk
+// gets a fresh prefix.
+type prefixedLineWriter struct {
+	w           io.Writer
+	prefix      string
+	atLineStart bool
+}
+
+func (p *prefixedLineWriter) Write(b []byte) (int, error) {
+	consumed := 0
+	for len(b) > 0 {
+		if p.atLineStart {
+			if _, err := io.WriteString(p.w, p.prefix); err != nil {
+				return consumed, err
+			}
+			p.atLineStart = false
+		}
+		i := bytes.IndexAny(b, "\r\n")
+		var chunk []byte
+		if i < 0 {
+			chunk = b
+		} else {
+			chunk = b[:i+1]
+			p.atLineStart = true
+		}
+		n, err := p.w.Write(chunk)
+		consumed += n
+		if err != nil {
+			return consumed, err
+		}
+		b = b[len(chunk):]
+	}
+	return consumed, nil
 }

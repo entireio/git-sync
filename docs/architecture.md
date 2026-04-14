@@ -23,7 +23,7 @@ That is why the design leans so heavily on:
 - relay-first strategies
 - front-loaded validation
 - typed results and JSON output
-- explicit execution modes instead of a single opaque "mirror" operation
+- explicit operation modes instead of a single opaque "mirror" operation
 
 ## When To Use `git-sync`
 
@@ -64,12 +64,22 @@ That is why bootstrap and incremental relay are explicit strategies instead of h
 
 ### Explicit Strategy Split
 
-The current execution modes are:
+The current product modes are:
+
+- `sync`
+  - planning plus reconciliation
+- `replicate`
+  - source-authoritative overwrite planning
+  - relay-only execution
+  - no materialized fallback
+  - works against targets that advertise `no-thin` (the relayed pack is
+    always self-contained because our upload-pack client does not request
+    the `thin-pack` capability)
+
+The current transfer modes are:
 
 - `bootstrap`
   - empty-target relay
-- `sync`
-  - planning plus reconciliation
 - incremental relay
   - narrow fast path for safe updates
 - materialized fallback
@@ -82,7 +92,7 @@ The current execution modes are:
 
 - `pkg/gitsync`
   - stable public embedding API
-  - typed `Probe`, `Plan`, and `Sync` requests/results
+  - typed `Probe`, `Plan`, `Sync`, and `Replicate` requests/results
   - auth and HTTP client injection for worker-style callers
 - `pkg/gitsync/unstable`
   - explicitly non-stable first-party tooling surface
@@ -111,7 +121,7 @@ The current execution modes are:
 The project now separates embedding concerns from first-party tooling concerns:
 
 - `pkg/gitsync` is the stable library boundary.
-  Callers express orchestration intent through typed probe, plan, and sync requests. Auth and transport are injected. Execution strategy remains internal.
+  Callers express orchestration intent through typed probe, plan, sync, and replicate requests. Auth and transport are injected. Execution strategy remains internal.
 - `pkg/gitsync/unstable` is the escape hatch for advanced controls.
   It exists so the CLI and benchmark tool can use batching limits, memory measurement, verbose progress, bootstrap, and fetch without widening the stable API prematurely.
 
@@ -122,7 +132,7 @@ The stable result contract is also intentionally worker-oriented:
 - `Counts`
   aggregate applied/skipped/blocked/deleted counts
 - `Execution`
-  protocol, relay summary, execution mode, and batch summary
+  protocol, operation mode, transfer summary, and batch summary
 
 That split is intentional:
 

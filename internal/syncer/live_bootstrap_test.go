@@ -42,7 +42,7 @@ func runLiveLinuxBootstrap(t *testing.T, batchMaxPackBytes int64, wantRelayMode 
 		Source:        Endpoint{URL: "https://github.com/torvalds/linux.git"},
 		Target:        Endpoint{URL: server.RepoURL("target.git")},
 		Branches:      []string{"master"},
-		BatchMaxPackBytes: batchMaxPackBytes,
+		TargetMaxPackBytes: batchMaxPackBytes,
 		ProtocolMode:  protocolModeAuto,
 		ShowStats:     true,
 		MeasureMemory: true,

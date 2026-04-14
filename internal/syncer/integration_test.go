@@ -31,7 +31,6 @@ import (
 	"github.com/soph/git-sync/internal/auth"
 	"github.com/soph/git-sync/internal/gitproto"
 	"github.com/soph/git-sync/internal/planner"
-	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
 	"github.com/soph/git-sync/internal/syncertest"
 )
 
@@ -48,6 +47,7 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 
 	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
@@ -86,7 +86,7 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 
 func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLimit(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 20, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 100, 5_000)
 
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
@@ -95,7 +95,7 @@ func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLi
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
-	targetServer.receivePackBodyLimit = 1_000_000
+	targetServer.receivePackBodyLimit = 300_000
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
@@ -656,9 +656,13 @@ func TestBootstrap_IntegrationFailsWhenTargetRefExists(t *testing.T) {
 	}
 }
 
-func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
+func TestBootstrap_IntegrationBatchedResumeMismatchClearsAndRetries(t *testing.T) {
+	// When a temp ref from a previous run doesn't match any planned checkpoint
+	// (e.g., the user changed --target-max-pack-bytes between runs), bootstrap
+	// should delete the stale temp ref and start the branch fresh rather than
+	// failing with a resume mismatch error.
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 100, 5_000)
 
 	unrelatedRepo, unrelatedFS := newSourceRepo(t)
 	makeCommits(t, unrelatedRepo, unrelatedFS, 1)
@@ -674,56 +678,38 @@ func TestBootstrap_IntegrationBatchedResumeMismatchFails(t *testing.T) {
 	if err := copyRefsAndObjects(unrelatedRepo.Storer, targetRepo.Storer, nil); err != nil {
 		t.Fatalf("copy unrelated objects: %v", err)
 	}
-	targetHead := unrelatedHead
 	tempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch))
-	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, targetHead.Hash())); err != nil {
-		t.Fatalf("set temp ref: %v", err)
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tempRef, unrelatedHead.Hash())); err != nil {
+		t.Fatalf("set stale temp ref: %v", err)
 	}
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	cfg := Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+	result, err := Bootstrap(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("expected bootstrap to clear stale temp ref and succeed, got: %v", err)
+	}
+	if !result.Batching {
+		t.Fatalf("expected batched bootstrap, got %+v", result)
+	}
+	if result.Pushed == 0 {
+		t.Fatalf("expected pushed > 0, got %+v", result)
 	}
 
-	s, err := newSession(context.Background(), cfg, false)
-	if err != nil {
-		t.Fatalf("new session: %v", err)
-	}
-	desired, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
-	if err != nil {
-		t.Fatalf("build desired refs: %v", err)
-	}
-	ref := desired[plumbing.NewBranchReferenceName(testBranch)]
-	checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
-		SourceConn:    s.sourceConn,
-		SourceService: s.sourceService,
-		BatchMaxPack:  cfg.BatchMaxPackBytes,
-	}, ref)
-	if err != nil {
-		t.Fatalf("plan checkpoints: %v", err)
-	}
-	if len(checkpoints) == 0 {
-		t.Fatal("expected checkpoints for batched bootstrap")
-	}
-	for _, checkpoint := range checkpoints {
-		if checkpoint == targetHead.Hash() {
-			t.Fatalf("expected unrelated temp ref hash, got checkpoint collision at %s", checkpoint)
-		}
-	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 
-	_, err = Bootstrap(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected batched bootstrap resume mismatch to fail")
-	}
-	if !strings.Contains(err.Error(), "does not match any planned checkpoint") {
-		t.Fatalf("unexpected error: %v", err)
+	// Stale temp ref should have been cleaned up.
+	if _, err := targetRepo.Reference(tempRef, true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected stale temp ref to be deleted, got err=%v", err)
 	}
 }
 
@@ -756,7 +742,7 @@ func TestBootstrap_IntegrationBatchedResumeAtFinalTipCutsOver(t *testing.T) {
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap final-tip cutover failed: %v", err)
@@ -809,7 +795,7 @@ func TestBootstrap_IntegrationBatchedResumeAfterCutoverOnlyDeletesTempRef(t *tes
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap cleanup rerun failed: %v", err)
@@ -878,7 +864,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	}
 
 	if _, err := Bootstrap(context.Background(), cfg); err == nil {
@@ -909,7 +895,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 
 func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
 
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
@@ -925,7 +911,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 		Source:            Endpoint{URL: sourceServer.RepoURL()},
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	}
 
 	targetRef := plumbing.NewBranchReferenceName(testBranch)
@@ -996,7 +982,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 
 func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
-	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
 	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
 	if err != nil {
 		t.Fatalf("resolve source head: %v", err)
@@ -1020,7 +1006,7 @@ func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *te
 		Target:            Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:      protocolModeAuto,
 		IncludeTags:       true,
-		BatchMaxPackBytes: 350_000,
+		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap with lightweight tag failed: %v", err)
@@ -1161,6 +1147,7 @@ func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 
 	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
@@ -1577,6 +1564,375 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
+	// Replicate must tolerate targets that advertise no-thin. Source upload-pack
+	// never receives a thin-pack request from us (see gitproto/fetch.go), so
+	// the relayed pack is self-contained and acceptable to a no-thin
+	// receive-pack. This is the main reason the capability was reconsidered:
+	// go-git's own receive-pack advertises no-thin, and so does any server
+	// built on it (e.g. entire-server).
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackNoThin = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+	})
+	if err != nil {
+		t.Fatalf("replicate against no-thin target failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if !result.Relay {
+		t.Fatalf("expected relay execution against no-thin target, got %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {
+	s := &syncSession{
+		cfg: Config{
+			Prune: true,
+		},
+		target: &targetSession{
+			refMap: map[plumbing.ReferenceName]plumbing.Hash{
+				plumbing.NewBranchReferenceName("stale"): plumbing.NewHash("1111111111111111111111111111111111111111"),
+			},
+		},
+	}
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{
+		plumbing.NewBranchReferenceName("main"): {
+			SourceRef:  plumbing.NewBranchReferenceName("main"),
+			TargetRef:  plumbing.NewBranchReferenceName("main"),
+			SourceHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+			Kind:       planner.RefKindBranch,
+		},
+	}
+	if s.replicateCanBootstrap(desired) {
+		t.Fatal("expected bootstrap shortcut to be disabled when prune would delete managed refs")
+	}
+}
+
+func TestRun_IntegrationReplicateOverwritesDivergentBranch(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	targetRepo, _ := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Seed: both sides at the latest commit.
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	headCommit, err := sourceRepo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("load head commit: %v", err)
+	}
+	if len(headCommit.ParentHashes) == 0 {
+		t.Fatalf("expected head to have a parent")
+	}
+	olderHash := headCommit.ParentHashes[0]
+
+	// Rewind source's branch to an earlier commit. All objects still exist on
+	// both sides, but the refs now disagree in a non-fast-forward way from the
+	// target's perspective.
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(branchRef, olderHash)); err != nil {
+		t.Fatalf("rewind source branch: %v", err)
+	}
+
+	// Baseline: plain sync refuses the non-fast-forward rewind without force.
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err == nil {
+		t.Fatal("expected plain sync to refuse non-fast-forward overwrite without force")
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+	})
+	if err != nil {
+		t.Fatalf("replicate failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if result.Pushed != 1 || result.Blocked != 0 || result.Deleted != 0 {
+		t.Fatalf("unexpected result counts: %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "replicate" || result.RelayReason != "replicate-overwrite-relay" {
+		t.Fatalf("expected replicate relay execution, got %+v", result)
+	}
+
+	got, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("read target branch: %v", err)
+	}
+	if got.Hash() != olderHash {
+		t.Fatalf("expected target branch retargeted to %s, got %s", olderHash, got.Hash())
+	}
+}
+
+func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
+	// Large bootstrap-relay pushes can overwhelm targets with body-size
+	// limits (e.g. go-git-based receive-pack on raft-backed storage).
+	// Replicate falls back through the bootstrap strategy for empty targets,
+	// and must honor TargetMaxPackBytes so callers can split a huge push
+	// into tractable receive-pack POSTs. Without this plumbing the replicate
+	// CLI flag would be silently ignored.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 100, 5_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:            Endpoint{URL: sourceServer.RepoURL()},
+		Target:            Endpoint{URL: targetServer.RepoURL()},
+		Mode:              modeReplicate,
+		ProtocolMode:      protocolModeAuto,
+		TargetMaxPackBytes: 350_000, // force > 1 batch for the generated pack
+	})
+	if err != nil {
+		t.Fatalf("replicate with batched bootstrap failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if !result.Batching || result.BatchCount < 2 {
+		t.Fatalf("expected batched bootstrap inside replicate, got batching=%t batch_count=%d result=%+v",
+			result.Batching, result.BatchCount, result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+	})
+	if err != nil {
+		t.Fatalf("replicate against empty target failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate carried through bootstrap, got %q", result.OperationMode)
+	}
+	if !result.Relay {
+		t.Fatalf("expected bootstrap relay to run, got %+v", result)
+	}
+	if result.RelayReason != "empty-target-managed-refs" {
+		t.Fatalf("expected empty-target bootstrap reason, got %+v", result)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected one pushed ref, got %+v", result)
+	}
+
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestRun_IntegrationReplicateOverwritesDivergentTag(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	targetRepo, _ := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head: %v", err)
+	}
+	// Parent of source head — exists on both sides after the seed sync.
+	sourceCommit, err := sourceRepo.CommitObject(sourceHead.Hash())
+	if err != nil {
+		t.Fatalf("load source head commit: %v", err)
+	}
+	if len(sourceCommit.ParentHashes) == 0 {
+		t.Fatalf("expected source head to have a parent")
+	}
+	olderHash := sourceCommit.ParentHashes[0]
+
+	tagRef := plumbing.NewTagReferenceName("v1")
+	// Source tag points to HEAD, target tag points to HEAD's parent: divergent.
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(tagRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(tagRef, olderHash)); err != nil {
+		t.Fatalf("set target tag: %v", err)
+	}
+	if targetHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected seed sync to equalize branch heads")
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		Mode:        modeReplicate,
+		IncludeTags: true,
+	})
+	if err != nil {
+		t.Fatalf("replicate tag overwrite failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected exactly one tag overwrite push, got %+v", result)
+	}
+	if !result.Relay || result.RelayMode != "replicate" {
+		t.Fatalf("expected replicate relay execution, got %+v", result)
+	}
+
+	got, err := targetRepo.Reference(tagRef, true)
+	if err != nil {
+		t.Fatalf("read target tag: %v", err)
+	}
+	if got.Hash() != sourceHead.Hash() {
+		t.Fatalf("expected target tag to be retargeted to %s, got %s", sourceHead.Hash(), got.Hash())
+	}
+}
+
+func TestRun_IntegrationReplicatePruneDeletesOrphanedManagedRef(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	targetRepo, _ := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head: %v", err)
+	}
+	orphanRef := plumbing.NewBranchReferenceName("stale")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanRef, targetHead.Hash())); err != nil {
+		t.Fatalf("set orphan branch: %v", err)
+	}
+
+	// Advance source so we have at least one real overwrite plan alongside the delete,
+	// keeping the replicate path out of the empty-target bootstrap shortcut.
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Mode:   modeReplicate,
+		Prune:  true,
+	})
+	if err != nil {
+		t.Fatalf("replicate --prune failed: %v", err)
+	}
+	if result.OperationMode != modeReplicate {
+		t.Fatalf("expected operation_mode=replicate, got %q", result.OperationMode)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref, got %+v", result)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected exactly one pushed ref alongside the delete, got %+v", result)
+	}
+
+	if _, err := targetRepo.Reference(orphanRef, true); err != plumbing.ErrReferenceNotFound {
+		t.Fatalf("expected orphan branch to be pruned, got err=%v", err)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestRun_ReplicateRejectsForceAtSessionConstruction(t *testing.T) {
+	// The Force-with-replicate check happens before any network I/O, so the URLs
+	// never get dialed. Using obviously-invalid URLs also asserts that fact.
+	_, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: "http://127.0.0.1:1/source.git"},
+		Target: Endpoint{URL: "http://127.0.0.1:1/target.git"},
+		Mode:   modeReplicate,
+		Force:  true,
+	})
+	if err == nil {
+		t.Fatal("expected replicate+force to be rejected")
+	}
+	if !strings.Contains(err.Error(), "replicate does not support --force") ||
+		!strings.Contains(err.Error(), "use sync instead") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRun_IntegrationAddAnnotatedTagAfterInitialBranchSync(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -1741,6 +2097,7 @@ type smartHTTPRepoServer struct {
 
 	receivePackBodyLimit int64
 	receivePackNoThin    bool
+	receivePackThinCap   bool
 	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
 	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
 	uploadPackRaw        func(http.ResponseWriter, *http.Request, []byte) bool
@@ -1893,14 +2250,20 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if service == serviceReceivePack && s.receivePackNoThin {
-		// For no-thin, we need to decode, modify capabilities, and re-encode
-		ar := packp.NewAdvRefs()
-		if err := ar.Decode(bytes.NewReader(buf.Bytes())); err == nil {
-			_ = ar.Capabilities.Set(capability.Capability("no-thin"))
-			buf.Reset()
-			_ = ar.Encode(&buf)
+	if service == serviceReceivePack && (s.receivePackNoThin || s.receivePackThinCap) {
+		rewritten, err := rewriteReceivePackAdvertisement(buf.Bytes(), func(caps *capability.List) {
+			if s.receivePackThinCap {
+				caps.Delete(capability.Capability("no-thin"))
+			}
+			if s.receivePackNoThin {
+				_ = caps.Set(capability.Capability("no-thin"))
+			}
+		})
+		if err != nil {
+			s.tb.Fatalf("rewrite receive-pack advertisement: %v", err)
 		}
+		buf.Reset()
+		_, _ = buf.Write(rewritten)
 	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
@@ -1909,6 +2272,37 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 	}
 
 	s.recordMetric(service, metricInfoRefs, 0, int64(buf.Len()), 0, 0)
+}
+
+func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List)) ([]byte, error) {
+	ar := packp.NewAdvRefs()
+	if err := ar.Decode(bytes.NewReader(data)); err == nil {
+		mutate(ar.Capabilities)
+		var buf bytes.Buffer
+		if err := ar.Encode(&buf); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	rd := bytes.NewReader(data)
+	var smart packp.SmartReply
+	if err := smart.Decode(rd); err != nil {
+		return nil, err
+	}
+	ar = packp.NewAdvRefs()
+	if err := ar.Decode(rd); err != nil {
+		return nil, err
+	}
+	mutate(ar.Capabilities)
+	var buf bytes.Buffer
+	if err := smart.Encode(&buf); err != nil {
+		return nil, err
+	}
+	if err := ar.Encode(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Request) {

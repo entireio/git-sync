@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,7 @@ import (
 )
 
 const (
-	defaultAutoBatchMaxPackBytes = 512 * 1024 * 1024
+	defaultTargetMaxPackBytes = 512 * 1024 * 1024
 	githubLargeRepoThresholdKB   = 1536 * 1024
 )
 
@@ -52,7 +53,7 @@ type Params struct {
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
 	MaxPackBytes int64
-	BatchMaxPack int64
+	TargetMaxPack int64
 	Verbose      bool
 	Logger       *slog.Logger
 }
@@ -72,7 +73,7 @@ type Result struct {
 
 type plannedBatch struct {
 	planner.BootstrapBatch
-	prefetchedPacks map[plumbing.Hash][]byte
+	chain []plumbing.Hash // full first-parent chain (root→tip) for subdividing on push failure
 }
 
 // Execute runs the bootstrap strategy (one-shot or batched).
@@ -83,13 +84,13 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 
 	// GitHub large-repo preflight
 	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
-		p.BatchMaxPack = batchLimit
+		p.TargetMaxPack = batchLimit
 		p.log("bootstrap github preflight selected batched mode",
-			"batch_max_pack_bytes", p.BatchMaxPack)
+			"target_max_pack_bytes", p.TargetMaxPack)
 	}
 
 	planTargetRefs := p.TargetRefs
-	if p.BatchMaxPack > 0 {
+	if p.TargetMaxPack > 0 {
 		planTargetRefs = adjustedBootstrapTargetRefs(p.DesiredRefs, p.TargetRefs)
 	}
 	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, planTargetRefs)
@@ -101,7 +102,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		Plans: plans, Relay: true, RelayMode: "bootstrap", RelayReason: relayReason,
 	}
 
-	if p.BatchMaxPack > 0 {
+	if p.TargetMaxPack > 0 {
 		return executeBatched(ctx, p, plans, result)
 	}
 
@@ -123,13 +124,13 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
-		autoBatch, ok := autoBatchMaxPackBytes(p, pushErr)
+		autoBatch, ok := autoTargetMaxPackBytes(p, pushErr)
 		if !ok {
 			return result, fmt.Errorf("push target refs: %w", pushErr)
 		}
 		p.log("bootstrap retrying with batched mode after target rejection",
-			"batch_max_pack_bytes", autoBatch)
-		p.BatchMaxPack = autoBatch
+			"target_max_pack_bytes", autoBatch)
+		p.TargetMaxPack = autoBatch
 		return executeBatched(ctx, p, plans, result)
 	}
 
@@ -199,10 +200,18 @@ func executeBatched(
 		}
 	}
 
-	batchLimit := p.BatchMaxPack
-	if p.MaxPackBytes > 0 && (batchLimit == 0 || p.MaxPackBytes < batchLimit) {
-		batchLimit = p.MaxPackBytes
-	}
+	// MaxPackBytes is the hard abort threshold for any single source fetch.
+	// TargetMaxPack controls checkpoint *placement* (how many batches) but
+	// should not cap individual fetches — the estimate may undercount, and
+	// the actual pack for a batch can legitimately exceed the planning
+	// heuristic. If the resulting pack is too large for the target's
+	// receive-pack, the push itself fails and resume handles retry.
+	fetchLimit := p.MaxPackBytes
+	// Track branch tips already pushed to the target so subsequent branches
+	// can advertise them as haves. Without this, the second branch in a
+	// multi-branch bootstrap re-sends all shared objects (e.g., linux's
+	// master and nocache-cleanup share ~99% of history).
+	completedRefs := planner.CopyRefHashMap(p.TargetRefs)
 
 	for _, batch := range batches {
 		result.PlannedBatchCount += len(batch.Checkpoints)
@@ -215,11 +224,44 @@ func executeBatched(
 
 		current := batch.ResumeHash
 		startIdx, err := planner.BootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
-		if err != nil {
-			return result, fmt.Errorf("resume bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+		if err != nil && !batch.ResumeHash.IsZero() && len(batch.chain) > 0 {
+			// Temp ref doesn't match any planned checkpoint (e.g., the user
+			// changed --target-max-pack-bytes between runs). If the hash is
+			// in the commit chain, reuse it as the starting point and re-plan
+			// remaining checkpoints — preserving already-pushed data.
+			if chainIdx := chainPosition(batch.chain, batch.ResumeHash); chainIdx >= 0 {
+				remaining := batch.chain[chainIdx+1:]
+				if len(remaining) > 0 {
+					numBatches := estimateBatchCount(int64(len(remaining)), p.TargetMaxPack)
+					batch.Checkpoints = evenCheckpoints(remaining, numBatches)
+					p.log("bootstrap batch resuming from stale temp ref",
+						"branch", batch.Plan.TargetRef.String(),
+						"resume_hash", planner.ShortHash(batch.ResumeHash),
+						"remaining_commits", len(remaining),
+						"new_batches", len(batch.Checkpoints))
+					startIdx = 0
+					err = nil
+				}
+			}
+		}
+		if err != nil && !batch.ResumeHash.IsZero() {
+			// Temp ref hash not in the chain at all — truly stale. Delete and start fresh.
+			p.log("bootstrap batch clearing stale temp ref",
+				"branch", batch.Plan.TargetRef.String(),
+				"temp_ref", batch.TempRef.String(),
+				"stale_hash", planner.ShortHash(batch.ResumeHash))
+			delCmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: batch.ResumeHash, Delete: true}}
+			if delErr := p.TargetPusher.PushCommands(ctx, delCmds); delErr != nil {
+				return result, fmt.Errorf("delete stale temp ref %s: %w (original: %w)", batch.TempRef, delErr, err)
+			}
+			current = plumbing.ZeroHash
+			startIdx = 0
 		}
 
-		for idx := startIdx; idx < len(batch.Checkpoints); idx++ {
+		// Manual index loop: subdivide may insert checkpoints at the current
+		// index, so we must not auto-increment after a retry.
+		idx := startIdx
+		for idx < len(batch.Checkpoints) {
 			checkpoint := batch.Checkpoints[idx]
 			p.log("bootstrap batch push checkpoint",
 				"branch", batch.Plan.TargetRef.String(),
@@ -244,14 +286,54 @@ func executeBatched(
 				})
 			}
 
-			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, batchLimit)
+			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, completedRefs, fetchLimit)
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
 			packReader = closeOnce(packReader)
+
+			// Peek at the PACK header (12 bytes) to get the object count.
+			// If the estimated pack size exceeds the batch limit, subdivide
+			// immediately instead of pushing a pack the target will reject.
+			// This avoids wasting a multi-GiB transfer on a doomed push.
+			if p.TargetMaxPack > 0 && len(batch.chain) > 0 {
+				subdivided := false
+				packReader, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, func() bool {
+					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
+					if len(expanded) > len(batch.Checkpoints[idx:]) {
+						p.log("bootstrap batch subdividing before push (pack header estimate)",
+							"branch", batch.Plan.TargetRef.String(),
+							"old_remaining", len(batch.Checkpoints[idx:]),
+							"new_remaining", len(expanded))
+						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
+						subdivided = true
+						return true
+					}
+					return false
+				})
+				if err != nil {
+					return result, fmt.Errorf("check pack size for %s: %w", batch.Plan.TargetRef, err)
+				}
+				if subdivided {
+					continue // retry at same idx with new (smaller) checkpoint
+				}
+			}
+
 			cmds := convert.PlansToPushCommands(stagePlans)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
+				if isTargetBodyLimitError(err) && len(batch.chain) > 0 {
+					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
+					if len(expanded) > len(batch.Checkpoints[idx:]) {
+						p.log("bootstrap batch subdividing after target size rejection",
+							"branch", batch.Plan.TargetRef.String(),
+							"old_remaining", len(batch.Checkpoints[idx:]),
+							"new_remaining", len(expanded),
+							"error", err.Error())
+						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
+						continue // retry at same idx with new (smaller) checkpoint
+					}
+				}
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
 			_ = packReader.Close()
@@ -261,6 +343,7 @@ func executeBatched(
 				"batch_total", len(batch.Checkpoints))
 			current = checkpoint
 			result.BatchCount++
+			idx++
 		}
 
 		if current.IsZero() {
@@ -277,6 +360,8 @@ func executeBatched(
 		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
 		}
+		completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
+		completedRefs[batch.TempRef] = batch.Plan.SourceHash
 		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
 	}
 
@@ -320,7 +405,7 @@ func executeBatched(
 func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
 	out := make([]plannedBatch, 0, len(desired))
 	for _, ref := range desired {
-		checkpoints, prefetched, err := planCheckpointsWithCache(ctx, p, ref)
+		checkpoints, chain, err := planCheckpointsFromChain(ctx, p, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +420,7 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 				ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
 				Checkpoints: checkpoints,
 			},
-			prefetchedPacks: prefetched,
+			chain: chain,
 		})
 	}
 	return out, nil
@@ -343,319 +428,173 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 
 // PlanCheckpoints plans the checkpoint hashes for a single branch during batched bootstrap.
 func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
-	checkpoints, _, err := planCheckpointsWithCache(ctx, p, ref)
+	checkpoints, _, err := planCheckpointsFromChain(ctx, p, ref)
 	return checkpoints, err
 }
 
-func planCheckpointsWithCache(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, map[plumbing.Hash][]byte, error) {
-	cp, err := newCheckpointPlanner(ctx, p, ref)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cp.plan()
-}
+// estimatedBytesPerCommit is the heuristic for estimating pack size from commit
+// count. Real repos range from ~5 KiB/commit (small web apps) to ~120 KiB
+// (blob-heavy monorepos); most mature repos fall in 20–80 KiB. 64 KiB produces
+// accurate batch counts for large repos (linux is ~66 KiB/commit) while
+// slightly overestimating for small ones (harmless — extra batches finish fast).
+// The PACK header pre-check and target-rejection retry catch remaining error.
+const estimatedBytesPerCommit = 65536
 
-type probeResult struct {
-	tooLarge bool
-	data     []byte
-}
-
-type checkpointPlanner struct {
-	ctx        context.Context
-	params     Params
-	ref        planner.DesiredRef
-	chain      []plumbing.Hash
-	probeCache map[string]probeResult
-	prefetched map[plumbing.Hash][]byte
-}
-
-func newCheckpointPlanner(ctx context.Context, p Params, ref planner.DesiredRef) (*checkpointPlanner, error) {
+func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, []plumbing.Hash, error) {
 	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
+
+	// Fetch all commits (tree:0 filter) into a temporary in-memory store.
+	// For linux this is ~1.4M commits at ~3.3 KiB each = ~4.6 GB transient.
+	// We extract the first-parent chain (~75k hashes, ~3 MB) immediately
+	// and discard the store so GC can reclaim the 4.6 GB. The transient
+	// spike is unavoidable with git protocol v2 (no first-parent-only
+	// fetch) and go-git's pack parser (needs full store for delta resolution).
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
-		return nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
 	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
+	graphStore = nil // allow GC to reclaim the commit graph store (~4.6 GB for linux)
+	runtime.GC()
 	if err != nil {
-		return nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
 	}
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+		return nil, nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
 	}
-	return &checkpointPlanner{
-		ctx:        ctx,
-		params:     p,
-		ref:        ref,
-		chain:      chain,
-		probeCache: make(map[string]probeResult),
-		prefetched: make(map[plumbing.Hash][]byte),
-	}, nil
+
+	numBatches := estimateBatchCount(int64(len(chain)), p.TargetMaxPack)
+	checkpoints := evenCheckpoints(chain, numBatches)
+
+	p.log("bootstrap batch planned checkpoints",
+		"branch", ref.TargetRef.String(),
+		"chain_len", len(chain),
+		"estimated_batches", len(checkpoints))
+
+	return checkpoints, chain, nil
 }
 
-func (p *checkpointPlanner) plan() ([]plumbing.Hash, map[plumbing.Hash][]byte, error) {
-	checkpoints := make([]plumbing.Hash, 0, len(p.chain))
-	prevIdx := -1
-	prevHash := plumbing.ZeroHash
-	prevSpan := initialCheckpointSpan(p.params.BatchMaxPack, len(p.chain))
-	prevMeasuredBytes := 0
-	for prevIdx < len(p.chain)-1 {
-		bestIdx, err := p.selectNextCheckpoint(prevIdx, prevHash, prevSpan, prevMeasuredBytes)
-		if err != nil {
-			return nil, nil, err
-		}
-		if bestIdx <= prevIdx {
-			return nil, nil, fmt.Errorf("could not find bootstrap checkpoint for %s under batch-max-pack-bytes=%d", p.ref.TargetRef, p.params.BatchMaxPack)
-		}
-		if result, ok := p.cachedProbe(prevHash, bestIdx); ok && !result.tooLarge && len(result.data) > 0 {
-			p.prefetched[p.chain[bestIdx]] = result.data
-			prevSpan = adaptiveNextProbeSpan(p.params.BatchMaxPack, len(result.data), bestIdx-prevIdx, len(p.chain)-1-bestIdx)
-			prevMeasuredBytes = len(result.data)
-		} else {
-			prevSpan = bestIdx - prevIdx
-			prevMeasuredBytes = 0
-		}
-		prevIdx = bestIdx
-		prevHash = p.chain[bestIdx]
-		checkpoints = append(checkpoints, prevHash)
-		p.params.log("bootstrap batch planned checkpoint",
-			"branch", p.ref.TargetRef.String(),
-			"checkpoint", planner.ShortHash(prevHash),
-			"selected", len(checkpoints),
-			"chain_len", len(p.chain))
+func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
+	if batchMaxPack <= 0 || chainLen <= 0 {
+		return 1
 	}
-	return checkpoints, p.prefetched, nil
+	estimated := chainLen * estimatedBytesPerCommit
+	n := int((estimated + batchMaxPack - 1) / batchMaxPack)
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
-func (p *checkpointPlanner) selectNextCheckpoint(prevIdx int, prevHash plumbing.Hash, prevSpan int, prevMeasuredBytes int) (int, error) {
-	bestIdx := -1
-	remaining := len(p.chain) - 1 - prevIdx
-	if shouldSelectTipWithoutProbe(p.params.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
-		bestIdx = len(p.chain) - 1
-	} else if shouldProbeTipFirst(p.params.BatchMaxPack, prevMeasuredBytes, prevSpan, remaining) {
-		tipIdx := len(p.chain) - 1
-		tooLarge, err := p.probe(prevHash, tipIdx)
-		if err != nil {
-			return -1, err
-		}
-		if !tooLarge {
-			bestIdx = tipIdx
-		}
-	}
-	if bestIdx != -1 {
-		return bestIdx, nil
-	}
-	return p.searchCheckpointUnderLimit(prevIdx, prevHash, prevSpan)
-}
+// estimatedBytesPerObject is a conservative average for compressed git objects
+// in a packfile. Used with the PACK header's object count to estimate total
+// pack size before streaming the full pack. Real values range from ~200 bytes
+// (tiny commits in a sparse repo) to ~2 KiB (blob-heavy repos), with most
+// mature repos averaging 500–1000 bytes. 750 is a reasonable middle ground.
+const estimatedBytesPerObject = 750
 
-func (p *checkpointPlanner) probe(prevHash plumbing.Hash, idx int) (bool, error) {
-	if result, ok := p.cachedProbe(prevHash, idx); ok {
-		return result.tooLarge, nil
-	}
-	data, tooLarge, err := fetchPackForProbe(p.ctx, p.params, p.ref, p.chain[idx], prevHash, p.params.BatchMaxPack)
+// checkPackSizeAndSubdivide reads the 12-byte PACK header to get the object
+// count, estimates total pack size, and if it exceeds batchLimit, closes the
+// reader and calls subdivide(). Returns (nil, nil) when subdivided (caller
+// should continue to retry), or (prepended reader, nil) to proceed with push.
+func checkPackSizeAndSubdivide(
+	r io.ReadCloser,
+	batchLimit int64,
+	subdivide func() bool,
+) (io.ReadCloser, error) {
+	var header [12]byte
+	n, err := io.ReadFull(r, header[:])
 	if err != nil {
-		return false, fmt.Errorf("measure bootstrap batch for %s at %s: %w", p.ref.TargetRef, planner.ShortHash(p.chain[idx]), err)
+		// Short pack or error — let the push handle it
+		prefixed := io.MultiReader(bytes.NewReader(header[:n]), r)
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
 	}
-	p.probeCache[probeKey(prevHash, idx)] = probeResult{tooLarge: tooLarge, data: data}
-	return tooLarge, nil
+	if string(header[:4]) != "PACK" {
+		// Not a standard packfile — can't estimate, proceed
+		prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+	}
+	objectCount := int64(header[8])<<24 | int64(header[9])<<16 | int64(header[10])<<8 | int64(header[11])
+	estimated := objectCount * estimatedBytesPerObject
+
+	if estimated > batchLimit && subdivide() {
+		_ = r.Close()
+		return nil, nil
+	}
+
+	prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
+	return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
 }
 
-func (p *checkpointPlanner) cachedProbe(prevHash plumbing.Hash, idx int) (probeResult, bool) {
-	result, ok := p.probeCache[probeKey(prevHash, idx)]
-	return result, ok
+type wrappedMultiRC struct {
+	io.Reader
+	io.Closer
 }
 
-func (p *checkpointPlanner) probeBounds(prevHash plumbing.Hash, lo, hi int) (largestFit int, smallestTooLarge int) {
-	largestFit = lo - 1
-	smallestTooLarge = hi + 1
-	for idx := lo; idx <= hi; idx++ {
-		result, ok := p.cachedProbe(prevHash, idx)
+func (w *wrappedMultiRC) Read(p []byte) (int, error) { return w.Reader.Read(p) }
+
+// chainPosition returns the index of hash in chain, or -1 if not found.
+func chainPosition(chain []plumbing.Hash, hash plumbing.Hash) int {
+	for i, h := range chain {
+		if h == hash {
+			return i
+		}
+	}
+	return -1
+}
+
+// subdivideCheckpoints splits each remaining checkpoint range in half using
+// the full commit chain. Called when a batch push is rejected for exceeding
+// the target's body-size limit. Returns the expanded checkpoint list; if no
+// split is possible (ranges are already 1 commit), returns the input unchanged.
+func subdivideCheckpoints(chain []plumbing.Hash, current plumbing.Hash, remaining []plumbing.Hash) []plumbing.Hash {
+	chainIdx := make(map[plumbing.Hash]int, len(chain))
+	for i, h := range chain {
+		chainIdx[h] = i
+	}
+	curIdx, ok := chainIdx[current]
+	if !ok && !current.IsZero() {
+		return remaining
+	}
+	if current.IsZero() {
+		curIdx = -1
+	}
+
+	expanded := make([]plumbing.Hash, 0, len(remaining)*2)
+	prev := curIdx
+	for _, cp := range remaining {
+		cpIdx, ok := chainIdx[cp]
 		if !ok {
+			expanded = append(expanded, cp)
 			continue
 		}
-		if result.tooLarge {
-			if idx < smallestTooLarge {
-				smallestTooLarge = idx
-			}
-			continue
+		gap := cpIdx - prev
+		if gap > 1 {
+			midIdx := prev + gap/2
+			expanded = append(expanded, chain[midIdx])
 		}
-		if idx > largestFit {
-			largestFit = idx
-		}
+		expanded = append(expanded, cp)
+		prev = cpIdx
 	}
-	return largestFit, smallestTooLarge
+	return expanded
 }
 
-func (p *checkpointPlanner) searchCheckpointUnderLimit(prevIdx int, prevHash plumbing.Hash, prevSpan int) (int, error) {
-	lo := prevIdx + 1
-	hi := len(p.chain) - 1
-	if lo > hi {
-		return -1, nil
+func evenCheckpoints(chain []plumbing.Hash, numBatches int) []plumbing.Hash {
+	if numBatches <= 1 || len(chain) <= 1 || numBatches >= len(chain) {
+		return []plumbing.Hash{chain[len(chain)-1]}
 	}
-
-	largestFit, smallestTooLarge := p.probeBounds(prevHash, lo, hi)
-	if smallestTooLarge > hi {
-		if largestFit >= lo {
-			return largestFit, nil
-		}
-
-		idx := nextCheckpointProbeCandidate(lo, hi, prevSpan, largestFit, smallestTooLarge)
-		tooLarge, err := p.probe(prevHash, idx)
-		if err != nil {
-			return -1, err
-		}
-		if !tooLarge {
-			return idx, nil
-		}
-		smallestTooLarge = idx
-	}
-
-	for smallestTooLarge-largestFit > 1 {
-		idx := nextCheckpointProbeCandidate(lo, hi, prevSpan, largestFit, smallestTooLarge)
-		if idx <= largestFit {
-			idx = largestFit + 1
-		}
-		if idx >= smallestTooLarge {
-			idx = smallestTooLarge - 1
-		}
-		if idx < lo || idx > hi || idx <= largestFit || idx >= smallestTooLarge {
+	checkpoints := make([]plumbing.Hash, 0, numBatches)
+	batchSize := len(chain) / numBatches
+	for i := 0; i < numBatches-1; i++ {
+		idx := (i+1)*batchSize - 1
+		if idx >= len(chain)-1 {
 			break
 		}
-
-		tooLarge, err := p.probe(prevHash, idx)
-		if err != nil {
-			return -1, err
-		}
-		if tooLarge {
-			smallestTooLarge = idx
-			continue
-		}
-		largestFit = idx
+		checkpoints = append(checkpoints, chain[idx])
 	}
-
-	if largestFit >= lo {
-		return largestFit, nil
-	}
-
-	tooLarge, err := p.probe(prevHash, lo)
-	if err != nil {
-		return -1, err
-	}
-	if tooLarge {
-		return -1, nil
-	}
-	return lo, nil
-}
-
-func nextCheckpointProbeCandidate(lo, hi, prevSpan, largestFit, smallestTooLarge int) int {
-	if smallestTooLarge <= hi {
-		idx := largestFit + (smallestTooLarge-largestFit)/2
-		if idx <= largestFit {
-			return largestFit + 1
-		}
-		if idx >= smallestTooLarge {
-			return smallestTooLarge - 1
-		}
-		return idx
-	}
-
-	projected := lo
-	if prevSpan > 0 {
-		projected = lo + prevSpan - 1
-	}
-	if projected < lo {
-		projected = lo
-	}
-	if projected > hi {
-		projected = hi
-	}
-	if projected <= largestFit {
-		return hi
-	}
-	return projected
-}
-
-func probeKey(prevHash plumbing.Hash, idx int) string {
-	return prevHash.String() + ":" + strconv.Itoa(idx)
-}
-
-func initialCheckpointSpan(batchMaxPack int64, chainLen int) int {
-	// Issue #14: Use a commit-count heuristic for the initial span estimate
-	// to reduce expensive fetch-and-discard probes. Typical compressed commit
-	// + tree overhead averages ~2-5 KiB per commit in a mature repo.
-	const avgBytesPerCommit = 4096
-	if batchMaxPack <= 0 {
-		return 0
-	}
-	initialSpan := int(batchMaxPack / avgBytesPerCommit)
-	if initialSpan > chainLen {
-		initialSpan = chainLen
-	}
-	if initialSpan < 1 {
-		initialSpan = 1
-	}
-	return initialSpan
-}
-
-func adaptiveNextProbeSpan(limit int64, measuredBytes int, selectedSpan int, remaining int) int {
-	if selectedSpan < 1 {
-		selectedSpan = 1
-	}
-	if remaining < 1 {
-		return selectedSpan
-	}
-	if limit <= 0 || measuredBytes <= 0 {
-		if selectedSpan > remaining {
-			return remaining
-		}
-		return selectedSpan
-	}
-
-	next := int((int64(selectedSpan) * limit) / int64(measuredBytes))
-	if next < 1 {
-		next = 1
-	}
-	if next > remaining {
-		next = remaining
-	}
-	return next
-}
-
-func shouldProbeTipFirst(limit int64, measuredBytes int, measuredSpan int, remaining int) bool {
-	if limit <= 0 || measuredBytes <= 0 || measuredSpan <= 0 || remaining <= measuredSpan {
-		return false
-	}
-	estimated := (int64(measuredBytes) * int64(remaining)) / int64(measuredSpan)
-	return estimated <= (limit*9)/10
-}
-
-func shouldSelectTipWithoutProbe(limit int64, measuredBytes int, measuredSpan int, remaining int) bool {
-	if limit <= 0 || measuredBytes <= 0 || measuredSpan <= 0 || remaining <= 0 {
-		return false
-	}
-	if remaining <= measuredSpan {
-		return int64(measuredBytes) <= limit/2
-	}
-	estimated := (int64(measuredBytes) * int64(remaining)) / int64(measuredSpan)
-	return estimated <= limit/2
-}
-
-func fetchPackForProbe(ctx context.Context, p Params, ref planner.DesiredRef, want, have plumbing.Hash, limit int64) ([]byte, bool, error) {
-	desired := singleGP(ref.SourceRef, ref.TargetRef, want)
-	haves := planner.SingleHaveMap(have)
-	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
-	if err != nil {
-		return nil, false, err
-	}
-	defer packReader.Close()
-	data, err := io.ReadAll(gitproto.LimitPackReader(packReader, limit))
-	if err == nil {
-		return data, false, nil
-	}
-	if strings.Contains(err.Error(), "source pack exceeded max-pack-bytes limit") {
-		return nil, true, nil
-	}
-	return nil, false, err
+	checkpoints = append(checkpoints, chain[len(chain)-1])
+	return checkpoints
 }
 
 func packReaderForCheckpoint(
@@ -664,18 +603,17 @@ func packReaderForCheckpoint(
 	batch plannedBatch,
 	checkpoint plumbing.Hash,
 	current plumbing.Hash,
+	completedRefs map[plumbing.ReferenceName]plumbing.Hash,
 	batchLimit int64,
 ) (io.ReadCloser, error) {
-	if data, ok := batch.prefetchedPacks[checkpoint]; ok && len(data) > 0 {
-		p.log("bootstrap batch reusing prefetched probe pack",
-			"branch", batch.Plan.TargetRef.String(),
-			"checkpoint", planner.ShortHash(checkpoint),
-			"bytes", len(data))
-		return io.NopCloser(bytes.NewReader(data)), nil
-	}
-
 	desired := singleGP(batch.Plan.SourceRef, batch.TempRef, checkpoint)
-	haves := planner.SingleHaveMap(current)
+	// Merge the current checkpoint (within this branch) with any
+	// already-completed branch tips so the source can delta-compress
+	// against objects the target already has from previous branches.
+	haves := planner.CopyRefHashMap(completedRefs)
+	if !current.IsZero() {
+		haves[batch.TempRef] = current
+	}
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
 	if err != nil {
 		return nil, err
@@ -686,7 +624,7 @@ func packReaderForCheckpoint(
 // --- GitHub preflight ---
 
 func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
-	if p.BatchMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
+	if p.TargetMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
 		return 0, false
 	}
 	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
@@ -696,7 +634,7 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	if !ok || repoSizeKB < githubLargeRepoThresholdKB {
 		return 0, false
 	}
-	limit := int64(defaultAutoBatchMaxPackBytes)
+	limit := int64(defaultTargetMaxPackBytes)
 	if p.MaxPackBytes > 0 && p.MaxPackBytes < limit {
 		limit = p.MaxPackBytes
 	}
@@ -757,14 +695,14 @@ func GitHubOwnerRepo(conn *gitproto.Conn) (string, string, bool) {
 	return parts[0], parts[1], true
 }
 
-func autoBatchMaxPackBytes(p Params, err error) (int64, bool) {
-	if p.BatchMaxPack > 0 || !isTargetBodyLimitError(err) {
+func autoTargetMaxPackBytes(p Params, err error) (int64, bool) {
+	if p.TargetMaxPack > 0 || !isTargetBodyLimitError(err) {
 		return 0, false
 	}
 	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
 		return 0, false
 	}
-	limit := int64(defaultAutoBatchMaxPackBytes)
+	limit := int64(defaultTargetMaxPackBytes)
 	if targetLimit := targetBodyLimit(err); targetLimit > 0 {
 		derived := targetLimit / 2
 		if derived <= 0 {

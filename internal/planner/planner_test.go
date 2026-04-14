@@ -76,6 +76,89 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 	}
 }
 
+func TestPlanReplicationRefOverwritesDivergence(t *testing.T) {
+	target := plumbing.NewHash("1111111111111111111111111111111111111111")
+	source := plumbing.NewHash("2222222222222222222222222222222222222222")
+	plan := PlanReplicationRef(DesiredRef{
+		Kind:       RefKindBranch,
+		Label:      "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: source,
+	}, target, true)
+	if plan.Action != ActionUpdate {
+		t.Fatalf("expected update, got %s", plan.Action)
+	}
+	if plan.Reason == "" {
+		t.Fatalf("expected overwrite reason")
+	}
+}
+
+func TestPlanReplicationRefOverwritesTagRetarget(t *testing.T) {
+	target := plumbing.NewHash("1111111111111111111111111111111111111111")
+	source := plumbing.NewHash("2222222222222222222222222222222222222222")
+	plan := PlanReplicationRef(DesiredRef{
+		Kind:       RefKindTag,
+		Label:      "v1",
+		SourceRef:  plumbing.NewTagReferenceName("v1"),
+		TargetRef:  plumbing.NewTagReferenceName("v1"),
+		SourceHash: source,
+	}, target, true)
+	if plan.Action != ActionUpdate {
+		t.Fatalf("expected update, got %s", plan.Action)
+	}
+	if plan.Reason != "11111111 -> 22222222 (replicate tag overwrite)" {
+		t.Fatalf("unexpected reason: %s", plan.Reason)
+	}
+}
+
+func TestBuildReplicationPlansDoesNotMutateManaged(t *testing.T) {
+	// BuildReplicationPlans inserts prune-eligible orphan refs into a local
+	// copy of `managed`. Regression guard: it must not mutate the caller's map.
+	orphan := plumbing.NewBranchReferenceName("stale")
+	main := plumbing.NewBranchReferenceName("main")
+	managed := map[plumbing.ReferenceName]ManagedTarget{
+		main: {Kind: RefKindBranch, Label: "main"},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		main: {
+			Kind:       RefKindBranch,
+			Label:      "main",
+			SourceRef:  main,
+			TargetRef:  main,
+			SourceHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		},
+	}
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		main:   plumbing.NewHash("1111111111111111111111111111111111111111"),
+		orphan: plumbing.NewHash("3333333333333333333333333333333333333333"),
+	}
+
+	plans, err := BuildReplicationPlans(desired, targetRefs, managed, PlanConfig{Prune: true})
+	if err != nil {
+		t.Fatalf("BuildReplicationPlans: %v", err)
+	}
+
+	// The returned plans should include the orphan delete...
+	var sawDelete bool
+	for _, p := range plans {
+		if p.TargetRef == orphan && p.Action == ActionDelete {
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("expected prune delete for orphan, got plans=%+v", plans)
+	}
+
+	// ...but the caller's managed map must remain unchanged.
+	if len(managed) != 1 {
+		t.Fatalf("caller's managed map was mutated: %+v", managed)
+	}
+	if _, ok := managed[orphan]; ok {
+		t.Fatalf("orphan leaked into caller's managed map")
+	}
+}
+
 func TestValidateMappingsRejectsDuplicateTargets(t *testing.T) {
 	_, err := validation.ValidateMappings([]RefMapping{
 		{Source: "main", Target: "stable"},
@@ -759,6 +842,49 @@ func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
 		t.Fatal("expected CanIncrementalRelay=false for branch create")
 	}
 	if reason != "incremental-branch-action-not-update" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestSupportsReplicateRelayToleratesNoThin(t *testing.T) {
+	// replicate tolerates "no-thin" targets because gitproto.FetchPack never
+	// requests the thin-pack capability, so the relayed pack is always
+	// self-contained and safe for no-thin receive-pack servers.
+	ok, reason := SupportsReplicateRelay(RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true})
+	if !ok {
+		t.Fatalf("expected SupportsReplicateRelay to accept no-thin target, got reason=%s", reason)
+	}
+	if reason != "replicate-target-capable-no-thin" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestSupportsReplicateRelayRejectsUnknownCapabilities(t *testing.T) {
+	ok, reason := SupportsReplicateRelay(RelayTargetPolicy{CapabilitiesKnown: false})
+	if ok {
+		t.Fatal("expected SupportsReplicateRelay=false when target capabilities are unknown")
+	}
+	if reason != "replicate-missing-target-capabilities" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanReplicateRelayRejectsInvalidPlanAction(t *testing.T) {
+	plans := []BranchPlan{{
+		Branch:     "main",
+		SourceRef:  "refs/heads/main",
+		TargetRef:  "refs/heads/main",
+		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		TargetHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		Kind:       RefKindBranch,
+		Action:     ActionDelete,
+	}}
+
+	ok, reason := CanReplicateRelay(plans)
+	if ok {
+		t.Fatal("expected CanReplicateRelay=false for delete action")
+	}
+	if reason != "replicate-branch-action-not-create-or-update" {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }

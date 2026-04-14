@@ -161,6 +161,72 @@ func BuildPlans(
 	return plans, nil
 }
 
+// BuildReplicationPlans generates overwrite-oriented plans for replication mode.
+// Divergent refs are updated directly rather than blocked.
+func BuildReplicationPlans(
+	desired map[plumbing.ReferenceName]DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	managed map[plumbing.ReferenceName]ManagedTarget,
+	cfg PlanConfig,
+) ([]BranchPlan, error) {
+	managed = copyManagedTargets(managed)
+	if cfg.Prune {
+		for targetRef := range targetRefs {
+			if _, ok := managed[targetRef]; ok {
+				continue
+			}
+			switch {
+			case targetRef.IsTag() && cfg.IncludeTags:
+				managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
+			case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
+				managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
+			}
+		}
+	}
+
+	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
+	for name := range managed {
+		targetNames = append(targetNames, name)
+	}
+	sort.Slice(targetNames, func(i, j int) bool { return targetNames[i] < targetNames[j] })
+
+	plans := make([]BranchPlan, 0, len(targetNames))
+	for _, targetRef := range targetNames {
+		info := managed[targetRef]
+		want, existsInDesired := desired[targetRef]
+		targetHash, existsOnTarget := targetRefs[targetRef]
+
+		if !existsInDesired {
+			if cfg.Prune && existsOnTarget {
+				plans = append(plans, BranchPlan{
+					Branch:     info.Label,
+					TargetRef:  targetRef,
+					TargetHash: targetHash,
+					Kind:       info.Kind,
+					Action:     ActionDelete,
+					Reason:     fmt.Sprintf("%s -> <deleted>", ShortHash(targetHash)),
+				})
+			}
+			continue
+		}
+
+		plans = append(plans, PlanReplicationRef(want, targetHash, existsOnTarget))
+	}
+
+	sort.Slice(plans, func(i, j int) bool {
+		return plans[i].TargetRef.String() < plans[j].TargetRef.String()
+	})
+	return plans, nil
+}
+
+func copyManagedTargets(input map[plumbing.ReferenceName]ManagedTarget) map[plumbing.ReferenceName]ManagedTarget {
+	out := make(map[plumbing.ReferenceName]ManagedTarget, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
 // BuildBootstrapPlans creates plans for an empty-target bootstrap.
 func BuildBootstrapPlans(
 	desired map[plumbing.ReferenceName]DesiredRef,
@@ -246,6 +312,39 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 	plan.Action = ActionBlock
 	plan.Reason = fmt.Sprintf("%s is not an ancestor of %s", ShortHash(targetHash), ShortHash(want.SourceHash))
 	return plan, nil
+}
+
+// PlanReplicationRef determines the overwrite-oriented action for a single ref.
+func PlanReplicationRef(want DesiredRef, targetHash plumbing.Hash, existsOnTarget bool) BranchPlan {
+	plan := BranchPlan{
+		Branch:     want.Label,
+		SourceRef:  want.SourceRef,
+		TargetRef:  want.TargetRef,
+		SourceHash: want.SourceHash,
+		TargetHash: targetHash,
+		Kind:       want.Kind,
+	}
+
+	if want.SourceHash == targetHash {
+		plan.Action = ActionSkip
+		plan.Reason = fmt.Sprintf("%s already current", ShortHash(want.SourceHash))
+		return plan
+	}
+
+	if !existsOnTarget || targetHash.IsZero() {
+		plan.Action = ActionCreate
+		plan.Reason = fmt.Sprintf("%s -> <new>", ShortHash(want.SourceHash))
+		return plan
+	}
+
+	plan.Action = ActionUpdate
+	switch want.Kind {
+	case RefKindTag:
+		plan.Reason = fmt.Sprintf("%s -> %s (replicate tag overwrite)", ShortHash(targetHash), ShortHash(want.SourceHash))
+	default:
+		plan.Reason = fmt.Sprintf("%s -> %s (replicate overwrite)", ShortHash(targetHash), ShortHash(want.SourceHash))
+	}
+	return plan
 }
 
 // MaxAncestryDepth is the maximum number of commits to visit during a

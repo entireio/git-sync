@@ -38,7 +38,7 @@ type AdvancedOptions struct {
 	MeasureMemory          bool
 	Verbose                bool
 	MaxPackBytes           int64
-	BatchMaxPackBytes      int64
+	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 }
 
@@ -101,6 +101,15 @@ func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
 }
 
 func (c *Client) Sync(ctx context.Context, req SyncRequest) (Result, error) {
+	cfg, err := c.buildSyncConfig(ctx, req)
+	if err != nil {
+		return Result{}, err
+	}
+	return syncer.Run(ctx, cfg)
+}
+
+func (c *Client) Replicate(ctx context.Context, req SyncRequest) (Result, error) {
+	req.Policy.Mode = gitsync.ModeReplicate
 	cfg, err := c.buildSyncConfig(ctx, req)
 	if err != nil {
 		return Result{}, err
@@ -171,8 +180,11 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		DryRun:                 req.DryRun,
 		ShowStats:              req.Options.CollectStats,
 		MeasureMemory:          req.Options.MeasureMemory,
+		Mode:                   operationModeString(req.Policy.Mode),
 		Force:                  req.Policy.Force,
 		Prune:                  req.Policy.Prune,
+		MaxPackBytes:           req.Options.MaxPackBytes,
+		TargetMaxPackBytes:     req.Options.TargetMaxPackBytes,
 		MaterializedMaxObjects: maxObjects,
 		ProtocolMode:           protocolString(req.Policy.Protocol),
 		Verbose:                req.Options.Verbose,
@@ -198,7 +210,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		ShowStats:         req.Options.CollectStats,
 		MeasureMemory:     req.Options.MeasureMemory,
 		MaxPackBytes:      req.Options.MaxPackBytes,
-		BatchMaxPackBytes: req.Options.BatchMaxPackBytes,
+		TargetMaxPackBytes: req.Options.TargetMaxPackBytes,
 		ProtocolMode:      protocolString(req.Protocol),
 		Verbose:           req.Options.Verbose,
 	}, nil
@@ -239,6 +251,13 @@ func (c *Client) resolveEndpoint(ctx context.Context, endpoint gitsync.Endpoint,
 func protocolString(mode gitsync.ProtocolMode) string {
 	if mode == "" {
 		return string(gitsync.ProtocolAuto)
+	}
+	return string(mode)
+}
+
+func operationModeString(mode gitsync.OperationMode) string {
+	if mode == "" {
+		return string(gitsync.ModeSync)
 	}
 	return string(mode)
 }

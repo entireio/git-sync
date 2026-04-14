@@ -19,6 +19,8 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
@@ -114,6 +116,9 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	if result["dry_run"] != true {
 		t.Fatalf("expected dry_run=true, got %#v", result["dry_run"])
 	}
+	if result["operation_mode"] != "sync" {
+		t.Fatalf("expected operation_mode=sync, got %#v", result["operation_mode"])
+	}
 	if result["bootstrap_suggested"] != true {
 		t.Fatalf("expected bootstrap_suggested=true, got %#v", result["bootstrap_suggested"])
 	}
@@ -148,6 +153,119 @@ func TestRun_Plan_JSONDoesNotPush(t *testing.T) {
 	}
 	if targetServer.Count("git-receive-pack") != 0 {
 		t.Fatalf("expected no receive-pack POSTs, got %d", targetServer.Count("git-receive-pack"))
+	}
+}
+
+func TestRun_Plan_ReplicateMode_JSONShowsReplicate(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"plan",
+			"--mode", "replicate",
+			"--json",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run replicate plan: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode plan json: %v\noutput=%s", err, output)
+	}
+	if result["operation_mode"] != "replicate" {
+		t.Fatalf("expected operation_mode=replicate, got %#v", result["operation_mode"])
+	}
+}
+
+func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"replicate",
+			"--json",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run replicate subcommand: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode replicate json: %v\noutput=%s", err, output)
+	}
+	if result["dry_run"] != false {
+		t.Fatalf("expected dry_run=false, got %#v", result["dry_run"])
+	}
+	if result["operation_mode"] != "replicate" {
+		t.Fatalf("expected operation_mode=replicate, got %#v", result["operation_mode"])
+	}
+	if result["pushed"] != float64(1) {
+		t.Fatalf("expected pushed=1, got %#v", result["pushed"])
+	}
+	if result["relay"] != true {
+		t.Fatalf("expected relay=true, got %#v", result["relay"])
+	}
+	if result["relay_reason"] != "empty-target-managed-refs" {
+		t.Fatalf("expected relay_reason=empty-target-managed-refs, got %#v", result["relay_reason"])
+	}
+
+	if got := targetServer.Count("git-receive-pack"); got != 1 {
+		t.Fatalf("expected one receive-pack POST, got %d", got)
+	}
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head: %v", err)
+	}
+	if sourceHead.Hash() != targetHead.Hash() {
+		t.Fatalf("expected target head %s to match source head %s", targetHead.Hash(), sourceHead.Hash())
+	}
+}
+
+func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
+	err := run(context.Background(), []string{
+		"replicate",
+		"--force",
+		"http://127.0.0.1:1/source.git",
+		"http://127.0.0.1:1/target.git",
+	})
+	if err == nil {
+		t.Fatal("expected replicate --force to be rejected")
+	}
+	if !strings.Contains(err.Error(), "replicate does not support --force") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -236,15 +354,17 @@ type smartHTTPRepoServer struct {
 
 	mu           sync.Mutex
 	receivePacks int
+	thinCapable  bool
 }
 
 func newSmartHTTPRepoServer(t *testing.T, repo *git.Repository) *smartHTTPRepoServer {
 	t.Helper()
 
 	s := &smartHTTPRepoServer{
-		t:        t,
-		repo:     repo,
-		repoPath: "/repo.git",
+		t:           t,
+		repo:        repo,
+		repoPath:    "/repo.git",
+		thinCapable: true,
 	}
 	s.server = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
@@ -292,11 +412,52 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if service == transport.ReceivePackService && s.thinCapable {
+		rewritten, err := rewriteReceivePackAdvertisement(buf.Bytes(), func(caps *capability.List) {
+			caps.Delete(capability.Capability("no-thin"))
+		})
+		if err != nil {
+			s.t.Fatalf("rewrite receive-pack advertisement: %v", err)
+		}
+		buf.Reset()
+		_, _ = buf.Write(rewritten)
+	}
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		s.t.Fatalf("write advertised refs: %v", err)
 	}
+}
+
+func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List)) ([]byte, error) {
+	ar := packp.NewAdvRefs()
+	if err := ar.Decode(bytes.NewReader(data)); err == nil {
+		mutate(ar.Capabilities)
+		var buf bytes.Buffer
+		if err := ar.Encode(&buf); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	rd := bytes.NewReader(data)
+	var smart packp.SmartReply
+	if err := smart.Decode(rd); err != nil {
+		return nil, err
+	}
+	ar = packp.NewAdvRefs()
+	if err := ar.Decode(rd); err != nil {
+		return nil, err
+	}
+	mutate(ar.Capabilities)
+	var buf bytes.Buffer
+	if err := smart.Encode(&buf); err != nil {
+		return nil, err
+	}
+	if err := ar.Encode(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Request) {

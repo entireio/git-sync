@@ -152,7 +152,7 @@ Progress:
 
 - explicit mapped refs are supported
 - `--max-pack-bytes` provides a first safety threshold for the streamed source pack during bootstrap
-- `--batch-max-pack-bytes` now enables a Phase A batched branch-only bootstrap mode for large initial syncs
+- `--target-max-pack-bytes` now enables a Phase A batched branch-only bootstrap mode for large initial syncs
 
 Phase 3:
 

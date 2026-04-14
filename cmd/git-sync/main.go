@@ -29,9 +29,11 @@ func run(ctx context.Context, args []string) error {
 
 	switch args[0] {
 	case "sync":
-		return runSyncLike(ctx, "sync", args[1:], false)
+		return runSyncLike(ctx, "sync", args[1:], false, gitsync.ModeSync)
+	case "replicate":
+		return runSyncLike(ctx, "replicate", args[1:], false, gitsync.ModeReplicate)
 	case "plan":
-		return runSyncLike(ctx, "plan", args[1:], true)
+		return runSyncLike(ctx, "plan", args[1:], true, "")
 	case "bootstrap":
 		return runBootstrap(ctx, args[1:])
 	case "probe":
@@ -45,7 +47,7 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
-func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) error {
+func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, defaultMode gitsync.OperationMode) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
@@ -70,6 +72,10 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 
 	branches := fs.String("branch", "", "comma-separated branch list; default is all source branches")
 	fs.Var(&mappings, "map", "ref mapping in src:dst form; short names map branches, full refs map exact refs")
+	modeValue := operationModeFlag(defaultOperationMode(defaultMode))
+	if name == "plan" {
+		fs.Var(&modeValue, "mode", "operation mode: sync or replicate")
+	}
 	fs.BoolVar(&req.Policy.IncludeTags, "tags", false, "mirror tags")
 	fs.BoolVar(&req.Policy.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
 	fs.BoolVar(&req.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
@@ -77,6 +83,8 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.IntVar(&req.Options.MaterializedMaxObjects, "materialized-max-objects", unstable.DefaultMaterializedMaxObjects, "abort non-relay materialized syncs above this many objects")
+	fs.Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap-relay push if the streamed source pack exceeds this many bytes")
+	fs.Int64Var(&req.Options.TargetMaxPackBytes, "target-max-pack-bytes", 0, "target receive-pack body size limit; batches are planned and auto-subdivided to fit")
 	protocolValue := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
 	fs.Var(&protocolValue, "protocol", "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&req.Options.Verbose, "v", false, "verbose logging")
@@ -84,6 +92,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	req.Policy.Mode = gitsync.OperationMode(modeValue)
 	req.Policy.Protocol = gitsync.ProtocolMode(protocolValue)
 
 	positional := fs.Args()
@@ -125,7 +134,11 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool) e
 	if dryRun {
 		result, err = client.Plan(ctx, req)
 	} else {
-		result, err = client.Sync(ctx, req)
+		if req.Policy.Mode == gitsync.ModeReplicate {
+			result, err = client.Replicate(ctx, req)
+		} else {
+			result, err = client.Sync(ctx, req)
+		}
 	}
 	if err != nil {
 		return err
@@ -168,7 +181,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 	fs.Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
-	fs.Int64Var(&req.Options.BatchMaxPackBytes, "batch-max-pack-bytes", 0, "split branch bootstrap into relay batches capped at this many bytes per batch")
+	fs.Int64Var(&req.Options.TargetMaxPackBytes, "target-max-pack-bytes", 0, "target receive-pack body size limit; batches are planned and auto-subdivided to fit")
 	bootstrapProtocol := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
 	fs.Var(&bootstrapProtocol, "protocol", "protocol mode: auto, v1, or v2")
 	fs.BoolVar(&req.Options.Verbose, "v", false, "verbose logging")
@@ -396,7 +409,7 @@ func envBool(key string) bool {
 }
 
 func usageError(message string) error {
-	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --batch-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", unstable.DefaultMaterializedMaxObjects)
+	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync replicate [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nreplicate flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --mode sync|replicate\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --target-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", unstable.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}
@@ -404,8 +417,10 @@ func usageError(message string) error {
 }
 
 type protocolMode gitsync.ProtocolMode
+type operationMode gitsync.OperationMode
 
 type protocolModeFlag protocolMode
+type operationModeFlag operationMode
 
 func (p *protocolModeFlag) String() string {
 	return string(*p)
@@ -418,4 +433,28 @@ func (p *protocolModeFlag) Set(value string) error {
 	}
 	*p = protocolModeFlag(protocolMode(gitsync.ProtocolMode(mode)))
 	return nil
+}
+
+func (m *operationModeFlag) String() string {
+	return string(*m)
+}
+
+func (m *operationModeFlag) Set(value string) error {
+	switch gitsync.OperationMode(value) {
+	case gitsync.ModeSync, gitsync.ModeReplicate:
+		*m = operationModeFlag(operationMode(value))
+		return nil
+	default:
+		return fmt.Errorf("unsupported mode %q", value)
+	}
+}
+
+// defaultOperationMode returns the starting value for the --mode flag.
+// Subcommands that pin a mode (sync, replicate) pass it in; plan passes ""
+// and gets sync as the default, letting --mode override it.
+func defaultOperationMode(defaultMode gitsync.OperationMode) operationMode {
+	if defaultMode != "" {
+		return operationMode(defaultMode)
+	}
+	return operationMode(gitsync.ModeSync)
 }

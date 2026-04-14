@@ -98,7 +98,7 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 
 	targetURL := strings.TrimRight(baseURL, "/") + "/git/" + username + "/" + repoName
 	t.Logf(
-		"Entire local smoke config: source=%s branch=%s target=%s repo=%s protocol=%s max_pack_bytes=%d batch_max_pack_bytes=%d",
+		"Entire local smoke config: source=%s branch=%s target=%s repo=%s protocol=%s max_pack_bytes=%d target_max_pack_bytes=%d",
 		sourceURL,
 		branch,
 		targetURL,
@@ -118,7 +118,7 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 		Branches:          []string{branch},
 		Verbose:           true,
 		MaxPackBytes:      maxPackBytes,
-		BatchMaxPackBytes: batchMaxPackBytes,
+		TargetMaxPackBytes: batchMaxPackBytes,
 		ProtocolMode:      protocolMode,
 	})
 	if err != nil {
