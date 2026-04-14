@@ -71,6 +71,7 @@ type Result struct {
 
 type plannedBatch struct {
 	planner.BootstrapBatch
+	chain []plumbing.Hash // full first-parent chain (root→tip) for subdividing on push failure
 }
 
 // Execute runs the bootstrap strategy (one-shot or batched).
@@ -253,6 +254,18 @@ func executeBatched(
 			cmds := convert.PlansToPushCommands(stagePlans)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
+				if isTargetBodyLimitError(err) && len(batch.chain) > 0 {
+					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
+					if len(expanded) > len(batch.Checkpoints[idx:]) {
+						p.log("bootstrap batch subdividing after target size rejection",
+							"branch", batch.Plan.TargetRef.String(),
+							"old_remaining", len(batch.Checkpoints[idx:]),
+							"new_remaining", len(expanded),
+							"error", err.Error())
+						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
+						continue // retry with finer checkpoints, same idx
+					}
+				}
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
 			}
 			_ = packReader.Close()
@@ -321,7 +334,7 @@ func executeBatched(
 func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
 	out := make([]plannedBatch, 0, len(desired))
 	for _, ref := range desired {
-		checkpoints, err := planCheckpointsFromChain(ctx, p, ref)
+		checkpoints, chain, err := planCheckpointsFromChain(ctx, p, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -336,6 +349,7 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 				ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
 				Checkpoints: checkpoints,
 			},
+			chain: chain,
 		})
 	}
 	return out, nil
@@ -343,24 +357,25 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 
 // PlanCheckpoints plans the checkpoint hashes for a single branch during batched bootstrap.
 func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
-	return planCheckpointsFromChain(ctx, p, ref)
+	checkpoints, _, err := planCheckpointsFromChain(ctx, p, ref)
+	return checkpoints, err
 }
 
 const estimatedBytesPerCommit = 8192
 
-func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
+func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, []plumbing.Hash, error) {
 	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
-		return nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
 	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
 	if err != nil {
-		return nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
 	}
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+		return nil, nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
 	}
 
 	numBatches := estimateBatchCount(int64(len(chain)), p.BatchMaxPack)
@@ -371,7 +386,7 @@ func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.Desired
 		"chain_len", len(chain),
 		"estimated_batches", len(checkpoints))
 
-	return checkpoints, nil
+	return checkpoints, chain, nil
 }
 
 func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
@@ -384,6 +399,42 @@ func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
 		n = 1
 	}
 	return n
+}
+
+// subdivideCheckpoints splits each remaining checkpoint range in half using
+// the full commit chain. Called when a batch push is rejected for exceeding
+// the target's body-size limit. Returns the expanded checkpoint list; if no
+// split is possible (ranges are already 1 commit), returns the input unchanged.
+func subdivideCheckpoints(chain []plumbing.Hash, current plumbing.Hash, remaining []plumbing.Hash) []plumbing.Hash {
+	chainIdx := make(map[plumbing.Hash]int, len(chain))
+	for i, h := range chain {
+		chainIdx[h] = i
+	}
+	curIdx, ok := chainIdx[current]
+	if !ok && !current.IsZero() {
+		return remaining
+	}
+	if current.IsZero() {
+		curIdx = -1
+	}
+
+	expanded := make([]plumbing.Hash, 0, len(remaining)*2)
+	prev := curIdx
+	for _, cp := range remaining {
+		cpIdx, ok := chainIdx[cp]
+		if !ok {
+			expanded = append(expanded, cp)
+			continue
+		}
+		gap := cpIdx - prev
+		if gap > 1 {
+			midIdx := prev + gap/2
+			expanded = append(expanded, chain[midIdx])
+		}
+		expanded = append(expanded, cp)
+		prev = cpIdx
+	}
+	return expanded
 }
 
 func evenCheckpoints(chain []plumbing.Hash, numBatches int) []plumbing.Hash {

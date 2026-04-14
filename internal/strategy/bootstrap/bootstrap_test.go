@@ -241,6 +241,73 @@ func TestEvenCheckpoints(t *testing.T) {
 	})
 }
 
+func TestSubdivideCheckpoints(t *testing.T) {
+	makeHashes := func(n int) []plumbing.Hash {
+		hashes := make([]plumbing.Hash, n)
+		for i := range hashes {
+			hashes[i] = plumbing.NewHash(fmt.Sprintf("%040d", i))
+		}
+		return hashes
+	}
+
+	chain := makeHashes(10) // indices 0..9
+
+	t.Run("splits single checkpoint at midpoint", func(t *testing.T) {
+		// current=chain[0], remaining=[chain[9]] → insert chain[4] as midpoint
+		got := subdivideCheckpoints(chain, chain[0], []plumbing.Hash{chain[9]})
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2: %v", len(got), got)
+		}
+		if got[0] != chain[4] {
+			t.Fatalf("got[0] = %s, want midpoint chain[4] = %s", got[0], chain[4])
+		}
+		if got[1] != chain[9] {
+			t.Fatalf("got[1] = %s, want tip chain[9] = %s", got[1], chain[9])
+		}
+	})
+
+	t.Run("zero current starts from beginning", func(t *testing.T) {
+		// current=zero, remaining=[chain[9]] → insert chain[4] as midpoint
+		got := subdivideCheckpoints(chain, plumbing.ZeroHash, []plumbing.Hash{chain[9]})
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2", len(got))
+		}
+		if got[0] != chain[4] {
+			t.Fatalf("got[0] = %s, want chain[4]", got[0])
+		}
+	})
+
+	t.Run("adjacent commits cannot split further", func(t *testing.T) {
+		// current=chain[8], remaining=[chain[9]] → gap=1, no midpoint
+		got := subdivideCheckpoints(chain, chain[8], []plumbing.Hash{chain[9]})
+		if len(got) != 1 {
+			t.Fatalf("len = %d, want 1", len(got))
+		}
+	})
+
+	t.Run("multiple remaining checkpoints each get split", func(t *testing.T) {
+		// current=zero, remaining=[chain[4], chain[9]]
+		// first: gap(-1→4)=5, mid=chain[1]
+		// second: gap(4→9)=5, mid=chain[6]
+		got := subdivideCheckpoints(chain, plumbing.ZeroHash, []plumbing.Hash{chain[4], chain[9]})
+		if len(got) != 4 {
+			t.Fatalf("len = %d, want 4: %v", len(got), got)
+		}
+		if got[0] != chain[1] {
+			t.Fatalf("got[0] = %s, want chain[1]", got[0])
+		}
+		if got[1] != chain[4] {
+			t.Fatalf("got[1] = %s, want chain[4]", got[1])
+		}
+		if got[2] != chain[6] {
+			t.Fatalf("got[2] = %s, want chain[6]", got[2])
+		}
+		if got[3] != chain[9] {
+			t.Fatalf("got[3] = %s, want chain[9]", got[3])
+		}
+	})
+}
+
 type fakeBootstrapSource struct {
 	fetchPack        func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
