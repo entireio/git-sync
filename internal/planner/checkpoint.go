@@ -20,6 +20,21 @@ type BootstrapBatch struct {
 // FirstParentChain walks the first-parent chain from tip back to root,
 // returning the chain in root-to-tip order.
 func FirstParentChain(store storer.EncodedObjectStorer, tip plumbing.Hash) ([]plumbing.Hash, error) {
+	return FirstParentChainStoppingAt(store, tip, nil)
+}
+
+// FirstParentChainStoppingAt walks the first-parent chain from tip back to
+// root, stopping early when a commit's hash is in stopAt. Returns the chain
+// in root-to-tip order, excluding any stopAt commits. When tip itself is in
+// stopAt, the returned chain is empty. A nil stopAt behaves like the plain
+// FirstParentChain walk.
+//
+// This supports trunk-aware planning: once trunk's ancestry is known, other
+// branches only need their divergence chain.
+func FirstParentChainStoppingAt(store storer.EncodedObjectStorer, tip plumbing.Hash, stopAt map[plumbing.Hash]struct{}) ([]plumbing.Hash, error) {
+	if _, stop := stopAt[tip]; stop {
+		return nil, nil
+	}
 	commit, err := object.GetCommit(store, tip)
 	if err != nil {
 		return nil, fmt.Errorf("load tip commit %s: %w", tip, err)
@@ -30,7 +45,11 @@ func FirstParentChain(store storer.EncodedObjectStorer, tip plumbing.Hash) ([]pl
 		if len(commit.ParentHashes) == 0 {
 			break
 		}
-		commit, err = object.GetCommit(store, commit.ParentHashes[0])
+		parent := commit.ParentHashes[0]
+		if _, stop := stopAt[parent]; stop {
+			break
+		}
+		commit, err = object.GetCommit(store, parent)
 		if err != nil {
 			return nil, fmt.Errorf("load parent commit %s: %w", commit.ParentHashes[0], err)
 		}

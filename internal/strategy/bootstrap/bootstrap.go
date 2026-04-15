@@ -43,16 +43,20 @@ type Params struct {
 	SourceConn    *gitproto.Conn
 	SourceService interface {
 		FetchPack(ctx context.Context, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-		FetchCommitGraph(ctx context.Context, store storer.Storer, conn *gitproto.Conn, ref gitproto.DesiredRef) error
+		FetchCommitGraph(ctx context.Context, store storer.Storer, conn *gitproto.Conn, ref gitproto.DesiredRef, haves []plumbing.Hash) error
 		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 		PushCommands(ctx context.Context, cmds []gitproto.PushCommand) error
 	}
-	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
-	MaxPackBytes  int64
+	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
+	// SourceHeadTarget is the source ref that HEAD points to, when advertised.
+	// Empty if unknown. When set, batched bootstrap plans this branch first and
+	// uses its commit-graph reachability as a cutoff for subsequent branches.
+	SourceHeadTarget plumbing.ReferenceName
+	MaxPackBytes int64
 	TargetMaxPack int64
 	Verbose       bool
 	Logger        *slog.Logger
@@ -404,11 +408,42 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 // --- Checkpoint planning ---
 
 func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
-	out := make([]plannedBatch, 0, len(desired))
-	for _, ref := range desired {
-		checkpoints, chain, err := planCheckpointsFromChain(ctx, p, ref)
+	ordered, trunkIdx := orderTrunkFirst(desired, p.SourceHeadTarget)
+	switch {
+	case p.SourceHeadTarget == "":
+		p.log("bootstrap batch trunk unset", "reason", "source did not advertise a HEAD symref")
+	case trunkIdx < 0:
+		p.log("bootstrap batch trunk unset",
+			"reason", "HEAD ref not in desired set (filtered by --branch or --map)",
+			"source_head_target", p.SourceHeadTarget.String())
+	default:
+		p.log("bootstrap batch trunk selected",
+			"source_head_target", p.SourceHeadTarget.String(),
+			"trunk_target_ref", ordered[trunkIdx].TargetRef.String())
+	}
+	out := make([]plannedBatch, 0, len(ordered))
+
+	var (
+		trunkStopSet map[plumbing.Hash]struct{}
+		trunkHaves   []plumbing.Hash
+	)
+
+	for i, ref := range ordered {
+		var (
+			haves  []plumbing.Hash
+			stopAt map[plumbing.Hash]struct{}
+		)
+		if i != trunkIdx && trunkStopSet != nil {
+			haves = trunkHaves
+			stopAt = trunkStopSet
+		}
+		checkpoints, chain, ancestors, err := planCheckpointsFromChain(ctx, p, ref, haves, stopAt)
 		if err != nil {
 			return nil, err
+		}
+		if i == trunkIdx && trunkIdx >= 0 {
+			trunkStopSet = ancestors
+			trunkHaves = []plumbing.Hash{ref.SourceHash}
 		}
 		out = append(out, plannedBatch{
 			BootstrapBatch: planner.BootstrapBatch{
@@ -427,9 +462,31 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 	return out, nil
 }
 
+// orderTrunkFirst returns desired reordered so the branch matching
+// sourceHeadTarget is first. If no match, the original order is preserved and
+// trunkIdx is -1. Otherwise trunkIdx is 0 (the position of the trunk).
+func orderTrunkFirst(desired []planner.DesiredRef, sourceHeadTarget plumbing.ReferenceName) ([]planner.DesiredRef, int) {
+	if sourceHeadTarget == "" {
+		return desired, -1
+	}
+	for i, ref := range desired {
+		if ref.SourceRef == sourceHeadTarget {
+			if i == 0 {
+				return desired, 0
+			}
+			reordered := make([]planner.DesiredRef, 0, len(desired))
+			reordered = append(reordered, ref)
+			reordered = append(reordered, desired[:i]...)
+			reordered = append(reordered, desired[i+1:]...)
+			return reordered, 0
+		}
+	}
+	return desired, -1
+}
+
 // PlanCheckpoints plans the checkpoint hashes for a single branch during batched bootstrap.
 func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
-	checkpoints, _, err := planCheckpointsFromChain(ctx, p, ref)
+	checkpoints, _, _, err := planCheckpointsFromChain(ctx, p, ref, nil, nil)
 	return checkpoints, err
 }
 
@@ -441,28 +498,54 @@ func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]p
 // The PACK header pre-check and target-rejection retry catch remaining error.
 const estimatedBytesPerCommit = 65536
 
-func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, []plumbing.Hash, error) {
-	p.log("bootstrap batch fetching commit graph", "branch", ref.TargetRef.String())
+// planCheckpointsFromChain fetches the source-side commit graph for a branch
+// and derives checkpoint hashes for batched bootstrap. When trunkStopAt is
+// provided, the walk terminates at commits already reachable from the trunk,
+// and trunkHaves is passed to the source fetch so shared history is not
+// resent. The returned ancestors set covers every commit in the fetched graph
+// (not just the first-parent chain), so callers can accumulate it as a
+// cutoff for subsequent branches.
+func planCheckpointsFromChain(
+	ctx context.Context,
+	p Params,
+	ref planner.DesiredRef,
+	trunkHaves []plumbing.Hash,
+	trunkStopAt map[plumbing.Hash]struct{},
+) ([]plumbing.Hash, []plumbing.Hash, map[plumbing.Hash]struct{}, error) {
+	p.log("bootstrap batch fetching commit graph",
+		"branch", ref.TargetRef.String(),
+		"have_count", len(trunkHaves),
+		"stop_at_count", len(trunkStopAt))
 
 	// Fetch all commits (tree:0 filter) into a temporary in-memory store.
-	// For linux this is ~1.4M commits at ~3.3 KiB each = ~4.6 GB transient.
-	// We extract the first-parent chain (~75k hashes, ~3 MB) immediately
-	// and discard the store so GC can reclaim the 4.6 GB. The transient
-	// spike is unavoidable with git protocol v2 (no first-parent-only
-	// fetch) and go-git's pack parser (needs full store for delta resolution).
+	// Without haves this is ~1.4M commits for linux (~4.6 GB transient).
+	// With trunk haves, the source only sends commits not reachable from
+	// trunk, which for typical feature branches is tiny. We extract the
+	// first-parent chain immediately and discard the store so GC can
+	// reclaim it. The transient spike is unavoidable with git protocol v2
+	// (no first-parent-only fetch) and go-git's pack parser (needs full
+	// store for delta resolution).
 	graphStore := memory.NewStorage()
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
-	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef); err != nil {
-		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef, trunkHaves); err != nil {
+		return nil, nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
-	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
-	graphStore = nil //nolint:ineffassign,wastedassign // clear reference so GC can reclaim ~4.6 GB commit graph store
-	runtime.GC()
+	chain, err := planner.FirstParentChainStoppingAt(graphStore, ref.SourceHash, trunkStopAt)
 	if err != nil {
-		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+		return nil, nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
 	}
+	// Collect all commit hashes in the fetched graph so callers can extend
+	// their stop set. We only need the keys — ~8 bytes per commit, so the
+	// linux ancestry set is ~11 MB vs the store's ~4.6 GB.
+	ancestors := collectCommitHashes(graphStore)
+	graphStore = nil // allow GC to reclaim the commit graph store
+	runtime.GC()
+
 	if len(chain) == 0 {
-		return nil, nil, fmt.Errorf("empty first-parent chain for %s", ref.TargetRef)
+		// Tip is already covered by the stop set. Emit a single-checkpoint
+		// batch so downstream push logic still creates the target ref; the
+		// accompanying fetch will find nothing new via haves.
+		chain = []plumbing.Hash{ref.SourceHash}
 	}
 
 	numBatches := estimateBatchCount(int64(len(chain)), p.TargetMaxPack)
@@ -473,7 +556,23 @@ func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.Desired
 		"chain_len", len(chain),
 		"estimated_batches", len(checkpoints))
 
-	return checkpoints, chain, nil
+	return checkpoints, chain, ancestors, nil
+}
+
+// collectCommitHashes returns the set of commit hashes in store. Used to build
+// the trunk reachability set for subsequent branches' stop-at walks.
+func collectCommitHashes(store *memory.Storage) map[plumbing.Hash]struct{} {
+	iter, err := store.IterEncodedObjects(plumbing.CommitObject)
+	if err != nil {
+		return nil
+	}
+	defer iter.Close()
+	out := map[plumbing.Hash]struct{}{}
+	_ = iter.ForEach(func(obj plumbing.EncodedObject) error {
+		out[obj.Hash()] = struct{}{}
+		return nil
+	})
+	return out
 }
 
 func estimateBatchCount(chainLen int64, batchMaxPack int64) int {

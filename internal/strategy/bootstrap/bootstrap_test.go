@@ -396,9 +396,64 @@ func TestSubdivideCheckpoints(t *testing.T) {
 	})
 }
 
+func TestOrderTrunkFirstPutsHEADBranchFirst(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	hotfixRef := plumbing.NewBranchReferenceName("hotfix")
+
+	desired := []planner.DesiredRef{
+		{SourceRef: featureRef, TargetRef: featureRef, Label: "feature"},
+		{SourceRef: hotfixRef, TargetRef: hotfixRef, Label: "hotfix"},
+		{SourceRef: mainRef, TargetRef: mainRef, Label: "main"},
+	}
+
+	ordered, trunkIdx := orderTrunkFirst(desired, mainRef)
+	if trunkIdx != 0 {
+		t.Fatalf("trunkIdx = %d, want 0", trunkIdx)
+	}
+	if ordered[0].SourceRef != mainRef {
+		t.Fatalf("ordered[0] = %s, want main", ordered[0].SourceRef)
+	}
+	// Relative order of non-trunk refs preserved.
+	if ordered[1].SourceRef != featureRef || ordered[2].SourceRef != hotfixRef {
+		t.Fatalf("non-trunk relative order lost: %v", ordered)
+	}
+	// Original slice untouched.
+	if desired[0].SourceRef != featureRef {
+		t.Fatalf("orderTrunkFirst mutated input slice")
+	}
+}
+
+func TestOrderTrunkFirstNoHEADLeavesOrder(t *testing.T) {
+	a := planner.DesiredRef{SourceRef: plumbing.NewBranchReferenceName("a"), Label: "a"}
+	b := planner.DesiredRef{SourceRef: plumbing.NewBranchReferenceName("b"), Label: "b"}
+	desired := []planner.DesiredRef{a, b}
+
+	ordered, trunkIdx := orderTrunkFirst(desired, "")
+	if trunkIdx != -1 {
+		t.Fatalf("trunkIdx = %d, want -1", trunkIdx)
+	}
+	if ordered[0].Label != "a" || ordered[1].Label != "b" {
+		t.Fatalf("order changed without HEAD hint: %v", ordered)
+	}
+}
+
+func TestOrderTrunkFirstHEADNotInDesired(t *testing.T) {
+	a := planner.DesiredRef{SourceRef: plumbing.NewBranchReferenceName("a"), Label: "a"}
+	desired := []planner.DesiredRef{a}
+
+	ordered, trunkIdx := orderTrunkFirst(desired, plumbing.NewBranchReferenceName("main"))
+	if trunkIdx != -1 {
+		t.Fatalf("trunkIdx = %d, want -1 when HEAD filtered out", trunkIdx)
+	}
+	if len(ordered) != 1 || ordered[0].Label != "a" {
+		t.Fatalf("unexpected order: %v", ordered)
+	}
+}
+
 type fakeBootstrapSource struct {
 	fetchPack        func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) error
 }
 
 func (f fakeBootstrapSource) FetchPack(
@@ -415,9 +470,10 @@ func (f fakeBootstrapSource) FetchCommitGraph(
 	store storer.Storer,
 	conn *gitproto.Conn,
 	ref gitproto.DesiredRef,
+	haves []plumbing.Hash,
 ) error {
 	if f.fetchCommitGraph != nil {
-		return f.fetchCommitGraph(ctx, store, conn, ref)
+		return f.fetchCommitGraph(ctx, store, conn, ref, haves)
 	}
 	return nil
 }
@@ -595,7 +651,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
@@ -635,7 +691,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
