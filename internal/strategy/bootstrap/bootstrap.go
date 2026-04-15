@@ -79,6 +79,12 @@ type plannedBatch struct {
 	planner.BootstrapBatch
 
 	chain []plumbing.Hash // full first-parent chain (root→tip) for subdividing on push failure
+	// subsumed is true when the branch tip is already reachable from the
+	// trunk (planned first), so every object is already on the target after
+	// trunk's batches. Execution skips the commit-graph fetch, the pack
+	// fetch, the temp ref, and the pack push — emitting only a single ref
+	// create command.
+	subsumed bool
 }
 
 // Execute runs the bootstrap strategy (one-shot or batched).
@@ -219,6 +225,22 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	completedRefs := planner.CopyRefHashMap(p.TargetRefs)
 
 	for _, batch := range batches {
+		if batch.subsumed {
+			cmds := []gitproto.PushCommand{{
+				Name: batch.Plan.TargetRef,
+				Old:  plumbing.ZeroHash,
+				New:  batch.Plan.SourceHash,
+			}}
+			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+				return result, fmt.Errorf("create subsumed branch ref for %s: %w", batch.Plan.TargetRef, err)
+			}
+			completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
+			result.BatchCount++
+			p.log("bootstrap batch subsumed branch finalized",
+				"branch", batch.Plan.TargetRef.String(),
+				"source_hash", planner.ShortHash(batch.Plan.SourceHash))
+			continue
+		}
 		result.PlannedBatchCount += len(batch.Checkpoints)
 		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
 		p.log("bootstrap batch branch plan",
@@ -429,6 +451,28 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 	)
 
 	for i, ref := range ordered {
+		// Branches whose tip is already reachable from trunk's ancestry need
+		// no pack transfer — trunk's batches already delivered every object.
+		// Emit a subsumed batch that the executor handles with a single ref
+		// create command.
+		if i != trunkIdx && trunkStopSet != nil {
+			if _, subsumed := trunkStopSet[ref.SourceHash]; subsumed {
+				p.log("bootstrap batch branch subsumed by trunk",
+					"branch", ref.TargetRef.String(),
+					"source_hash", planner.ShortHash(ref.SourceHash))
+				out = append(out, plannedBatch{
+					BootstrapBatch: planner.BootstrapBatch{
+						Plan: planner.BranchPlan{
+							Branch: ref.Label, SourceRef: ref.SourceRef,
+							TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
+							Kind: ref.Kind, Action: planner.ActionCreate,
+						},
+					},
+					subsumed: true,
+				})
+				continue
+			}
+		}
 		var (
 			haves  []plumbing.Hash
 			stopAt map[plumbing.Hash]struct{}
