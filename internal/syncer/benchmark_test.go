@@ -6,7 +6,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/soph/git-sync/internal/syncertest"
+	"github.com/entirehq/git-sync/internal/syncertest"
 	"io"
 	"testing"
 )

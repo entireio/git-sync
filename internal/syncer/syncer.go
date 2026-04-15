@@ -21,15 +21,15 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
 
-	"github.com/soph/git-sync/internal/auth"
-	"github.com/soph/git-sync/internal/convert"
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
-	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
-	"github.com/soph/git-sync/internal/strategy/incremental"
-	"github.com/soph/git-sync/internal/strategy/materialized"
-	repstrat "github.com/soph/git-sync/internal/strategy/replicate"
-	"github.com/soph/git-sync/internal/validation"
+	"github.com/entirehq/git-sync/internal/auth"
+	"github.com/entirehq/git-sync/internal/convert"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
+	bstrap "github.com/entirehq/git-sync/internal/strategy/bootstrap"
+	"github.com/entirehq/git-sync/internal/strategy/incremental"
+	"github.com/entirehq/git-sync/internal/strategy/materialized"
+	repstrat "github.com/entirehq/git-sync/internal/strategy/replicate"
+	"github.com/entirehq/git-sync/internal/validation"
 )
 
 const (

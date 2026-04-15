@@ -5,8 +5,8 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/soph/git-sync/internal/planner"
-	"github.com/soph/git-sync/internal/syncer"
+	"github.com/entirehq/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/syncer"
 )
 
 func TestHashStringZeroHashIsEmpty(t *testing.T) {

@@ -28,10 +28,10 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/soph/git-sync/internal/auth"
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
-	"github.com/soph/git-sync/internal/syncertest"
+	"github.com/entirehq/git-sync/internal/auth"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/syncertest"
 )
 
 const testBranch = "master"

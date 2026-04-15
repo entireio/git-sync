@@ -18,8 +18,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
 
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
 )
 
 func TestIsTargetBodyLimitError(t *testing.T) {

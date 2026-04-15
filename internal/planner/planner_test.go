@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/soph/git-sync/internal/validation"
+	"github.com/entirehq/git-sync/internal/validation"
 )
 
 func TestSelectBranches(t *testing.T) {

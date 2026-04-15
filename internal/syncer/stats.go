@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/soph/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/gitproto"
 )
 
 // ServiceStats tracks transfer statistics for a single service.

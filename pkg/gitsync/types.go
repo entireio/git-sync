@@ -2,7 +2,7 @@ package gitsync
 
 import (
 	"context"
-	"github.com/soph/git-sync/pkg/gitsync/internalbridge"
+	"github.com/entirehq/git-sync/pkg/gitsync/internalbridge"
 )
 
 // ProtocolMode controls source-side protocol negotiation.

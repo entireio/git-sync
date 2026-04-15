@@ -8,7 +8,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"
-	"github.com/soph/git-sync/internal/validation"
+	"github.com/entirehq/git-sync/internal/validation"
 )
 
 // PlanConfig holds configuration for plan generation.
