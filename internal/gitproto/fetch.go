@@ -122,6 +122,48 @@ func (s *RefService) FetchCommitGraph(
 	return storeV2FetchPack(store, reader, false)
 }
 
+// FetchCommitGraphDepth fetches a shallow commit-only slice rooted at ref.
+// Requires v2 with filter and shallow support.
+func (s *RefService) FetchCommitGraphDepth(
+	ctx context.Context,
+	store storer.Storer,
+	conn *Conn,
+	ref DesiredRef,
+	depth int,
+) error {
+	if s.Protocol != "v2" {
+		return fmt.Errorf("depth-limited commit graph fetch requires protocol v2")
+	}
+	if !s.V2Caps.FetchSupports("filter") {
+		return fmt.Errorf("source does not advertise fetch filter support")
+	}
+	if !s.V2Caps.FetchSupports("shallow") {
+		return fmt.Errorf("source does not advertise shallow fetch support")
+	}
+	if depth <= 0 {
+		return fmt.Errorf("depth must be positive")
+	}
+
+	cmdArgs := []string{
+		"ofs-delta",
+		"no-progress",
+		fmt.Sprintf("deepen %d", depth),
+		"filter tree:0",
+		"want " + ref.SourceHash.String(),
+		"done",
+	}
+	body, err := EncodeCommand("fetch", s.V2Caps.RequestCapabilities(), cmdArgs)
+	if err != nil {
+		return err
+	}
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, true, "upload-pack fetch")
+	if err != nil {
+		return err
+	}
+	defer ioutil.CheckClose(reader, &err)
+	return storeV2FetchPack(store, reader, false)
+}
+
 // Capabilities returns the sorted capability list for display.
 func (s *RefService) Capabilities() []string {
 	switch s.Protocol {
@@ -502,4 +544,3 @@ type wrappedRC struct {
 	io.Reader
 	io.Closer
 }
-

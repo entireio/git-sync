@@ -19,6 +19,7 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/memory"
@@ -29,8 +30,8 @@ import (
 )
 
 const (
-	defaultTargetMaxPackBytes = 512 * 1024 * 1024
-	githubLargeRepoThresholdKB   = 1536 * 1024
+	defaultTargetMaxPackBytes  = 512 * 1024 * 1024
+	githubLargeRepoThresholdKB = 1536 * 1024
 )
 
 var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
@@ -44,23 +45,26 @@ type Params struct {
 	SourceService interface {
 		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 		FetchCommitGraph(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+		FetchCommitGraphDepth(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef, int) error
 		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
 		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
 		PushCommands(context.Context, []gitproto.PushCommand) error
 	}
-	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
-	MaxPackBytes int64
+	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
+	MaxPackBytes  int64
 	TargetMaxPack int64
-	Verbose      bool
-	Logger       *slog.Logger
+	Verbose       bool
+	Logger        *slog.Logger
+	Planner       string
 }
 
 // Result holds the outcome of the bootstrap strategy.
 type Result struct {
 	Plans             []planner.BranchPlan
+	BootstrapPlans    []Plan
 	Pushed            int
 	Relay             bool
 	RelayMode         string
@@ -70,6 +74,18 @@ type Result struct {
 	PlannedBatchCount int
 	TempRefs          []string
 }
+
+type Plan struct {
+	TargetRef   plumbing.ReferenceName
+	TempRef     plumbing.ReferenceName
+	ResumeHash  plumbing.Hash
+	Checkpoints []plumbing.Hash
+}
+
+const (
+	PlannerGraph   = "graph"
+	PlannerShallow = "shallow"
+)
 
 type plannedBatch struct {
 	planner.BootstrapBatch
@@ -138,6 +154,45 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	return result, nil
 }
 
+func PlanOnly(ctx context.Context, p Params, relayReason string) (Result, error) {
+	planTargetRefs := p.TargetRefs
+	if p.TargetMaxPack > 0 {
+		planTargetRefs = adjustedBootstrapTargetRefs(p.DesiredRefs, p.TargetRefs)
+	}
+	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, planTargetRefs)
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{
+		Plans:       plans,
+		Relay:       true,
+		RelayMode:   "bootstrap-plan",
+		RelayReason: relayReason,
+	}
+	if p.TargetMaxPack <= 0 {
+		return result, nil
+	}
+
+	bootstrapPlans, err := planBootstrap(ctx, p, plans)
+	if err != nil {
+		return result, err
+	}
+	result.Batching = true
+	result.RelayMode = "bootstrap-plan-batch"
+	result.BootstrapPlans = make([]Plan, 0, len(bootstrapPlans))
+	for _, batch := range bootstrapPlans {
+		result.BootstrapPlans = append(result.BootstrapPlans, Plan{
+			TargetRef:   batch.Plan.TargetRef,
+			TempRef:     batch.TempRef,
+			ResumeHash:  batch.ResumeHash,
+			Checkpoints: append([]plumbing.Hash(nil), batch.Checkpoints...),
+		})
+		result.PlannedBatchCount += len(batch.Checkpoints)
+		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
+	}
+	return result, nil
+}
+
 func adjustedBootstrapTargetRefs(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
@@ -170,7 +225,6 @@ func executeBatched(
 		return result, fmt.Errorf("bootstrap batching requires protocol v2 source fetch filter support")
 	}
 
-	planRefs := make([]planner.DesiredRef, 0, len(plans))
 	tagPlans := make([]planner.BranchPlan, 0, len(plans))
 	tagDesired := make(map[plumbing.ReferenceName]gitproto.DesiredRef)
 	for _, plan := range plans {
@@ -187,17 +241,11 @@ func executeBatched(
 		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
 			return result, fmt.Errorf("bootstrap batching currently supports branch refs and create-only tags")
 		}
-		planRefs = append(planRefs, p.DesiredRefs[plan.TargetRef])
 	}
 
-	var batches []plannedBatch
-	if len(planRefs) > 0 {
-		p.log("bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
-		var err error
-		batches, err = planBatches(ctx, p, planRefs)
-		if err != nil {
-			return result, err
-		}
+	batches, err := planBootstrap(ctx, p, plans)
+	if err != nil {
+		return result, err
 	}
 
 	// MaxPackBytes is the hard abort threshold for any single source fetch.
@@ -400,6 +448,42 @@ func executeBatched(
 	return result, nil
 }
 
+func planBootstrap(ctx context.Context, p Params, plans []planner.BranchPlan) ([]plannedBatch, error) {
+	planRefs := make([]planner.DesiredRef, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Kind == planner.RefKindTag {
+			continue
+		}
+		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
+			return nil, fmt.Errorf("bootstrap batching currently supports branch refs and create-only tags")
+		}
+		ref, ok := p.DesiredRefs[plan.TargetRef]
+		if !ok {
+			return nil, fmt.Errorf("missing desired ref for %s", plan.TargetRef)
+		}
+		planRefs = append(planRefs, ref)
+	}
+	if len(planRefs) == 0 {
+		return nil, nil
+	}
+	p.log("bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs), "planner", plannerName(p))
+	switch plannerName(p) {
+	case PlannerGraph:
+		return planBatches(ctx, p, planRefs)
+	case PlannerShallow:
+		return planBatchesShallow(ctx, p, planRefs)
+	default:
+		return nil, fmt.Errorf("unsupported bootstrap planner %q", p.Planner)
+	}
+}
+
+func plannerName(p Params) string {
+	if p.Planner == "" {
+		return PlannerGraph
+	}
+	return p.Planner
+}
+
 // --- Checkpoint planning ---
 
 func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
@@ -426,9 +510,49 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 	return out, nil
 }
 
+const (
+	initialShallowDepth = 1024
+	maxShallowDepth     = 1 << 20
+)
+
+func planBatchesShallow(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
+	out := make([]plannedBatch, 0, len(desired))
+	for _, ref := range desired {
+		checkpoints, chain, err := planCheckpointsShallow(ctx, p, ref)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, plannedBatch{
+			BootstrapBatch: planner.BootstrapBatch{
+				Plan: planner.BranchPlan{
+					Branch: ref.Label, SourceRef: ref.SourceRef,
+					TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
+					Kind: ref.Kind, Action: planner.ActionCreate,
+				},
+				TempRef:     planner.BootstrapTempRef(ref.TargetRef),
+				ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
+				Checkpoints: checkpoints,
+			},
+			chain: chain,
+		})
+	}
+	return out, nil
+}
+
 // PlanCheckpoints plans the checkpoint hashes for a single branch during batched bootstrap.
 func PlanCheckpoints(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, error) {
-	checkpoints, _, err := planCheckpointsFromChain(ctx, p, ref)
+	var (
+		checkpoints []plumbing.Hash
+		err         error
+	)
+	switch plannerName(p) {
+	case PlannerGraph:
+		checkpoints, _, err = planCheckpointsFromChain(ctx, p, ref)
+	case PlannerShallow:
+		checkpoints, _, err = planCheckpointsShallow(ctx, p, ref)
+	default:
+		err = fmt.Errorf("unsupported bootstrap planner %q", p.Planner)
+	}
 	return checkpoints, err
 }
 
@@ -473,6 +597,68 @@ func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.Desired
 		"estimated_batches", len(checkpoints))
 
 	return checkpoints, chain, nil
+}
+
+func planCheckpointsShallow(ctx context.Context, p Params, ref planner.DesiredRef) ([]plumbing.Hash, []plumbing.Hash, error) {
+	if !p.SourceService.SupportsBootstrapBatch() {
+		return nil, nil, fmt.Errorf("bootstrap shallow planner requires protocol v2 source fetch filter support")
+	}
+	p.log("bootstrap shallow planner fetching ancestry slices", "branch", ref.TargetRef.String())
+	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
+	prevLen := 0
+	for depth := initialShallowDepth; depth <= maxShallowDepth; depth *= 2 {
+		graphStore := memory.NewStorage()
+		if err := p.SourceService.FetchCommitGraphDepth(ctx, graphStore, p.SourceConn, gpRef, depth); err != nil {
+			return nil, nil, fmt.Errorf("fetch bootstrap shallow planning graph for %s depth=%d: %w", ref.TargetRef, depth, err)
+		}
+		chain, complete, err := firstParentPrefix(graphStore, ref.SourceHash)
+		graphStore = nil
+		runtime.GC()
+		if err != nil {
+			return nil, nil, fmt.Errorf("walk shallow first-parent chain for %s depth=%d: %w", ref.TargetRef, depth, err)
+		}
+		p.log("bootstrap shallow planner slice",
+			"branch", ref.TargetRef.String(),
+			"depth", depth,
+			"chain_len", len(chain),
+			"complete", complete)
+		if complete {
+			numBatches := estimateBatchCount(int64(len(chain)), p.TargetMaxPack)
+			checkpoints := evenCheckpoints(chain, numBatches)
+			return checkpoints, chain, nil
+		}
+		if len(chain) <= prevLen && depth >= maxShallowDepth {
+			break
+		}
+		prevLen = len(chain)
+	}
+	return nil, nil, fmt.Errorf("bootstrap shallow planner could not reach first-parent root for %s within depth limit", ref.TargetRef)
+}
+
+func firstParentPrefix(store storer.EncodedObjectStorer, tip plumbing.Hash) ([]plumbing.Hash, bool, error) {
+	commit, err := object.GetCommit(store, tip)
+	if err != nil {
+		return nil, false, err
+	}
+	chain := make([]plumbing.Hash, 0, 128)
+	for {
+		chain = append(chain, commit.Hash)
+		if len(commit.ParentHashes) == 0 {
+			break
+		}
+		next, err := object.GetCommit(store, commit.ParentHashes[0])
+		if err != nil {
+			for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+				chain[i], chain[j] = chain[j], chain[i]
+			}
+			return chain, false, nil
+		}
+		commit = next
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, true, nil
 }
 
 func estimateBatchCount(chainLen int64, batchMaxPack int64) int {

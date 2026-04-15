@@ -254,6 +254,49 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 	}
 }
 
+func TestRun_BootstrapPlanOnly_JSONDoesNotPush(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 8)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"bootstrap",
+			"--json",
+			"--plan-only",
+			"--planner", "graph",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run bootstrap --plan-only: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode bootstrap plan json: %v\noutput=%s", err, output)
+	}
+	if result["planner"] != "graph" {
+		t.Fatalf("expected planner=graph, got %#v", result["planner"])
+	}
+	if result["pushed"] != float64(0) {
+		t.Fatalf("expected pushed=0, got %#v", result["pushed"])
+	}
+	if targetServer.Count("git-receive-pack") != 0 {
+		t.Fatalf("expected no receive-pack POSTs, got %d", targetServer.Count("git-receive-pack"))
+	}
+}
+
 func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
 	err := run(context.Background(), []string{
 		"replicate",

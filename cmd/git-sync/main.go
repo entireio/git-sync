@@ -157,6 +157,8 @@ func runBootstrap(ctx context.Context, args []string) error {
 
 	var mappings multiStringFlag
 	var jsonOutput bool
+	var planOnly bool
+	var planner string
 	var sourceAuth gitsync.EndpointAuth
 	var targetAuth gitsync.EndpointAuth
 	req := unstable.BootstrapRequest{}
@@ -180,6 +182,8 @@ func runBootstrap(ctx context.Context, args []string) error {
 	fs.BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	fs.BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
+	fs.BoolVar(&planOnly, "plan-only", false, "compute bootstrap checkpoint plans without fetching or pushing packs")
+	fs.StringVar(&planner, "planner", "graph", "bootstrap planner: graph or shallow")
 	fs.Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
 	fs.Int64Var(&req.Options.TargetMaxPackBytes, "target-max-pack-bytes", 0, "target receive-pack body size limit; batches are planned and auto-subdivided to fit")
 	bootstrapProtocol := protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
@@ -219,6 +223,13 @@ func runBootstrap(ctx context.Context, args []string) error {
 	if req.Source.URL == "" || req.Target.URL == "" {
 		return usageError("bootstrap requires source and target repository URLs")
 	}
+	switch planner {
+	case "graph", "shallow":
+	default:
+		return fmt.Errorf("unsupported --planner %q", planner)
+	}
+	req.PlanOnly = planOnly
+	req.Planner = planner
 
 	result, err := unstable.New(unstable.Options{
 		Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
@@ -409,7 +420,7 @@ func envBool(key string) bool {
 }
 
 func usageError(message string) error {
-	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync replicate [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nreplicate flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --mode sync|replicate\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --target-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", unstable.DefaultMaterializedMaxObjects)
+	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync replicate [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nreplicate flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --mode sync|replicate\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --plan-only\n  --planner graph|shallow\n  --max-pack-bytes 104857600\n  --target-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", unstable.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}

@@ -73,6 +73,8 @@ type Config struct {
 	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 	ProtocolMode           string
+	BootstrapPlanOnly      bool
+	BootstrapPlanner       string
 }
 
 // Re-export types from planner for CLI compatibility.
@@ -107,24 +109,34 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 
 // Result holds the outcome of a sync or bootstrap operation.
 type Result struct {
-	Plans              []BranchPlan `json:"plans"`
-	Pushed             int          `json:"pushed"`
-	Skipped            int          `json:"skipped"`
-	Blocked            int          `json:"blocked"`
-	Deleted            int          `json:"deleted"`
-	DryRun             bool         `json:"dry_run"`
-	OperationMode      string       `json:"operation_mode"`
-	Relay              bool         `json:"relay"`
-	RelayMode          string       `json:"relay_mode"`
-	RelayReason        string       `json:"relay_reason"`
-	Batching           bool         `json:"batching"`
-	BatchCount         int          `json:"batch_count"`
-	PlannedBatchCount  int          `json:"planned_batch_count"`
-	TempRefs           []string     `json:"temp_refs"`
-	BootstrapSuggested bool         `json:"bootstrap_suggested"`
-	Stats              Stats        `json:"stats"`
-	Measurement        Measurement  `json:"measurement"`
-	Protocol           string       `json:"protocol"`
+	Plans              []BranchPlan              `json:"plans"`
+	BootstrapPlans     []BootstrapCheckpointPlan `json:"bootstrap_plans,omitempty"`
+	Pushed             int                       `json:"pushed"`
+	Skipped            int                       `json:"skipped"`
+	Blocked            int                       `json:"blocked"`
+	Deleted            int                       `json:"deleted"`
+	DryRun             bool                      `json:"dry_run"`
+	OperationMode      string                    `json:"operation_mode"`
+	Relay              bool                      `json:"relay"`
+	RelayMode          string                    `json:"relay_mode"`
+	RelayReason        string                    `json:"relay_reason"`
+	Batching           bool                      `json:"batching"`
+	BatchCount         int                       `json:"batch_count"`
+	PlannedBatchCount  int                       `json:"planned_batch_count"`
+	TempRefs           []string                  `json:"temp_refs"`
+	BootstrapSuggested bool                      `json:"bootstrap_suggested"`
+	Stats              Stats                     `json:"stats"`
+	Measurement        Measurement               `json:"measurement"`
+	Protocol           string                    `json:"protocol"`
+	Planner            string                    `json:"planner,omitempty"`
+}
+
+type BootstrapCheckpointPlan struct {
+	TargetRef       string   `json:"target_ref"`
+	TempRef         string   `json:"temp_ref"`
+	ResumeHash      string   `json:"resume_hash,omitempty"`
+	Checkpoints     []string `json:"checkpoints"`
+	CheckpointCount int      `json:"checkpoint_count"`
 }
 
 func (r Result) Lines() []string {
@@ -139,7 +151,14 @@ func (r Result) Lines() []string {
 	if r.DryRun {
 		summary += " dry-run=true"
 	}
+	if r.Planner != "" {
+		summary += " planner=" + r.Planner
+	}
 	lines = append(lines, summary)
+	for _, plan := range r.BootstrapPlans {
+		lines = append(lines, fmt.Sprintf("bootstrap-plan: target=%s temp=%s resume=%s checkpoints=%d",
+			plan.TargetRef, plan.TempRef, shortOrZero(plan.ResumeHash), plan.CheckpointCount))
+	}
 	lines = append(lines, statsLines(r.Stats)...)
 	lines = append(lines, measurementLine(r.Measurement)...)
 	if r.BootstrapSuggested {
@@ -149,6 +168,16 @@ func (r Result) Lines() []string {
 		lines = append(lines, fmt.Sprintf("batching: temp-refs=%s", strings.Join(r.TempRefs, ",")))
 	}
 	return lines
+}
+
+func shortOrZero(hash string) string {
+	if hash == "" {
+		return "00000000"
+	}
+	if len(hash) > 8 {
+		return hash[:8]
+	}
+	return hash
 }
 
 // ProbeResult holds the outcome of a probe operation.
@@ -693,6 +722,31 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	return result, err
 }
 
+func BootstrapPlan(ctx context.Context, cfg Config) (Result, error) {
+	if cfg.Force {
+		return Result{}, fmt.Errorf("bootstrap does not support --force")
+	}
+	if cfg.Prune {
+		return Result{}, fmt.Errorf("bootstrap does not support --prune")
+	}
+
+	s, err := newSession(ctx, cfg, true)
+	if err != nil {
+		return Result{}, err
+	}
+	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
+	if err != nil {
+		return Result{}, err
+	}
+	if len(desiredRefs) == 0 {
+		return Result{}, fmt.Errorf("no source refs matched")
+	}
+	_, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, s.target.refMap)
+	result, err := bootstrapPlanWithInputs(ctx, s, desiredRefs, s.target.refMap, reason)
+	result.Measurement = s.measurementDone()
+	return result, err
+}
+
 // Probe inspects source and optionally target remotes.
 func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	if cfg.Source.URL == "" {
@@ -757,7 +811,7 @@ func bootstrapWithInputs(
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
 		MaxPackBytes: s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
-		Verbose: s.cfg.Verbose, Logger: s.logger,
+		Verbose: s.cfg.Verbose, Logger: s.logger, Planner: s.cfg.BootstrapPlanner,
 	}, relayReason)
 	if err != nil {
 		return Result{}, err
@@ -768,7 +822,61 @@ func bootstrapWithInputs(
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
 		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
+		Planner: plannerOrDefault(s.cfg.BootstrapPlanner),
 	}, nil
+}
+
+func bootstrapPlanWithInputs(
+	ctx context.Context,
+	s *syncSession,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	relayReason string,
+) (Result, error) {
+	bResult, err := bstrap.PlanOnly(ctx, bstrap.Params{
+		SourceConn: s.sourceConn, SourceService: s.sourceService,
+		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
+		MaxPackBytes: s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
+		Verbose: s.cfg.Verbose, Logger: s.logger, Planner: s.cfg.BootstrapPlanner,
+	}, relayReason)
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{
+		Plans: bResult.Plans, OperationMode: s.cfg.Mode,
+		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
+		Batching: bResult.Batching, PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
+		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
+		Planner: plannerOrDefault(s.cfg.BootstrapPlanner),
+	}
+	for _, plan := range bResult.BootstrapPlans {
+		checkpoints := make([]string, 0, len(plan.Checkpoints))
+		for _, checkpoint := range plan.Checkpoints {
+			checkpoints = append(checkpoints, checkpoint.String())
+		}
+		result.BootstrapPlans = append(result.BootstrapPlans, BootstrapCheckpointPlan{
+			TargetRef:       plan.TargetRef.String(),
+			TempRef:         plan.TempRef.String(),
+			ResumeHash:      hashString(plan.ResumeHash),
+			Checkpoints:     checkpoints,
+			CheckpointCount: len(checkpoints),
+		})
+	}
+	return result, nil
+}
+
+func plannerOrDefault(name string) string {
+	if name == "" {
+		return bstrap.PlannerGraph
+	}
+	return name
+}
+
+func hashString(hash plumbing.Hash) string {
+	if hash.IsZero() {
+		return ""
+	}
+	return hash.String()
 }
 
 func (s *syncSession) executeIncremental(

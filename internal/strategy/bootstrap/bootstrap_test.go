@@ -392,8 +392,9 @@ func TestSubdivideCheckpoints(t *testing.T) {
 }
 
 type fakeBootstrapSource struct {
-	fetchPack        func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+	fetchPack             func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchCommitGraph      func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+	fetchCommitGraphDepth func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef, int) error
 }
 
 func (f fakeBootstrapSource) FetchPack(
@@ -411,6 +412,22 @@ func (f fakeBootstrapSource) FetchCommitGraph(
 	conn *gitproto.Conn,
 	ref gitproto.DesiredRef,
 ) error {
+	if f.fetchCommitGraph != nil {
+		return f.fetchCommitGraph(ctx, store, conn, ref)
+	}
+	return nil
+}
+
+func (f fakeBootstrapSource) FetchCommitGraphDepth(
+	ctx context.Context,
+	store storer.Storer,
+	conn *gitproto.Conn,
+	ref gitproto.DesiredRef,
+	depth int,
+) error {
+	if f.fetchCommitGraphDepth != nil {
+		return f.fetchCommitGraphDepth(ctx, store, conn, ref, depth)
+	}
 	if f.fetchCommitGraph != nil {
 		return f.fetchCommitGraph(ctx, store, conn, ref)
 	}
@@ -611,7 +628,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 				Label:      "main",
 			},
 		},
-		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
 		TargetMaxPack: 10,
 	}, "empty target")
 	if err == nil || !strings.Contains(err.Error(), "push bootstrap batch") {
@@ -652,7 +669,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 				Label:      "main",
 			},
 		},
-		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
 		TargetMaxPack: 10,
 	}, "empty target")
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -693,7 +710,7 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 						Kind:       planner.RefKindBranch,
 					},
 				},
-				TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+				TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
 				TargetMaxPack: tt.batchMaxPack,
 			}, "missing pusher")
 			if err == nil || err.Error() != "bootstrap strategy requires TargetPusher" {

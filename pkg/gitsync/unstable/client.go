@@ -65,6 +65,8 @@ type BootstrapRequest struct {
 	Scope       gitsync.RefScope
 	IncludeTags bool
 	Protocol    gitsync.ProtocolMode
+	PlanOnly    bool
+	Planner     string
 	Options     AdvancedOptions
 }
 
@@ -121,6 +123,9 @@ func (c *Client) Bootstrap(ctx context.Context, req BootstrapRequest) (Result, e
 	cfg, err := c.buildBootstrapConfig(ctx, req)
 	if err != nil {
 		return Result{}, err
+	}
+	if req.PlanOnly {
+		return syncer.BootstrapPlan(ctx, cfg)
 	}
 	return syncer.Bootstrap(ctx, cfg)
 }
@@ -201,18 +206,20 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:            source,
-		Target:            target,
-		HTTPClient:        c.httpClient,
-		Branches:          append([]string(nil), req.Scope.Branches...),
-		Mappings:          validationMappings(req.Scope.Mappings),
-		IncludeTags:       req.IncludeTags,
-		ShowStats:         req.Options.CollectStats,
-		MeasureMemory:     req.Options.MeasureMemory,
-		MaxPackBytes:      req.Options.MaxPackBytes,
+		Source:             source,
+		Target:             target,
+		HTTPClient:         c.httpClient,
+		Branches:           append([]string(nil), req.Scope.Branches...),
+		Mappings:           validationMappings(req.Scope.Mappings),
+		IncludeTags:        req.IncludeTags,
+		ShowStats:          req.Options.CollectStats,
+		MeasureMemory:      req.Options.MeasureMemory,
+		MaxPackBytes:       req.Options.MaxPackBytes,
 		TargetMaxPackBytes: req.Options.TargetMaxPackBytes,
-		ProtocolMode:      protocolString(req.Protocol),
-		Verbose:           req.Options.Verbose,
+		ProtocolMode:       protocolString(req.Protocol),
+		Verbose:            req.Options.Verbose,
+		BootstrapPlanOnly:  req.PlanOnly,
+		BootstrapPlanner:   req.Planner,
 	}, nil
 }
 
