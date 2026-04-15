@@ -24,7 +24,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/soph/git-sync/pkg/gitsync/unstable"
+	"github.com/entirehq/git-sync/pkg/gitsync/unstable"
 )
 
 const testBranch = "master"

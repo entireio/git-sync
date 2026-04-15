@@ -9,9 +9,9 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/soph/git-sync/internal/convert"
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/convert"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
 )
 
 func TestPlansToPushPlans(t *testing.T) {

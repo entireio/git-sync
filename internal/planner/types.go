@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/soph/git-sync/internal/validation"
+	"github.com/entirehq/git-sync/internal/validation"
 )
 
 // RefKind distinguishes branch refs from tag refs.

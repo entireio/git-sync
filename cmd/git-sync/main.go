@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/soph/git-sync/internal/validation"
-	"github.com/soph/git-sync/pkg/gitsync"
-	"github.com/soph/git-sync/pkg/gitsync/unstable"
+	"github.com/entirehq/git-sync/internal/validation"
+	"github.com/entirehq/git-sync/pkg/gitsync"
+	"github.com/entirehq/git-sync/pkg/gitsync/unstable"
 )
 
 func main() {

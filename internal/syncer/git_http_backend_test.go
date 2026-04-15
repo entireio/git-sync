@@ -16,9 +16,9 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
-	bstrap "github.com/soph/git-sync/internal/strategy/bootstrap"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
+	bstrap "github.com/entirehq/git-sync/internal/strategy/bootstrap"
 )
 
 const gitHTTPBackendEnv = "GITSYNC_E2E_GIT_HTTP_BACKEND"

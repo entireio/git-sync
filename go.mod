@@ -1,4 +1,4 @@
-module github.com/soph/git-sync
+module github.com/entirehq/git-sync
 
 go 1.25.2
 

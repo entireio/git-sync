@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/soph/git-sync/internal/validation"
-	"github.com/soph/git-sync/pkg/gitsync/internalbridge"
+	"github.com/entirehq/git-sync/internal/validation"
+	"github.com/entirehq/git-sync/pkg/gitsync/internalbridge"
 )
 
 // Options configures a Client. It is intentionally small in the first public cut.

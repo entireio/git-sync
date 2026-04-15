@@ -6,8 +6,8 @@ package convert
 import (
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
 )
 
 // DesiredRefs converts planner desired refs to gitproto desired refs.

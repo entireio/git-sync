@@ -8,10 +8,10 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 
-	"github.com/soph/git-sync/internal/convert"
-	"github.com/soph/git-sync/internal/gitproto"
-	"github.com/soph/git-sync/internal/planner"
-	"github.com/soph/git-sync/internal/syncertest"
+	"github.com/entirehq/git-sync/internal/convert"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/syncertest"
 )
 
 func TestPlansToPushPlans(t *testing.T) {
