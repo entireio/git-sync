@@ -14,8 +14,8 @@ import (
 type ServiceStats struct {
 	Name          string `json:"name"`
 	Requests      int    `json:"requests"`
-	RequestBytes  int64  `json:"request_bytes"`
-	ResponseBytes int64  `json:"response_bytes"`
+	RequestBytes  int64  `json:"requestBytes"`
+	ResponseBytes int64  `json:"responseBytes"`
 	Wants         int    `json:"wants"`
 	Haves         int    `json:"haves"`
 	Commands      int    `json:"commands"`

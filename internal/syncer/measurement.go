@@ -9,11 +9,11 @@ import (
 // Measurement holds performance measurement data.
 type Measurement struct {
 	Enabled            bool   `json:"enabled"`
-	ElapsedMillis      int64  `json:"elapsed_millis"`
-	PeakAllocBytes     uint64 `json:"peak_alloc_bytes"`
-	PeakHeapInuseBytes uint64 `json:"peak_heap_inuse_bytes"`
-	TotalAllocBytes    uint64 `json:"total_alloc_bytes"`
-	GCCount            uint32 `json:"gc_count"`
+	ElapsedMillis      int64  `json:"elapsedMillis"`
+	PeakAllocBytes     uint64 `json:"peakAllocBytes"`
+	PeakHeapInuseBytes uint64 `json:"peakHeapInuseBytes"`
+	TotalAllocBytes    uint64 `json:"totalAllocBytes"`
+	GCCount            uint32 `json:"gcCount"`
 }
 
 func startMeasurement(enabled bool) func() Measurement {

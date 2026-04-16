@@ -24,17 +24,17 @@ const (
 
 // Endpoint identifies a remote Git endpoint.
 type Endpoint struct {
-	URL string
+	URL string `json:"url"`
 }
 
 // EndpointAuth carries explicit per-request auth and TLS settings.
 // It is resolved through an AuthProvider rather than embedded in Endpoint so
 // endpoint identity does not also become the public auth-precedence boundary.
 type EndpointAuth struct {
-	Username      string
-	Token         string
-	BearerToken   string
-	SkipTLSVerify bool
+	Username      string `json:"username"`
+	Token         string `json:"token"`
+	BearerToken   string `json:"bearerToken"`
+	SkipTLSVerify bool   `json:"skipTlsVerify"`
 }
 
 // EndpointRole identifies whether auth is being resolved for the source or target.
@@ -52,8 +52,8 @@ type AuthProvider interface {
 
 // StaticAuthProvider returns fixed source and target auth values.
 type StaticAuthProvider struct {
-	Source EndpointAuth
-	Target EndpointAuth
+	Source EndpointAuth `json:"source"`
+	Target EndpointAuth `json:"target"`
 }
 
 // AuthFor implements AuthProvider.
@@ -66,50 +66,50 @@ func (p StaticAuthProvider) AuthFor(_ context.Context, _ Endpoint, role Endpoint
 
 // RefMapping is an explicit source-to-target ref mapping.
 type RefMapping struct {
-	Source string
-	Target string
+	Source string `json:"source"`
+	Target string `json:"target"`
 }
 
 // RefScope constrains which refs a request manages.
 type RefScope struct {
-	Branches []string
-	Mappings []RefMapping
+	Branches []string     `json:"branches"`
+	Mappings []RefMapping `json:"mappings"`
 }
 
 // SyncPolicy controls high-level sync behavior.
 type SyncPolicy struct {
-	Mode        OperationMode
-	IncludeTags bool
-	Force       bool
-	Prune       bool
-	Protocol    ProtocolMode
+	Mode        OperationMode `json:"mode"`
+	IncludeTags bool          `json:"includeTags"`
+	Force       bool          `json:"force"`
+	Prune       bool          `json:"prune"`
+	Protocol    ProtocolMode  `json:"protocol"`
 }
 
 // ProbeRequest inspects source refs and optional target capabilities.
 type ProbeRequest struct {
-	Source       Endpoint
-	Target       *Endpoint
-	IncludeTags  bool
-	Protocol     ProtocolMode
-	CollectStats bool
+	Source       Endpoint     `json:"source"`
+	Target       *Endpoint    `json:"target"`
+	IncludeTags  bool         `json:"includeTags"`
+	Protocol     ProtocolMode `json:"protocol"`
+	CollectStats bool         `json:"collectStats"`
 }
 
 // PlanRequest computes ref actions without pushing.
 type PlanRequest struct {
-	Source       Endpoint
-	Target       Endpoint
-	Scope        RefScope
-	Policy       SyncPolicy
-	CollectStats bool
+	Source       Endpoint   `json:"source"`
+	Target       Endpoint   `json:"target"`
+	Scope        RefScope   `json:"scope"`
+	Policy       SyncPolicy `json:"policy"`
+	CollectStats bool       `json:"collectStats"`
 }
 
 // SyncRequest executes a sync between two remotes.
 type SyncRequest struct {
-	Source       Endpoint
-	Target       Endpoint
-	Scope        RefScope
-	Policy       SyncPolicy
-	CollectStats bool
+	Source       Endpoint   `json:"source"`
+	Target       Endpoint   `json:"target"`
+	Scope        RefScope   `json:"scope"`
+	Policy       SyncPolicy `json:"policy"`
+	CollectStats bool       `json:"collectStats"`
 }
 
 type RefKind = internalbridge.RefKind

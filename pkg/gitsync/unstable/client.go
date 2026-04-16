@@ -35,12 +35,12 @@ type Client struct {
 }
 
 type AdvancedOptions struct {
-	CollectStats           bool
-	MeasureMemory          bool
-	Verbose                bool
-	MaxPackBytes           int64
-	TargetMaxPackBytes     int64
-	MaterializedMaxObjects int
+	CollectStats           bool  `json:"collectStats"`
+	MeasureMemory          bool  `json:"measureMemory"`
+	Verbose                bool  `json:"verbose"`
+	MaxPackBytes           int64 `json:"maxPackBytes"`
+	TargetMaxPackBytes     int64 `json:"targetMaxPackBytes"`
+	MaterializedMaxObjects int   `json:"materializedMaxObjects"`
 }
 
 type ProbeRequest struct {

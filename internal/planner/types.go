@@ -50,10 +50,10 @@ type ManagedTarget struct {
 // BranchPlan describes the planned action for a single ref.
 type BranchPlan struct {
 	Branch     string                 `json:"branch"`
-	SourceRef  plumbing.ReferenceName `json:"source_ref"`
-	TargetRef  plumbing.ReferenceName `json:"target_ref"`
-	SourceHash plumbing.Hash          `json:"source_hash"`
-	TargetHash plumbing.Hash          `json:"target_hash"`
+	SourceRef  plumbing.ReferenceName `json:"sourceRef"`
+	TargetRef  plumbing.ReferenceName `json:"targetRef"`
+	SourceHash plumbing.Hash          `json:"sourceHash"`
+	TargetHash plumbing.Hash          `json:"targetHash"`
 	Kind       RefKind                `json:"kind"`
 	Action     Action                 `json:"action"`
 	Reason     string                 `json:"reason"`
@@ -62,10 +62,10 @@ type BranchPlan struct {
 func (p BranchPlan) MarshalJSON() ([]byte, error) {
 	type bp struct {
 		Branch     string  `json:"branch"`
-		SourceRef  string  `json:"source_ref"`
-		TargetRef  string  `json:"target_ref"`
-		SourceHash string  `json:"source_hash"`
-		TargetHash string  `json:"target_hash"`
+		SourceRef  string  `json:"sourceRef"`
+		TargetRef  string  `json:"targetRef"`
+		SourceHash string  `json:"sourceHash"`
+		TargetHash string  `json:"targetHash"`
 		Kind       RefKind `json:"kind"`
 		Action     Action  `json:"action"`
 		Reason     string  `json:"reason"`

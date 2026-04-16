@@ -29,49 +29,49 @@ const (
 
 type runSummary struct {
 	Index      int             `json:"index"`
-	TargetPath string          `json:"target_path"`
-	TargetURL  string          `json:"target_url"`
-	WallMillis int64           `json:"wall_millis"`
+	TargetPath string          `json:"targetPath"`
+	TargetURL  string          `json:"targetUrl"`
+	WallMillis int64           `json:"wallMillis"`
 	Result     unstable.Result `json:"result"`
 	Error      string          `json:"error,omitempty"`
 }
 
 type aggregateSummary struct {
-	SuccessfulRuns        int      `json:"successful_runs"`
-	FailedRuns            int      `json:"failed_runs"`
-	BatchedRuns           int      `json:"batched_runs"`
-	MinWallMillis         int64    `json:"min_wall_millis"`
-	MaxWallMillis         int64    `json:"max_wall_millis"`
-	AvgWallMillis         float64  `json:"avg_wall_millis"`
-	MinSyncElapsedMillis  int64    `json:"min_sync_elapsed_millis"`
-	MaxSyncElapsedMillis  int64    `json:"max_sync_elapsed_millis"`
-	AvgSyncElapsedMillis  float64  `json:"avg_sync_elapsed_millis"`
-	MinBatchCount         int      `json:"min_batch_count,omitempty"`
-	MaxBatchCount         int      `json:"max_batch_count,omitempty"`
-	AvgBatchCount         float64  `json:"avg_batch_count,omitempty"`
-	MinPlannedBatchCount  int      `json:"min_planned_batch_count,omitempty"`
-	MaxPlannedBatchCount  int      `json:"max_planned_batch_count,omitempty"`
-	AvgPlannedBatchCount  float64  `json:"avg_planned_batch_count,omitempty"`
-	MaxPeakAllocBytes     uint64   `json:"max_peak_alloc_bytes"`
-	MaxPeakHeapInuseBytes uint64   `json:"max_peak_heap_inuse_bytes"`
-	MaxTotalAllocBytes    uint64   `json:"max_total_alloc_bytes"`
-	MaxGCCount            uint32   `json:"max_gc_count"`
-	RelayModes            []string `json:"relay_modes,omitempty"`
+	SuccessfulRuns        int      `json:"successfulRuns"`
+	FailedRuns            int      `json:"failedRuns"`
+	BatchedRuns           int      `json:"batchedRuns"`
+	MinWallMillis         int64    `json:"minWallMillis"`
+	MaxWallMillis         int64    `json:"maxWallMillis"`
+	AvgWallMillis         float64  `json:"avgWallMillis"`
+	MinSyncElapsedMillis  int64    `json:"minSyncElapsedMillis"`
+	MaxSyncElapsedMillis  int64    `json:"maxSyncElapsedMillis"`
+	AvgSyncElapsedMillis  float64  `json:"avgSyncElapsedMillis"`
+	MinBatchCount         int      `json:"minBatchCount,omitempty"`
+	MaxBatchCount         int      `json:"maxBatchCount,omitempty"`
+	AvgBatchCount         float64  `json:"avgBatchCount,omitempty"`
+	MinPlannedBatchCount  int      `json:"minPlannedBatchCount,omitempty"`
+	MaxPlannedBatchCount  int      `json:"maxPlannedBatchCount,omitempty"`
+	AvgPlannedBatchCount  float64  `json:"avgPlannedBatchCount,omitempty"`
+	MaxPeakAllocBytes     uint64   `json:"maxPeakAllocBytes"`
+	MaxPeakHeapInuseBytes uint64   `json:"maxPeakHeapInuseBytes"`
+	MaxTotalAllocBytes    uint64   `json:"maxTotalAllocBytes"`
+	MaxGCCount            uint32   `json:"maxGcCount"`
+	RelayModes            []string `json:"relayModes,omitempty"`
 }
 
 type benchmarkReport struct {
 	Scenario    scenario         `json:"scenario"`
-	SourceURL   string           `json:"source_url"`
+	SourceURL   string           `json:"sourceUrl"`
 	Repeat      int              `json:"repeat"`
-	KeepTargets bool             `json:"keep_targets"`
-	WorkDir     string           `json:"work_dir"`
+	KeepTargets bool             `json:"keepTargets"`
+	WorkDir     string           `json:"workDir"`
 	Config      benchmarkConfig  `json:"config"`
 	Aggregate   aggregateSummary `json:"aggregate"`
 	Runs        []runSummary     `json:"runs"`
 }
 
 type benchmarkConfig struct {
-	SourceURL string                   `json:"source_url"`
+	SourceURL string                   `json:"sourceUrl"`
 	Scope     gitsync.RefScope         `json:"scope"`
 	Policy    gitsync.SyncPolicy       `json:"policy"`
 	Options   unstable.AdvancedOptions `json:"options"`
@@ -215,7 +215,7 @@ func run(ctx context.Context, args []string) error {
 	report.Aggregate = summarizeRuns(report.Runs)
 
 	if jsonOutput {
-		data, err := json.MarshalIndent(report, "", "  ") //nolint:musttag // bench debug output, nested types from other packages use default names
+		data, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal report: %w", err)
 		}

@@ -116,16 +116,16 @@ type Result struct {
 	Skipped            int          `json:"skipped"`
 	Blocked            int          `json:"blocked"`
 	Deleted            int          `json:"deleted"`
-	DryRun             bool         `json:"dry_run"`
-	OperationMode      string       `json:"operation_mode"`
+	DryRun             bool         `json:"dryRun"`
+	OperationMode      string       `json:"operationMode"`
 	Relay              bool         `json:"relay"`
-	RelayMode          string       `json:"relay_mode"`
-	RelayReason        string       `json:"relay_reason"`
+	RelayMode          string       `json:"relayMode"`
+	RelayReason        string       `json:"relayReason"`
 	Batching           bool         `json:"batching"`
-	BatchCount         int          `json:"batch_count"`
-	PlannedBatchCount  int          `json:"planned_batch_count"`
-	TempRefs           []string     `json:"temp_refs"`
-	BootstrapSuggested bool         `json:"bootstrap_suggested"`
+	BatchCount         int          `json:"batchCount"`
+	PlannedBatchCount  int          `json:"plannedBatchCount"`
+	TempRefs           []string     `json:"tempRefs"`
+	BootstrapSuggested bool         `json:"bootstrapSuggested"`
 	Stats              Stats        `json:"stats"`
 	Measurement        Measurement  `json:"measurement"`
 	Protocol           string       `json:"protocol"`
@@ -157,13 +157,13 @@ func (r Result) Lines() []string {
 
 // ProbeResult holds the outcome of a probe operation.
 type ProbeResult struct {
-	SourceURL     string      `json:"source_url"`
-	TargetURL     string      `json:"target_url,omitempty"`
-	RequestedMode string      `json:"requested_mode"`
+	SourceURL     string      `json:"sourceUrl"`
+	TargetURL     string      `json:"targetUrl,omitempty"`
+	RequestedMode string      `json:"requestedMode"`
 	Protocol      string      `json:"protocol"`
-	RefPrefixes   []string    `json:"ref_prefixes"`
-	Capabilities  []string    `json:"source_capabilities"`
-	TargetCaps    []string    `json:"target_capabilities,omitempty"`
+	RefPrefixes   []string    `json:"refPrefixes"`
+	Capabilities  []string    `json:"sourceCapabilities"`
+	TargetCaps    []string    `json:"targetCapabilities,omitempty"`
 	Refs          []RefInfo   `json:"refs"`
 	Stats         Stats       `json:"stats"`
 	Measurement   Measurement `json:"measurement"`
@@ -198,24 +198,24 @@ func (r ProbeResult) Lines() []string {
 
 // FetchResult holds the outcome of a fetch operation.
 type FetchResult struct {
-	SourceURL      string          `json:"source_url"`
-	RequestedMode  string          `json:"requested_mode"`
+	SourceURL      string          `json:"sourceUrl"`
+	RequestedMode  string          `json:"requestedMode"`
 	Protocol       string          `json:"protocol"`
 	Wants          []RefInfo       `json:"wants"`
 	Haves          []plumbing.Hash `json:"haves"`
-	FetchedObjects int             `json:"fetched_objects"`
+	FetchedObjects int             `json:"fetchedObjects"`
 	Stats          Stats           `json:"stats"`
 	Measurement    Measurement     `json:"measurement"`
 }
 
 func (r FetchResult) MarshalJSON() ([]byte, error) {
 	type fr struct {
-		SourceURL      string      `json:"source_url"`
-		RequestedMode  string      `json:"requested_mode"`
+		SourceURL      string      `json:"sourceUrl"`
+		RequestedMode  string      `json:"requestedMode"`
 		Protocol       string      `json:"protocol"`
 		Wants          []RefInfo   `json:"wants"`
 		Haves          []string    `json:"haves"`
-		FetchedObjects int         `json:"fetched_objects"`
+		FetchedObjects int         `json:"fetchedObjects"`
 		Stats          Stats       `json:"stats"`
 		Measurement    Measurement `json:"measurement"`
 	}
