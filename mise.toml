@@ -10,10 +10,12 @@ run = "gofmt -s -w ."
 
 [tasks.test]
 description = "Run tests"
+env = { GIT_TERMINAL_PROMPT = "0" }
 run = "go test ./..."
 
 [tasks."test:ci"]
 description = "Run all tests with race detection"
+env = { GIT_TERMINAL_PROMPT = "0" }
 run = "go test -race ./..."
 
 [tasks."test:git-http-backend"]
