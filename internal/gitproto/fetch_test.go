@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCapabilities(t *testing.T) {
@@ -40,7 +41,7 @@ func TestCapabilities(t *testing.T) {
 
 	// v1 protocol
 	adv := packp.NewAdvRefs()
-	_ = adv.Capabilities.Set(capability.OFSDelta)
+	require.NoError(t, adv.Capabilities.Set(capability.OFSDelta))
 	rs = &RefService{Protocol: "v1", V1Adv: adv}
 	got = rs.Capabilities()
 	if len(got) == 0 {
@@ -105,7 +106,7 @@ func TestBuildSidebandReader(t *testing.T) {
 
 	// With Sideband64k -- should return a demuxer (different reader).
 	caps = capability.NewList()
-	_ = caps.Set(capability.Sideband64k)
+	require.NoError(t, caps.Set(capability.Sideband64k))
 	got = buildSidebandReader(caps, reader, nil)
 	if got == reader {
 		t.Error("expected wrapped reader when Sideband64k is set")
@@ -113,7 +114,7 @@ func TestBuildSidebandReader(t *testing.T) {
 
 	// With Sideband (not 64k) -- should return a demuxer.
 	caps = capability.NewList()
-	_ = caps.Set(capability.Sideband)
+	require.NoError(t, caps.Set(capability.Sideband))
 	got = buildSidebandReader(caps, reader, nil)
 	if got == reader {
 		t.Error("expected wrapped reader when Sideband is set")
@@ -123,7 +124,7 @@ func TestBuildSidebandReader(t *testing.T) {
 func TestBuildSidebandReaderWithProgress(t *testing.T) {
 	reader := bytes.NewBufferString("test")
 	caps := capability.NewList()
-	_ = caps.Set(capability.Sideband64k)
+	require.NoError(t, caps.Set(capability.Sideband64k))
 	var progress sideband.Progress = io.Discard
 	got := buildSidebandReader(caps, reader, progress)
 	if got == reader {
@@ -146,7 +147,6 @@ func TestWrappedRCClose(t *testing.T) {
 	// wrappedRC should close the underlying closer.
 	called := false
 	rc := &wrappedRC{
-		Reader: bytes.NewBufferString("data"),
 		Closer: closerFunc(func() error {
 			called = true
 			return nil
@@ -271,7 +271,7 @@ func TestBufReader(t *testing.T) {
 
 func TestFetchToStoreUnsupportedProtocol(t *testing.T) {
 	rs := &RefService{Protocol: "v99"}
-	err := rs.FetchToStore(nil, nil, nil, nil, nil)
+	err := rs.FetchToStore(t.Context(), nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported protocol")
 	}
@@ -279,7 +279,7 @@ func TestFetchToStoreUnsupportedProtocol(t *testing.T) {
 
 func TestFetchPackUnsupportedProtocol(t *testing.T) {
 	rs := &RefService{Protocol: "v99"}
-	_, err := rs.FetchPack(nil, nil, nil, nil)
+	_, err := rs.FetchPack(t.Context(), nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported protocol")
 	}
@@ -287,7 +287,7 @@ func TestFetchPackUnsupportedProtocol(t *testing.T) {
 
 func TestFetchCommitGraphRequiresV2(t *testing.T) {
 	rs := &RefService{Protocol: "v1"}
-	err := rs.FetchCommitGraph(nil, nil, nil, DesiredRef{})
+	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{})
 	if err == nil {
 		t.Fatal("expected error for non-v2 protocol")
 	}
@@ -300,7 +300,7 @@ func TestFetchCommitGraphRequiresFilter(t *testing.T) {
 		},
 	}
 	rs := &RefService{Protocol: "v2", V2Caps: caps}
-	err := rs.FetchCommitGraph(nil, nil, nil, DesiredRef{})
+	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{})
 	if err == nil {
 		t.Fatal("expected error when filter not supported")
 	}
@@ -319,7 +319,7 @@ func TestFetchPackV1ContextCanceled(t *testing.T) {
 	}))
 
 	adv := packp.NewAdvRefs()
-	_ = adv.Capabilities.Set(capability.Sideband64k)
+	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -645,7 +645,7 @@ func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 	}))
 
 	adv := packp.NewAdvRefs()
-	_ = adv.Capabilities.Set(capability.Sideband64k)
+	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -692,7 +692,7 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 	}))
 
 	adv := packp.NewAdvRefs()
-	_ = adv.Capabilities.Set(capability.Sideband64k)
+	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),

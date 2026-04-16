@@ -2,11 +2,11 @@ package syncer
 
 import (
 	"context"
+	"github.com/entirehq/git-sync/internal/syncertest"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/entirehq/git-sync/internal/syncertest"
 	"io"
 	"testing"
 )
@@ -20,7 +20,7 @@ func BenchmarkRunBootstrapEmptyTarget(b *testing.B) {
 	defer sourceServer.Close()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		b.StopTimer()
 		targetRepo, err := git.Init(memory.NewStorage())
 		if err != nil {
@@ -47,7 +47,7 @@ func BenchmarkRunIncrementalRelay(b *testing.B) {
 	b.ReportAllocs()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		b.StopTimer()
 		sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
 		syncertest.MakeBenchmarkCommits(b, sourceRepo, sourceFS, 2)
@@ -85,7 +85,7 @@ func BenchmarkRunMaterializedFallback(b *testing.B) {
 	b.ReportAllocs()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		b.StopTimer()
 		sourceRepo, sourceFS := syncertest.NewMemoryRepo(b)
 		syncertest.MakeBenchmarkCommits(b, sourceRepo, sourceFS, 3)

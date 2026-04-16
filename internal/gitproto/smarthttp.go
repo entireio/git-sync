@@ -23,8 +23,8 @@ func httpError(res *http.Response) error {
 	var reason string
 	if res.Body != nil {
 		limited := io.LimitReader(res.Body, maxHTTPErrorBody+1)
-		data, _ := io.ReadAll(limited)
-		if len(data) > 0 {
+		data, err := io.ReadAll(limited)
+		if err == nil && len(data) > 0 {
 			if len(data) > maxHTTPErrorBody {
 				data = append(data[:maxHTTPErrorBody], []byte("...")...)
 			}
@@ -91,7 +91,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 	url := fmt.Sprintf("%s/info/refs?service=%s", conn.Endpoint.String(), svc)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create info-refs request: %w", err)
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", capability.DefaultAgent())
@@ -103,7 +103,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 
 	res, err := conn.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("request info-refs: %w", err)
 	}
 	defer res.Body.Close()
 	if err := httpError(res); err != nil {
@@ -114,7 +114,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 	lr := io.LimitReader(res.Body, maxInfoRefsSize+1)
 	data, err := io.ReadAll(lr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read info-refs response: %w", err)
 	}
 	if int64(len(data)) > maxInfoRefsSize {
 		return nil, fmt.Errorf("info/refs response exceeds %d byte limit", maxInfoRefsSize)
@@ -134,7 +134,7 @@ func PostRPC(ctx context.Context, conn *Conn, service transport.Service, body []
 	lr := io.LimitReader(reader, maxRPCResponse+1)
 	data, err := io.ReadAll(lr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read RPC response: %w", err)
 	}
 	if int64(len(data)) > maxRPCResponse {
 		return nil, fmt.Errorf("RPC response for %s exceeds %d byte limit", service, maxRPCResponse)
@@ -155,7 +155,7 @@ func PostRPCStreamBody(ctx context.Context, conn *Conn, service transport.Servic
 	url := fmt.Sprintf("%s/%s", conn.Endpoint.String(), svc)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create RPC request: %w", err)
 	}
 	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", svc))
 	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", svc))
@@ -168,7 +168,7 @@ func PostRPCStreamBody(ctx context.Context, conn *Conn, service transport.Servic
 
 	res, err := conn.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("post RPC: %w", err)
 	}
 	if err := httpError(res); err != nil {
 		_ = res.Body.Close()

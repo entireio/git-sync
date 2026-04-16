@@ -102,7 +102,11 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 		Name string `json:"name"`
 		Hash string `json:"hash"`
 	}
-	return json.Marshal(ri{Name: r.Name, Hash: r.Hash.String()})
+	b, err := json.Marshal(ri{Name: r.Name, Hash: r.Hash.String()})
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSON: %w", err)
+	}
+	return b, nil
 }
 
 // Result holds the outcome of a sync or bootstrap operation.
@@ -146,7 +150,7 @@ func (r Result) Lines() []string {
 		lines = append(lines, "hint: target refs are absent; bootstrap can seed them without local object storage")
 	}
 	if r.Batching && len(r.TempRefs) > 0 {
-		lines = append(lines, fmt.Sprintf("batching: temp-refs=%s", strings.Join(r.TempRefs, ",")))
+		lines = append(lines, "batching: temp-refs="+strings.Join(r.TempRefs, ","))
 	}
 	return lines
 }
@@ -167,9 +171,9 @@ type ProbeResult struct {
 
 func (r ProbeResult) Lines() []string {
 	lines := []string{
-		fmt.Sprintf("source: %s", r.SourceURL),
-		fmt.Sprintf("requested-protocol: %s", r.RequestedMode),
-		fmt.Sprintf("negotiated-protocol: %s", r.Protocol),
+		"source: " + r.SourceURL,
+		"requested-protocol: " + r.RequestedMode,
+		"negotiated-protocol: " + r.Protocol,
 	}
 	if len(r.RefPrefixes) > 0 {
 		lines = append(lines, "ref-prefixes: "+strings.Join(r.RefPrefixes, ", "))
@@ -219,18 +223,22 @@ func (r FetchResult) MarshalJSON() ([]byte, error) {
 	for _, h := range r.Haves {
 		haves = append(haves, h.String())
 	}
-	return json.Marshal(fr{
+	b, err := json.Marshal(fr{
 		SourceURL: r.SourceURL, RequestedMode: r.RequestedMode,
 		Protocol: r.Protocol, Wants: r.Wants, Haves: haves,
 		FetchedObjects: r.FetchedObjects, Stats: r.Stats, Measurement: r.Measurement,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSON: %w", err)
+	}
+	return b, nil
 }
 
 func (r FetchResult) Lines() []string {
 	lines := []string{
-		fmt.Sprintf("source: %s", r.SourceURL),
-		fmt.Sprintf("requested-protocol: %s", r.RequestedMode),
-		fmt.Sprintf("negotiated-protocol: %s", r.Protocol),
+		"source: " + r.SourceURL,
+		"requested-protocol: " + r.RequestedMode,
+		"negotiated-protocol: " + r.Protocol,
 		fmt.Sprintf("wants: %d", len(r.Wants)),
 		fmt.Sprintf("haves: %d", len(r.Haves)),
 		fmt.Sprintf("fetched-objects: %d", r.FetchedObjects),
@@ -239,7 +247,7 @@ func (r FetchResult) Lines() []string {
 		lines = append(lines, fmt.Sprintf("want: %s %s", w.Hash.String(), w.Name))
 	}
 	for _, h := range r.Haves {
-		lines = append(lines, fmt.Sprintf("have: %s", h.String()))
+		lines = append(lines, "have: "+h.String())
 	}
 	lines = append(lines, statsLines(r.Stats)...)
 	lines = append(lines, measurementLine(r.Measurement)...)
@@ -281,7 +289,7 @@ func measurementLine(m Measurement) []string {
 func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.Conn, error) {
 	ep, err := transport.NewEndpoint(raw.URL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse endpoint: %w", err)
 	}
 	authEp := auth.Endpoint{
 		Username:      raw.Username,
@@ -291,7 +299,7 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	}
 	authMethod, err := auth.Resolve(authEp, ep)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve auth: %w", err)
 	}
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
 	return gitproto.NewConnWithHTTPClient(ep, label, authMethod, client), nil
@@ -349,7 +357,7 @@ type targetSession struct {
 func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession, error) {
 	mode, err := validation.NormalizeProtocolMode(cfg.ProtocolMode)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("normalize protocol mode: %w", err)
 	}
 	cfg.ProtocolMode = mode
 	switch cfg.Mode {
@@ -360,10 +368,10 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
 	}
 	if _, err := validation.ValidateMappings(cfg.Mappings); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validate mappings: %w", err)
 	}
 	if cfg.Mode == modeReplicate && cfg.Force {
-		return nil, fmt.Errorf("replicate does not support --force; use sync instead")
+		return nil, errors.New("replicate does not support --force; use sync instead")
 	}
 
 	s := &syncSession{
@@ -445,10 +453,10 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 
 	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(sourceRefMap, planConfig(s.cfg))
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
 	if len(desiredRefs) == 0 {
-		return Result{}, fmt.Errorf("no source refs matched")
+		return Result{}, errors.New("no source refs matched")
 	}
 
 	// Check for bootstrap opportunity (before allocating in-memory repo)
@@ -456,7 +464,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		if s.cfg.DryRun {
 			plans, err := planner.BuildBootstrapPlans(desiredRefs, targetRefMap)
 			if err != nil {
-				return Result{}, err
+				return Result{}, fmt.Errorf("build bootstrap plans: %w", err)
 			}
 			return Result{
 				Plans: plans, DryRun: true, RelayReason: reason,
@@ -475,13 +483,13 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	gpDesired := convert.DesiredRefs(desiredRefs)
 	if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return Result{}, err
+			return Result{}, fmt.Errorf("fetch to store: %w", err)
 		}
 	}
 
 	plans, err := planner.BuildPlans(repo.Storer, desiredRefs, targetRefMap, managedTargets, planConfig(s.cfg))
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("build plans: %w", err)
 	}
 
 	result := Result{
@@ -534,6 +542,8 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 			result.Pushed++
 		case ActionDelete:
 			result.Deleted++
+		case ActionSkip, ActionBlock:
+			// not applicable in this context
 		}
 	}
 	result.Stats = stats.snapshot()
@@ -544,10 +554,10 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
 	if len(desiredRefs) == 0 {
-		return Result{}, fmt.Errorf("no source refs matched")
+		return Result{}, errors.New("no source refs matched")
 	}
 
 	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {
@@ -559,7 +569,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		if s.cfg.DryRun {
 			plans, err := planner.BuildBootstrapPlans(desiredRefs, s.target.refMap)
 			if err != nil {
-				return Result{}, err
+				return Result{}, fmt.Errorf("build bootstrap plans: %w", err)
 			}
 			return Result{
 				Plans:              plans,
@@ -577,7 +587,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 
 	plans, err := planner.BuildReplicationPlans(desiredRefs, s.target.refMap, managedTargets, planConfig(s.cfg))
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("build replication plans: %w", err)
 	}
 
 	result := Result{
@@ -629,6 +639,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 			result.Pushed++
 		case ActionDelete:
 			result.Deleted++
+		case ActionSkip, ActionBlock:
+			// not applicable in this context
 		}
 	}
 	result.Stats = s.stats.snapshot()
@@ -665,13 +677,13 @@ func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceNa
 // Bootstrap seeds an empty target with relay behavior.
 func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.Force {
-		return Result{}, fmt.Errorf("bootstrap does not support --force")
+		return Result{}, errors.New("bootstrap does not support --force")
 	}
 	if cfg.Prune {
-		return Result{}, fmt.Errorf("bootstrap does not support --prune")
+		return Result{}, errors.New("bootstrap does not support --prune")
 	}
 	if cfg.DryRun {
-		return Result{}, fmt.Errorf("bootstrap does not support dry-run; use plan or sync")
+		return Result{}, errors.New("bootstrap does not support dry-run; use plan or sync")
 	}
 
 	s, err := newSession(ctx, cfg, true)
@@ -681,10 +693,10 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 
 	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
 	if len(desiredRefs) == 0 {
-		return Result{}, fmt.Errorf("no source refs matched")
+		return Result{}, errors.New("no source refs matched")
 	}
 
 	_, reason := planner.CanBootstrapRelay(cfg.Force, cfg.Prune, desiredRefs, s.target.refMap)
@@ -696,7 +708,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 // Probe inspects source and optionally target remotes.
 func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	if cfg.Source.URL == "" {
-		return ProbeResult{}, fmt.Errorf("source repository URL is required")
+		return ProbeResult{}, errors.New("source repository URL is required")
 	}
 
 	s, err := newSession(ctx, cfg, cfg.Target.URL != "")
@@ -709,7 +721,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 // Fetch exercises source-side fetch negotiation.
 func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plumbing.Hash) (FetchResult, error) {
 	if cfg.Source.URL == "" {
-		return FetchResult{}, fmt.Errorf("source repository URL is required")
+		return FetchResult{}, errors.New("source repository URL is required")
 	}
 
 	s, err := newSession(ctx, cfg, false)
@@ -723,17 +735,17 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	}
 	desiredRefs, err := s.buildDesiredRefs()
 	if err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, fmt.Errorf("build desired refs: %w", err)
 	}
 	targetRefMap, err := s.buildHaveRefMap(haveRefs, haveHashes)
 	if err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, fmt.Errorf("build have ref map: %w", err)
 	}
 
 	gpDesired := convert.DesiredRefs(desiredRefs)
 	if err := s.sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
 		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return FetchResult{}, err
+			return FetchResult{}, fmt.Errorf("fetch to store: %w", err)
 		}
 	}
 
@@ -760,7 +772,7 @@ func bootstrapWithInputs(
 		Verbose: s.cfg.Verbose, Logger: s.logger,
 	}, relayReason)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("bootstrap execute: %w", err)
 	}
 	return Result{
 		Plans: bResult.Plans, Pushed: bResult.Pushed, OperationMode: s.cfg.Mode,
@@ -776,7 +788,7 @@ func (s *syncSession) executeIncremental(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	pushPlans []planner.BranchPlan,
 ) (incremental.Result, error) {
-	return incremental.Execute(ctx, incremental.Params{
+	incResult, incErr := incremental.Execute(ctx, incremental.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
@@ -785,6 +797,10 @@ func (s *syncSession) executeIncremental(
 		},
 		CanTagRelay: planner.CanFullTagCreateRelay,
 	}, planConfig(s.cfg))
+	if incErr != nil {
+		return incResult, fmt.Errorf("incremental execute: %w", incErr)
+	}
+	return incResult, nil
 }
 
 func (s *syncSession) executeMaterialized(
@@ -793,11 +809,14 @@ func (s *syncSession) executeMaterialized(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	pushPlans []planner.BranchPlan,
 ) error {
-	return materialized.Execute(ctx, materialized.Params{
+	if err := materialized.Execute(ctx, materialized.Params{
 		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxObjects: s.cfg.MaterializedMaxObjects,
-	})
+	}); err != nil {
+		return fmt.Errorf("materialized execute: %w", err)
+	}
+	return nil
 }
 
 func (s *syncSession) executeReplicate(
@@ -805,20 +824,24 @@ func (s *syncSession) executeReplicate(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
-	return repstrat.Execute(ctx, repstrat.Params{
+	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 	})
+	if repErr != nil {
+		return repResult, fmt.Errorf("replicate execute: %w", repErr)
+	}
+	return repResult, nil
 }
 
 func (s *syncSession) buildDesiredRefs() (map[plumbing.ReferenceName]planner.DesiredRef, error) {
 	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build desired refs: %w", err)
 	}
 	if len(desiredRefs) == 0 {
-		return nil, fmt.Errorf("no source refs matched")
+		return nil, errors.New("no source refs matched")
 	}
 	return desiredRefs, nil
 }
@@ -898,13 +921,15 @@ func (s *syncSession) newFetchResult(
 func countObjects(store storer.EncodedObjectStorer) (int, error) {
 	iter, err := store.IterEncodedObjects(plumbing.AnyObject)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("iterate encoded objects: %w", err)
 	}
 	defer iter.Close()
 	count := 0
-	err = iter.ForEach(func(_ plumbing.EncodedObject) error {
+	if err := iter.ForEach(func(_ plumbing.EncodedObject) error {
 		count++
 		return nil
-	})
-	return count, err
+	}); err != nil {
+		return 0, fmt.Errorf("count encoded objects: %w", err)
+	}
+	return count, nil
 }

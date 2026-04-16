@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entirehq/git-sync/pkg/gitsync/unstable"
 	billy "github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/memfs"
 	git "github.com/go-git/go-git/v6"
@@ -24,10 +25,10 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/entirehq/git-sync/pkg/gitsync/unstable"
 )
 
 const testBranch = "master"
+const modeReplicate = "replicate"
 
 func TestMarshalOutput_JSONShape(t *testing.T) {
 	data, err := marshalOutput(unstable.FetchResult{
@@ -173,7 +174,7 @@ func TestRun_Plan_ReplicateMode_JSONShowsReplicate(t *testing.T) {
 	output, err := captureStdout(func() error {
 		return run(context.Background(), []string{
 			"plan",
-			"--mode", "replicate",
+			"--mode", modeReplicate,
 			"--json",
 			sourceServer.RepoURL(),
 			targetServer.RepoURL(),
@@ -187,7 +188,7 @@ func TestRun_Plan_ReplicateMode_JSONShowsReplicate(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("decode plan json: %v\noutput=%s", err, output)
 	}
-	if result["operation_mode"] != "replicate" {
+	if result["operation_mode"] != modeReplicate {
 		t.Fatalf("expected operation_mode=replicate, got %#v", result["operation_mode"])
 	}
 }
@@ -208,7 +209,7 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 
 	output, err := captureStdout(func() error {
 		return run(context.Background(), []string{
-			"replicate",
+			modeReplicate,
 			"--json",
 			sourceServer.RepoURL(),
 			targetServer.RepoURL(),
@@ -225,7 +226,7 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 	if result["dry_run"] != false {
 		t.Fatalf("expected dry_run=false, got %#v", result["dry_run"])
 	}
-	if result["operation_mode"] != "replicate" {
+	if result["operation_mode"] != modeReplicate {
 		t.Fatalf("expected operation_mode=replicate, got %#v", result["operation_mode"])
 	}
 	if result["pushed"] != float64(1) {
@@ -256,7 +257,7 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 
 func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
 	err := run(context.Background(), []string{
-		"replicate",
+		modeReplicate,
 		"--force",
 		"http://127.0.0.1:1/source.git",
 		"http://127.0.0.1:1/target.git",
@@ -309,7 +310,7 @@ func makeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count 
 		t.Fatalf("open worktree: %v", err)
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		content := strings.Repeat(fmt.Sprintf("line %d %d\n", i, time.Now().UnixNano()), 24)
 		file, err := fs.Create("tracked.txt")
 		if err != nil {
@@ -492,7 +493,9 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 	if buf.Len() > 0 {
-		_, _ = w.Write(buf.Bytes())
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			s.t.Fatalf("write receive-pack response: %v", err)
+		}
 	}
 	if err != nil {
 		return

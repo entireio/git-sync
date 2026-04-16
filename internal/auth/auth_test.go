@@ -22,8 +22,8 @@ func TestDecodeTokenWithExpiration(t *testing.T) {
 		name      string
 		encoded   string
 		wantToken string
-		wantZero  bool   // if true, expect time.Time zero value
-		wantUnix  int64  // checked only when wantZero is false
+		wantZero  bool  // if true, expect time.Time zero value
+		wantUnix  int64 // checked only when wantZero is false
 	}{
 		{
 			name:      "token with pipe-separated unix timestamp",
@@ -168,11 +168,11 @@ func TestCredentialFillInputNoUser(t *testing.T) {
 
 func TestParseCredentialOutput(t *testing.T) {
 	tests := []struct {
-		name       string
-		output     string
-		wantUser   string
-		wantPass   string
-		wantLen    int
+		name     string
+		output   string
+		wantUser string
+		wantPass string
+		wantLen  int
 	}{
 		{
 			name:     "standard username and password",
@@ -235,14 +235,14 @@ func TestResolve(t *testing.T) {
 	sshEP := &transport.Endpoint{URL: url.URL{Scheme: "ssh", Host: "example.com", Path: "/repo.git"}}
 
 	tests := []struct {
-		name      string
-		raw       Endpoint
-		ep        *transport.Endpoint
-		mockCred  func(ctx context.Context, input string) ([]byte, error)
-		wantType  string // "token", "basic", "nil"
-		wantUser  string
-		wantPass  string
-		wantErr   bool
+		name     string
+		raw      Endpoint
+		ep       *transport.Endpoint
+		mockCred func(ctx context.Context, input string) ([]byte, error)
+		wantType string // "token", "basic", "nil"
+		wantUser string
+		wantPass string
+		wantErr  bool
 	}{
 		{
 			name:     "bearer token set returns TokenAuth",
@@ -277,8 +277,8 @@ func TestResolve(t *testing.T) {
 			name: "nothing set HTTP endpoint no credential helper returns nil",
 			raw:  Endpoint{},
 			ep:   ep,
-			mockCred: func(ctx context.Context, input string) ([]byte, error) {
-				return nil, fmt.Errorf("no helper")
+			mockCred: func(_ context.Context, _ string) ([]byte, error) {
+				return nil, errors.New("no helper")
 			},
 			wantType: "nil",
 		},
@@ -294,8 +294,8 @@ func TestResolve(t *testing.T) {
 				GitCredentialFillCommand = tt.mockCred
 			} else {
 				// Default mock: no credential helper.
-				GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
-					return nil, fmt.Errorf("no helper")
+				GitCredentialFillCommand = func(_ context.Context, _ string) ([]byte, error) {
+					return nil, errors.New("no helper")
 				}
 			}
 
@@ -529,7 +529,7 @@ func TestIsNotFound(t *testing.T) {
 	if !isNotFound(keyring.ErrNotFound) {
 		t.Error("expected isNotFound(keyring.ErrNotFound) = true")
 	}
-	if isNotFound(fmt.Errorf("some other error")) {
+	if isNotFound(errors.New("some other error")) {
 		t.Error("expected isNotFound(other error) = false")
 	}
 	// Wrapped ErrNotFound should also be detected.
@@ -566,7 +566,7 @@ func TestGetTokenWithRefresh(t *testing.T) {
 		// Set up a hosts.json so lookupEntireDBToken would find a user.
 		configDir := t.TempDir()
 		t.Setenv("ENTIRE_CONFIG_DIR", configDir)
-		hostsJSON := fmt.Sprintf(`{"example.com":{"activeUser":"alice","users":["alice"]}}`)
+		hostsJSON := `{"example.com":{"activeUser":"alice","users":["alice"]}}`
 		if err := os.WriteFile(filepath.Join(configDir, "hosts.json"), []byte(hostsJSON), 0o644); err != nil {
 			t.Fatal(err)
 		}

@@ -36,7 +36,7 @@ func MakeCommits(tb testing.TB, repo *git.Repository, fs billy.Filesystem, count
 		tb.Fatalf("open worktree: %v", err)
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		content := strings.Repeat(fmt.Sprintf("line %d %d\n", i, time.Now().UnixNano()), 24)
 		file, err := fs.Create("tracked.txt")
 		if err != nil {
@@ -70,7 +70,7 @@ func MakeBenchmarkCommits(tb testing.TB, repo *git.Repository, fs billy.Filesyst
 		tb.Fatalf("open worktree: %v", err)
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		content := fmt.Sprintf("bench line %d %d\n", i, time.Now().UnixNano())
 		file, err := fs.Create("tracked.txt")
 		if err != nil {
@@ -104,7 +104,7 @@ func MakeLargeCommits(tb testing.TB, repo *git.Repository, fs billy.Filesystem, 
 		tb.Fatalf("open worktree: %v", err)
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		name := fmt.Sprintf("blob-%d.bin", i)
 		file, err := fs.Create(name)
 		if err != nil {

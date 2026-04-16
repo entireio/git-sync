@@ -53,7 +53,7 @@ func LookupEntireDBCredential(raw Endpoint, ep *transport.Endpoint) (string, str
 	}
 	username := raw.Username
 	if username == "" {
-		username = "git"
+		username = defaultGitUsername
 	}
 	return username, token, true, nil
 }
@@ -82,7 +82,7 @@ func lookupEntireDBToken(host, baseURL string, skipTLS bool) (string, error) {
 	if configDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", nil // no config dir, not an error
+			return "", nil //nolint:nilerr // missing config dir means no stored credentials, not an error
 		}
 		configDir = filepath.Join(home, ".config", "entire")
 	}
@@ -174,19 +174,19 @@ func refreshAccessToken(ctx context.Context, host, username, baseURL string, ski
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/oauth/token", strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create token refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLS}, //nolint:gosec
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLS}, //nolint:gosec // InsecureSkipVerify is controlled by user flag
 		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("execute token refresh request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -195,7 +195,7 @@ func refreshAccessToken(ctx context.Context, host, username, baseURL string, ski
 
 	var tokenResp oauthTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", err
+		return "", fmt.Errorf("decode token refresh response: %w", err)
 	}
 	if tokenResp.AccessToken == "" {
 		return "", errors.New("empty access token in refresh response")
@@ -209,7 +209,8 @@ func refreshAccessToken(ctx context.Context, host, username, baseURL string, ski
 		return "", err
 	}
 	if tokenResp.RefreshToken != "" {
-		_ = WriteStoredToken(credentialService(host)+":refresh", username, tokenResp.RefreshToken)
+		//nolint:errcheck // best-effort refresh token storage; access token already saved successfully
+		WriteStoredToken(credentialService(host)+":refresh", username, tokenResp.RefreshToken)
 	}
 	return tokenResp.AccessToken, nil
 }

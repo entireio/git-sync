@@ -3,6 +3,7 @@ package replicate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -18,11 +19,11 @@ import (
 type Params struct {
 	SourceConn    *gitproto.Conn
 	SourceService interface {
-		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+		FetchPack(ctx context.Context, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 	}
 	TargetPusher interface {
-		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
-		PushCommands(context.Context, []gitproto.PushCommand) error
+		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
+		PushCommands(ctx context.Context, cmds []gitproto.PushCommand) error
 	}
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
@@ -41,7 +42,7 @@ type Result struct {
 // relay and deletes are sent afterwards as ref-only commands.
 func Execute(ctx context.Context, p Params) (Result, error) {
 	if p.TargetPusher == nil {
-		return Result{}, fmt.Errorf("replicate strategy requires TargetPusher")
+		return Result{}, errors.New("replicate strategy requires TargetPusher")
 	}
 
 	updatePlans := make([]planner.BranchPlan, 0, len(p.PushPlans))
@@ -52,6 +53,8 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 			updatePlans = append(updatePlans, plan)
 		case planner.ActionDelete:
 			deletePlans = append(deletePlans, plan)
+		case planner.ActionSkip, planner.ActionBlock:
+			// not applicable
 		default:
 			return Result{}, fmt.Errorf("replicate strategy does not support %s actions", plan.Action)
 		}
@@ -83,6 +86,7 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 
 type closeOnceReadCloser struct {
 	io.ReadCloser
+
 	once sync.Once
 }
 
@@ -91,7 +95,10 @@ func (c *closeOnceReadCloser) Close() error {
 	c.once.Do(func() {
 		err = c.ReadCloser.Close()
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("close pack reader: %w", err)
+	}
+	return nil
 }
 
 func closeOnce(rc io.ReadCloser) io.ReadCloser {

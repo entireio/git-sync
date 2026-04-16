@@ -267,7 +267,9 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 
 	t.Run("small pack proceeds without subdivide", func(t *testing.T) {
 		header := makePackHeader(100) // 100 * 750 = 75000 bytes estimated
-		body := append(header, []byte("packdata")...)
+		body := make([]byte, 0, len(header)+len("packdata"))
+		body = append(body, header...)
+		body = append(body, []byte("packdata")...)
 		r := io.NopCloser(bytes.NewReader(body))
 		subdivided := false
 		got, err := checkPackSizeAndSubdivide(r, 1_000_000, func() bool {
@@ -284,7 +286,10 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 			t.Fatal("should not subdivide small pack")
 		}
 		// Verify the PACK header was prepended back
-		out, _ := io.ReadAll(got)
+		out, err2 := io.ReadAll(got)
+		if err2 != nil {
+			t.Fatalf("unexpected ReadAll error: %v", err2)
+		}
 		if string(out[:4]) != "PACK" {
 			t.Fatalf("expected PACK header preserved, got %q", out[:4])
 		}
@@ -426,6 +431,7 @@ type fakeBootstrapPusher struct {
 
 type trackingReadCloser struct {
 	io.Reader
+
 	closed bool
 }
 
@@ -593,7 +599,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -611,7 +617,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 				Label:      "main",
 			},
 		},
-		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
 		TargetMaxPack: 10,
 	}, "empty target")
 	if err == nil || !strings.Contains(err.Error(), "push bootstrap batch") {
@@ -633,7 +639,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -652,7 +658,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 				Label:      "main",
 			},
 		},
-		TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
 		TargetMaxPack: 10,
 	}, "empty target")
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -693,7 +699,7 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 						Kind:       planner.RefKindBranch,
 					},
 				},
-				TargetRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+				TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
 				TargetMaxPack: tt.batchMaxPack,
 			}, "missing pusher")
 			if err == nil || err.Error() != "bootstrap strategy requires TargetPusher" {
@@ -708,7 +714,7 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 
 func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		requests++
 		t.Fatalf("unexpected preflight request: %s %s", r.Method, r.URL.String())
 	}))
@@ -731,7 +737,7 @@ func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
 		SourceService: fakeBootstrapSource{
 			fetchPack: func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				t.Fatal("unexpected fetch")
-				return nil, nil
+				return nil, nil //nolint:nilnil // test fake returns nil to signal no data
 			},
 		},
 		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
@@ -761,7 +767,7 @@ func makeLinearCommitChain(tb testing.TB, count int) []plumbing.Hash {
 func writeLinearCommitChain(tb testing.TB, store storer.Storer, count int) []plumbing.Hash {
 	tb.Helper()
 	hashes := make([]plumbing.Hash, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		obj := store.NewEncodedObject()
 		var parents []plumbing.Hash
 		if len(hashes) > 0 {

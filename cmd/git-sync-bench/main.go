@@ -117,7 +117,7 @@ func run(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.Options.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	cfg.Policy.Protocol = gitsync.ProtocolMode(benchProtocol)
 	if len(fs.Args()) > 0 {
@@ -133,7 +133,7 @@ func run(ctx context.Context, args []string) error {
 	for _, raw := range mappings {
 		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse mapping %q: %w", raw, err)
 		}
 		cfg.Scope.Mappings = append(cfg.Scope.Mappings, gitsync.RefMapping{
 			Source: mapping.Source,
@@ -178,7 +178,7 @@ func run(ctx context.Context, args []string) error {
 		Runs:        make([]runSummary, 0, repeat),
 	}
 
-	for i := 0; i < repeat; i++ {
+	for i := range repeat {
 		runCfg := cfg
 		targetPath := filepath.Join(workDir, fmt.Sprintf("%s-run-%03d.git", sc, i+1))
 		if err := os.RemoveAll(targetPath); err != nil {
@@ -215,7 +215,7 @@ func run(ctx context.Context, args []string) error {
 	report.Aggregate = summarizeRuns(report.Runs)
 
 	if jsonOutput {
-		data, err := json.MarshalIndent(report, "", "  ")
+		data, err := json.MarshalIndent(report, "", "  ") //nolint:musttag // bench debug output, nested types from other packages use default names
 		if err != nil {
 			return fmt.Errorf("marshal report: %w", err)
 		}
@@ -231,7 +231,7 @@ func executeScenario(ctx context.Context, sc scenario, cfg benchmarkConfig, targ
 	client := unstable.New(unstable.Options{})
 	switch sc {
 	case scenarioBootstrap:
-		return client.Bootstrap(ctx, unstable.BootstrapRequest{
+		result, err := client.Bootstrap(ctx, unstable.BootstrapRequest{
 			Source:      gitsync.Endpoint{URL: cfg.SourceURL},
 			Target:      gitsync.Endpoint{URL: targetURL},
 			Scope:       cfg.Scope,
@@ -239,14 +239,22 @@ func executeScenario(ctx context.Context, sc scenario, cfg benchmarkConfig, targ
 			Protocol:    cfg.Policy.Protocol,
 			Options:     cfg.Options,
 		})
+		if err != nil {
+			return unstable.Result{}, fmt.Errorf("bootstrap: %w", err)
+		}
+		return result, nil
 	case scenarioSync:
-		return client.Sync(ctx, unstable.SyncRequest{
+		result, err := client.Sync(ctx, unstable.SyncRequest{
 			Source:  gitsync.Endpoint{URL: cfg.SourceURL},
 			Target:  gitsync.Endpoint{URL: targetURL},
 			Scope:   cfg.Scope,
 			Policy:  cfg.Policy,
 			Options: cfg.Options,
 		})
+		if err != nil {
+			return unstable.Result{}, fmt.Errorf("sync: %w", err)
+		}
+		return result, nil
 	default:
 		return unstable.Result{}, fmt.Errorf("unsupported scenario %q", sc)
 	}
@@ -460,7 +468,7 @@ func (p *benchProtocolModeFlag) String() string {
 func (p *benchProtocolModeFlag) Set(value string) error {
 	mode, err := validation.NormalizeProtocolMode(value)
 	if err != nil {
-		return err
+		return fmt.Errorf("normalize protocol: %w", err)
 	}
 	*p = benchProtocolModeFlag(benchProtocolMode(gitsync.ProtocolMode(mode)))
 	return nil

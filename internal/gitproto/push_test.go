@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPrefixedLineWriter(t *testing.T) {
@@ -104,7 +105,9 @@ func fakeReceivePackServer(t *testing.T, reportErr string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Consume the request body.
-		_, _ = io.Copy(io.Discard, r.Body)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Logf("drain request body: %v", err)
+		}
 		_ = r.Body.Close()
 
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
@@ -114,7 +117,9 @@ func fakeReceivePackServer(t *testing.T, reportErr string) *httptest.Server {
 			// Write a minimal report-status with an error.
 			report := packp.NewReportStatus()
 			report.UnpackStatus = reportErr
-			_ = report.Encode(w)
+			if err := report.Encode(w); err != nil {
+				t.Logf("encode report: %v", err)
+			}
 		}
 		// If no reportErr, write nothing -- PushPack will not try to
 		// decode report-status when the capability is not negotiated.
@@ -154,7 +159,9 @@ func TestPushPackClosesPackOnSuccess(t *testing.T) {
 func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 	// Server that returns HTTP 500 so the POST fails.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Logf("drain request body: %v", err)
+		}
 		_ = r.Body.Close()
 		http.Error(w, "receive-pack failed", http.StatusInternalServerError)
 	}))
@@ -228,7 +235,9 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started <- struct{}{}
-		_, _ = io.Copy(io.Discard, r.Body)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Logf("drain request body: %v", err)
+		}
 		_ = r.Body.Close()
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -272,9 +281,9 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 
 func TestBuildUpdateRequest(t *testing.T) {
 	adv := packp.NewAdvRefs()
-	_ = adv.Capabilities.Set(capability.ReportStatus)
-	_ = adv.Capabilities.Set(capability.DeleteRefs)
-	_ = adv.Capabilities.Set(capability.Sideband64k)
+	require.NoError(t, adv.Capabilities.Set(capability.ReportStatus))
+	require.NoError(t, adv.Capabilities.Set(capability.DeleteRefs))
+	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
 
 	req, hasDelete, hasUpdates, err := buildUpdateRequest(adv, []PushCommand{
 		{Name: "refs/heads/main", New: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
@@ -315,10 +324,11 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 	adv := packp.NewAdvRefs()
 	adv.Capabilities = capability.NewList()
 	// Use a nil-transport conn -- we should never reach the network.
-	ep, _ := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	require.NoError(t, err)
 	conn := &Conn{Endpoint: ep, HTTP: &http.Client{}}
 
-	err := PushPack(context.Background(), conn, adv, []PushCommand{
+	err = PushPack(context.Background(), conn, adv, []PushCommand{
 		{Name: "refs/heads/old", Delete: true},
 	}, pack, false)
 	if err == nil {
@@ -331,6 +341,7 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 
 type trackingReadCloser struct {
 	io.ReadCloser
+
 	closed bool
 }
 

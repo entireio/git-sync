@@ -45,7 +45,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 		}
 		if caps, err := DecodeV2Capabilities(bytes.NewReader(data)); err == nil {
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
-				return nil, nil, fmt.Errorf("source does not advertise required protocol v2 commands")
+				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
 			}
 			refs, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
@@ -54,7 +54,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 			return refs, &RefService{Protocol: "v2", V2Caps: caps}, nil
 		}
 		if protocolMode == "v2" {
-			return nil, nil, fmt.Errorf("source did not negotiate protocol v2")
+			return nil, nil, errors.New("source did not negotiate protocol v2")
 		}
 		// Fall back to v1
 		adv, err := decodeV1AdvRefs(data)
@@ -85,11 +85,11 @@ func AdvertisedRefsV1(ctx context.Context, conn *Conn, service transport.Service
 func AdvRefsToSlice(ar *packp.AdvRefs) ([]*plumbing.Reference, error) {
 	refs, err := ar.AllReferences()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("all references: %w", err)
 	}
 	iter, err := refs.IterReferences()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iter references: %w", err)
 	}
 	defer iter.Close()
 
@@ -98,7 +98,10 @@ func AdvRefsToSlice(ar *packp.AdvRefs) ([]*plumbing.Reference, error) {
 		out = append(out, ref)
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, fmt.Errorf("iterate references: %w", err)
+	}
+	return out, nil
 }
 
 // AdvRefsCaps returns the sorted capability list from an AdvRefs.
@@ -187,7 +190,7 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 
 	ar := packp.NewAdvRefs()
 	if err := ar.Decode(rd); err != nil {
-		if err == packp.ErrEmptyAdvRefs {
+		if errors.Is(err, packp.ErrEmptyAdvRefs) {
 			return nil, transport.ErrEmptyRemoteRepository
 		}
 		return nil, fmt.Errorf("%w; body-prefix=%q", err, bodyPreview(data))
@@ -198,7 +201,7 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {
 	_, prefix, err := pktline.PeekLine(rd)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("peek pktline: %w", err)
 	}
 	if !bytes.HasPrefix(prefix, []byte("# service=")) {
 		return false, nil
@@ -206,7 +209,7 @@ func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {
 
 	var reply packp.SmartReply
 	if err := reply.Decode(rd); err != nil {
-		return true, err
+		return true, fmt.Errorf("decode smart reply: %w", err)
 	}
 	if reply.Service == "" {
 		return true, errors.New("missing smart HTTP service name")

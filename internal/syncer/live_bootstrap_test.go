@@ -39,14 +39,14 @@ func runLiveLinuxBootstrap(t *testing.T, batchMaxPackBytes int64, wantRelayMode 
 	defer server.Close()
 
 	result, err := Bootstrap(context.Background(), Config{
-		Source:        Endpoint{URL: "https://github.com/torvalds/linux.git"},
-		Target:        Endpoint{URL: server.RepoURL("target.git")},
-		Branches:      []string{"master"},
+		Source:             Endpoint{URL: "https://github.com/torvalds/linux.git"},
+		Target:             Endpoint{URL: server.RepoURL("target.git")},
+		Branches:           []string{"master"},
 		TargetMaxPackBytes: batchMaxPackBytes,
-		ProtocolMode:  protocolModeAuto,
-		ShowStats:     true,
-		MeasureMemory: true,
-		Verbose:       true,
+		ProtocolMode:       protocolModeAuto,
+		ShowStats:          true,
+		MeasureMemory:      true,
+		Verbose:            true,
 	})
 	if err != nil {
 		t.Fatalf("live linux bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())

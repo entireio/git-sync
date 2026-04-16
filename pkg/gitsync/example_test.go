@@ -16,7 +16,7 @@ func ExampleClient_Sync() {
 		},
 	})
 
-	_, _ = client.Sync(context.Background(), gitsync.SyncRequest{
+	if _, err := client.Sync(context.Background(), gitsync.SyncRequest{
 		Source: gitsync.Endpoint{URL: "https://github.example/source/repo.git"},
 		Target: gitsync.Endpoint{URL: "https://git.example/target/repo.git"},
 		Scope:  gitsync.RefScope{Branches: []string{"main"}},
@@ -24,7 +24,9 @@ func ExampleClient_Sync() {
 			IncludeTags: true,
 			Protocol:    gitsync.ProtocolAuto,
 		},
-	})
+	}); err != nil {
+		return // network error expected in example environment
+	}
 
 	// Output:
 }

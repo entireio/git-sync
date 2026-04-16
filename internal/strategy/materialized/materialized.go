@@ -5,6 +5,7 @@ package materialized
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	git "github.com/go-git/go-git/v6"
@@ -21,10 +22,10 @@ type Params struct {
 	Store         storer.Storer
 	SourceConn    *gitproto.Conn
 	SourceService interface {
-		FetchToStore(context.Context, storer.Storer, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) error
+		FetchToStore(ctx context.Context, store storer.Storer, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) error
 	}
 	TargetPusher interface {
-		PushObjects(context.Context, []gitproto.PushCommand, storer.Storer, []plumbing.Hash) error
+		PushObjects(ctx context.Context, cmds []gitproto.PushCommand, store storer.Storer, hashes []plumbing.Hash) error
 	}
 	DesiredRefs map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs  map[plumbing.ReferenceName]plumbing.Hash
@@ -82,8 +83,8 @@ func (e *executor) ensureTagObjects() error {
 		return nil
 	}
 	err := e.params.SourceService.FetchToStore(e.ctx, e.params.Store, e.params.SourceConn, tagDesired, nil)
-	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return err
+	if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("fetch tag objects to store: %w", err)
 	}
 	return nil
 }
@@ -95,7 +96,11 @@ func (e *executor) collectObjectClosure() ([]plumbing.Hash, error) {
 			objects = append(objects, plan.SourceHash)
 		}
 	}
-	return planner.ObjectsToPush(e.params.Store, objects, e.params.TargetRefs)
+	hashes, err := planner.ObjectsToPush(e.params.Store, objects, e.params.TargetRefs)
+	if err != nil {
+		return nil, fmt.Errorf("compute objects to push: %w", err)
+	}
+	return hashes, nil
 }
 
 func (e *executor) enforceObjectLimit(hashes []plumbing.Hash) error {
@@ -112,7 +117,7 @@ func (e *executor) enforceObjectLimit(hashes []plumbing.Hash) error {
 func (e *executor) push(hashes []plumbing.Hash) error {
 	cmds := convert.PlansToPushCommands(e.params.PushPlans)
 	if e.params.TargetPusher == nil {
-		return fmt.Errorf("materialized strategy requires TargetPusher")
+		return errors.New("materialized strategy requires TargetPusher")
 	}
 	if err := e.params.TargetPusher.PushObjects(e.ctx, cmds, e.params.Store, hashes); err != nil {
 		return fmt.Errorf("push target refs: %w", err)

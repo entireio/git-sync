@@ -96,10 +96,10 @@ func (s *RefService) FetchCommitGraph(
 	ref DesiredRef,
 ) error {
 	if s.Protocol != "v2" {
-		return fmt.Errorf("commit graph fetch requires protocol v2")
+		return errors.New("commit graph fetch requires protocol v2")
 	}
 	if !s.V2Caps.FetchSupports("filter") {
-		return fmt.Errorf("source does not advertise fetch filter support")
+		return errors.New("source does not advertise fetch filter support")
 	}
 
 	cmdArgs := []string{
@@ -252,7 +252,10 @@ func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
 				demux.Progress = progressSink(verbose, "source: ")
-				return packfile.UpdateObjectStorage(store, demux)
+				if err := packfile.UpdateObjectStorage(store, demux); err != nil {
+					return fmt.Errorf("update object storage: %w", err)
+				}
+				return nil
 			case "acknowledgments\n", "shallow-info\n":
 				if err := SkipSection(reader); err != nil {
 					return err
@@ -319,17 +322,25 @@ func buildV1UploadPackBody(
 	req := packp.NewUploadRequest()
 	req.Wants = wants
 	if !verbose && adv.Capabilities.Supports(capability.NoProgress) {
-		_ = req.Capabilities.Set(capability.NoProgress)
+		if err := req.Capabilities.Set(capability.NoProgress); err != nil {
+			return nil, nil, fmt.Errorf("set capability: %w", err)
+		}
 	}
 	if includeTags && adv.Capabilities.Supports(capability.IncludeTag) {
-		_ = req.Capabilities.Set(capability.IncludeTag)
+		if err := req.Capabilities.Set(capability.IncludeTag); err != nil {
+			return nil, nil, fmt.Errorf("set capability: %w", err)
+		}
 	}
 	// Prefer sideband64k over sideband (issue #4).
 	if sb := PreferredSideband(adv.Capabilities); sb != "" {
-		_ = req.Capabilities.Set(sb)
+		if err := req.Capabilities.Set(sb); err != nil {
+			return nil, nil, fmt.Errorf("set capability: %w", err)
+		}
 	}
 	if adv.Capabilities.Supports(capability.OFSDelta) {
-		_ = req.Capabilities.Set(capability.OFSDelta)
+		if err := req.Capabilities.Set(capability.OFSDelta); err != nil {
+			return nil, nil, fmt.Errorf("set capability: %w", err)
+		}
 	}
 	// NOTE: we intentionally do not request capability.ThinPack. The relayed
 	// pack must stay self-contained because callers (e.g. replicate) forward
@@ -377,7 +388,10 @@ func fetchToStoreV1(
 		return fmt.Errorf("drain server response: %w", drainErr)
 	}
 	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: "))
-	return packfile.UpdateObjectStorage(store, sbReader)
+	if err := packfile.UpdateObjectStorage(store, sbReader); err != nil {
+		return fmt.Errorf("update object storage: %w", err)
+	}
+	return nil
 }
 
 func fetchPackV1(
@@ -431,7 +445,7 @@ func drainTrailingNAKs(r *bufio.Reader) error {
 			return nil
 		}
 		if _, err := r.Discard(8); err != nil {
-			return err
+			return fmt.Errorf("discard trailing NAK: %w", err)
 		}
 	}
 }
@@ -502,4 +516,3 @@ type wrappedRC struct {
 	io.Reader
 	io.Closer
 }
-

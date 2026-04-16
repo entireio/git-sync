@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -14,7 +15,11 @@ func ReadStoredToken(service, username string) (string, error) {
 	if os.Getenv("ENTIRE_TOKEN_STORE") == "file" {
 		return readFileToken(fileTokenPath(), service, username)
 	}
-	return keyring.Get(service, username)
+	token, err := keyring.Get(service, username)
+	if err != nil {
+		return "", fmt.Errorf("read keyring token: %w", err)
+	}
+	return token, nil
 }
 
 // WriteStoredToken writes a token to the configured store.
@@ -22,7 +27,10 @@ func WriteStoredToken(service, username, password string) error {
 	if os.Getenv("ENTIRE_TOKEN_STORE") == "file" {
 		return writeFileToken(fileTokenPath(), service, username, password)
 	}
-	return keyring.Set(service, username, password)
+	if err := keyring.Set(service, username, password); err != nil {
+		return fmt.Errorf("write keyring token: %w", err)
+	}
+	return nil
 }
 
 func fileTokenPath() string {
@@ -57,11 +65,11 @@ func readFileTokenDirect(path, service, username string) (string, error) {
 		if os.IsNotExist(err) {
 			return "", keyring.ErrNotFound
 		}
-		return "", err
+		return "", fmt.Errorf("read token store file: %w", err)
 	}
 	var store map[string]map[string]string
 	if err := json.Unmarshal(data, &store); err != nil {
-		return "", err
+		return "", fmt.Errorf("unmarshal token store: %w", err)
 	}
 	users := store[service]
 	if users == nil {
@@ -81,7 +89,7 @@ func writeFileToken(path, service, username, password string) error {
 		return os.ErrInvalid
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return fmt.Errorf("create config directory: %w", err)
 	}
 
 	// Acquire exclusive lock for the write.
@@ -95,10 +103,10 @@ func writeFileToken(path, service, username, password string) error {
 	store := map[string]map[string]string{}
 	if data, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(data, &store); err != nil {
-			return err
+			return fmt.Errorf("unmarshal token store: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
-		return err
+		return fmt.Errorf("read token store file: %w", err)
 	}
 	if store[service] == nil {
 		store[service] = map[string]string{}
@@ -106,14 +114,17 @@ func writeFileToken(path, service, username, password string) error {
 	store[service][username] = password
 	data, err := json.Marshal(store)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal token store: %w", err)
 	}
 	// Atomic write: write to temp file then rename to prevent corruption on crash.
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
+		return fmt.Errorf("write token store temp file: %w", err)
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename token store temp file: %w", err)
+	}
+	return nil
 }
 
 // flockShared acquires a shared (read) lock on path+".lock".
@@ -129,14 +140,15 @@ func flockExclusive(path string) (func(), error) {
 func flockOpen(lockPath string, how int) (func(), error) {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open lock file: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), how); err != nil {
 		f.Close()
-		return nil, err
+		return nil, fmt.Errorf("acquire file lock: %w", err)
 	}
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		//nolint:errcheck // unlock errors on close are not actionable
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
 }

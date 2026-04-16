@@ -1,6 +1,7 @@
 package gitproto
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -41,6 +42,7 @@ func LimitPackReader(r io.ReadCloser, maxBytes int64) io.ReadCloser {
 
 type packLimitRC struct {
 	io.ReadCloser
+
 	max  int64
 	read int64
 }
@@ -51,5 +53,8 @@ func (r *packLimitRC) Read(p []byte) (int, error) {
 	if r.read > r.max {
 		return n, fmt.Errorf("source pack exceeded max-pack-bytes limit (%d)", r.max)
 	}
-	return n, err
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, fmt.Errorf("read: %w", err)
+	}
+	return n, err //nolint:wrapcheck // io.EOF must pass through for io.Reader contract
 }

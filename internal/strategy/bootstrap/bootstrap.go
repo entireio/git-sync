@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	defaultTargetMaxPackBytes = 512 * 1024 * 1024
-	githubLargeRepoThresholdKB   = 1536 * 1024
+	defaultTargetMaxPackBytes  = 512 * 1024 * 1024
+	githubLargeRepoThresholdKB = 1536 * 1024
 )
 
 var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
@@ -42,20 +42,20 @@ var GitHubRepoAPIBaseURL = "https://api.github.com"
 type Params struct {
 	SourceConn    *gitproto.Conn
 	SourceService interface {
-		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-		FetchCommitGraph(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+		FetchPack(ctx context.Context, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+		FetchCommitGraph(ctx context.Context, store storer.Storer, conn *gitproto.Conn, ref gitproto.DesiredRef) error
 		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
-		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
-		PushCommands(context.Context, []gitproto.PushCommand) error
+		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
+		PushCommands(ctx context.Context, cmds []gitproto.PushCommand) error
 	}
-	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
-	MaxPackBytes int64
+	DesiredRefs   map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs    map[plumbing.ReferenceName]plumbing.Hash
+	MaxPackBytes  int64
 	TargetMaxPack int64
-	Verbose      bool
-	Logger       *slog.Logger
+	Verbose       bool
+	Logger        *slog.Logger
 }
 
 // Result holds the outcome of the bootstrap strategy.
@@ -73,13 +73,14 @@ type Result struct {
 
 type plannedBatch struct {
 	planner.BootstrapBatch
+
 	chain []plumbing.Hash // full first-parent chain (root→tip) for subdividing on push failure
 }
 
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
 	if p.TargetPusher == nil {
-		return Result{Relay: true, RelayMode: "bootstrap", RelayReason: relayReason}, fmt.Errorf("bootstrap strategy requires TargetPusher")
+		return Result{Relay: true, RelayMode: "bootstrap", RelayReason: relayReason}, errors.New("bootstrap strategy requires TargetPusher")
 	}
 
 	// GitHub large-repo preflight
@@ -95,7 +96,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, planTargetRefs)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("build bootstrap plans: %w", err)
 	}
 
 	result := Result{
@@ -160,14 +161,14 @@ func adjustedBootstrapTargetRefs(
 
 // --- Batched bootstrap ---
 
-func executeBatched(
+func executeBatched( //nolint:maintidx // complex batch logic is inherently branchy
 	ctx context.Context,
 	p Params,
 	plans []planner.BranchPlan,
 	result Result,
 ) (Result, error) {
 	if !p.SourceService.SupportsBootstrapBatch() {
-		return result, fmt.Errorf("bootstrap batching requires protocol v2 source fetch filter support")
+		return result, errors.New("bootstrap batching requires protocol v2 source fetch filter support")
 	}
 
 	planRefs := make([]planner.DesiredRef, 0, len(plans))
@@ -185,7 +186,7 @@ func executeBatched(
 			continue
 		}
 		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
-			return result, fmt.Errorf("bootstrap batching currently supports branch refs and create-only tags")
+			return result, errors.New("bootstrap batching currently supports branch refs and create-only tags")
 		}
 		planRefs = append(planRefs, p.DesiredRefs[plan.TargetRef])
 	}
@@ -455,7 +456,7 @@ func planCheckpointsFromChain(ctx context.Context, p Params, ref planner.Desired
 		return nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
 	chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
-	graphStore = nil // allow GC to reclaim the commit graph store (~4.6 GB for linux)
+	graphStore = nil //nolint:ineffassign,wastedassign // clear reference so GC can reclaim ~4.6 GB commit graph store
 	runtime.GC()
 	if err != nil {
 		return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
@@ -502,13 +503,13 @@ func checkPackSizeAndSubdivide(
 	r io.ReadCloser,
 	batchLimit int64,
 	subdivide func() bool,
-) (io.ReadCloser, error) {
+) (io.ReadCloser, error) { //nolint:unparam // error return kept for future use
 	var header [12]byte
 	n, err := io.ReadFull(r, header[:])
 	if err != nil {
 		// Short pack or error — let the push handle it
 		prefixed := io.MultiReader(bytes.NewReader(header[:n]), r)
-		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil //nolint:nilerr // below threshold is not an error, we return the original reader
 	}
 	if string(header[:4]) != "PACK" {
 		// Not a standard packfile — can't estimate, proceed
@@ -520,7 +521,7 @@ func checkPackSizeAndSubdivide(
 
 	if estimated > batchLimit && subdivide() {
 		_ = r.Close()
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil reader signals no subdivision needed
 	}
 
 	prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
@@ -532,7 +533,13 @@ type wrappedMultiRC struct {
 	io.Closer
 }
 
-func (w *wrappedMultiRC) Read(p []byte) (int, error) { return w.Reader.Read(p) }
+func (w *wrappedMultiRC) Read(p []byte) (int, error) {
+	n, err := w.Reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, fmt.Errorf("read prepended pack: %w", err)
+	}
+	return n, err //nolint:wrapcheck // io.EOF must not be wrapped to preserve io.Reader contract
+}
 
 // chainPosition returns the index of hash in chain, or -1 if not found.
 func chainPosition(chain []plumbing.Hash, hash plumbing.Hash) int {
@@ -586,7 +593,7 @@ func evenCheckpoints(chain []plumbing.Hash, numBatches int) []plumbing.Hash {
 	}
 	checkpoints := make([]plumbing.Hash, 0, numBatches)
 	batchSize := len(chain) / numBatches
-	for i := 0; i < numBatches-1; i++ {
+	for i := range numBatches - 1 {
 		idx := (i+1)*batchSize - 1
 		if idx >= len(chain)-1 {
 			break
@@ -616,7 +623,7 @@ func packReaderForCheckpoint(
 	}
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetch checkpoint pack: %w", err)
 	}
 	return gitproto.LimitPackReader(packReader, batchLimit), nil
 }
@@ -655,7 +662,7 @@ func lookupGitHubRepoSizeKB(ctx context.Context, conn *gitproto.Conn) (int64, bo
 		return 0, false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("X-Github-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", capability.DefaultAgent())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
 	resp, err := conn.HTTP.Do(req)
@@ -764,6 +771,7 @@ func (p Params) log(msg string, args ...any) {
 
 type closeOnceReadCloser struct {
 	io.ReadCloser
+
 	once sync.Once
 }
 
@@ -772,7 +780,10 @@ func (c *closeOnceReadCloser) Close() error {
 	c.once.Do(func() {
 		err = c.ReadCloser.Close()
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("close pack reader: %w", err)
+	}
+	return nil
 }
 
 func closeOnce(rc io.ReadCloser) io.ReadCloser {

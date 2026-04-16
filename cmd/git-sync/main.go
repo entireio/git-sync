@@ -9,10 +9,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/entirehq/git-sync/internal/validation"
 	"github.com/entirehq/git-sync/pkg/gitsync"
 	"github.com/entirehq/git-sync/pkg/gitsync/unstable"
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
 func main() {
@@ -90,7 +90,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, d
 	fs.BoolVar(&req.Options.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	req.Policy.Mode = gitsync.OperationMode(modeValue)
 	req.Policy.Protocol = gitsync.ProtocolMode(protocolValue)
@@ -112,7 +112,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, d
 	for _, raw := range mappings {
 		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse mapping %q: %w", raw, err)
 		}
 		req.Scope.Mappings = append(req.Scope.Mappings, gitsync.RefMapping{
 			Source: mapping.Source,
@@ -141,7 +141,7 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, d
 		}
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("sync: %w", err)
 	}
 	printOutput(jsonOutput, result)
 
@@ -187,7 +187,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 	fs.BoolVar(&req.Options.Verbose, "v", false, "verbose logging")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	req.Protocol = gitsync.ProtocolMode(bootstrapProtocol)
 
@@ -208,7 +208,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 	for _, raw := range mappings {
 		mapping, err := validation.ParseMapping(raw)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse mapping %q: %w", raw, err)
 		}
 		req.Scope.Mappings = append(req.Scope.Mappings, gitsync.RefMapping{
 			Source: mapping.Source,
@@ -224,7 +224,7 @@ func runBootstrap(ctx context.Context, args []string) error {
 		Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
 	}).Bootstrap(ctx, req)
 	if err != nil {
-		return err
+		return fmt.Errorf("bootstrap: %w", err)
 	}
 	printOutput(jsonOutput, result)
 	return nil
@@ -256,7 +256,7 @@ func runProbe(ctx context.Context, args []string) error {
 	fs.BoolVar(&jsonOutput, "json", false, "print JSON output")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	req.Protocol = gitsync.ProtocolMode(probeProtocol)
 
@@ -281,7 +281,7 @@ func runProbe(ctx context.Context, args []string) error {
 		Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
 	}).Probe(ctx, req)
 	if err != nil {
-		return err
+		return fmt.Errorf("probe: %w", err)
 	}
 	printOutput(jsonOutput, result)
 	return nil
@@ -313,7 +313,7 @@ func runFetch(ctx context.Context, args []string) error {
 	fs.Var(&haveHashesRaw, "have", "explicit object hash to advertise as have")
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 	req.Protocol = gitsync.ProtocolMode(fetchProtocol)
 
@@ -346,7 +346,7 @@ func runFetch(ctx context.Context, args []string) error {
 		Auth: gitsync.StaticAuthProvider{Source: sourceAuth},
 	}).Fetch(ctx, req)
 	if err != nil {
-		return err
+		return fmt.Errorf("fetch: %w", err)
 	}
 	printOutput(jsonOutput, result)
 	return nil
@@ -369,7 +369,11 @@ func printOutput(jsonOutput bool, value interface{ Lines() []string }) {
 }
 
 func marshalOutput(value interface{}) ([]byte, error) {
-	return json.MarshalIndent(value, "", "  ")
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSON: %w", err)
+	}
+	return data, nil
 }
 
 type multiStringFlag []string
@@ -429,7 +433,7 @@ func (p *protocolModeFlag) String() string {
 func (p *protocolModeFlag) Set(value string) error {
 	mode, err := validation.NormalizeProtocolMode(value)
 	if err != nil {
-		return err
+		return fmt.Errorf("normalize protocol: %w", err)
 	}
 	*p = protocolModeFlag(protocolMode(gitsync.ProtocolMode(mode)))
 	return nil

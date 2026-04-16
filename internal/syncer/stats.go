@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -69,7 +70,6 @@ func (s *statsCollector) snapshot() Stats {
 	return out
 }
 
-
 // countingRoundTripper wraps an HTTP transport to record transfer stats.
 type countingRoundTripper struct {
 	base  http.RoundTripper
@@ -80,7 +80,7 @@ type countingRoundTripper struct {
 func (rt *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	res, err := rt.base.RoundTrip(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("round trip: %w", err)
 	}
 
 	serviceName := req.Header.Get(gitproto.StatsPhaseHeader)
@@ -107,6 +107,7 @@ func (rt *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 
 type countingReadCloser struct {
 	io.ReadCloser
+
 	n       int64
 	onClose func(int64)
 }
@@ -114,7 +115,7 @@ type countingReadCloser struct {
 func (c *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := c.ReadCloser.Read(p)
 	c.n += int64(n)
-	return n, err
+	return n, err //nolint:wrapcheck // Read must preserve io.EOF for io.Reader contract
 }
 
 func (c *countingReadCloser) Close() error {
@@ -123,5 +124,8 @@ func (c *countingReadCloser) Close() error {
 		c.onClose(c.n)
 		c.onClose = nil
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
 }

@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/entirehq/git-sync/internal/validation"
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
 // RefKind distinguishes branch refs from tag refs.
@@ -70,7 +70,7 @@ func (p BranchPlan) MarshalJSON() ([]byte, error) {
 		Action     Action  `json:"action"`
 		Reason     string  `json:"reason"`
 	}
-	return json.Marshal(bp{
+	data, err := json.Marshal(bp{
 		Branch:     p.Branch,
 		SourceRef:  p.SourceRef.String(),
 		TargetRef:  p.TargetRef.String(),
@@ -80,6 +80,10 @@ func (p BranchPlan) MarshalJSON() ([]byte, error) {
 		Action:     p.Action,
 		Reason:     p.Reason,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal branch plan: %w", err)
+	}
+	return data, nil
 }
 
 // ShortHash returns the first 8 characters of a hash, or "<zero>" for zero hashes.
@@ -147,11 +151,12 @@ func RefPrefixes(mappings []RefMapping, includeTags bool) []string {
 	if len(mappings) > 0 {
 		for _, m := range mappings {
 			src := strings.TrimSpace(m.Source)
-			if strings.HasPrefix(src, "refs/tags/") {
+			switch {
+			case strings.HasPrefix(src, "refs/tags/"):
 				prefixSet["refs/tags/"] = struct{}{}
-			} else if strings.HasPrefix(src, "refs/heads/") {
+			case strings.HasPrefix(src, "refs/heads/"):
 				prefixSet["refs/heads/"] = struct{}{}
-			} else if !strings.HasPrefix(src, "refs/") {
+			case !strings.HasPrefix(src, "refs/"):
 				prefixSet["refs/heads/"] = struct{}{}
 			}
 		}

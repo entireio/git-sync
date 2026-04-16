@@ -15,10 +15,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
 	bstrap "github.com/entirehq/git-sync/internal/strategy/bootstrap"
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
 const gitHTTPBackendEnv = "GITSYNC_E2E_GIT_HTTP_BACKEND"
@@ -87,7 +87,7 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected incremental result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "incremental" {
+	if !result.Relay || result.RelayMode != relayModeIncremental {
 		t.Fatalf("expected incremental sync to use incremental relay, got %+v", result)
 	}
 
@@ -219,7 +219,7 @@ func TestRun_GitHTTPBackendSyncMultiBranchFastForward(t *testing.T) {
 	if result.Pushed != 2 || result.Blocked != 0 {
 		t.Fatalf("unexpected multi-branch result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "incremental" {
+	if !result.Relay || result.RelayMode != relayModeIncremental {
 		t.Fatalf("expected multi-branch fast-forward sync to use incremental relay, got %+v", result)
 	}
 
@@ -291,7 +291,7 @@ func TestRun_GitHTTPBackendSyncMappedBranchFastForward(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected mapped incremental result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "incremental" {
+	if !result.Relay || result.RelayMode != relayModeIncremental {
 		t.Fatalf("expected mapped incremental sync to use incremental relay, got %+v", result)
 	}
 
@@ -352,7 +352,7 @@ func TestRun_GitHTTPBackendSyncTagCreate(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected tag-create result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "incremental" {
+	if !result.Relay || result.RelayMode != relayModeIncremental {
 		t.Fatalf("expected tag-create sync to use incremental relay, got %+v", result)
 	}
 
@@ -444,8 +444,8 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	targetURL := server.RepoURL("target.git")
 
 	result, err := Bootstrap(context.Background(), Config{
-		Source:            Endpoint{URL: sourceURL},
-		Target:            Endpoint{URL: targetURL},
+		Source:             Endpoint{URL: sourceURL},
+		Target:             Endpoint{URL: targetURL},
 		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
@@ -454,7 +454,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected batched bootstrap result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch || !result.Batching {
 		t.Fatalf("expected batched bootstrap relay result, got %+v", result)
 	}
 	if result.BatchCount < 2 {
@@ -508,10 +508,10 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	sourceURL := server.RepoURL("source.git")
 	targetURL := server.RepoURL("target.git")
 	cfg := Config{
-		Source:            Endpoint{URL: sourceURL},
-		Target:            Endpoint{URL: targetURL},
+		Source:             Endpoint{URL: sourceURL},
+		Target:             Endpoint{URL: targetURL},
 		TargetMaxPackBytes: 350_000,
-		ProtocolMode:      protocolModeAuto,
+		ProtocolMode:       protocolModeAuto,
 	}
 
 	stats := newStats(false)
@@ -553,7 +553,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected batched resume result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch || !result.Batching {
 		t.Fatalf("expected batched bootstrap resume relay result, got %+v", result)
 	}
 	if result.BatchCount >= len(checkpoints) {
@@ -634,7 +634,7 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 		checkpoints, err := bstrap.PlanCheckpoints(context.Background(), bstrap.Params{
 			SourceConn:    sourceConn,
 			SourceService: sourceService,
-			TargetMaxPack:  limit,
+			TargetMaxPack: limit,
 			Verbose:       cfg.Verbose,
 		}, ref)
 		if err != nil {
@@ -700,9 +700,9 @@ func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
 	targetURL := server.RepoURL("target.git")
 
 	result, err := Bootstrap(context.Background(), Config{
-		Source:            Endpoint{URL: sourceURL},
-		Target:            Endpoint{URL: targetURL},
-		IncludeTags:       true,
+		Source:             Endpoint{URL: sourceURL},
+		Target:             Endpoint{URL: targetURL},
+		IncludeTags:        true,
 		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
@@ -711,7 +711,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
 	if result.Pushed != 2 || result.Blocked != 0 {
 		t.Fatalf("unexpected batched bootstrap with tags result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch || !result.Batching {
 		t.Fatalf("expected batched bootstrap with tags relay result, got %+v", result)
 	}
 
@@ -770,7 +770,7 @@ func (s *gitHTTPBackendServer) Stderr() string {
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
@@ -805,7 +805,7 @@ func assertGitRefEqual(t *testing.T, sourceRepoPath, targetRepoPath string, refs
 
 func assertGitRefAbsent(t *testing.T, repoPath string, ref plumbing.ReferenceName) {
 	t.Helper()
-	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", ref.String())
+	cmd := exec.CommandContext(t.Context(), "git", "show-ref", "--verify", "--quiet", ref.String())
 	cmd.Dir = repoPath
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if err := cmd.Run(); err == nil {

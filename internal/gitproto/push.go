@@ -3,6 +3,7 @@ package gitproto
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,10 +60,14 @@ func buildUpdateRequest(
 ) (*packp.UpdateRequests, bool, bool, error) {
 	req := packp.NewUpdateRequests()
 	if sb := PreferredSideband(adv.Capabilities); sb != "" {
-		_ = req.Capabilities.Set(sb)
+		if err := req.Capabilities.Set(sb); err != nil {
+			return nil, false, false, fmt.Errorf("set capability: %w", err)
+		}
 	}
 	if adv.Capabilities.Supports(capability.ReportStatus) {
-		_ = req.Capabilities.Set(capability.ReportStatus)
+		if err := req.Capabilities.Set(capability.ReportStatus); err != nil {
+			return nil, false, false, fmt.Errorf("set capability: %w", err)
+		}
 	}
 
 	hasDelete := false
@@ -81,9 +86,11 @@ func buildUpdateRequest(
 
 	if hasDelete {
 		if !adv.Capabilities.Supports(capability.DeleteRefs) {
-			return nil, false, false, fmt.Errorf("target does not support delete-refs")
+			return nil, false, false, errors.New("target does not support delete-refs")
 		}
-		_ = req.Capabilities.Set(capability.DeleteRefs)
+		if err := req.Capabilities.Set(capability.DeleteRefs); err != nil {
+			return nil, false, false, fmt.Errorf("set capability: %w", err)
+		}
 	}
 
 	_ = verbose // progress handling is server-side in HTTP mode
@@ -132,7 +139,7 @@ func sendReceivePack(
 			return fmt.Errorf("decode report-status: %w", err)
 		}
 		if err := report.Error(); err != nil {
-			return err
+			return fmt.Errorf("report-status: %w", err)
 		}
 	}
 	return nil
@@ -190,7 +197,7 @@ func PushPack(
 	for _, cmd := range commands {
 		if cmd.Delete {
 			_ = pack.Close()
-			return fmt.Errorf("pack push only supports create and update actions")
+			return errors.New("pack push only supports create and update actions")
 		}
 	}
 
@@ -205,7 +212,10 @@ func PushPack(
 	if err != nil {
 		return err
 	}
-	return closeErr
+	if closeErr != nil {
+		return fmt.Errorf("close pack: %w", closeErr)
+	}
+	return nil
 }
 
 // PushCommands sends ref update commands without a pack (for ref-only changes).
@@ -256,7 +266,7 @@ func (p *prefixedLineWriter) Write(b []byte) (int, error) {
 	for len(b) > 0 {
 		if p.atLineStart {
 			if _, err := io.WriteString(p.w, p.prefix); err != nil {
-				return consumed, err
+				return consumed, fmt.Errorf("write prefix: %w", err)
 			}
 			p.atLineStart = false
 		}
@@ -271,7 +281,7 @@ func (p *prefixedLineWriter) Write(b []byte) (int, error) {
 		n, err := p.w.Write(chunk)
 		consumed += n
 		if err != nil {
-			return consumed, err
+			return consumed, fmt.Errorf("write chunk: %w", err)
 		}
 		b = b[len(chunk):]
 	}

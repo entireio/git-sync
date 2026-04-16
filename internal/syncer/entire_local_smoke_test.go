@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -115,11 +116,11 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 			Token:         token,
 			SkipTLSVerify: skipTLSVerify,
 		},
-		Branches:          []string{branch},
-		Verbose:           true,
-		MaxPackBytes:      maxPackBytes,
+		Branches:           []string{branch},
+		Verbose:            true,
+		MaxPackBytes:       maxPackBytes,
 		TargetMaxPackBytes: batchMaxPackBytes,
-		ProtocolMode:      protocolMode,
+		ProtocolMode:       protocolMode,
 	})
 	if err != nil {
 		t.Fatalf("sync public source into Entire failed: %v", err)
@@ -196,7 +197,7 @@ func entireCLIBinary() (string, error) {
 	if path, err := exec.LookPath("entiredb"); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("could not find entiredb; set GITSYNC_E2E_ENTIREDB_BIN or put entiredb on PATH")
+	return "", errors.New("could not find entiredb; set GITSYNC_E2E_ENTIREDB_BIN or put entiredb on PATH")
 }
 
 func entireCLIEnv(baseURL string, skipTLSVerify bool) []string {

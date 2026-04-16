@@ -84,11 +84,19 @@ func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targe
 }
 
 func Probe(ctx context.Context, cfg Config) (syncer.ProbeResult, error) {
-	return syncer.Probe(ctx, cfg.raw)
+	result, err := syncer.Probe(ctx, cfg.raw)
+	if err != nil {
+		return syncer.ProbeResult{}, err //nolint:wrapcheck // pass-through layer, caller wraps with context
+	}
+	return result, nil
 }
 
 func Run(ctx context.Context, cfg Config) (syncer.Result, error) {
-	return syncer.Run(ctx, cfg.raw)
+	result, err := syncer.Run(ctx, cfg.raw)
+	if err != nil {
+		return syncer.Result{}, err //nolint:wrapcheck // pass-through layer, caller wraps with context
+	}
+	return result, nil
 }
 
 func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {

@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRefHashMap(t *testing.T) {
@@ -57,9 +58,9 @@ func TestAdvRefsCaps(t *testing.T) {
 
 	// AdvRefs with populated capabilities.
 	adv = packp.NewAdvRefs()
-	_ = adv.Capabilities.Set(capability.OFSDelta)
-	_ = adv.Capabilities.Add(capability.Agent, "git/test-agent")
-	_ = adv.Capabilities.Set(capability.NoProgress)
+	require.NoError(t, adv.Capabilities.Set(capability.OFSDelta))
+	require.NoError(t, adv.Capabilities.Add(capability.Agent, "git/test-agent"))
+	require.NoError(t, adv.Capabilities.Set(capability.NoProgress))
 
 	items := AdvRefsCaps(adv)
 	if len(items) == 0 {

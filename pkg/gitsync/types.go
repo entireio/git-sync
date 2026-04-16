@@ -57,7 +57,7 @@ type StaticAuthProvider struct {
 }
 
 // AuthFor implements AuthProvider.
-func (p StaticAuthProvider) AuthFor(_ context.Context, _ Endpoint, role EndpointRole) (EndpointAuth, error) {
+func (p StaticAuthProvider) AuthFor(_ context.Context, _ Endpoint, role EndpointRole) (EndpointAuth, error) { //nolint:unparam // implements AuthProvider interface
 	if role == TargetRole {
 		return p.Target, nil
 	}

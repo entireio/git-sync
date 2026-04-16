@@ -12,6 +12,10 @@ run = "gofmt -s -w ."
 description = "Run tests"
 run = "go test ./..."
 
+[tasks."test:ci"]
+description = "Run all tests with race detection"
+run = "go test -race ./..."
+
 [tasks."test:git-http-backend"]
 description = "Run optional git-http-backend integration tests"
 run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackendSync' -v"
