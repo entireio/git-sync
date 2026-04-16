@@ -2,6 +2,7 @@ package unstable
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -34,12 +35,12 @@ type Client struct {
 }
 
 type AdvancedOptions struct {
-	CollectStats           bool
-	MeasureMemory          bool
-	Verbose                bool
-	MaxPackBytes           int64
-	TargetMaxPackBytes     int64
-	MaterializedMaxObjects int
+	CollectStats           bool  `json:"collectStats"`
+	MeasureMemory          bool  `json:"measureMemory"`
+	Verbose                bool  `json:"verbose"`
+	MaxPackBytes           int64 `json:"maxPackBytes"`
+	TargetMaxPackBytes     int64 `json:"targetMaxPackBytes"`
+	MaterializedMaxObjects int   `json:"materializedMaxObjects"`
 }
 
 type ProbeRequest struct {
@@ -87,7 +88,11 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	return syncer.Probe(ctx, cfg)
+	result, err := syncer.Probe(ctx, cfg)
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("probe: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
@@ -97,7 +102,11 @@ func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return syncer.Run(ctx, cfg)
+	result, err := syncer.Run(ctx, cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("plan: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Sync(ctx context.Context, req SyncRequest) (Result, error) {
@@ -105,7 +114,11 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return syncer.Run(ctx, cfg)
+	result, err := syncer.Run(ctx, cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("sync: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Replicate(ctx context.Context, req SyncRequest) (Result, error) {
@@ -114,7 +127,11 @@ func (c *Client) Replicate(ctx context.Context, req SyncRequest) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	return syncer.Run(ctx, cfg)
+	result, err := syncer.Run(ctx, cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("replicate: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Bootstrap(ctx context.Context, req BootstrapRequest) (Result, error) {
@@ -122,7 +139,11 @@ func (c *Client) Bootstrap(ctx context.Context, req BootstrapRequest) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	return syncer.Bootstrap(ctx, cfg)
+	result, err := syncer.Bootstrap(ctx, cfg)
+	if err != nil {
+		return Result{}, fmt.Errorf("bootstrap: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) Fetch(ctx context.Context, req FetchRequest) (FetchResult, error) {
@@ -130,7 +151,11 @@ func (c *Client) Fetch(ctx context.Context, req FetchRequest) (FetchResult, erro
 	if err != nil {
 		return FetchResult{}, err
 	}
-	return syncer.Fetch(ctx, cfg, append([]string(nil), req.HaveRefs...), append([]plumbing.Hash(nil), req.HaveHashes...))
+	result, err := syncer.Fetch(ctx, cfg, append([]string(nil), req.HaveRefs...), append([]plumbing.Hash(nil), req.HaveHashes...))
+	if err != nil {
+		return FetchResult{}, fmt.Errorf("fetch: %w", err)
+	}
+	return result, nil
 }
 
 func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer.Config, error) {
@@ -201,18 +226,18 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:            source,
-		Target:            target,
-		HTTPClient:        c.httpClient,
-		Branches:          append([]string(nil), req.Scope.Branches...),
-		Mappings:          validationMappings(req.Scope.Mappings),
-		IncludeTags:       req.IncludeTags,
-		ShowStats:         req.Options.CollectStats,
-		MeasureMemory:     req.Options.MeasureMemory,
-		MaxPackBytes:      req.Options.MaxPackBytes,
+		Source:             source,
+		Target:             target,
+		HTTPClient:         c.httpClient,
+		Branches:           append([]string(nil), req.Scope.Branches...),
+		Mappings:           validationMappings(req.Scope.Mappings),
+		IncludeTags:        req.IncludeTags,
+		ShowStats:          req.Options.CollectStats,
+		MeasureMemory:      req.Options.MeasureMemory,
+		MaxPackBytes:       req.Options.MaxPackBytes,
 		TargetMaxPackBytes: req.Options.TargetMaxPackBytes,
-		ProtocolMode:      protocolString(req.Protocol),
-		Verbose:           req.Options.Verbose,
+		ProtocolMode:       protocolString(req.Protocol),
+		Verbose:            req.Options.Verbose,
 	}, nil
 }
 
@@ -237,7 +262,11 @@ func (c *Client) authFor(ctx context.Context, endpoint gitsync.Endpoint, role gi
 	if c.auth == nil {
 		return gitsync.EndpointAuth{}, nil
 	}
-	return c.auth.AuthFor(ctx, endpoint, role)
+	auth, err := c.auth.AuthFor(ctx, endpoint, role)
+	if err != nil {
+		return gitsync.EndpointAuth{}, fmt.Errorf("resolve auth for %s: %w", role, err)
+	}
+	return auth, nil
 }
 
 func (c *Client) resolveEndpoint(ctx context.Context, endpoint gitsync.Endpoint, role gitsync.EndpointRole) (syncer.Endpoint, error) {

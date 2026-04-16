@@ -3,6 +3,7 @@ package gitproto
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
@@ -18,7 +19,7 @@ func TestPacketReaderHandlesSpecialPackets(t *testing.T) {
 		t.Fatalf("unexpected flush: kind=%v payload=%q", kind, payload)
 	}
 
-	kind, payload, err = reader.ReadPacket()
+	kind, _, err = reader.ReadPacket()
 	if err != nil {
 		t.Fatalf("read delim: %v", err)
 	}
@@ -26,7 +27,7 @@ func TestPacketReaderHandlesSpecialPackets(t *testing.T) {
 		t.Fatalf("unexpected delim kind: %v", kind)
 	}
 
-	kind, payload, err = reader.ReadPacket()
+	kind, _, err = reader.ReadPacket()
 	if err != nil {
 		t.Fatalf("read response-end: %v", err)
 	}
@@ -237,7 +238,7 @@ func TestPacketReaderEOF(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from empty reader, got nil")
 	}
-	if err != io.EOF && err != io.ErrUnexpectedEOF {
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("expected io.EOF or io.ErrUnexpectedEOF, got %v", err)
 	}
 }

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/entirehq/git-sync/internal/validation"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"
-	"github.com/entirehq/git-sync/internal/validation"
 )
 
 // PlanConfig holds configuration for plan generation.
@@ -54,7 +54,7 @@ func BuildDesiredRefs(
 		// Validate all mappings up front (issue #2, #3)
 		normalized, err := validation.ValidateMappings(cfg.Mappings)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("validate ref mappings: %w", err)
 		}
 		for _, nm := range normalized {
 			kind := RefKindFromName(nm.TargetRef)
@@ -129,7 +129,7 @@ func BuildPlans(
 					TargetHash: targetHash,
 					Kind:       info.Kind,
 					Action:     ActionDelete,
-					Reason:     fmt.Sprintf("%s -> <deleted>", ShortHash(targetHash)),
+					Reason:     ShortHash(targetHash) + " -> <deleted>",
 				})
 			}
 			continue
@@ -143,7 +143,7 @@ func BuildPlans(
 				SourceHash: want.SourceHash,
 				Kind:       want.Kind,
 				Action:     ActionCreate,
-				Reason:     fmt.Sprintf("%s -> <new>", ShortHash(want.SourceHash)),
+				Reason:     ShortHash(want.SourceHash) + " -> <new>",
 			})
 			continue
 		}
@@ -163,6 +163,8 @@ func BuildPlans(
 
 // BuildReplicationPlans generates overwrite-oriented plans for replication mode.
 // Divergent refs are updated directly rather than blocked.
+//
+//nolint:unparam // error return kept for API consistency with BuildPlans
 func BuildReplicationPlans(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
@@ -204,7 +206,7 @@ func BuildReplicationPlans(
 					TargetHash: targetHash,
 					Kind:       info.Kind,
 					Action:     ActionDelete,
-					Reason:     fmt.Sprintf("%s -> <deleted>", ShortHash(targetHash)),
+					Reason:     ShortHash(targetHash) + " -> <deleted>",
 				})
 			}
 			continue
@@ -272,18 +274,18 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 
 	if want.SourceHash == targetHash {
 		plan.Action = ActionSkip
-		plan.Reason = fmt.Sprintf("%s already current", ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(want.SourceHash) + " already current"
 		return plan, nil
 	}
 
 	if want.Kind == RefKindTag {
 		if force {
 			plan.Action = ActionUpdate
-			plan.Reason = fmt.Sprintf("%s -> %s (force tag update)", ShortHash(targetHash), ShortHash(want.SourceHash))
+			plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (force tag update)"
 			return plan, nil
 		}
 		plan.Action = ActionBlock
-		plan.Reason = fmt.Sprintf("%s differs from %s; use --force to retarget tag", ShortHash(targetHash), ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(targetHash) + " differs from " + ShortHash(want.SourceHash) + "; use --force to retarget tag"
 		return plan, nil
 	}
 
@@ -292,25 +294,25 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		if errors.Is(err, ErrAncestryDepthExceeded) {
 			// Can't prove fast-forward within depth limit — block with explanation.
 			plan.Action = ActionBlock
-			plan.Reason = fmt.Sprintf("ancestry check for %s exceeded depth limit; use --force if this is a valid fast-forward", want.TargetRef)
+			plan.Reason = "ancestry check for " + want.TargetRef.String() + " exceeded depth limit; use --force if this is a valid fast-forward"
 			return plan, nil
 		}
 		return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, err)
 	}
 	if isFF {
 		plan.Action = ActionUpdate
-		plan.Reason = fmt.Sprintf("%s -> %s", ShortHash(targetHash), ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash)
 		return plan, nil
 	}
 
 	if force {
 		plan.Action = ActionUpdate
-		plan.Reason = fmt.Sprintf("%s -> %s (force)", ShortHash(targetHash), ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (force)"
 		return plan, nil
 	}
 
 	plan.Action = ActionBlock
-	plan.Reason = fmt.Sprintf("%s is not an ancestor of %s", ShortHash(targetHash), ShortHash(want.SourceHash))
+	plan.Reason = ShortHash(targetHash) + " is not an ancestor of " + ShortHash(want.SourceHash)
 	return plan, nil
 }
 
@@ -327,22 +329,24 @@ func PlanReplicationRef(want DesiredRef, targetHash plumbing.Hash, existsOnTarge
 
 	if want.SourceHash == targetHash {
 		plan.Action = ActionSkip
-		plan.Reason = fmt.Sprintf("%s already current", ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(want.SourceHash) + " already current"
 		return plan
 	}
 
 	if !existsOnTarget || targetHash.IsZero() {
 		plan.Action = ActionCreate
-		plan.Reason = fmt.Sprintf("%s -> <new>", ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(want.SourceHash) + " -> <new>"
 		return plan
 	}
 
 	plan.Action = ActionUpdate
 	switch want.Kind {
 	case RefKindTag:
-		plan.Reason = fmt.Sprintf("%s -> %s (replicate tag overwrite)", ShortHash(targetHash), ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (replicate tag overwrite)"
+	case RefKindBranch:
+		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (replicate overwrite)"
 	default:
-		plan.Reason = fmt.Sprintf("%s -> %s (replicate overwrite)", ShortHash(targetHash), ShortHash(want.SourceHash))
+		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (replicate overwrite)"
 	}
 	return plan
 }
@@ -394,7 +398,7 @@ func ReachesCommit(store storer.EncodedObjectStorer, startHash, targetHash plumb
 				if errors.Is(err, plumbing.ErrObjectNotFound) {
 					continue
 				}
-				return false, err
+				return false, fmt.Errorf("load parent commit %s: %w", parentHash, err)
 			}
 			stack = append(stack, parent)
 		}
@@ -487,7 +491,8 @@ func collectObjects(
 			return err
 		}
 	case plumbing.BlobObject:
-	default:
+		// Blobs are leaf objects — nothing to recurse into.
+	case plumbing.InvalidObject, plumbing.OFSDeltaObject, plumbing.REFDeltaObject, plumbing.AnyObject:
 		return fmt.Errorf("unsupported object type %s for %s", obj.Type(), hash)
 	}
 

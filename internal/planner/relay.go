@@ -118,11 +118,9 @@ func CanFullTagCreateRelay(plans []BranchPlan) (bool, string) {
 func RelayFallbackReason(force, prune, dryRun bool, plans []BranchPlan, target RelayTargetPolicy) string {
 	if ok, reason := CanIncrementalRelay(force, prune, dryRun, plans, target); ok {
 		return reason
-	} else if ok, reason := CanFullTagCreateRelay(plans); ok {
-		return reason
-	} else {
-		return reason
 	}
+	_, reason := CanFullTagCreateRelay(plans)
+	return reason
 }
 
 // CanReplicateRelay checks whether replication mode can execute as a relay-only

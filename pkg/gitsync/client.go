@@ -2,6 +2,7 @@ package gitsync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -37,7 +38,7 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	}
 	result, err := internalbridge.Probe(ctx, cfg)
 	if err != nil {
-		return ProbeResult{}, err
+		return ProbeResult{}, fmt.Errorf("probe: %w", err)
 	}
 	return internalbridge.FromProbeResult(result), nil
 }
@@ -53,7 +54,7 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	}
 	result, err := internalbridge.Run(ctx, cfg)
 	if err != nil {
-		return PlanResult{}, err
+		return PlanResult{}, fmt.Errorf("plan: %w", err)
 	}
 	return internalbridge.FromSyncResult(result), nil
 }
@@ -69,7 +70,7 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	}
 	result, err := internalbridge.Run(ctx, cfg)
 	if err != nil {
-		return SyncResult{}, err
+		return SyncResult{}, fmt.Errorf("sync: %w", err)
 	}
 	return internalbridge.FromSyncResult(result), nil
 }
@@ -133,56 +134,60 @@ func (c *Client) authFor(ctx context.Context, endpoint Endpoint, role EndpointRo
 	if c.auth == nil {
 		return EndpointAuth{}, nil
 	}
-	return c.auth.AuthFor(ctx, endpoint, role)
+	auth, err := c.auth.AuthFor(ctx, endpoint, role)
+	if err != nil {
+		return EndpointAuth{}, fmt.Errorf("resolve auth for %s: %w", role, err)
+	}
+	return auth, nil
 }
 
 func (r SyncRequest) Validate() error {
 	if r.Source.URL == "" {
-		return fmt.Errorf("source URL is required")
+		return errors.New("source URL is required")
 	}
 	if r.Target.URL == "" {
-		return fmt.Errorf("target URL is required")
+		return errors.New("target URL is required")
 	}
 	if err := validateOperationMode(r.Policy.Mode); err != nil {
 		return err
 	}
 	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
-		return err
+		return fmt.Errorf("normalize protocol: %w", err)
 	}
 	if _, err := validation.ValidateMappings(validationMappings(r.Scope.Mappings)); err != nil {
-		return err
+		return fmt.Errorf("validate mappings: %w", err)
 	}
 	return nil
 }
 
 func (r PlanRequest) Validate() error {
 	if r.Source.URL == "" {
-		return fmt.Errorf("source URL is required")
+		return errors.New("source URL is required")
 	}
 	if r.Target.URL == "" {
-		return fmt.Errorf("target URL is required")
+		return errors.New("target URL is required")
 	}
 	if err := validateOperationMode(r.Policy.Mode); err != nil {
 		return err
 	}
 	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
-		return err
+		return fmt.Errorf("normalize protocol: %w", err)
 	}
 	if _, err := validation.ValidateMappings(validationMappings(r.Scope.Mappings)); err != nil {
-		return err
+		return fmt.Errorf("validate mappings: %w", err)
 	}
 	return nil
 }
 
 func (r ProbeRequest) Validate() error {
 	if r.Source.URL == "" {
-		return fmt.Errorf("source URL is required")
+		return errors.New("source URL is required")
 	}
 	if r.Target != nil && r.Target.URL == "" {
-		return fmt.Errorf("target URL is required when target endpoint is provided")
+		return errors.New("target URL is required when target endpoint is provided")
 	}
 	if _, err := validation.NormalizeProtocolMode(string(r.Protocol)); err != nil {
-		return err
+		return fmt.Errorf("normalize protocol: %w", err)
 	}
 	return nil
 }

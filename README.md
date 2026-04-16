@@ -347,13 +347,13 @@ Add `--json` to `probe`, `fetch`, `bootstrap`, `plan`, or `sync` to emit machine
 
 The JSON interface is intentionally stable:
 
-- keys use `snake_case`
+- keys use `camelCase`
 - refs and hashes are serialized as strings, not raw byte arrays
-- `probe` returns top-level keys such as `source_url`, `target_url`, `protocol`, `ref_prefixes`, `source_capabilities`, `target_capabilities`, `refs`, and `stats`
-- `fetch` returns top-level keys such as `source_url`, `protocol`, `wants`, `haves`, `fetched_objects`, and `stats`
-- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dry_run`, `protocol`, and `stats`
-- `bootstrap`, `plan`, and `sync` also expose `relay`, `relay_mode`, `relay_reason`, `batching`, `batch_count`, `planned_batch_count`, and `temp_refs`
-- each item in `plans` includes stable string fields such as `branch`, `source_ref`, `target_ref`, `source_hash`, `target_hash`, `kind`, `action`, and `reason`
+- `probe` returns top-level keys such as `sourceUrl`, `targetUrl`, `protocol`, `refPrefixes`, `sourceCapabilities`, `targetCapabilities`, `refs`, and `stats`
+- `fetch` returns top-level keys such as `sourceUrl`, `protocol`, `wants`, `haves`, `fetchedObjects`, and `stats`
+- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dryRun`, `protocol`, and `stats`
+- `bootstrap`, `plan`, and `sync` also expose `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
+- each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
 
 ## Auth
 

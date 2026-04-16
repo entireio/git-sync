@@ -9,10 +9,10 @@ import (
 // selection and push behavior.
 type TargetFeatures struct {
 	Known        bool `json:"known"`
-	DeleteRefs   bool `json:"delete_refs"`
-	NoThin       bool `json:"no_thin"`
-	OFSDelta     bool `json:"ofs_delta"`
-	ReportStatus bool `json:"report_status"`
+	DeleteRefs   bool `json:"deleteRefs"`
+	NoThin       bool `json:"noThin"`
+	OFSDelta     bool `json:"ofsDelta"`
+	ReportStatus bool `json:"reportStatus"`
 	Sideband     bool `json:"sideband"`
 	Sideband64k  bool `json:"sideband64k"`
 }

@@ -10,6 +10,8 @@ import (
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
+const defaultGitUsername = "git"
+
 // Endpoint holds the authentication-related fields for a remote.
 type Endpoint struct {
 	Username      string
@@ -25,10 +27,10 @@ func Resolve(raw Endpoint, ep *transport.Endpoint) (transport.AuthMethod, error)
 		return auth, nil
 	}
 	if ep == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil signals no auth method found at this stage
 	}
 	if ep.Scheme != "http" && ep.Scheme != "https" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil signals no auth method found at this stage
 	}
 	if username, password, ok, err := LookupEntireDBCredential(raw, ep); err != nil {
 		return nil, err // issue #7: surface refresh failure explicitly
@@ -38,7 +40,7 @@ func Resolve(raw Endpoint, ep *transport.Endpoint) (transport.AuthMethod, error)
 	if username, password, ok := lookupGitCredential(ep); ok {
 		return &transporthttp.BasicAuth{Username: username, Password: password}, nil
 	}
-	return nil, nil
+	return nil, nil //nolint:nilnil // nil signals no auth method found at this stage
 }
 
 func explicitAuth(raw Endpoint) transport.AuthMethod {
@@ -48,7 +50,7 @@ func explicitAuth(raw Endpoint) transport.AuthMethod {
 	if raw.Token != "" {
 		username := raw.Username
 		if username == "" {
-			username = "git"
+			username = defaultGitUsername
 		}
 		return &transporthttp.BasicAuth{Username: username, Password: raw.Token}
 	}
@@ -81,7 +83,7 @@ func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {
 		if ep.User != nil && ep.User.Username() != "" {
 			username = ep.User.Username()
 		} else {
-			username = "git"
+			username = defaultGitUsername
 		}
 	}
 	return username, password, true

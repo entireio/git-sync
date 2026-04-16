@@ -15,6 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entirehq/git-sync/internal/auth"
+	"github.com/entirehq/git-sync/internal/gitproto"
+	"github.com/entirehq/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/syncertest"
 	billy "github.com/go-git/go-billy/v6"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -28,13 +32,14 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/entirehq/git-sync/internal/auth"
-	"github.com/entirehq/git-sync/internal/gitproto"
-	"github.com/entirehq/git-sync/internal/planner"
-	"github.com/entirehq/git-sync/internal/syncertest"
 )
 
-const testBranch = "master"
+const (
+	testBranch                   = "master"
+	reasonEmptyTargetManagedRefs = "empty-target-managed-refs"
+	relayModeIncremental         = "incremental"
+	relayModeBootstrapBatch      = "bootstrap-batch"
+)
 
 func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
@@ -64,7 +69,7 @@ func TestRun_IntegrationInitialSyncToEmptyTarget(t *testing.T) {
 	if !result.Relay {
 		t.Fatalf("expected sync to auto-switch to relay bootstrap on empty target")
 	}
-	if result.RelayReason != "empty-target-managed-refs" {
+	if result.RelayReason != reasonEmptyTargetManagedRefs {
 		t.Fatalf("expected bootstrap relay reason, got %+v", result)
 	}
 
@@ -110,7 +115,7 @@ func TestRun_IntegrationInitialSyncAutoFallsBackToBatchedBootstrapOnTargetBodyLi
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" || !result.Batching {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch || !result.Batching {
 		t.Fatalf("expected batched relay fallback result, got %+v", result)
 	}
 	if result.BatchCount < 2 {
@@ -403,7 +408,7 @@ func TestBootstrap_IntegrationPushCanceledMidStreamFails(t *testing.T) {
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
-	targetServer.receivePackRaw = func(w http.ResponseWriter, r *http.Request) bool {
+	targetServer.receivePackRaw = func(_ http.ResponseWriter, r *http.Request) bool {
 		defer r.Body.Close()
 		buf := make([]byte, 32)
 		n, err := r.Body.Read(buf)
@@ -415,7 +420,7 @@ func TestBootstrap_IntegrationPushCanceledMidStreamFails(t *testing.T) {
 		default:
 		}
 		<-release
-		_, _ = r.Body.Read(buf)
+		_, _ = r.Body.Read(buf) //nolint:errcheck // drain after cancellation; error is expected
 		return true
 	}
 	defer sourceServer.Close()
@@ -541,7 +546,7 @@ func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 	if !result.DryRun || !result.BootstrapSuggested {
 		t.Fatalf("expected bootstrap suggestion, got %+v", result)
 	}
-	if result.RelayReason != "empty-target-managed-refs" {
+	if result.RelayReason != reasonEmptyTargetManagedRefs {
 		t.Fatalf("expected bootstrap suggestion reason, got %+v", result)
 	}
 	if result.Relay {
@@ -551,7 +556,7 @@ func TestRun_IntegrationPlanSuggestsBootstrapOnEmptyTarget(t *testing.T) {
 
 func TestProbe_ContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		started <- struct{}{}
 		<-r.Context().Done()
 	}))
@@ -708,7 +713,7 @@ func TestBootstrap_IntegrationBatchedResumeMismatchClearsAndRetries(t *testing.T
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 
 	// Stale temp ref should have been cleaned up.
-	if _, err := targetRepo.Reference(tempRef, true); err != plumbing.ErrReferenceNotFound {
+	if _, err := targetRepo.Reference(tempRef, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		t.Fatalf("expected stale temp ref to be deleted, got err=%v", err)
 	}
 }
@@ -739,15 +744,15 @@ func TestBootstrap_IntegrationBatchedResumeAtFinalTipCutsOver(t *testing.T) {
 	defer targetServer.Close()
 
 	result, err := Bootstrap(context.Background(), Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
 		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap final-tip cutover failed: %v", err)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch {
 		t.Fatalf("expected batched bootstrap result, got %+v", result)
 	}
 	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
@@ -792,15 +797,15 @@ func TestBootstrap_IntegrationBatchedResumeAfterCutoverOnlyDeletesTempRef(t *tes
 	defer targetServer.Close()
 
 	result, err := Bootstrap(context.Background(), Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
 		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap cleanup rerun failed: %v", err)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch {
 		t.Fatalf("expected batched bootstrap result, got %+v", result)
 	}
 	targetHead, err := targetRepo.Reference(targetRef, true)
@@ -861,9 +866,9 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 	}
 
 	cfg := Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
 		TargetMaxPackBytes: 350_000,
 	}
 
@@ -885,7 +890,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 	if err != nil {
 		t.Fatalf("bootstrap retry after delete failure failed: %v", err)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch {
 		t.Fatalf("expected batched bootstrap result, got %+v", result)
 	}
 	if _, err := targetRepo.Reference(tempRef, true); err == nil {
@@ -908,9 +913,9 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 	defer targetServer.Close()
 
 	cfg := Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
 		TargetMaxPackBytes: 350_000,
 	}
 
@@ -961,7 +966,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap retry after checkpoint pack failure failed: %v", err)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap-batch" {
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch {
 		t.Fatalf("expected batched bootstrap result, got %+v", result)
 	}
 	targetHead, err := targetRepo.Reference(targetRef, true)
@@ -1002,16 +1007,16 @@ func TestBootstrap_IntegrationBatchedLightweightTagCreatesWithoutExtraPack(t *te
 	defer targetServer.Close()
 
 	result, err := Bootstrap(context.Background(), Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode:      protocolModeAuto,
-		IncludeTags:       true,
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
+		IncludeTags:        true,
 		TargetMaxPackBytes: 350_000,
 	})
 	if err != nil {
 		t.Fatalf("batched bootstrap with lightweight tag failed: %v", err)
 	}
-	if result.Pushed != 2 || !result.Batching || result.RelayMode != "bootstrap-batch" {
+	if result.Pushed != 2 || !result.Batching || result.RelayMode != relayModeBootstrapBatch {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	tagRef, err := targetRepo.Reference(plumbing.NewTagReferenceName("v1"), true)
@@ -1131,7 +1136,7 @@ func TestBootstrap_IntegrationPackLimit(t *testing.T) {
 	if !strings.Contains(err.Error(), "max-pack-bytes") {
 		t.Fatalf("expected max-pack-bytes error, got %v", err)
 	}
-	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); err != plumbing.ErrReferenceNotFound {
+	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		t.Fatalf("expected target branch to remain absent, got %v", err)
 	}
 }
@@ -1276,7 +1281,7 @@ func TestRun_IntegrationDryRunPlansWithoutPush(t *testing.T) {
 	if targetServer.Count(serviceReceivePack, metricPack) != 0 {
 		t.Fatalf("expected no receive-pack POSTs during dry-run, got %d", targetServer.Count(serviceReceivePack, metricPack))
 	}
-	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); err != plumbing.ErrReferenceNotFound {
+	if _, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		t.Fatalf("expected target branch to remain absent, got %v", err)
 	}
 }
@@ -1302,7 +1307,7 @@ func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
 	t.Cleanup(func() {
 		auth.GitCredentialFillCommand = originalFill
 	})
-	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	auth.GitCredentialFillCommand = func(_ context.Context, input string) ([]byte, error) {
 		if !strings.Contains(input, "protocol=http\n") {
 			t.Fatalf("expected protocol in credential input, got %q", input)
 		}
@@ -1539,7 +1544,7 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("v1"), true); err != nil {
 		t.Fatalf("expected v1 tag on target: %v", err)
 	}
-	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("stale"), true); err != plumbing.ErrReferenceNotFound {
+	if _, err := targetRepo.Reference(plumbing.NewTagReferenceName("stale"), true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		t.Fatalf("expected stale tag to be pruned, got %v", err)
 	}
 
@@ -1724,10 +1729,10 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	defer targetServer.Close()
 
 	result, err := Run(context.Background(), Config{
-		Source:            Endpoint{URL: sourceServer.RepoURL()},
-		Target:            Endpoint{URL: targetServer.RepoURL()},
-		Mode:              modeReplicate,
-		ProtocolMode:      protocolModeAuto,
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		ProtocolMode:       protocolModeAuto,
 		TargetMaxPackBytes: 350_000, // force > 1 batch for the generated pack
 	})
 	if err != nil {
@@ -1773,7 +1778,7 @@ func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
 	if !result.Relay {
 		t.Fatalf("expected bootstrap relay to run, got %+v", result)
 	}
-	if result.RelayReason != "empty-target-managed-refs" {
+	if result.RelayReason != reasonEmptyTargetManagedRefs {
 		t.Fatalf("expected empty-target bootstrap reason, got %+v", result)
 	}
 	if result.Pushed != 1 {
@@ -1909,7 +1914,7 @@ func TestRun_IntegrationReplicatePruneDeletesOrphanedManagedRef(t *testing.T) {
 		t.Fatalf("expected exactly one pushed ref alongside the delete, got %+v", result)
 	}
 
-	if _, err := targetRepo.Reference(orphanRef, true); err != plumbing.ErrReferenceNotFound {
+	if _, err := targetRepo.Reference(orphanRef, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		t.Fatalf("expected orphan branch to be pruned, got err=%v", err)
 	}
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
@@ -2063,7 +2068,7 @@ func signature() object.Signature {
 	}
 }
 
-func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) {
+func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) { //nolint:unparam // kept as param for test readability
 	syncertest.AssertBranchHeadsMatch(t, sourceRepo, targetRepo, branch)
 }
 
@@ -2256,7 +2261,9 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 				caps.Delete(capability.Capability("no-thin"))
 			}
 			if s.receivePackNoThin {
-				_ = caps.Set(capability.Capability("no-thin"))
+				if err := caps.Set(capability.Capability("no-thin")); err != nil {
+					s.tb.Fatalf("set no-thin capability: %v", err)
+				}
 			}
 		})
 		if err != nil {
@@ -2305,7 +2312,7 @@ func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List))
 	return buf.Bytes(), nil
 }
 
-func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, r *http.Request) {
+func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, _ *http.Request) {
 	var buf bytes.Buffer
 	lines := []string{
 		"version 2\n",
@@ -2368,7 +2375,7 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), wantCount, haveCount)
 }
 
-func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, r *http.Request, body []byte) {
+func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, _ *http.Request, body []byte) {
 	req, err := decodeV2TestCommandRequest(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2712,6 +2719,8 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 			if inArgs {
 				req.Args = append(req.Args, line)
 			}
+		case gitproto.PacketResponseEnd:
+			return req, nil
 		default:
 			return req, fmt.Errorf("unexpected packet type %v", kind)
 		}
@@ -2719,8 +2728,8 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 }
 
 func TestMain(m *testing.M) {
-	originalHTTP, _ := transport.Get("http")
-	originalHTTPS, _ := transport.Get("https")
+	originalHTTP, _ := transport.Get("http")   //nolint:errcheck // best-effort save; nil is acceptable
+	originalHTTPS, _ := transport.Get("https") //nolint:errcheck // best-effort save; nil is acceptable
 
 	customHTTP := transporthttp.NewTransport(&transporthttp.TransportOptions{Client: &http.Client{}})
 	transport.Register("http", customHTTP)

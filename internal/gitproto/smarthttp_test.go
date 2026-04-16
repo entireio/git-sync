@@ -59,7 +59,10 @@ func TestNewHTTPTransport(t *testing.T) {
 
 func TestApplyAuth(t *testing.T) {
 	// BasicAuth
-	req, _ := http.NewRequest("GET", "https://example.com", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
 	auth := &transporthttp.BasicAuth{Username: "user", Password: "pass"}
 	ApplyAuth(req, auth)
 	user, pass, ok := req.BasicAuth()
@@ -68,7 +71,10 @@ func TestApplyAuth(t *testing.T) {
 	}
 
 	// TokenAuth
-	req, _ = http.NewRequest("GET", "https://example.com", nil)
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
 	tokenAuth := &transporthttp.TokenAuth{Token: "my-token"}
 	ApplyAuth(req, tokenAuth)
 	got := req.Header.Get("Authorization")
@@ -77,7 +83,10 @@ func TestApplyAuth(t *testing.T) {
 	}
 
 	// nil auth should not panic.
-	req, _ = http.NewRequest("GET", "https://example.com", nil)
+	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
 	ApplyAuth(req, nil)
 }
 
@@ -162,9 +171,9 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 }
 
 func TestHTTPErrorBoundsBodyRead(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "https://example.com/repo.git", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/repo.git", nil)
 	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
+		t.Fatalf("NewRequestWithContext: %v", err)
 	}
 
 	body := &roundTripReader{remaining: maxHTTPErrorBody + 4096}
@@ -201,7 +210,7 @@ func (r *roundTripReader) Read(p []byte) (int, error) {
 	if n > r.remaining {
 		n = r.remaining
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p[i] = 'x'
 	}
 	r.remaining -= n

@@ -22,7 +22,7 @@ type BootstrapBatch struct {
 func FirstParentChain(store storer.EncodedObjectStorer, tip plumbing.Hash) ([]plumbing.Hash, error) {
 	commit, err := object.GetCommit(store, tip)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load tip commit %s: %w", tip, err)
 	}
 	chain := make([]plumbing.Hash, 0, 128)
 	for {
@@ -32,7 +32,7 @@ func FirstParentChain(store storer.EncodedObjectStorer, tip plumbing.Hash) ([]pl
 		}
 		commit, err = object.GetCommit(store, commit.ParentHashes[0])
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("load parent commit %s: %w", commit.ParentHashes[0], err)
 		}
 	}
 	// Reverse in-place to get root-to-tip order.
@@ -95,7 +95,7 @@ func SampledCheckpointCandidates(lo, hi int, prevSpan int) []int {
 
 	const sampleCount = 4
 	current := projected
-	for i := 0; i < sampleCount-1; i++ {
+	for range sampleCount - 1 {
 		if current <= lo {
 			add(lo)
 			continue

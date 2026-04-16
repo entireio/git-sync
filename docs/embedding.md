@@ -119,8 +119,8 @@ The stable `SyncResult` is organized for worker consumption:
 - `Counts`
   aggregate applied/skipped/blocked/deleted totals
 - `Execution`
-  protocol, `operation_mode` (sync or replicate), relay summary,
-  `transfer_mode` (the engine path that executed), and batch summary
+  protocol, `operationMode` (sync or replicate), relay summary,
+  `transferMode` (the engine path that executed), and batch summary
 - `Stats`
   transfer counters when requested
 - `Measurement`

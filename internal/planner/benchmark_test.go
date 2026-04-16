@@ -11,14 +11,14 @@ import (
 
 func BenchmarkBuildDesiredRefs(b *testing.B) {
 	sourceRefs := make(map[plumbing.ReferenceName]plumbing.Hash, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		name := plumbing.NewBranchReferenceName(fmt.Sprintf("branch-%03d", i))
 		sourceRefs[name] = plumbing.NewHash(fmt.Sprintf("%040x", i+1))
 	}
 	cfg := PlanConfig{}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _, err := BuildDesiredRefs(sourceRefs, cfg)
 		if err != nil {
 			b.Fatal(err)
@@ -40,7 +40,7 @@ func BenchmarkBuildPlans(b *testing.B) {
 	targetRefs := make(map[plumbing.ReferenceName]plumbing.Hash, 100)
 	managed := make(map[plumbing.ReferenceName]ManagedTarget, 100)
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		ref := plumbing.NewBranchReferenceName(fmt.Sprintf("branch-%03d", i))
 		short := ref.Short()
 
@@ -76,7 +76,7 @@ func BenchmarkBuildPlans(b *testing.B) {
 	cfg := PlanConfig{}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		// Copy managed map each iteration because BuildPlans can mutate it
 		// when Prune is set (not the case here, but copy for safety).
 		mgdCopy := make(map[plumbing.ReferenceName]ManagedTarget, len(managed))
@@ -97,7 +97,7 @@ func BenchmarkSampledCheckpointCandidates(b *testing.B) {
 	prevSpan := 500
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		candidates := SampledCheckpointCandidates(lo, hi, prevSpan)
 		if len(candidates) == 0 {
 			b.Fatal("expected candidates")
@@ -122,7 +122,7 @@ func BenchmarkReachesCommit(b *testing.B) {
 	root := hashes[0]
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		ok, err := ReachesCommit(repo.Storer, tip, root)
 		if err != nil {
 			b.Fatal(err)

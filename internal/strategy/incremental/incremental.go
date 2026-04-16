@@ -5,6 +5,7 @@ package incremental
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -20,10 +21,10 @@ import (
 type Params struct {
 	SourceConn    *gitproto.Conn
 	SourceService interface {
-		FetchPack(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+		FetchPack(ctx context.Context, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 	}
 	TargetPusher interface {
-		PushPack(context.Context, []gitproto.PushCommand, io.ReadCloser) error
+		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 	}
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
@@ -47,10 +48,10 @@ type Result struct {
 func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, error) {
 	canRelay := p.CanRelay
 	if canRelay == nil {
-		return Result{}, fmt.Errorf("incremental strategy requires CanRelay")
+		return Result{}, errors.New("incremental strategy requires CanRelay")
 	}
 	if p.TargetPusher == nil {
-		return Result{}, fmt.Errorf("incremental strategy requires TargetPusher")
+		return Result{}, errors.New("incremental strategy requires TargetPusher")
 	}
 	cmds := convert.PlansToPushCommands(p.PushPlans)
 	if ok, reason := canRelay(cfg.Force, cfg.Prune, false, p.PushPlans); ok {
@@ -70,7 +71,7 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 	}
 
 	if p.CanTagRelay == nil {
-		return Result{}, fmt.Errorf("incremental strategy requires CanTagRelay")
+		return Result{}, errors.New("incremental strategy requires CanTagRelay")
 	}
 	if ok, reason := p.CanTagRelay(p.PushPlans); ok {
 		desired := convert.DesiredRefsForPlans(p.DesiredRefs, p.PushPlans)
@@ -93,6 +94,7 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 
 type closeOnceReadCloser struct {
 	io.ReadCloser
+
 	once sync.Once
 }
 
@@ -101,7 +103,10 @@ func (c *closeOnceReadCloser) Close() error {
 	c.once.Do(func() {
 		err = c.ReadCloser.Close()
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("close pack reader: %w", err)
+	}
+	return nil
 }
 
 func closeOnce(rc io.ReadCloser) io.ReadCloser {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/stretchr/testify/require"
 )
 
 func TestV2CapabilitiesFetchSupports(t *testing.T) {
@@ -146,7 +147,7 @@ func TestPreferredSideband(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			list := capability.NewList()
 			for _, c := range tt.caps {
-				_ = list.Set(c)
+				require.NoError(t, list.Set(c))
 			}
 			got := PreferredSideband(list)
 			if got != tt.want {

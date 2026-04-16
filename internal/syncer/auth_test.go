@@ -25,7 +25,7 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 
 	originalFill := auth.GitCredentialFillCommand
 	t.Cleanup(func() { auth.GitCredentialFillCommand = originalFill })
-	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	auth.GitCredentialFillCommand = func(_ context.Context, input string) ([]byte, error) {
 		t.Fatalf("unexpected git credential fill call with input %q", input)
 		return nil, nil
 	}
@@ -111,7 +111,7 @@ func TestResolveAuthMethodUsesEntireDBStoredToken(t *testing.T) {
 
 	originalFill := auth.GitCredentialFillCommand
 	t.Cleanup(func() { auth.GitCredentialFillCommand = originalFill })
-	auth.GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, error) {
+	auth.GitCredentialFillCommand = func(_ context.Context, input string) ([]byte, error) {
 		t.Fatalf("unexpected git credential fill call with input %q", input)
 		return nil, nil
 	}
@@ -148,7 +148,9 @@ func TestResolveAuthMethodRefreshesExpiredEntireDBToken(t *testing.T) {
 			t.Fatalf("unexpected refresh token: %s", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token":"new-token","refresh_token":"new-refresh","expires_in":3600}`))
+		if _, err := w.Write([]byte(`{"access_token":"new-token","refresh_token":"new-refresh","expires_in":3600}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 

@@ -26,10 +26,10 @@ const (
 
 type RefResult struct {
 	Branch     string  `json:"branch"`
-	SourceRef  string  `json:"source_ref"`
-	TargetRef  string  `json:"target_ref"`
-	SourceHash string  `json:"source_hash"`
-	TargetHash string  `json:"target_hash"`
+	SourceRef  string  `json:"sourceRef"`
+	TargetRef  string  `json:"targetRef"`
+	SourceHash string  `json:"sourceHash"`
+	TargetHash string  `json:"targetHash"`
 	Kind       RefKind `json:"kind"`
 	Action     Action  `json:"action"`
 	Reason     string  `json:"reason"`
@@ -45,8 +45,8 @@ type RefInfo struct {
 type ServiceStats struct {
 	Name          string `json:"name"`
 	Requests      int    `json:"requests"`
-	RequestBytes  int64  `json:"request_bytes"`
-	ResponseBytes int64  `json:"response_bytes"`
+	RequestBytes  int64  `json:"requestBytes"`
+	ResponseBytes int64  `json:"responseBytes"`
 	Wants         int    `json:"wants"`
 	Haves         int    `json:"haves"`
 	Commands      int    `json:"commands"`
@@ -59,21 +59,21 @@ type Stats struct {
 
 type Measurement struct {
 	Enabled            bool   `json:"enabled"`
-	ElapsedMillis      int64  `json:"elapsed_millis"`
-	PeakAllocBytes     uint64 `json:"peak_alloc_bytes"`
-	PeakHeapInuseBytes uint64 `json:"peak_heap_inuse_bytes"`
-	TotalAllocBytes    uint64 `json:"total_alloc_bytes"`
-	GCCount            uint32 `json:"gc_count"`
+	ElapsedMillis      int64  `json:"elapsedMillis"`
+	PeakAllocBytes     uint64 `json:"peakAllocBytes"`
+	PeakHeapInuseBytes uint64 `json:"peakHeapInuseBytes"`
+	TotalAllocBytes    uint64 `json:"totalAllocBytes"`
+	GCCount            uint32 `json:"gcCount"`
 }
 
 type ProbeResult struct {
-	SourceURL     string      `json:"source_url"`
-	TargetURL     string      `json:"target_url,omitempty"`
-	RequestedMode string      `json:"requested_mode"`
+	SourceURL     string      `json:"sourceUrl"`
+	TargetURL     string      `json:"targetUrl,omitempty"`
+	RequestedMode string      `json:"requestedMode"`
 	Protocol      string      `json:"protocol"`
-	RefPrefixes   []string    `json:"ref_prefixes"`
-	Capabilities  []string    `json:"source_capabilities"`
-	TargetCaps    []string    `json:"target_capabilities,omitempty"`
+	RefPrefixes   []string    `json:"refPrefixes"`
+	Capabilities  []string    `json:"sourceCapabilities"`
+	TargetCaps    []string    `json:"targetCapabilities,omitempty"`
 	Refs          []RefInfo   `json:"refs"`
 	Stats         Stats       `json:"stats"`
 	Measurement   Measurement `json:"measurement"`
@@ -93,13 +93,13 @@ type BatchSummary struct {
 }
 
 type ExecutionSummary struct {
-	DryRun             bool         `json:"dry_run"`
+	DryRun             bool         `json:"dryRun"`
 	Protocol           string       `json:"protocol"`
-	OperationMode      string       `json:"operation_mode"`
+	OperationMode      string       `json:"operationMode"`
 	Relay              bool         `json:"relay"`
-	TransferMode       string       `json:"transfer_mode"`
+	TransferMode       string       `json:"transferMode"`
 	Reason             string       `json:"reason"`
-	BootstrapSuggested bool         `json:"bootstrap_suggested"`
+	BootstrapSuggested bool         `json:"bootstrapSuggested"`
 	Batch              BatchSummary `json:"batch"`
 }
 

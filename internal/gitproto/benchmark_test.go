@@ -14,16 +14,16 @@ func BenchmarkPacketReaderData(b *testing.B) {
 	const packetCount = 1000
 	payload := "data\n"
 	pkt := FormatPktLine(payload)
-	for i := 0; i < packetCount; i++ {
+	for range packetCount {
 		wire.WriteString(pkt)
 	}
 	wire.WriteString("0000") // flush to terminate
 	data := wire.String()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		reader := NewPacketReader(bytes.NewBufferString(data))
-		for j := 0; j < packetCount; j++ {
+		for range packetCount {
 			kind, p, err := reader.ReadPacket()
 			if err != nil {
 				b.Fatal(err)
@@ -47,7 +47,7 @@ func BenchmarkDecodeV2Capabilities(b *testing.B) {
 	// Build a capability advertisement with 10 capabilities.
 	var wire strings.Builder
 	wire.WriteString(FormatPktLine("version 2\n"))
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		line := fmt.Sprintf("capability-%d=value-%d\n", i, i)
 		wire.WriteString(FormatPktLine(line))
 	}
@@ -55,7 +55,7 @@ func BenchmarkDecodeV2Capabilities(b *testing.B) {
 	data := wire.String()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		caps, err := DecodeV2Capabilities(bytes.NewBufferString(data))
 		if err != nil {
 			b.Fatal(err)
@@ -71,12 +71,12 @@ func BenchmarkEncodeCommand(b *testing.B) {
 	capArgs := []string{"agent=git-sync/bench"}
 	cmdArgs := make([]string, 0, 52)
 	cmdArgs = append(cmdArgs, "ofs-delta", "no-progress")
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("want %040x", i+1))
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		data, err := EncodeCommand("fetch", capArgs, cmdArgs)
 		if err != nil {
 			b.Fatal(err)

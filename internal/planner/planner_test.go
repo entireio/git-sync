@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entirehq/git-sync/internal/validation"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/entirehq/git-sync/internal/validation"
 )
 
 func TestSelectBranches(t *testing.T) {

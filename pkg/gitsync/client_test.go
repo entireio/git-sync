@@ -3,6 +3,7 @@ package gitsync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,7 +21,7 @@ import (
 type errAuthProvider struct{}
 
 func (errAuthProvider) AuthFor(_ context.Context, _ Endpoint, _ EndpointRole) (EndpointAuth, error) {
-	return EndpointAuth{}, fmt.Errorf("boom")
+	return EndpointAuth{}, errors.New("boom")
 }
 
 func TestValidateRequests(t *testing.T) {

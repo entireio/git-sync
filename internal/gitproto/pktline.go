@@ -45,7 +45,7 @@ func (pr *PacketReader) BufReader() *bufio.Reader {
 // only valid until the next call to ReadPacket.
 func (pr *PacketReader) ReadPacket() (PacketType, []byte, error) {
 	if _, err := io.ReadFull(pr.r, pr.header[:]); err != nil {
-		return PacketData, nil, err
+		return PacketData, nil, fmt.Errorf("read pktline header: %w", err)
 	}
 
 	switch string(pr.header[:]) {
@@ -72,7 +72,7 @@ func (pr *PacketReader) ReadPacket() (PacketType, []byte, error) {
 		pr.buf = pr.buf[:payloadLen]
 	}
 	if _, err := io.ReadFull(pr.r, pr.buf); err != nil {
-		return PacketData, nil, err
+		return PacketData, nil, fmt.Errorf("read pktline payload: %w", err)
 	}
 	return PacketData, pr.buf, nil
 }
@@ -106,25 +106,25 @@ func hexVal(b byte) (byte, bool) {
 func EncodeCommand(command string, capArgs, cmdArgs []string) ([]byte, error) {
 	var buf bytes.Buffer
 	if _, err := pktline.Writef(&buf, "command=%s\n", command); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write command: %w", err)
 	}
 	for _, arg := range capArgs {
 		if _, err := pktline.Writef(&buf, "%s\n", arg); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("write capability arg: %w", err)
 		}
 	}
 	if len(cmdArgs) > 0 {
 		if err := pktline.WriteDelim(&buf); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("write delimiter: %w", err)
 		}
 		for _, arg := range cmdArgs {
 			if _, err := pktline.Writef(&buf, "%s\n", arg); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("write command arg: %w", err)
 			}
 		}
 	}
 	if err := pktline.WriteFlush(&buf); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write flush: %w", err)
 	}
 	return buf.Bytes(), nil
 }

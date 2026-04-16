@@ -135,6 +135,7 @@ func (f fakeTargetPusher) PushPack(ctx context.Context, cmds []gitproto.PushComm
 
 type trackingReadCloser struct {
 	io.Reader
+
 	closed bool
 }
 
@@ -164,6 +165,8 @@ func (r *interruptedReadCloser) Close() error {
 	r.closed = true
 	return nil
 }
+
+const testReasonFastForward = "fast-forward"
 
 func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
@@ -210,14 +213,14 @@ func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 			if force || prune || dryRun || len(plans) != 1 {
 				t.Fatalf("unexpected relay inputs: force=%v prune=%v dryRun=%v plans=%d", force, prune, dryRun, len(plans))
 			}
-			return true, "fast-forward"
+			return true, testReasonFastForward
 		},
 	}
 	result, err := Execute(context.Background(), params, planner.PlanConfig{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !result.Relay || result.RelayMode != "incremental" || result.RelayReason != "fast-forward" {
+	if !result.Relay || result.RelayMode != "incremental" || result.RelayReason != testReasonFastForward {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	if gotDesired[mainRef].SourceHash != newHash {
@@ -322,7 +325,7 @@ func TestExecuteIncrementalRelayClosesPackOnPushError(t *testing.T) {
 			Action:     planner.ActionUpdate,
 		}},
 		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
-			return true, "fast-forward"
+			return true, testReasonFastForward
 		},
 	}, planner.PlanConfig{})
 	if err == nil || err.Error() != "push target refs: boom" {
@@ -369,7 +372,7 @@ func TestExecuteIncrementalRelayClosesPackOnReadInterruption(t *testing.T) {
 			Action:     planner.ActionUpdate,
 		}},
 		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
-			return true, "fast-forward"
+			return true, testReasonFastForward
 		},
 	}, planner.PlanConfig{})
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
