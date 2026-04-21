@@ -380,6 +380,20 @@ func TestPushPackReturnsPushReportErrorForPerRefFailures(t *testing.T) {
 	}
 }
 
+func TestBuildReportErrorTreatsEmptyUnpackStatusAsFatal(t *testing.T) {
+	// A malformed / degraded receive-pack response with an empty unpack
+	// status must be treated as failure (matches go-git's ReportStatus.Error
+	// semantics), not silently passed through.
+	report := &packp.ReportStatus{UnpackStatus: ""}
+	got := buildReportError(report)
+	if got == nil {
+		t.Fatal("expected non-nil PushReportError for empty unpack status; empty is not 'ok'")
+	}
+	if got.UnpackStatus != "" {
+		t.Errorf("UnpackStatus: want empty (propagated), got %q", got.UnpackStatus)
+	}
+}
+
 func TestPushPackRejectsDeletes(t *testing.T) {
 	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
 	// PushPack should reject delete commands before even trying to connect.

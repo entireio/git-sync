@@ -192,7 +192,7 @@ func sendReceivePack(
 }
 
 func buildReportError(report *packp.ReportStatus) *PushReportError {
-	if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
+	if report.UnpackStatus != "ok" {
 		return &PushReportError{UnpackStatus: report.UnpackStatus}
 	}
 	var failures []PushRefFailure

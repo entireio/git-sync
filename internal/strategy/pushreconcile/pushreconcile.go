@@ -19,6 +19,17 @@ import (
 // push error because the target was already at the desired state.
 const Reason = "reconciled"
 
+// reconcilableStatuses are the per-ref failure reasons that indicate a CAS
+// race with a concurrent writer (and therefore are candidates for
+// reconciliation when the target already matches the desired state).
+// Statuses outside this set — e.g. "pre-receive hook declined",
+// "non-fast-forward", ACL denials — must bubble up even if the target
+// happens to converge, so misconfiguration stays observable.
+var reconcilableStatuses = map[string]struct{}{
+	"remote ref has changed": {}, // CAS failure on Update/Delete
+	"already exists":         {}, // CAS failure on Create
+}
+
 // Lister refreshes the target ref advertisement.
 type Lister interface {
 	ListRefs(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
@@ -44,6 +55,11 @@ func Check(ctx context.Context, err error, plans []planner.BranchPlan, lister Li
 	}
 	if len(reportErr.Failures) == 0 {
 		return false
+	}
+	for _, f := range reportErr.Failures {
+		if _, ok := reconcilableStatuses[f.Status]; !ok {
+			return false
+		}
 	}
 	fresh, listErr := lister.ListRefs(ctx)
 	if listErr != nil {

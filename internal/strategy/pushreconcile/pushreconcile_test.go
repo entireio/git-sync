@@ -128,6 +128,23 @@ func TestCheckReturnsFalseWhenListerErrors(t *testing.T) {
 	}
 }
 
+func TestCheckReturnsFalseForUnrecognizedStatusEvenWhenTargetMatches(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	source := plumbing.NewHash("2222222222222222222222222222222222222222")
+	lister := &stubLister{refs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: source}}
+
+	plans := []planner.BranchPlan{
+		{TargetRef: mainRef, SourceHash: source, Action: planner.ActionUpdate},
+	}
+	pushErr := &gitproto.PushReportError{
+		Failures: []gitproto.PushRefFailure{{Ref: mainRef, Status: "pre-receive hook declined"}},
+	}
+
+	if Check(context.Background(), pushErr, plans, lister) {
+		t.Fatal("expected Check to return false for non-CAS status even when target matches; hook/policy rejections must not be swallowed")
+	}
+}
+
 func TestCheckReturnsFalseWhenFailureRefNotInPlans(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	unknown := plumbing.NewBranchReferenceName("unknown")
