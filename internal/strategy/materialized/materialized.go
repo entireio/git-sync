@@ -15,6 +15,7 @@ import (
 	"github.com/entirehq/git-sync/internal/convert"
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/strategy/pushreconcile"
 )
 
 // Params holds the inputs for a materialized push.
@@ -27,10 +28,11 @@ type Params struct {
 	TargetPusher interface {
 		PushObjects(ctx context.Context, cmds []gitproto.PushCommand, store storer.Storer, hashes []plumbing.Hash) error
 	}
-	DesiredRefs map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs  map[plumbing.ReferenceName]plumbing.Hash
-	PushPlans   []planner.BranchPlan
-	MaxObjects  int
+	TargetLister pushreconcile.Lister
+	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
+	PushPlans    []planner.BranchPlan
+	MaxObjects   int
 }
 
 // DefaultMaxMaterializedObjects is the default safety limit for the materialized fallback path.
@@ -120,6 +122,9 @@ func (e *executor) push(hashes []plumbing.Hash) error {
 		return errors.New("materialized strategy requires TargetPusher")
 	}
 	if err := e.params.TargetPusher.PushObjects(e.ctx, cmds, e.params.Store, hashes); err != nil {
+		if pushreconcile.Check(e.ctx, err, e.params.PushPlans, e.params.TargetLister) {
+			return nil
+		}
 		return fmt.Errorf("push target refs: %w", err)
 	}
 	return nil

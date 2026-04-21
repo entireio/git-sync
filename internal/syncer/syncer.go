@@ -789,7 +789,8 @@ func (s *syncSession) executeIncremental(
 	pushPlans []planner.BranchPlan,
 ) (incremental.Result, error) {
 	incResult, incErr := incremental.Execute(ctx, incremental.Params{
-		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
+		SourceConn: s.sourceConn, SourceService: s.sourceService,
+		TargetPusher: s.target.pusher, TargetLister: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 		CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
@@ -810,7 +811,8 @@ func (s *syncSession) executeMaterialized(
 	pushPlans []planner.BranchPlan,
 ) error {
 	if err := materialized.Execute(ctx, materialized.Params{
-		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
+		Store: store, SourceConn: s.sourceConn, SourceService: s.sourceService,
+		TargetPusher: s.target.pusher, TargetLister: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxObjects: s.cfg.MaterializedMaxObjects,
 	}); err != nil {
@@ -825,7 +827,8 @@ func (s *syncSession) executeReplicate(
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
 	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
-		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
+		SourceConn: s.sourceConn, SourceService: s.sourceService,
+		TargetPusher: s.target.pusher, TargetLister: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 	})

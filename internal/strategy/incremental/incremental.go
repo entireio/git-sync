@@ -15,6 +15,7 @@ import (
 	"github.com/entirehq/git-sync/internal/convert"
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
+	"github.com/entirehq/git-sync/internal/strategy/pushreconcile"
 )
 
 // Params holds the inputs for an incremental relay execution.
@@ -26,6 +27,7 @@ type Params struct {
 	TargetPusher interface {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 	}
+	TargetLister pushreconcile.Lister
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
 	PushPlans    []planner.BranchPlan
@@ -55,41 +57,43 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 	}
 	cmds := convert.PlansToPushCommands(p.PushPlans)
 	if ok, reason := canRelay(cfg.Force, cfg.Prune, false, p.PushPlans); ok {
-		desired := convert.DesiredRefsForPlans(p.DesiredRefs, p.PushPlans)
-		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, p.TargetRefs)
-		if err != nil {
-			return Result{}, fmt.Errorf("fetch source pack: %w", err)
-		}
-		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-		packReader = closeOnce(packReader)
-		if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
-			_ = packReader.Close()
-			return Result{}, fmt.Errorf("push target refs: %w", err)
-		}
-		_ = packReader.Close()
-		return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil
+		return p.relay(ctx, cmds, p.TargetRefs, reason, "fetch source pack")
 	}
 
 	if p.CanTagRelay == nil {
 		return Result{}, errors.New("incremental strategy requires CanTagRelay")
 	}
 	if ok, reason := p.CanTagRelay(p.PushPlans); ok {
-		desired := convert.DesiredRefsForPlans(p.DesiredRefs, p.PushPlans)
-		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, nil)
-		if err != nil {
-			return Result{}, fmt.Errorf("fetch source tag pack: %w", err)
-		}
-		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-		packReader = closeOnce(packReader)
-		if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
-			_ = packReader.Close()
-			return Result{}, fmt.Errorf("push target refs: %w", err)
-		}
-		_ = packReader.Close()
-		return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil
+		return p.relay(ctx, cmds, nil, reason, "fetch source tag pack")
 	}
 
 	return Result{}, nil
+}
+
+// relay fetches a pack from source with the given haves, pushes it to the
+// target, and reconciles per-ref CAS failures if the target already matches.
+func (p Params) relay(
+	ctx context.Context,
+	cmds []gitproto.PushCommand,
+	haves map[plumbing.ReferenceName]plumbing.Hash,
+	reason, fetchErrPrefix string,
+) (Result, error) {
+	desired := convert.DesiredRefsForPlans(p.DesiredRefs, p.PushPlans)
+	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
+	if err != nil {
+		return Result{}, fmt.Errorf("%s: %w", fetchErrPrefix, err)
+	}
+	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
+	packReader = closeOnce(packReader)
+	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
+	_ = packReader.Close()
+	if pushErr != nil {
+		if !pushreconcile.Check(ctx, pushErr, p.PushPlans, p.TargetLister) {
+			return Result{}, fmt.Errorf("push target refs: %w", pushErr)
+		}
+		reason = pushreconcile.Reason
+	}
+	return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil
 }
 
 type closeOnceReadCloser struct {

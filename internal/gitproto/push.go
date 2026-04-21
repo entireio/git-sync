@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
@@ -23,6 +24,36 @@ type PushCommand struct {
 	Old    plumbing.Hash
 	New    plumbing.Hash
 	Delete bool
+}
+
+// PushRefFailure is a single per-reference failure from a receive-pack
+// report-status response.
+type PushRefFailure struct {
+	Ref    plumbing.ReferenceName
+	Status string
+}
+
+// PushReportError is returned when receive-pack report-status contains
+// either an unpack failure or any per-reference command failure. Callers can
+// inspect Failures to reconcile CAS races against a fresh target
+// advertisement (see internal/strategy/pushreconcile).
+type PushReportError struct {
+	UnpackStatus string
+	Failures     []PushRefFailure
+}
+
+func (e *PushReportError) Error() string {
+	if e.UnpackStatus != "" {
+		return "report-status: unpack error: " + e.UnpackStatus
+	}
+	if len(e.Failures) == 0 {
+		return "report-status: unknown failure"
+	}
+	parts := make([]string, len(e.Failures))
+	for i, f := range e.Failures {
+		parts[i] = fmt.Sprintf("%s: %s", f.Ref, f.Status)
+	}
+	return "report-status: command error on " + strings.Join(parts, "; ")
 }
 
 // Pusher wraps target-side receive-pack state behind a smaller execution API.
@@ -50,6 +81,21 @@ func (p Pusher) PushCommands(ctx context.Context, commands []PushCommand) error 
 // PushObjects encodes and pushes locally materialized objects.
 func (p Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
 	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose)
+}
+
+// ListRefs re-fetches the target advertisement. The push strategies call
+// this after a per-ref CAS failure to check whether the target is already
+// at the desired state (see internal/strategy/pushreconcile).
+func (p Pusher) ListRefs(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+	adv, err := AdvertisedRefsV1(ctx, p.Conn, transport.ReceivePackService)
+	if err != nil {
+		return nil, fmt.Errorf("refresh target advertisement: %w", err)
+	}
+	refs, err := AdvRefsToSlice(adv)
+	if err != nil {
+		return nil, fmt.Errorf("decode target advertisement: %w", err)
+	}
+	return RefHashMap(refs), nil
 }
 
 // buildUpdateRequest builds the receive-pack update request.
@@ -138,11 +184,28 @@ func sendReceivePack(
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}
-		if err := report.Error(); err != nil {
-			return fmt.Errorf("report-status: %w", err)
+		if reportErr := buildReportError(report); reportErr != nil {
+			return reportErr
 		}
 	}
 	return nil
+}
+
+func buildReportError(report *packp.ReportStatus) *PushReportError {
+	if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
+		return &PushReportError{UnpackStatus: report.UnpackStatus}
+	}
+	var failures []PushRefFailure
+	for _, cs := range report.CommandStatuses {
+		if cs.Status == "ok" {
+			continue
+		}
+		failures = append(failures, PushRefFailure{Ref: cs.ReferenceName, Status: cs.Status})
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return &PushReportError{Failures: failures}
 }
 
 // PushObjects pushes locally-materialized objects to the target.

@@ -3,6 +3,7 @@ package gitproto
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -315,6 +316,67 @@ func TestBuildUpdateRequestDeleteWithoutCapability(t *testing.T) {
 	}, false)
 	if err == nil {
 		t.Fatal("expected error when target does not support delete-refs")
+	}
+}
+
+func TestPushPackReturnsPushReportErrorForPerRefFailures(t *testing.T) {
+	refA := plumbing.ReferenceName("refs/heads/main")
+	refB := plumbing.ReferenceName("refs/heads/feature")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Logf("drain request body: %v", err)
+		}
+		_ = r.Body.Close()
+
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		w.WriteHeader(http.StatusOK)
+
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		report.CommandStatuses = []*packp.CommandStatus{
+			{ReferenceName: refA, Status: "remote ref has changed"},
+			{ReferenceName: refB, Status: "already exists"},
+		}
+		if err := report.Encode(w); err != nil {
+			t.Logf("encode report: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
+	conn := connForServer(t, srv)
+	adv := packp.NewAdvRefs()
+	adv.Capabilities = capability.NewList()
+	require.NoError(t, adv.Capabilities.Set(capability.ReportStatus))
+
+	err := PushPack(context.Background(), conn, adv, []PushCommand{
+		{Name: refA, New: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		{Name: refB, New: plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+	}, pack, false)
+	if err == nil {
+		t.Fatal("expected PushPack to return an error")
+	}
+
+	var prErr *PushReportError
+	if !errors.As(err, &prErr) {
+		t.Fatalf("expected *PushReportError, got %T: %v", err, err)
+	}
+	if prErr.UnpackStatus != "" {
+		t.Errorf("unexpected UnpackStatus %q; expected empty for per-ref failures", prErr.UnpackStatus)
+	}
+	if len(prErr.Failures) != 2 {
+		t.Fatalf("expected 2 failures, got %d: %+v", len(prErr.Failures), prErr.Failures)
+	}
+	got := map[plumbing.ReferenceName]string{}
+	for _, f := range prErr.Failures {
+		got[f.Ref] = f.Status
+	}
+	if got[refA] != "remote ref has changed" {
+		t.Errorf("ref %s status: want %q, got %q", refA, "remote ref has changed", got[refA])
+	}
+	if got[refB] != "already exists" {
+		t.Errorf("ref %s status: want %q, got %q", refB, "already exists", got[refB])
 	}
 }
 

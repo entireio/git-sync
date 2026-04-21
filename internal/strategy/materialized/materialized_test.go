@@ -2,6 +2,7 @@ package materialized
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -247,12 +248,51 @@ func TestExecuteDeleteOnlyIsRefOnlyExample(t *testing.T) {
 	}
 }
 
+func TestExecuteReconcilesWhenTargetAlreadyMatchesSource(t *testing.T) {
+	// Use a delete-only plan so the materialized path skips the object
+	// closure and we can focus on reconciliation at the push layer.
+	oldRef := plumbing.NewBranchReferenceName("old")
+	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+
+	tp := fakeTargetPusher{
+		pushObjects: func(context.Context, []gitproto.PushCommand, storer.Storer, []plumbing.Hash) error {
+			return &gitproto.PushReportError{
+				Failures: []gitproto.PushRefFailure{{Ref: oldRef, Status: "remote ref has changed"}},
+			}
+		},
+		listRefs: func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+			return map[plumbing.ReferenceName]plumbing.Hash{}, nil
+		},
+	}
+	err := Execute(context.Background(), Params{
+		PushPlans: []planner.BranchPlan{{
+			TargetRef:  oldRef,
+			TargetHash: oldHash,
+			Action:     planner.ActionDelete,
+			Kind:       planner.RefKindBranch,
+		}},
+		TargetPusher: tp,
+		TargetLister: tp,
+	})
+	if err != nil {
+		t.Fatalf("Execute() returned error: %v", err)
+	}
+}
+
 type fakeTargetPusher struct {
 	pushObjects func(context.Context, []gitproto.PushCommand, storer.Storer, []plumbing.Hash) error
+	listRefs    func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
 }
 
 func (f fakeTargetPusher) PushObjects(ctx context.Context, cmds []gitproto.PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
 	return f.pushObjects(ctx, cmds, store, hashes)
+}
+
+func (f fakeTargetPusher) ListRefs(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+	if f.listRefs == nil {
+		return nil, errors.New("fakeTargetPusher.ListRefs not configured")
+	}
+	return f.listRefs(ctx)
 }
 
 func containsHash(hashes []plumbing.Hash, want plumbing.Hash) bool {
