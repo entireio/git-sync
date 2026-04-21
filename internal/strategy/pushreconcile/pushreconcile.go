@@ -8,6 +8,7 @@ package pushreconcile
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/go-git/go-git/v6/plumbing"
 
@@ -19,13 +20,12 @@ import (
 // push error because the target was already at the desired state.
 const Reason = "reconciled"
 
-// reconcilableStatuses are the per-ref failure reasons that indicate a CAS
-// race with a concurrent writer (and therefore are candidates for
-// reconciliation when the target already matches the desired state).
-// Statuses outside this set — e.g. "pre-receive hook declined",
-// "non-fast-forward", ACL denials — must bubble up even if the target
-// happens to converge, so misconfiguration stays observable.
-var reconcilableStatuses = map[string]struct{}{
+// expectedRaceStatuses are the per-ref failure reasons that normally arise
+// from concurrent-writer CAS races. Reconciliation is gated on *state*
+// (does the target now match the plan?), not on the status string; this
+// set is used only to emit a warning when we reconcile on a status we
+// didn't anticipate, so unusual failure modes remain visible in logs.
+var expectedRaceStatuses = map[string]struct{}{
 	"remote ref has changed": {}, // CAS failure on Update/Delete
 	"already exists":         {}, // CAS failure on Create
 }
@@ -56,11 +56,6 @@ func Check(ctx context.Context, err error, plans []planner.BranchPlan, lister Li
 	if len(reportErr.Failures) == 0 {
 		return false
 	}
-	for _, f := range reportErr.Failures {
-		if _, ok := reconcilableStatuses[f.Status]; !ok {
-			return false
-		}
-	}
 	fresh, listErr := lister.ListRefs(ctx)
 	if listErr != nil {
 		return false
@@ -82,6 +77,14 @@ func Check(ctx context.Context, err error, plans []planner.BranchPlan, lister Li
 		}
 		if fresh[f.Ref] != plan.SourceHash {
 			return false
+		}
+	}
+	for _, f := range reportErr.Failures {
+		if _, expected := expectedRaceStatuses[f.Status]; !expected {
+			slog.WarnContext(ctx, "reconciled push with unexpected status",
+				slog.String("ref", f.Ref.String()),
+				slog.String("status", f.Status),
+			)
 		}
 	}
 	return true

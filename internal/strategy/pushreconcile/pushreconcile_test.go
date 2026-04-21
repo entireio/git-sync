@@ -1,8 +1,11 @@
 package pushreconcile
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -10,6 +13,18 @@ import (
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
 )
+
+// captureSlog installs a JSON handler writing to an in-memory buffer and
+// restores the previous default logger on cleanup. Returns the buffer so
+// tests can assert on emitted records.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
 
 type stubLister struct {
 	refs map[plumbing.ReferenceName]plumbing.Hash
@@ -128,7 +143,7 @@ func TestCheckReturnsFalseWhenListerErrors(t *testing.T) {
 	}
 }
 
-func TestCheckReturnsFalseForUnrecognizedStatusEvenWhenTargetMatches(t *testing.T) {
+func TestCheckReconcilesOnHashMatchAndLogsUnexpectedStatus(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	source := plumbing.NewHash("2222222222222222222222222222222222222222")
 	lister := &stubLister{refs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: source}}
@@ -140,8 +155,40 @@ func TestCheckReturnsFalseForUnrecognizedStatusEvenWhenTargetMatches(t *testing.
 		Failures: []gitproto.PushRefFailure{{Ref: mainRef, Status: "pre-receive hook declined"}},
 	}
 
-	if Check(context.Background(), pushErr, plans, lister) {
-		t.Fatal("expected Check to return false for non-CAS status even when target matches; hook/policy rejections must not be swallowed")
+	buf := captureSlog(t)
+	if !Check(context.Background(), pushErr, plans, lister) {
+		t.Fatal("hash matches plan — Check should reconcile regardless of status reason")
+	}
+	logOut := buf.String()
+	if !strings.Contains(logOut, "reconciled push with unexpected status") {
+		t.Errorf("expected warn log about unexpected status; got: %s", logOut)
+	}
+	if !strings.Contains(logOut, "pre-receive hook declined") {
+		t.Errorf("expected log to include the unexpected status string; got: %s", logOut)
+	}
+	if !strings.Contains(logOut, `"level":"WARN"`) {
+		t.Errorf("expected WARN level log; got: %s", logOut)
+	}
+}
+
+func TestCheckDoesNotLogForExpectedRaceStatus(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	source := plumbing.NewHash("2222222222222222222222222222222222222222")
+	lister := &stubLister{refs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: source}}
+
+	plans := []planner.BranchPlan{
+		{TargetRef: mainRef, SourceHash: source, Action: planner.ActionUpdate},
+	}
+	pushErr := &gitproto.PushReportError{
+		Failures: []gitproto.PushRefFailure{{Ref: mainRef, Status: "remote ref has changed"}},
+	}
+
+	buf := captureSlog(t)
+	if !Check(context.Background(), pushErr, plans, lister) {
+		t.Fatal("expected Check to reconcile for known CAS status")
+	}
+	if strings.Contains(buf.String(), "unexpected status") {
+		t.Errorf("expected no warn log for known race status; got: %s", buf.String())
 	}
 }
 
