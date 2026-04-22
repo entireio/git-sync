@@ -119,15 +119,6 @@ type SyncRequest struct {
 	CollectStats bool       `json:"collectStats"`
 }
 
-// ListRefsRequest fetches the ref advertisement from a single endpoint.
-// Target selects which transport service to advertise over: true uses
-// git-receive-pack (target side, what a push would see), false uses
-// git-upload-pack (source side, what a fetch would see).
-type ListRefsRequest struct {
-	Endpoint Endpoint `json:"endpoint"`
-	Target   bool     `json:"target"`
-}
-
 type RefKind = internalbridge.RefKind
 
 const (

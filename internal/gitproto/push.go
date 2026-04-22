@@ -54,21 +54,6 @@ func (p Pusher) PushObjects(ctx context.Context, commands []PushCommand, store s
 	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose)
 }
 
-// ListRefs re-fetches the target advertisement. The push strategies call
-// this after a per-ref CAS failure to check whether the target is already
-// at the desired state (see internal/strategy/pushreconcile).
-func (p Pusher) ListRefs(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-	adv, err := AdvertisedRefsV1(ctx, p.Conn, transport.ReceivePackService)
-	if err != nil {
-		return nil, fmt.Errorf("refresh target advertisement: %w", err)
-	}
-	refs, err := AdvRefsToSlice(adv)
-	if err != nil {
-		return nil, fmt.Errorf("decode target advertisement: %w", err)
-	}
-	return RefHashMap(refs), nil
-}
-
 // buildUpdateRequest builds the receive-pack update request.
 func buildUpdateRequest(
 	adv *packp.AdvRefs,

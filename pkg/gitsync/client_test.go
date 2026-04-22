@@ -165,41 +165,6 @@ func TestClientReplicateReturnsPlansAndPushReportErrorOnReceivePackFailure(t *te
 	}
 }
 
-func TestClientListRefsReturnsAdvertisedRefs(t *testing.T) {
-	repo, fs := syncertest.NewMemoryRepo(t)
-	syncertest.MakeCommits(t, repo, fs, 1)
-
-	server := newSmartHTTPRepoServer(t, repo)
-	defer server.Close()
-
-	client := New(Options{})
-
-	got, err := client.ListRefs(context.Background(), ListRefsRequest{
-		Endpoint: Endpoint{URL: server.RepoURL()},
-	})
-	if err != nil {
-		t.Fatalf("client ListRefs (source): %v", err)
-	}
-	master, err := repo.Reference(plumbing.NewBranchReferenceName("master"), true)
-	if err != nil {
-		t.Fatalf("resolve master: %v", err)
-	}
-	if got["refs/heads/master"] != master.Hash().String() {
-		t.Fatalf("source refs mismatch: got %v, want master=%s", got, master.Hash())
-	}
-
-	got, err = client.ListRefs(context.Background(), ListRefsRequest{
-		Endpoint: Endpoint{URL: server.RepoURL()},
-		Target:   true,
-	})
-	if err != nil {
-		t.Fatalf("client ListRefs (target): %v", err)
-	}
-	if got["refs/heads/master"] != master.Hash().String() {
-		t.Fatalf("target refs mismatch: got %v, want master=%s", got, master.Hash())
-	}
-}
-
 func TestClientReplicateRejectsUnsupportedMode(t *testing.T) {
 	err := (SyncRequest{
 		Source: Endpoint{URL: "https://source.example/repo.git"},

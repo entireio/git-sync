@@ -284,38 +284,6 @@ func measurementLine(m Measurement) []string {
 	)}
 }
 
-// ListRefs fetches the current ref advertisement from an endpoint and
-// returns a map of ref name to hex hash. When target is true the caller
-// is asking "what is this push target currently serving?" — we advertise
-// via git-receive-pack so target-only refs (e.g. server-internal entries)
-// are visible and permissions match what a push would see. Otherwise the
-// caller is reading the source and we use git-upload-pack.
-func ListRefs(ctx context.Context, endpoint Endpoint, httpClient *http.Client, target bool) (map[string]string, error) {
-	label := "source"
-	service := transport.UploadPackService
-	if target {
-		label = "target"
-		service = transport.ReceivePackService
-	}
-	conn, err := newConn(endpoint, label, newStats(false), httpClient)
-	if err != nil {
-		return nil, err
-	}
-	adv, err := gitproto.AdvertisedRefsV1(ctx, conn, service)
-	if err != nil {
-		return nil, fmt.Errorf("advertise refs: %w", err)
-	}
-	refs, err := gitproto.AdvRefsToSlice(adv)
-	if err != nil {
-		return nil, fmt.Errorf("decode refs: %w", err)
-	}
-	out := make(map[string]string, len(refs))
-	for _, r := range refs {
-		out[r.Name().String()] = r.Hash().String()
-	}
-	return out, nil
-}
-
 // --- Session setup ---
 
 func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.Conn, error) {

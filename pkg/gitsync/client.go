@@ -85,26 +85,6 @@ func (c *Client) Replicate(ctx context.Context, req SyncRequest) (SyncResult, er
 	return c.Sync(ctx, req)
 }
 
-// ListRefs fetches the current ref advertisement from an endpoint and
-// returns a map of ref name to hex hash. Useful when reconciling a
-// PushReportError after a failed Sync / Replicate — the caller can verify
-// whether the target has already converged to the desired state.
-func (c *Client) ListRefs(ctx context.Context, req ListRefsRequest) (map[string]string, error) {
-	role := SourceRole
-	if req.Target {
-		role = TargetRole
-	}
-	resolved, err := c.authFor(ctx, req.Endpoint, role)
-	if err != nil {
-		return nil, err
-	}
-	refs, err := internalbridge.ListRefs(ctx, bridgeEndpoint(req.Endpoint), bridgeEndpointAuth(resolved), req.Target, c.httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("list refs: %w", err)
-	}
-	return refs, nil
-}
-
 func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (internalbridge.Config, error) {
 	sourceAuth, err := c.authFor(ctx, req.Source, SourceRole)
 	if err != nil {

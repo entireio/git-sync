@@ -99,11 +99,6 @@ func Run(ctx context.Context, cfg Config) (syncer.Result, error) {
 	return syncer.Run(ctx, cfg.raw) //nolint:wrapcheck // pass-through layer, caller wraps with context
 }
 
-// ListRefs returns the current ref advertisement from an endpoint.
-func ListRefs(ctx context.Context, endpoint Endpoint, endpointAuth EndpointAuth, target bool, httpClient *http.Client) (map[string]string, error) {
-	return syncer.ListRefs(ctx, ToSyncerEndpoint(endpoint, endpointAuth), httpClient, target) //nolint:wrapcheck // pass-through layer
-}
-
 func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {
 	return syncer.Endpoint{
 		URL:           endpoint.URL,
