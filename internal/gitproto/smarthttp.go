@@ -15,6 +15,19 @@ import (
 
 const maxHTTPErrorBody = 64 * 1024
 
+// HTTPError is the error returned by httpError for non-2xx responses. Callers
+// can use errors.As to inspect StatusCode directly instead of parsing the
+// formatted string.
+type HTTPError struct {
+	StatusCode int
+	URL        string
+	Reason     string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("http %d: %s %s", e.StatusCode, e.URL, e.Reason)
+}
+
 // httpError checks an HTTP response status and returns an error for non-2xx responses.
 func httpError(res *http.Response) error {
 	if res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices {
@@ -31,7 +44,11 @@ func httpError(res *http.Response) error {
 			reason = string(data)
 		}
 	}
-	return fmt.Errorf("http %d: %s %s", res.StatusCode, res.Request.URL.Redacted(), reason)
+	return &HTTPError{
+		StatusCode: res.StatusCode,
+		URL:        res.Request.URL.Redacted(),
+		Reason:     reason,
+	}
 }
 
 // StatsPhaseHeader is the HTTP header used to annotate requests with the

@@ -13,7 +13,6 @@ import (
 	"github.com/entirehq/git-sync/internal/convert"
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
-	"github.com/entirehq/git-sync/internal/strategy/pushreconcile"
 )
 
 // Params holds the inputs for a replication relay execution.
@@ -26,7 +25,6 @@ type Params struct {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 		PushCommands(ctx context.Context, cmds []gitproto.PushCommand) error
 	}
-	TargetLister pushreconcile.Lister
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
 	PushPlans    []planner.BranchPlan
@@ -64,8 +62,6 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 		}
 	}
 
-	reason := ReasonOverwriteRelay
-
 	if len(updatePlans) > 0 {
 		desired := convert.DesiredRefsForPlans(p.DesiredRefs, updatePlans)
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, p.TargetRefs)
@@ -74,26 +70,20 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 		}
 		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 		packReader = closeOnce(packReader)
-		pushErr := p.TargetPusher.PushPack(ctx, convert.PlansToPushCommands(updatePlans), packReader)
-		_ = packReader.Close()
-		if pushErr != nil {
-			if !pushreconcile.Check(ctx, pushErr, updatePlans, p.TargetLister) {
-				return Result{}, fmt.Errorf("push target refs: %w", pushErr)
-			}
-			reason = pushreconcile.Reason
+		if err := p.TargetPusher.PushPack(ctx, convert.PlansToPushCommands(updatePlans), packReader); err != nil {
+			_ = packReader.Close()
+			return Result{}, fmt.Errorf("push target refs: %w", err)
 		}
+		_ = packReader.Close()
 	}
 
 	if len(deletePlans) > 0 {
 		if err := p.TargetPusher.PushCommands(ctx, convert.PlansToPushCommands(deletePlans)); err != nil {
-			if !pushreconcile.Check(ctx, err, deletePlans, p.TargetLister) {
-				return Result{}, fmt.Errorf("delete target refs: %w", err)
-			}
-			reason = pushreconcile.Reason
+			return Result{}, fmt.Errorf("delete target refs: %w", err)
 		}
 	}
 
-	return Result{Relay: true, RelayMode: "replicate", RelayReason: reason}, nil
+	return Result{Relay: true, RelayMode: "replicate", RelayReason: ReasonOverwriteRelay}, nil
 }
 
 type closeOnceReadCloser struct {

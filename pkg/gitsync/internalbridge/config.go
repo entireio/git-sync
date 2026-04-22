@@ -91,12 +91,17 @@ func Probe(ctx context.Context, cfg Config) (syncer.ProbeResult, error) {
 	return result, nil
 }
 
+// Run executes a sync and returns the (possibly partial) result alongside
+// any error. When syncer.Run fails after building plans — for example, a
+// receive-pack push error — the returned result still carries the plans
+// so callers can reconcile or report per-ref state.
 func Run(ctx context.Context, cfg Config) (syncer.Result, error) {
-	result, err := syncer.Run(ctx, cfg.raw)
-	if err != nil {
-		return syncer.Result{}, err //nolint:wrapcheck // pass-through layer, caller wraps with context
-	}
-	return result, nil
+	return syncer.Run(ctx, cfg.raw) //nolint:wrapcheck // pass-through layer, caller wraps with context
+}
+
+// ListRefs returns the current ref advertisement from an endpoint.
+func ListRefs(ctx context.Context, endpoint Endpoint, endpointAuth EndpointAuth, target bool, httpClient *http.Client) (map[string]string, error) {
+	return syncer.ListRefs(ctx, ToSyncerEndpoint(endpoint, endpointAuth), httpClient, target) //nolint:wrapcheck // pass-through layer
 }
 
 func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {

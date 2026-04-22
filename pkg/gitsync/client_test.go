@@ -13,6 +13,8 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 
 	"github.com/entirehq/git-sync/internal/syncertest"
@@ -110,6 +112,94 @@ func TestClientSyncEndToEndWithLocalRepos(t *testing.T) {
 	}
 }
 
+func TestClientReplicateReturnsPlansAndPushReportErrorOnReceivePackFailure(t *testing.T) {
+	// Target already has master at a different hash — this is the concurrent
+	// writer scenario Replicate is supposed to tolerate. The target
+	// receive-pack is forced to report "remote ref has changed" so we can
+	// assert that the public API surfaces a *PushReportError and still
+	// returns the planned ref actions so callers can reconcile.
+	sourceRepo, sourceFS := syncertest.NewMemoryRepo(t)
+	syncertest.MakeCommits(t, sourceRepo, sourceFS, 1)
+	targetRepo, targetFS := syncertest.NewMemoryRepo(t)
+	syncertest.MakeCommits(t, targetRepo, targetFS, 1) // diverges from source
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.forceReceivePackFailure = "remote ref has changed"
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	client := New(Options{})
+	result, err := client.Replicate(context.Background(), SyncRequest{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Scope:  RefScope{Branches: []string{"master"}},
+		Policy: SyncPolicy{Protocol: ProtocolV1},
+	})
+	if err == nil {
+		t.Fatal("expected Replicate to return an error when receive-pack reports per-ref failures")
+	}
+
+	var reportErr *PushReportError
+	if !errors.As(err, &reportErr) {
+		t.Fatalf("expected *PushReportError in error chain; got %T: %v", err, err)
+	}
+	if len(reportErr.Failures) != 1 || reportErr.Failures[0].Status != "remote ref has changed" {
+		t.Errorf("unexpected per-ref failures: %+v", reportErr.Failures)
+	}
+
+	if len(result.Refs) == 0 {
+		t.Fatal("expected SyncResult.Refs to be populated on the error path so callers can reconcile")
+	}
+	var sawMaster bool
+	for _, ref := range result.Refs {
+		if ref.TargetRef == "refs/heads/master" {
+			sawMaster = true
+			if ref.Action != ActionUpdate {
+				t.Errorf("master ref action: want Update, got %s", ref.Action)
+			}
+		}
+	}
+	if !sawMaster {
+		t.Fatalf("master ref missing from Refs: %+v", result.Refs)
+	}
+}
+
+func TestClientListRefsReturnsAdvertisedRefs(t *testing.T) {
+	repo, fs := syncertest.NewMemoryRepo(t)
+	syncertest.MakeCommits(t, repo, fs, 1)
+
+	server := newSmartHTTPRepoServer(t, repo)
+	defer server.Close()
+
+	client := New(Options{})
+
+	got, err := client.ListRefs(context.Background(), ListRefsRequest{
+		Endpoint: Endpoint{URL: server.RepoURL()},
+	})
+	if err != nil {
+		t.Fatalf("client ListRefs (source): %v", err)
+	}
+	master, err := repo.Reference(plumbing.NewBranchReferenceName("master"), true)
+	if err != nil {
+		t.Fatalf("resolve master: %v", err)
+	}
+	if got["refs/heads/master"] != master.Hash().String() {
+		t.Fatalf("source refs mismatch: got %v, want master=%s", got, master.Hash())
+	}
+
+	got, err = client.ListRefs(context.Background(), ListRefsRequest{
+		Endpoint: Endpoint{URL: server.RepoURL()},
+		Target:   true,
+	})
+	if err != nil {
+		t.Fatalf("client ListRefs (target): %v", err)
+	}
+	if got["refs/heads/master"] != master.Hash().String() {
+		t.Fatalf("target refs mismatch: got %v, want master=%s", got, master.Hash())
+	}
+}
+
 func TestClientReplicateRejectsUnsupportedMode(t *testing.T) {
 	err := (SyncRequest{
 		Source: Endpoint{URL: "https://source.example/repo.git"},
@@ -126,6 +216,9 @@ type smartHTTPRepoServer struct {
 	repo     *git.Repository
 	repoPath string
 	server   *httptest.Server
+	// forceReceivePackFailure, when set, makes receive-pack return a
+	// report-status with this string as the per-command failure reason.
+	forceReceivePackFailure string
 }
 
 func newSmartHTTPRepoServer(tb testing.TB, repo *git.Repository) *smartHTTPRepoServer {
@@ -211,6 +304,58 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 		return
 	}
 	defer r.Body.Close()
+
+	if s.forceReceivePackFailure != "" {
+		req := packp.NewUpdateRequests()
+		headerEnd := bytes.Index(body, []byte("PACK"))
+		if headerEnd < 0 {
+			headerEnd = len(body)
+		}
+		if err := req.Decode(bytes.NewReader(body[:headerEnd])); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        s.forceReceivePackFailure,
+			})
+		}
+		var rep bytes.Buffer
+		if err := report.Encode(nopWriteCloser{&rep}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		// The client negotiates sideband-64k when the target advertises it
+		// (go-git's transport.AdvertiseReferences does). Wrap the report in
+		// the pack-data channel so the client's demuxer can decode it.
+		var (
+			sidebandType sideband.Type
+			sidebandOK   bool
+		)
+		switch {
+		case req.Capabilities.Supports(capability.Sideband64k):
+			sidebandType = sideband.Sideband64k
+			sidebandOK = true
+		case req.Capabilities.Supports(capability.Sideband):
+			sidebandType = sideband.Sideband
+			sidebandOK = true
+		}
+		if sidebandOK {
+			muxer := sideband.NewMuxer(sidebandType, w)
+			if _, err := muxer.WriteChannel(sideband.PackData, rep.Bytes()); err != nil {
+				s.tb.Fatalf("write sideband report: %v", err)
+			}
+			return
+		}
+		if _, err := w.Write(rep.Bytes()); err != nil {
+			s.tb.Fatalf("write receive-pack report: %v", err)
+		}
+		return
+	}
 
 	if !bytes.Contains(body, []byte("PACK")) {
 		req := packp.NewUpdateRequests()

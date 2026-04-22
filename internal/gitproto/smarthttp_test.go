@@ -1,10 +1,12 @@
 package gitproto
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +191,34 @@ func TestHTTPErrorBoundsBodyRead(t *testing.T) {
 	}
 	if len(err.Error()) > maxHTTPErrorBody+128 {
 		t.Fatalf("error body was not bounded, len=%d", len(err.Error()))
+	}
+}
+
+func TestHTTPErrorTypedStatusCode(t *testing.T) {
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/repo.git/info/refs", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	res := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Request:    req,
+		Body:       io.NopCloser(bytes.NewReader([]byte("Repository not found."))),
+	}
+
+	err = httpError(res)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		t.Fatalf("expected *HTTPError via errors.As, got %T: %v", err, err)
+	}
+	if he.StatusCode != http.StatusNotFound {
+		t.Errorf("StatusCode = %d, want %d", he.StatusCode, http.StatusNotFound)
+	}
+	if !strings.Contains(he.Error(), "http 404") {
+		t.Errorf("Error() = %q, want to contain \"http 404\"", he.Error())
 	}
 }
 

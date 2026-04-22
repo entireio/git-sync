@@ -15,7 +15,6 @@ import (
 	"github.com/entirehq/git-sync/internal/convert"
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
-	"github.com/entirehq/git-sync/internal/strategy/pushreconcile"
 )
 
 // Params holds the inputs for an incremental relay execution.
@@ -27,7 +26,6 @@ type Params struct {
 	TargetPusher interface {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 	}
-	TargetLister pushreconcile.Lister
 	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
 	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
 	PushPlans    []planner.BranchPlan
@@ -70,8 +68,8 @@ func Execute(ctx context.Context, p Params, cfg planner.PlanConfig) (Result, err
 	return Result{}, nil
 }
 
-// relay fetches a pack from source with the given haves, pushes it to the
-// target, and reconciles per-ref CAS failures if the target already matches.
+// relay fetches a pack from source with the given haves and pushes it to the
+// target.
 func (p Params) relay(
 	ctx context.Context,
 	cmds []gitproto.PushCommand,
@@ -85,14 +83,11 @@ func (p Params) relay(
 	}
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 	packReader = closeOnce(packReader)
-	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
-	_ = packReader.Close()
-	if pushErr != nil {
-		if !pushreconcile.Check(ctx, pushErr, p.PushPlans, p.TargetLister) {
-			return Result{}, fmt.Errorf("push target refs: %w", pushErr)
-		}
-		reason = pushreconcile.Reason
+	if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
+		_ = packReader.Close()
+		return Result{}, fmt.Errorf("push target refs: %w", err)
 	}
+	_ = packReader.Close()
 	return Result{Relay: true, RelayMode: "incremental", RelayReason: reason}, nil
 }
 

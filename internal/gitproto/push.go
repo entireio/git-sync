@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
@@ -16,6 +15,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
+
+	"github.com/entirehq/git-sync/pkg/gitsync/syncerr"
 )
 
 // PushCommand represents a single ref update command.
@@ -24,36 +25,6 @@ type PushCommand struct {
 	Old    plumbing.Hash
 	New    plumbing.Hash
 	Delete bool
-}
-
-// PushRefFailure is a single per-reference failure from a receive-pack
-// report-status response.
-type PushRefFailure struct {
-	Ref    plumbing.ReferenceName
-	Status string
-}
-
-// PushReportError is returned when receive-pack report-status contains
-// either an unpack failure or any per-reference command failure. Callers can
-// inspect Failures to reconcile CAS races against a fresh target
-// advertisement (see internal/strategy/pushreconcile).
-type PushReportError struct {
-	UnpackStatus string
-	Failures     []PushRefFailure
-}
-
-func (e *PushReportError) Error() string {
-	if e.UnpackStatus != "" {
-		return "report-status: unpack error: " + e.UnpackStatus
-	}
-	if len(e.Failures) == 0 {
-		return "report-status: unknown failure"
-	}
-	parts := make([]string, len(e.Failures))
-	for i, f := range e.Failures {
-		parts[i] = fmt.Sprintf("%s: %s", f.Ref, f.Status)
-	}
-	return "report-status: command error on " + strings.Join(parts, "; ")
 }
 
 // Pusher wraps target-side receive-pack state behind a smaller execution API.
@@ -191,21 +162,21 @@ func sendReceivePack(
 	return nil
 }
 
-func buildReportError(report *packp.ReportStatus) *PushReportError {
+func buildReportError(report *packp.ReportStatus) *syncerr.PushReportError {
 	if report.UnpackStatus != "ok" {
-		return &PushReportError{UnpackStatus: report.UnpackStatus}
+		return &syncerr.PushReportError{UnpackStatus: report.UnpackStatus}
 	}
-	var failures []PushRefFailure
+	var failures []syncerr.PushRefFailure
 	for _, cs := range report.CommandStatuses {
 		if cs.Status == "ok" {
 			continue
 		}
-		failures = append(failures, PushRefFailure{Ref: cs.ReferenceName, Status: cs.Status})
+		failures = append(failures, syncerr.PushRefFailure{Ref: cs.ReferenceName.String(), Status: cs.Status})
 	}
 	if len(failures) == 0 {
 		return nil
 	}
-	return &PushReportError{Failures: failures}
+	return &syncerr.PushReportError{Failures: failures}
 }
 
 // PushObjects pushes locally-materialized objects to the target.

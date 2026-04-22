@@ -2,8 +2,15 @@ package gitsync
 
 import (
 	"context"
+
+	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/pkg/gitsync/internalbridge"
 )
+
+// HTTPError is returned (wrapped) when a Git Smart-HTTP request receives a
+// non-2xx response. Consumers can use errors.As(err, &gitsync.HTTPError{}) to
+// inspect StatusCode directly instead of parsing the formatted error string.
+type HTTPError = gitproto.HTTPError
 
 // ProtocolMode controls source-side protocol negotiation.
 type ProtocolMode string
@@ -110,6 +117,15 @@ type SyncRequest struct {
 	Scope        RefScope   `json:"scope"`
 	Policy       SyncPolicy `json:"policy"`
 	CollectStats bool       `json:"collectStats"`
+}
+
+// ListRefsRequest fetches the ref advertisement from a single endpoint.
+// Target selects which transport service to advertise over: true uses
+// git-receive-pack (target side, what a push would see), false uses
+// git-upload-pack (source side, what a fetch would see).
+type ListRefsRequest struct {
+	Endpoint Endpoint `json:"endpoint"`
+	Target   bool     `json:"target"`
 }
 
 type RefKind = internalbridge.RefKind

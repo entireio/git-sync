@@ -12,7 +12,6 @@ import (
 	"github.com/entirehq/git-sync/internal/convert"
 	"github.com/entirehq/git-sync/internal/gitproto"
 	"github.com/entirehq/git-sync/internal/planner"
-	"github.com/entirehq/git-sync/internal/strategy/pushreconcile"
 )
 
 func TestPlansToPushPlans(t *testing.T) {
@@ -128,18 +127,10 @@ func (f fakeSourceService) FetchPack(
 
 type fakeTargetPusher struct {
 	pushPack func(context.Context, []gitproto.PushCommand, io.ReadCloser) error
-	listRefs func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
 }
 
 func (f fakeTargetPusher) PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error {
 	return f.pushPack(ctx, cmds, pack)
-}
-
-func (f fakeTargetPusher) ListRefs(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-	if f.listRefs == nil {
-		return nil, errors.New("fakeTargetPusher.ListRefs not configured")
-	}
-	return f.listRefs(ctx)
 }
 
 type trackingReadCloser struct {
@@ -342,51 +333,6 @@ func TestExecuteIncrementalRelayClosesPackOnPushError(t *testing.T) {
 	}
 	if !pack.closed {
 		t.Fatal("expected pack to be closed on push error")
-	}
-}
-
-func TestExecuteIncrementalReconcilesWhenTargetAlreadyMatchesSource(t *testing.T) {
-	mainRef := plumbing.NewBranchReferenceName("main")
-	oldHash := plumbing.NewHash("1111111111111111111111111111111111111111")
-	newHash := plumbing.NewHash("2222222222222222222222222222222222222222")
-	pack := &trackingReadCloser{Reader: bytes.NewReader([]byte("PACK"))}
-
-	tp := fakeTargetPusher{
-		pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
-			_ = pack.Close()
-			return &gitproto.PushReportError{
-				Failures: []gitproto.PushRefFailure{{Ref: mainRef, Status: "remote ref has changed"}},
-			}
-		},
-		listRefs: func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-			return map[plumbing.ReferenceName]plumbing.Hash{mainRef: newHash}, nil
-		},
-	}
-	result, err := Execute(context.Background(), Params{
-		SourceService: fakeSourceService{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
-				return pack, nil
-			},
-		},
-		TargetPusher: tp,
-		TargetLister: tp,
-		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
-			mainRef: {SourceRef: mainRef, TargetRef: mainRef, SourceHash: newHash, Kind: planner.RefKindBranch},
-		},
-		TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{mainRef: oldHash},
-		PushPlans: []planner.BranchPlan{{
-			SourceRef: mainRef, TargetRef: mainRef, SourceHash: newHash, TargetHash: oldHash,
-			Kind: planner.RefKindBranch, Action: planner.ActionUpdate,
-		}},
-		CanRelay: func(bool, bool, bool, []planner.BranchPlan) (bool, string) {
-			return true, testReasonFastForward
-		},
-	}, planner.PlanConfig{})
-	if err != nil {
-		t.Fatalf("Execute() returned error: %v", err)
-	}
-	if !result.Relay || result.RelayReason != pushreconcile.Reason {
-		t.Fatalf("unexpected result: %+v", result)
 	}
 }
 

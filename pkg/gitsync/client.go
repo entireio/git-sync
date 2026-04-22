@@ -52,14 +52,17 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	if err != nil {
 		return PlanResult{}, err
 	}
-	result, err := internalbridge.Run(ctx, cfg)
-	if err != nil {
-		return PlanResult{}, fmt.Errorf("plan: %w", err)
+	result, runErr := internalbridge.Run(ctx, cfg)
+	public := internalbridge.FromSyncResult(result)
+	if runErr != nil {
+		return public, fmt.Errorf("plan: %w", runErr)
 	}
-	return internalbridge.FromSyncResult(result), nil
+	return public, nil
 }
 
-// Sync executes a sync between two remotes.
+// Sync executes a sync between two remotes. On error the returned result
+// still carries any plans that were built before the failure, so callers
+// can inspect per-ref actions (e.g. when reconciling a PushReportError).
 func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) {
 	if err := req.Validate(); err != nil {
 		return SyncResult{}, err
@@ -68,17 +71,38 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	if err != nil {
 		return SyncResult{}, err
 	}
-	result, err := internalbridge.Run(ctx, cfg)
-	if err != nil {
-		return SyncResult{}, fmt.Errorf("sync: %w", err)
+	result, runErr := internalbridge.Run(ctx, cfg)
+	public := internalbridge.FromSyncResult(result)
+	if runErr != nil {
+		return public, fmt.Errorf("sync: %w", runErr)
 	}
-	return internalbridge.FromSyncResult(result), nil
+	return public, nil
 }
 
 // Replicate executes source-authoritative relay-only replication between two remotes.
 func (c *Client) Replicate(ctx context.Context, req SyncRequest) (SyncResult, error) {
 	req.Policy.Mode = ModeReplicate
 	return c.Sync(ctx, req)
+}
+
+// ListRefs fetches the current ref advertisement from an endpoint and
+// returns a map of ref name to hex hash. Useful when reconciling a
+// PushReportError after a failed Sync / Replicate — the caller can verify
+// whether the target has already converged to the desired state.
+func (c *Client) ListRefs(ctx context.Context, req ListRefsRequest) (map[string]string, error) {
+	role := SourceRole
+	if req.Target {
+		role = TargetRole
+	}
+	resolved, err := c.authFor(ctx, req.Endpoint, role)
+	if err != nil {
+		return nil, err
+	}
+	refs, err := internalbridge.ListRefs(ctx, bridgeEndpoint(req.Endpoint), bridgeEndpointAuth(resolved), req.Target, c.httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("list refs: %w", err)
+	}
+	return refs, nil
 }
 
 func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (internalbridge.Config, error) {

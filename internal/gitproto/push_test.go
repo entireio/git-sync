@@ -16,6 +16,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/stretchr/testify/require"
+
+	"github.com/entirehq/git-sync/pkg/gitsync/syncerr"
 )
 
 func TestPrefixedLineWriter(t *testing.T) {
@@ -358,9 +360,9 @@ func TestPushPackReturnsPushReportErrorForPerRefFailures(t *testing.T) {
 		t.Fatal("expected PushPack to return an error")
 	}
 
-	var prErr *PushReportError
+	var prErr *syncerr.PushReportError
 	if !errors.As(err, &prErr) {
-		t.Fatalf("expected *PushReportError, got %T: %v", err, err)
+		t.Fatalf("expected *syncerr.PushReportError, got %T: %v", err, err)
 	}
 	if prErr.UnpackStatus != "" {
 		t.Errorf("unexpected UnpackStatus %q; expected empty for per-ref failures", prErr.UnpackStatus)
@@ -368,15 +370,15 @@ func TestPushPackReturnsPushReportErrorForPerRefFailures(t *testing.T) {
 	if len(prErr.Failures) != 2 {
 		t.Fatalf("expected 2 failures, got %d: %+v", len(prErr.Failures), prErr.Failures)
 	}
-	got := map[plumbing.ReferenceName]string{}
+	got := map[string]string{}
 	for _, f := range prErr.Failures {
 		got[f.Ref] = f.Status
 	}
-	if got[refA] != "remote ref has changed" {
-		t.Errorf("ref %s status: want %q, got %q", refA, "remote ref has changed", got[refA])
+	if got[refA.String()] != "remote ref has changed" {
+		t.Errorf("ref %s status: want %q, got %q", refA, "remote ref has changed", got[refA.String()])
 	}
-	if got[refB] != "already exists" {
-		t.Errorf("ref %s status: want %q, got %q", refB, "already exists", got[refB])
+	if got[refB.String()] != "already exists" {
+		t.Errorf("ref %s status: want %q, got %q", refB, "already exists", got[refB.String()])
 	}
 }
 
