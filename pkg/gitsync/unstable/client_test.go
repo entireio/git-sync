@@ -18,8 +18,8 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 			Target: gitsync.EndpointAuth{Token: "dst"},
 		},
 	}).buildSyncConfig(context.Background(), SyncRequest{
-		Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
-		Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+		Source: gitsync.Endpoint{URL: "https://source.example/repo.git", FollowInfoRefsRedirect: true},
+		Target: gitsync.Endpoint{URL: "https://target.example/repo.git", FollowInfoRefsRedirect: true},
 		Scope:  gitsync.RefScope{Branches: []string{"main"}},
 		Policy: gitsync.SyncPolicy{IncludeTags: true, Force: true, Prune: true},
 		DryRun: true,
@@ -41,6 +41,9 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 	}
 	if cfg.Source.Token != "src" || cfg.Target.Token != "dst" {
 		t.Fatalf("auth not propagated: %+v %+v", cfg.Source, cfg.Target)
+	}
+	if !cfg.Source.FollowInfoRefsRedirect || !cfg.Target.FollowInfoRefsRedirect {
+		t.Fatalf("follow-info-refs redirect flags not propagated: %+v %+v", cfg.Source, cfg.Target)
 	}
 }
 
