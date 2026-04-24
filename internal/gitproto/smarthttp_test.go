@@ -178,9 +178,11 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 // behaviour and lets clients use a cluster entry domain for info/refs while
 // packs land on the hosting replica.
 func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
-		_, _ = w.Write([]byte("001e# service=git-upload-pack\n0000"))
+		if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+			t.Errorf("node write: %v", err)
+		}
 	}))
 	defer node.Close()
 
@@ -209,9 +211,11 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 // TestRequestInfoRefs_DoesNotFollowByDefault confirms the default behaviour
 // is unchanged: Endpoint is stable even if the server 307s.
 func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
-		_, _ = w.Write([]byte("001e# service=git-upload-pack\n0000"))
+		if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+			t.Errorf("node write: %v", err)
+		}
 	}))
 	defer node.Close()
 
