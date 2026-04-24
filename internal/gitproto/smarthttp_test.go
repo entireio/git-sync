@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +169,71 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+// TestRequestInfoRefs_FollowInfoRefsRedirect verifies that when the flag is
+// set, a 307 on /info/refs rewrites Conn.Endpoint.Host so subsequent PostRPC
+// calls target the redirected node. Matches vanilla git's smart-HTTP
+// behaviour and lets clients use a cluster entry domain for info/refs while
+// packs land on the hosting replica.
+func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		_, _ = w.Write([]byte("001e# service=git-upload-pack\n0000"))
+	}))
+	defer node.Close()
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer entry.Close()
+
+	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn.FollowInfoRefsRedirect = true
+
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	nodeURL := strings.TrimPrefix(node.URL, "http://")
+	if conn.Endpoint.Host != nodeURL {
+		t.Errorf("Endpoint.Host = %q, want %q (endpoint should follow the 307)", conn.Endpoint.Host, nodeURL)
+	}
+}
+
+// TestRequestInfoRefs_DoesNotFollowByDefault confirms the default behaviour
+// is unchanged: Endpoint is stable even if the server 307s.
+func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		_, _ = w.Write([]byte("001e# service=git-upload-pack\n0000"))
+	}))
+	defer node.Close()
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer entry.Close()
+
+	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	entryHost := ep.Host
+	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	// FollowInfoRefsRedirect intentionally not set.
+
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	if conn.Endpoint.Host != entryHost {
+		t.Errorf("Endpoint.Host = %q, want %q (endpoint should be unchanged by default)", conn.Endpoint.Host, entryHost)
 	}
 }
 
