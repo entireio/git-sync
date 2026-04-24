@@ -45,6 +45,16 @@ type Conn struct {
 	Transport transport.Transport
 	HTTP      *http.Client
 	Auth      transport.AuthMethod
+
+	// FollowInfoRefsRedirect, when true, rewrites Endpoint.Scheme and
+	// Endpoint.Host to the final URL returned by RequestInfoRefs after
+	// HTTP redirects. Subsequent PostRPC* calls then target the
+	// redirected host directly, matching vanilla git's smart-HTTP
+	// behaviour for discovery-aware servers that 307 /info/refs to a
+	// hosting replica. Endpoint.Path is never modified — it still
+	// contains the repo path. Off by default to preserve behaviour for
+	// callers that rely on Endpoint being stable.
+	FollowInfoRefsRedirect bool
 }
 
 // NewConn creates a new connection to the given endpoint.
@@ -108,6 +118,13 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 	defer res.Body.Close()
 	if err := httpError(res); err != nil {
 		return nil, err
+	}
+	if conn.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
+		final := res.Request.URL
+		if final.Host != conn.Endpoint.Host || final.Scheme != conn.Endpoint.Scheme {
+			conn.Endpoint.Scheme = final.Scheme
+			conn.Endpoint.Host = final.Host
+		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
 	const maxInfoRefsSize = 64 * 1024 * 1024 // 64 MiB

@@ -59,6 +59,8 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, d
 
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&req.Target.URL, "target-url", "", "target repository URL")
+	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
+	fs.BoolVar(&req.Target.FollowInfoRefsRedirect, "target-follow-info-refs-redirect", envBool("GITSYNC_TARGET_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up target RPCs to the final /info/refs redirect host")
 
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
@@ -163,6 +165,8 @@ func runBootstrap(ctx context.Context, args []string) error {
 
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&req.Target.URL, "target-url", "", "target repository URL")
+	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
+	fs.BoolVar(&req.Target.FollowInfoRefsRedirect, "target-follow-info-refs-redirect", envBool("GITSYNC_TARGET_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up target RPCs to the final /info/refs redirect host")
 
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
@@ -237,9 +241,12 @@ func runProbe(ctx context.Context, args []string) error {
 	var jsonOutput bool
 	var sourceAuth gitsync.EndpointAuth
 	var targetAuth gitsync.EndpointAuth
+	var targetFollowInfoRefsRedirect bool
 	req := unstable.ProbeRequest{}
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
 	targetURL := fs.String("target-url", "", "optional target repository URL")
+	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
+	fs.BoolVar(&targetFollowInfoRefsRedirect, "target-follow-info-refs-redirect", envBool("GITSYNC_TARGET_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up target RPCs to the final /info/refs redirect host")
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
 	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
@@ -274,7 +281,10 @@ func runProbe(ctx context.Context, args []string) error {
 		return usageError("probe requires a source repository URL")
 	}
 	if *targetURL != "" {
-		req.Target = &gitsync.Endpoint{URL: *targetURL}
+		req.Target = &gitsync.Endpoint{
+			URL:                    *targetURL,
+			FollowInfoRefsRedirect: targetFollowInfoRefsRedirect,
+		}
 	}
 
 	result, err := unstable.New(unstable.Options{
@@ -298,6 +308,7 @@ func runFetch(ctx context.Context, args []string) error {
 	req := unstable.FetchRequest{}
 
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
+	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
 	fs.StringVar(&sourceAuth.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
@@ -413,7 +424,141 @@ func envBool(key string) bool {
 }
 
 func usageError(message string) error {
-	usage := fmt.Sprintf("usage:\n  git-sync sync [flags] <source-url> <target-url>\n  git-sync replicate [flags] <source-url> <target-url>\n  git-sync plan [flags] <source-url> <target-url>\n  git-sync bootstrap [flags] <source-url> <target-url>\n  git-sync probe [flags] <source-url> [target-url]\n  git-sync fetch [flags] <source-url>\n\nsync flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --materialized-max-objects %d\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nreplicate flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nplan flags:\n  --mode sync|replicate\n  --branch main,dev\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --json\n  --max-pack-bytes <bytes>\n  --target-max-pack-bytes <bytes>\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nbootstrap flags:\n  --branch main,dev\n  --map main:stable\n  --tags\n  --max-pack-bytes 104857600\n  --target-max-pack-bytes 1073741824\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --target-token ...\n  --source-username git\n  --target-username git\n  --source-bearer-token ...\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n  -v\n\nprobe flags:\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --target-token ...\n  --target-username git\n  --target-bearer-token ...\n  --source-insecure-skip-tls-verify\n  --target-insecure-skip-tls-verify\n\nfetch flags:\n  --branch main,dev\n  --tags\n  --stats\n  --measure-memory\n  --json\n  --protocol auto|v1|v2\n  --have-ref main\n  --have <hash>\n  --source-token ...\n  --source-username git\n  --source-bearer-token ...\n  --source-insecure-skip-tls-verify\n", unstable.DefaultMaterializedMaxObjects)
+	usage := fmt.Sprintf(`usage:
+  git-sync sync [flags] <source-url> <target-url>
+  git-sync replicate [flags] <source-url> <target-url>
+  git-sync plan [flags] <source-url> <target-url>
+  git-sync bootstrap [flags] <source-url> <target-url>
+  git-sync probe [flags] <source-url> [target-url]
+  git-sync fetch [flags] <source-url>
+
+sync flags:
+  --branch main,dev
+  --map main:stable
+  --tags
+  --force
+  --prune
+  --stats
+  --measure-memory
+  --json
+  --materialized-max-objects %d
+  --max-pack-bytes <bytes>
+  --target-max-pack-bytes <bytes>
+  --protocol auto|v1|v2
+  --source-token ...
+  --target-token ...
+  --source-username git
+  --target-username git
+  --source-bearer-token ...
+  --target-bearer-token ...
+  --source-insecure-skip-tls-verify
+  --target-insecure-skip-tls-verify
+  --source-follow-info-refs-redirect
+  --target-follow-info-refs-redirect
+  -v
+
+replicate flags:
+  --branch main,dev
+  --map main:stable
+  --tags
+  --prune
+  --stats
+  --measure-memory
+  --json
+  --max-pack-bytes <bytes>
+  --target-max-pack-bytes <bytes>
+  --protocol auto|v1|v2
+  --source-token ...
+  --target-token ...
+  --source-username git
+  --target-username git
+  --source-bearer-token ...
+  --target-bearer-token ...
+  --source-insecure-skip-tls-verify
+  --target-insecure-skip-tls-verify
+  --source-follow-info-refs-redirect
+  --target-follow-info-refs-redirect
+  -v
+
+plan flags:
+  --mode sync|replicate
+  --branch main,dev
+  --map main:stable
+  --tags
+  --force
+  --prune
+  --stats
+  --measure-memory
+  --json
+  --max-pack-bytes <bytes>
+  --target-max-pack-bytes <bytes>
+  --protocol auto|v1|v2
+  --source-token ...
+  --target-token ...
+  --source-username git
+  --target-username git
+  --source-bearer-token ...
+  --target-bearer-token ...
+  --source-insecure-skip-tls-verify
+  --target-insecure-skip-tls-verify
+  --source-follow-info-refs-redirect
+  --target-follow-info-refs-redirect
+  -v
+
+bootstrap flags:
+  --branch main,dev
+  --map main:stable
+  --tags
+  --max-pack-bytes 104857600
+  --target-max-pack-bytes 1073741824
+  --stats
+  --measure-memory
+  --json
+  --protocol auto|v1|v2
+  --source-token ...
+  --target-token ...
+  --source-username git
+  --target-username git
+  --source-bearer-token ...
+  --target-bearer-token ...
+  --source-insecure-skip-tls-verify
+  --target-insecure-skip-tls-verify
+  --source-follow-info-refs-redirect
+  --target-follow-info-refs-redirect
+  -v
+
+probe flags:
+  --tags
+  --stats
+  --measure-memory
+  --json
+  --protocol auto|v1|v2
+  --source-token ...
+  --source-username git
+  --source-bearer-token ...
+  --target-token ...
+  --target-username git
+  --target-bearer-token ...
+  --source-insecure-skip-tls-verify
+  --target-insecure-skip-tls-verify
+  --source-follow-info-refs-redirect
+  --target-follow-info-refs-redirect
+
+fetch flags:
+  --branch main,dev
+  --tags
+  --stats
+  --measure-memory
+  --json
+  --protocol auto|v1|v2
+  --have-ref main
+  --have <hash>
+  --source-token ...
+  --source-username git
+  --source-bearer-token ...
+  --source-insecure-skip-tls-verify
+  --source-follow-info-refs-redirect
+`, unstable.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}
