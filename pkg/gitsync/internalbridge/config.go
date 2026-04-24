@@ -28,7 +28,8 @@ type RefMapping struct {
 }
 
 type Endpoint struct {
-	URL string
+	URL                    string
+	FollowInfoRefsRedirect bool
 }
 
 type EndpointAuth struct {
@@ -101,11 +102,12 @@ func Run(ctx context.Context, cfg Config) (syncer.Result, error) {
 
 func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {
 	return syncer.Endpoint{
-		URL:           endpoint.URL,
-		Username:      auth.Username,
-		Token:         auth.Token,
-		BearerToken:   auth.BearerToken,
-		SkipTLSVerify: auth.SkipTLSVerify,
+		URL:                    endpoint.URL,
+		Username:               auth.Username,
+		Token:                  auth.Token,
+		BearerToken:            auth.BearerToken,
+		SkipTLSVerify:          auth.SkipTLSVerify,
+		FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
 	}
 }
 

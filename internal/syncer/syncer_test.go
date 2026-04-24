@@ -31,3 +31,26 @@ func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
 		t.Fatalf("expected non-github source to be rejected")
 	}
 }
+
+// TestNewConn_PropagatesFollowInfoRefsRedirect proves the plumbing from
+// Endpoint → gitproto.Conn is in place. Without this the flag on
+// Endpoint is dead config.
+func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
+	stats := newStats(false)
+
+	off, err := newConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
+	if err != nil {
+		t.Fatalf("new conn (off): %v", err)
+	}
+	if off.FollowInfoRefsRedirect {
+		t.Error("FollowInfoRefsRedirect should default to false")
+	}
+
+	on, err := newConn(Endpoint{URL: "https://node.example/repo.git", FollowInfoRefsRedirect: true}, "target", stats, nil)
+	if err != nil {
+		t.Fatalf("new conn (on): %v", err)
+	}
+	if !on.FollowInfoRefsRedirect {
+		t.Error("FollowInfoRefsRedirect was not propagated from Endpoint to Conn")
+	}
+}

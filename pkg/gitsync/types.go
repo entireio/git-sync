@@ -25,6 +25,14 @@ const (
 // Endpoint identifies a remote Git endpoint.
 type Endpoint struct {
 	URL string `json:"url"`
+
+	// FollowInfoRefsRedirect, when true, rewrites this endpoint's
+	// effective host to the final URL returned by /info/refs after
+	// HTTP redirects. Subsequent git RPCs (git-upload-pack,
+	// git-receive-pack) then target the redirected host directly.
+	// Matches vanilla git's smart-HTTP behaviour for discovery-aware
+	// servers that 307 /info/refs to a hosting replica.
+	FollowInfoRefsRedirect bool `json:"followInfoRefsRedirect,omitempty"`
 }
 
 // EndpointAuth carries explicit per-request auth and TLS settings.

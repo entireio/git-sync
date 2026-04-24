@@ -49,6 +49,12 @@ type Endpoint struct {
 	Token         string
 	BearerToken   string
 	SkipTLSVerify bool
+
+	// FollowInfoRefsRedirect, when true, rewrites the effective host of
+	// this endpoint to the final URL of /info/refs after HTTP redirects,
+	// so follow-up upload-pack / receive-pack POSTs land on the
+	// redirected node. Plumbed into gitproto.Conn.FollowInfoRefsRedirect.
+	FollowInfoRefsRedirect bool
 }
 
 // RefMapping is a user-specified source:target ref mapping.
@@ -302,7 +308,9 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 		return nil, fmt.Errorf("resolve auth: %w", err)
 	}
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
-	return gitproto.NewConnWithHTTPClient(ep, label, authMethod, client), nil
+	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
+	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
+	return conn, nil
 }
 
 func instrumentHTTPClient(base *http.Client, skipTLS bool, label string, stats *statsCollector) *http.Client {

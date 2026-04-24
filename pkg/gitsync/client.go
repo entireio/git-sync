@@ -193,7 +193,10 @@ func (r ProbeRequest) Validate() error {
 }
 
 func bridgeEndpoint(ep Endpoint) internalbridge.Endpoint {
-	return internalbridge.Endpoint{URL: ep.URL}
+	return internalbridge.Endpoint{
+		URL:                    ep.URL,
+		FollowInfoRefsRedirect: ep.FollowInfoRefsRedirect,
+	}
 }
 
 func bridgeEndpointAuth(auth EndpointAuth) internalbridge.EndpointAuth {

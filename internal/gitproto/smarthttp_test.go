@@ -208,6 +208,72 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 	}
 }
 
+// TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
+// is the reviewer-requested integration test: it runs the full sequence
+// (GET /info/refs → 307 → 200 on hosting node → POST /git-upload-pack) and
+// asserts the POST lands on the hosting node, not the entry domain. This is
+// the property that makes the flag useful — the whole point is that packs
+// follow info/refs.
+func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost(t *testing.T) {
+	var nodeGotPOST bool
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs"):
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+				t.Errorf("node info/refs write: %v", err)
+			}
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-upload-pack"):
+			nodeGotPOST = true
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("node: unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer node.Close()
+
+	var entryGotPOST bool
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			entryGotPOST = true
+			http.Error(w, "LB rejects packs", http.StatusMethodNotAllowed)
+			return
+		}
+		http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer entry.Close()
+
+	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn.FollowInfoRefsRedirect = true
+
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	// Now do the follow-up upload-pack POST. Without the flag this hits the
+	// entry domain (rejected with 405); with the flag it hits the node.
+	body, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack integration-test")
+	if err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+	if len(body) != 0 {
+		// body shape is not what we're asserting; just demand it didn't fail
+		_ = body
+	}
+
+	if entryGotPOST {
+		t.Error("POST hit the entry domain instead of the redirected node")
+	}
+	if !nodeGotPOST {
+		t.Error("POST did not hit the redirected node")
+	}
+}
+
 // TestRequestInfoRefs_DoesNotFollowByDefault confirms the default behaviour
 // is unchanged: Endpoint is stable even if the server 307s.
 func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
