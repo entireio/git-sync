@@ -294,8 +294,8 @@ func operationModeString(mode gitsync.OperationMode) string {
 func syncerEndpoint(endpoint gitsync.Endpoint, auth gitsync.EndpointAuth) syncer.Endpoint {
 	return internalbridge.ToSyncerEndpoint(
 		internalbridge.Endpoint{
-			URL:                    endpoint.URL,
-			FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
+			URL:           endpoint.URL,
+			AfterInfoRefs: endpoint.AfterInfoRefs,
 		},
 		internalbridge.EndpointAuth{
 			Username:      auth.Username,

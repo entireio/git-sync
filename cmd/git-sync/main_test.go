@@ -270,47 +270,6 @@ func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
 	}
 }
 
-func TestRun_Fetch_SourceFollowInfoRefsRedirectFlag(t *testing.T) {
-	sourceRepo, sourceFS := newSourceRepo(t)
-	makeCommits(t, sourceRepo, sourceFS, 1)
-
-	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
-	defer sourceServer.Close()
-
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == sourceServer.repoPath+"/info/refs":
-			http.Redirect(w, r, sourceServer.server.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
-		case r.Method == http.MethodPost:
-			http.Error(w, "entry domain rejects packs", http.StatusMethodNotAllowed)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer entry.Close()
-
-	output, err := captureStdout(func() error {
-		return run(context.Background(), []string{
-			"fetch",
-			"--source-follow-info-refs-redirect",
-			"--branch", testBranch,
-			"--json",
-			entry.URL + sourceServer.repoPath,
-		})
-	})
-	if err != nil {
-		t.Fatalf("run fetch: %v", err)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("decode fetch json: %v\noutput=%s", err, output)
-	}
-	if got, ok := result["fetchedObjects"].(float64); !ok || got == 0 {
-		t.Fatalf("expected fetched objects from redirected source, got %#v", result["fetchedObjects"])
-	}
-}
-
 func captureStdout(fn func() error) (string, error) {
 	old := os.Stdout
 	r, w, err := os.Pipe()

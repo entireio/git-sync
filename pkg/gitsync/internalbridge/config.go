@@ -3,6 +3,7 @@ package internalbridge
 import (
 	"context"
 	"net/http"
+	"net/url"
 
 	"github.com/entirehq/git-sync/internal/syncer"
 	"github.com/entirehq/git-sync/internal/validation"
@@ -28,8 +29,8 @@ type RefMapping struct {
 }
 
 type Endpoint struct {
-	URL                    string
-	FollowInfoRefsRedirect bool
+	URL           string
+	AfterInfoRefs func(*http.Response) *url.URL
 }
 
 type EndpointAuth struct {
@@ -102,12 +103,12 @@ func Run(ctx context.Context, cfg Config) (syncer.Result, error) {
 
 func ToSyncerEndpoint(endpoint Endpoint, auth EndpointAuth) syncer.Endpoint {
 	return syncer.Endpoint{
-		URL:                    endpoint.URL,
-		Username:               auth.Username,
-		Token:                  auth.Token,
-		BearerToken:            auth.BearerToken,
-		SkipTLSVerify:          auth.SkipTLSVerify,
-		FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
+		URL:           endpoint.URL,
+		Username:      auth.Username,
+		Token:         auth.Token,
+		BearerToken:   auth.BearerToken,
+		SkipTLSVerify: auth.SkipTLSVerify,
+		AfterInfoRefs: endpoint.AfterInfoRefs,
 	}
 }
 

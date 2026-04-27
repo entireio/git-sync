@@ -3,6 +3,7 @@ package unstable
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -11,6 +12,11 @@ import (
 )
 
 func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
+	srcPin := &url.URL{Scheme: "https", Host: "src.pinned"}
+	dstPin := &url.URL{Scheme: "https", Host: "dst.pinned"}
+	srcHook := func(*http.Response) *url.URL { return srcPin }
+	dstHook := func(*http.Response) *url.URL { return dstPin }
+
 	cfg, err := New(Options{
 		HTTPClient: &http.Client{},
 		Auth: gitsync.StaticAuthProvider{
@@ -18,8 +24,8 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 			Target: gitsync.EndpointAuth{Token: "dst"},
 		},
 	}).buildSyncConfig(context.Background(), SyncRequest{
-		Source: gitsync.Endpoint{URL: "https://source.example/repo.git", FollowInfoRefsRedirect: true},
-		Target: gitsync.Endpoint{URL: "https://target.example/repo.git", FollowInfoRefsRedirect: true},
+		Source: gitsync.Endpoint{URL: "https://source.example/repo.git", AfterInfoRefs: srcHook},
+		Target: gitsync.Endpoint{URL: "https://target.example/repo.git", AfterInfoRefs: dstHook},
 		Scope:  gitsync.RefScope{Branches: []string{"main"}},
 		Policy: gitsync.SyncPolicy{IncludeTags: true, Force: true, Prune: true},
 		DryRun: true,
@@ -42,8 +48,14 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 	if cfg.Source.Token != "src" || cfg.Target.Token != "dst" {
 		t.Fatalf("auth not propagated: %+v %+v", cfg.Source, cfg.Target)
 	}
-	if !cfg.Source.FollowInfoRefsRedirect || !cfg.Target.FollowInfoRefsRedirect {
-		t.Fatalf("follow-info-refs redirect flags not propagated: %+v %+v", cfg.Source, cfg.Target)
+	if cfg.Source.AfterInfoRefs == nil || cfg.Target.AfterInfoRefs == nil {
+		t.Fatalf("AfterInfoRefs hooks not propagated: %+v %+v", cfg.Source, cfg.Target)
+	}
+	if cfg.Source.AfterInfoRefs(nil) != srcPin {
+		t.Errorf("source hook returned wrong URL")
+	}
+	if cfg.Target.AfterInfoRefs(nil) != dstPin {
+		t.Errorf("target hook returned wrong URL")
 	}
 }
 

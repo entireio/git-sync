@@ -2,6 +2,9 @@ package gitsync
 
 import (
 	"context"
+	"net/http"
+	"net/url"
+
 	"github.com/entirehq/git-sync/pkg/gitsync/internalbridge"
 )
 
@@ -26,13 +29,36 @@ const (
 type Endpoint struct {
 	URL string `json:"url"`
 
-	// FollowInfoRefsRedirect, when true, rewrites this endpoint's
-	// effective host to the final URL returned by /info/refs after
-	// HTTP redirects. Subsequent git RPCs (git-upload-pack,
-	// git-receive-pack) then target the redirected host directly.
-	// Matches vanilla git's smart-HTTP behaviour for discovery-aware
-	// servers that 307 /info/refs to a hosting replica.
-	FollowInfoRefsRedirect bool `json:"followInfoRefsRedirect,omitempty"`
+	// AfterInfoRefs, when set, is called after /info/refs returns. A
+	// non-nil URL pins the endpoint's effective Scheme and Host, so
+	// subsequent git RPCs (git-upload-pack, git-receive-pack) target
+	// the chosen host. Endpoint.Path is never modified. Returning nil
+	// leaves the endpoint unchanged.
+	//
+	// Use FollowRedirectHook for the vanilla-git case (pin to the
+	// post-redirect URL). For protocol-specific replica advertisement,
+	// implement a hook that reads the relevant response header.
+	//
+	// Not JSON-serializable; only library callers can supply a hook.
+	AfterInfoRefs AfterInfoRefsHook `json:"-"`
+}
+
+// AfterInfoRefsHook inspects the /info/refs response and returns the URL
+// whose Scheme and Host should be pinned for subsequent RPCs. A nil return
+// leaves the endpoint unchanged.
+type AfterInfoRefsHook func(*http.Response) *url.URL
+
+// FollowRedirectHook is an AfterInfoRefsHook that pins the endpoint to
+// whatever URL http.Client redirected to while fetching /info/refs (which
+// equals the original URL when the server returned 200 directly without
+// redirecting). Subsequent RPCs then target that host — approximating
+// vanilla git's redirect-follow by caching the resolved host on the Conn,
+// rather than re-resolving per request as git itself does.
+func FollowRedirectHook(res *http.Response) *url.URL {
+	if res == nil || res.Request == nil || res.Request.URL == nil {
+		return nil
+	}
+	return res.Request.URL
 }
 
 // EndpointAuth carries explicit per-request auth and TLS settings.

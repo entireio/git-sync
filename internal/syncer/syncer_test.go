@@ -1,6 +1,8 @@
 package syncer
 
 import (
+	"net/http"
+	"net/url"
 	"testing"
 
 	bstrap "github.com/entirehq/git-sync/internal/strategy/bootstrap"
@@ -32,25 +34,30 @@ func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
 	}
 }
 
-// TestNewConn_PropagatesFollowInfoRefsRedirect proves the plumbing from
-// Endpoint → gitproto.Conn is in place. Without this the flag on
+// TestNewConn_PropagatesAfterInfoRefs proves the plumbing from
+// Endpoint → gitproto.Conn is in place. Without this the hook on
 // Endpoint is dead config.
-func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
+func TestNewConn_PropagatesAfterInfoRefs(t *testing.T) {
 	stats := newStats(false)
 
 	off, err := newConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (off): %v", err)
 	}
-	if off.FollowInfoRefsRedirect {
-		t.Error("FollowInfoRefsRedirect should default to false")
+	if off.AfterInfoRefs != nil {
+		t.Error("AfterInfoRefs should default to nil")
 	}
 
-	on, err := newConn(Endpoint{URL: "https://node.example/repo.git", FollowInfoRefsRedirect: true}, "target", stats, nil)
+	want := &url.URL{Scheme: "https", Host: "pinned.example"}
+	hook := func(*http.Response) *url.URL { return want }
+	on, err := newConn(Endpoint{URL: "https://node.example/repo.git", AfterInfoRefs: hook}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (on): %v", err)
 	}
-	if !on.FollowInfoRefsRedirect {
-		t.Error("FollowInfoRefsRedirect was not propagated from Endpoint to Conn")
+	if on.AfterInfoRefs == nil {
+		t.Fatal("AfterInfoRefs was not propagated from Endpoint to Conn")
+	}
+	if got := on.AfterInfoRefs(nil); got != want {
+		t.Errorf("propagated hook returned %v, want %v", got, want)
 	}
 }

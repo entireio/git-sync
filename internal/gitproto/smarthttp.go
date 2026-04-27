@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
@@ -46,15 +47,21 @@ type Conn struct {
 	HTTP      *http.Client
 	Auth      transport.AuthMethod
 
-	// FollowInfoRefsRedirect, when true, rewrites Endpoint.Scheme and
-	// Endpoint.Host to the final URL returned by RequestInfoRefs after
-	// HTTP redirects. Subsequent PostRPC* calls then target the
-	// redirected host directly, matching vanilla git's smart-HTTP
-	// behaviour for discovery-aware servers that 307 /info/refs to a
-	// hosting replica. Endpoint.Path is never modified — it still
-	// contains the repo path. Off by default to preserve behaviour for
-	// callers that rely on Endpoint being stable.
-	FollowInfoRefsRedirect bool
+	// AfterInfoRefs, when set, is called with the /info/refs response
+	// after RequestInfoRefs has read and bounded the body. The presented
+	// res.Body is a fresh reader over the buffered advertisement, so the
+	// hook can read it (or not) without affecting RequestInfoRefs's
+	// return value. A non-nil return rewrites Endpoint.Scheme and
+	// Endpoint.Host to those of the returned URL, so subsequent PostRPC*
+	// calls target the chosen host. Endpoint.Path is never modified.
+	// Returning nil leaves the endpoint unchanged.
+	//
+	// Use this for discovery-aware redirection: callers can read response
+	// headers, follow the post-redirect URL, or implement protocol-specific
+	// replica advertisement and pick a host. See
+	// pkg/gitsync.FollowRedirectHook for the vanilla-git case (pin to
+	// whatever http.Client redirected to).
+	AfterInfoRefs func(*http.Response) *url.URL
 }
 
 // NewConn creates a new connection to the given endpoint.
@@ -119,13 +126,6 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 	if err := httpError(res); err != nil {
 		return nil, err
 	}
-	if conn.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
-		final := res.Request.URL
-		if final.Host != conn.Endpoint.Host || final.Scheme != conn.Endpoint.Scheme {
-			conn.Endpoint.Scheme = final.Scheme
-			conn.Endpoint.Host = final.Host
-		}
-	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
 	const maxInfoRefsSize = 64 * 1024 * 1024 // 64 MiB
 	lr := io.LimitReader(res.Body, maxInfoRefsSize+1)
@@ -135,6 +135,17 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 	}
 	if int64(len(data)) > maxInfoRefsSize {
 		return nil, fmt.Errorf("info/refs response exceeds %d byte limit", maxInfoRefsSize)
+	}
+	if conn.AfterInfoRefs != nil {
+		res.Body = io.NopCloser(bytes.NewReader(data))
+		if pin := conn.AfterInfoRefs(res); pin != nil {
+			if pin.Scheme != "" {
+				conn.Endpoint.Scheme = pin.Scheme
+			}
+			if pin.Host != "" {
+				conn.Endpoint.Host = pin.Host
+			}
+		}
 	}
 	return data, nil
 }

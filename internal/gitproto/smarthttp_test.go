@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -172,57 +173,121 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 	}
 }
 
-// TestRequestInfoRefs_FollowInfoRefsRedirect verifies that when the flag is
-// set, a 307 on /info/refs rewrites Conn.Endpoint.Host so subsequent PostRPC
-// calls target the redirected node. Matches vanilla git's smart-HTTP
-// behaviour and lets clients use a cluster entry domain for info/refs while
-// packs land on the hosting replica.
-func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+// TestRequestInfoRefs_AfterInfoRefsHook_PinsToReturnedURL verifies that when
+// AfterInfoRefs returns a non-nil URL, Conn.Endpoint.Scheme and .Host are
+// rewritten to those of the returned URL so subsequent PostRPC calls target
+// it. The hook is the generic mechanism callers use to implement
+// discovery-aware redirection — header-based replica advertisement and the
+// vanilla-git post-redirect case are both expressible as hook
+// implementations.
+func TestRequestInfoRefs_AfterInfoRefsHook_PinsToReturnedURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
 		if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
-			t.Errorf("node write: %v", err)
+			t.Errorf("server write: %v", err)
 		}
 	}))
-	defer node.Close()
+	defer server.Close()
 
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
-	}))
-	defer entry.Close()
-
-	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	conn := NewConn(ep, "test", nil, http.DefaultTransport)
-	conn.FollowInfoRefsRedirect = true
+	conn.AfterInfoRefs = func(*http.Response) *url.URL {
+		return &url.URL{Scheme: "https", Host: "node3.example:443"}
+	}
 
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
-	nodeURL := strings.TrimPrefix(node.URL, "http://")
-	if conn.Endpoint.Host != nodeURL {
-		t.Errorf("Endpoint.Host = %q, want %q (endpoint should follow the 307)", conn.Endpoint.Host, nodeURL)
+	if conn.Endpoint.Host != "node3.example:443" {
+		t.Errorf("Endpoint.Host = %q, want %q (hook return should pin endpoint host)", conn.Endpoint.Host, "node3.example:443")
+	}
+	if conn.Endpoint.Scheme != "https" {
+		t.Errorf("Endpoint.Scheme = %q, want %q", conn.Endpoint.Scheme, "https")
 	}
 }
 
-// TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
-// is the reviewer-requested integration test: it runs the full sequence
-// (GET /info/refs → 307 → 200 on hosting node → POST /git-upload-pack) and
-// asserts the POST lands on the hosting node, not the entry domain. This is
-// the property that makes the flag useful — the whole point is that packs
-// follow info/refs.
-func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost(t *testing.T) {
+// TestRequestInfoRefs_AfterInfoRefsHook_NilReturnLeavesEndpointUnchanged
+// verifies that a hook returning nil is the explicit "no change" signal —
+// the endpoint stays as-is even though the hook fired.
+func TestRequestInfoRefs_AfterInfoRefsHook_NilReturnLeavesEndpointUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+			t.Errorf("server write: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	originalHost := ep.Host
+	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn.AfterInfoRefs = func(*http.Response) *url.URL { return nil }
+
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	if conn.Endpoint.Host != originalHost {
+		t.Errorf("Endpoint.Host = %q, want %q (nil hook return should not pin)", conn.Endpoint.Host, originalHost)
+	}
+}
+
+// TestRequestInfoRefs_AfterInfoRefsHook_BodyIsReadable pins the contract
+// that the hook can safely read res.Body without affecting RequestInfoRefs's
+// return value. The body is buffered before the hook fires and presented
+// via a fresh reader, so caller order doesn't matter.
+func TestRequestInfoRefs_AfterInfoRefsHook_BodyIsReadable(t *testing.T) {
+	const advertisement = "001e# service=git-upload-pack\n0000"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		if _, err := w.Write([]byte(advertisement)); err != nil {
+			t.Errorf("server write: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	ep, err := transport.NewEndpoint(server.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	var hookBody []byte
+	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn.AfterInfoRefs = func(res *http.Response) *url.URL {
+		data, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Errorf("hook read body: %v", err)
+		}
+		hookBody = data
+		return nil
+	}
+
+	data, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, "")
+	if err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if string(hookBody) != advertisement {
+		t.Errorf("hook body = %q, want %q", hookBody, advertisement)
+	}
+	if string(data) != advertisement {
+		t.Errorf("RequestInfoRefs body = %q, want %q", data, advertisement)
+	}
+}
+
+// TestRequestInfoRefs_AfterInfoRefsHook_SubsequentPOSTHitsHookHost is the
+// reviewer-requested integration test: GET /info/refs → hook returns the
+// hosting node's URL → subsequent POST /git-upload-pack lands on that node,
+// not on the originally-configured entry domain.
+func TestRequestInfoRefs_AfterInfoRefsHook_SubsequentPOSTHitsHookHost(t *testing.T) {
 	var nodeGotPOST bool
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs"):
-			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
-			if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
-				t.Errorf("node info/refs write: %v", err)
-			}
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-upload-pack"):
 			nodeGotPOST = true
 			w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
@@ -235,12 +300,18 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
 
 	var entryGotPOST bool
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs"):
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+				t.Errorf("entry info/refs write: %v", err)
+			}
+		case r.Method == http.MethodPost:
 			entryGotPOST = true
 			http.Error(w, "LB rejects packs", http.StatusMethodNotAllowed)
-			return
+		default:
+			http.NotFound(w, r)
 		}
-		http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
 	}))
 	defer entry.Close()
 
@@ -248,35 +319,33 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
+	nodeParsed, err := url.Parse(node.URL)
+	if err != nil {
+		t.Fatalf("parse node URL: %v", err)
+	}
 	conn := NewConn(ep, "test", nil, http.DefaultTransport)
-	conn.FollowInfoRefsRedirect = true
+	conn.AfterInfoRefs = func(*http.Response) *url.URL { return nodeParsed }
 
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
-	// Now do the follow-up upload-pack POST. Without the flag this hits the
-	// entry domain (rejected with 405); with the flag it hits the node.
-	body, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack integration-test")
-	if err != nil {
+	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack integration-test"); err != nil {
 		t.Fatalf("PostRPC: %v", err)
 	}
-	if len(body) != 0 {
-		// body shape is not what we're asserting; just demand it didn't fail
-		_ = body
-	}
-
 	if entryGotPOST {
-		t.Error("POST hit the entry domain instead of the redirected node")
+		t.Error("POST hit the entry domain instead of the hook-returned host")
 	}
 	if !nodeGotPOST {
-		t.Error("POST did not hit the redirected node")
+		t.Error("POST did not hit the hook-returned host")
 	}
 }
 
-// TestRequestInfoRefs_DoesNotFollowByDefault confirms the default behaviour
-// is unchanged: Endpoint is stable even if the server 307s.
-func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
+// TestRequestInfoRefs_NoHookByDefault confirms the default behaviour:
+// without an AfterInfoRefs hook the endpoint is stable even if the server
+// 307s. http.Client still follows the redirect for the GET itself, but
+// subsequent RPCs target the originally-configured host.
+func TestRequestInfoRefs_NoHookByDefault(t *testing.T) {
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
 		if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
@@ -296,14 +365,14 @@ func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 	}
 	entryHost := ep.Host
 	conn := NewConn(ep, "test", nil, http.DefaultTransport)
-	// FollowInfoRefsRedirect intentionally not set.
+	// AfterInfoRefs intentionally not set.
 
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
 	if conn.Endpoint.Host != entryHost {
-		t.Errorf("Endpoint.Host = %q, want %q (endpoint should be unchanged by default)", conn.Endpoint.Host, entryHost)
+		t.Errorf("Endpoint.Host = %q, want %q (endpoint should be unchanged when no hook)", conn.Endpoint.Host, entryHost)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -50,11 +51,11 @@ type Endpoint struct {
 	BearerToken   string
 	SkipTLSVerify bool
 
-	// FollowInfoRefsRedirect, when true, rewrites the effective host of
-	// this endpoint to the final URL of /info/refs after HTTP redirects,
-	// so follow-up upload-pack / receive-pack POSTs land on the
-	// redirected node. Plumbed into gitproto.Conn.FollowInfoRefsRedirect.
-	FollowInfoRefsRedirect bool
+	// AfterInfoRefs, when set, is invoked with the /info/refs response so
+	// the caller can pin the effective host of subsequent upload-pack /
+	// receive-pack POSTs. Plumbed into gitproto.Conn.AfterInfoRefs;
+	// see that field for the contract.
+	AfterInfoRefs func(*http.Response) *url.URL
 }
 
 // RefMapping is a user-specified source:target ref mapping.
@@ -309,7 +310,7 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	}
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
 	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
-	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
+	conn.AfterInfoRefs = raw.AfterInfoRefs
 	return conn, nil
 }
 

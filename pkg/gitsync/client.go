@@ -194,8 +194,8 @@ func (r ProbeRequest) Validate() error {
 
 func bridgeEndpoint(ep Endpoint) internalbridge.Endpoint {
 	return internalbridge.Endpoint{
-		URL:                    ep.URL,
-		FollowInfoRefsRedirect: ep.FollowInfoRefsRedirect,
+		URL:           ep.URL,
+		AfterInfoRefs: ep.AfterInfoRefs,
 	}
 }
 

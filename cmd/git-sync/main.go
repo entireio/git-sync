@@ -59,8 +59,6 @@ func runSyncLike(ctx context.Context, name string, args []string, dryRun bool, d
 
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&req.Target.URL, "target-url", "", "target repository URL")
-	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
-	fs.BoolVar(&req.Target.FollowInfoRefsRedirect, "target-follow-info-refs-redirect", envBool("GITSYNC_TARGET_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up target RPCs to the final /info/refs redirect host")
 
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
@@ -165,8 +163,6 @@ func runBootstrap(ctx context.Context, args []string) error {
 
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
 	fs.StringVar(&req.Target.URL, "target-url", "", "target repository URL")
-	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
-	fs.BoolVar(&req.Target.FollowInfoRefsRedirect, "target-follow-info-refs-redirect", envBool("GITSYNC_TARGET_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up target RPCs to the final /info/refs redirect host")
 
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
@@ -241,12 +237,9 @@ func runProbe(ctx context.Context, args []string) error {
 	var jsonOutput bool
 	var sourceAuth gitsync.EndpointAuth
 	var targetAuth gitsync.EndpointAuth
-	var targetFollowInfoRefsRedirect bool
 	req := unstable.ProbeRequest{}
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
 	targetURL := fs.String("target-url", "", "optional target repository URL")
-	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
-	fs.BoolVar(&targetFollowInfoRefsRedirect, "target-follow-info-refs-redirect", envBool("GITSYNC_TARGET_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up target RPCs to the final /info/refs redirect host")
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&targetAuth.Token, "target-token", envOr("GITSYNC_TARGET_TOKEN", ""), "target token/password")
 	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
@@ -281,10 +274,7 @@ func runProbe(ctx context.Context, args []string) error {
 		return usageError("probe requires a source repository URL")
 	}
 	if *targetURL != "" {
-		req.Target = &gitsync.Endpoint{
-			URL:                    *targetURL,
-			FollowInfoRefsRedirect: targetFollowInfoRefsRedirect,
-		}
+		req.Target = &gitsync.Endpoint{URL: *targetURL}
 	}
 
 	result, err := unstable.New(unstable.Options{
@@ -308,7 +298,6 @@ func runFetch(ctx context.Context, args []string) error {
 	req := unstable.FetchRequest{}
 
 	fs.StringVar(&req.Source.URL, "source-url", "", "source repository URL")
-	fs.BoolVar(&req.Source.FollowInfoRefsRedirect, "source-follow-info-refs-redirect", envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"), "send follow-up source RPCs to the final /info/refs redirect host")
 	fs.StringVar(&sourceAuth.Token, "source-token", envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
 	fs.StringVar(&sourceAuth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
 	fs.StringVar(&sourceAuth.BearerToken, "source-bearer-token", envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
@@ -453,8 +442,6 @@ sync flags:
   --target-bearer-token ...
   --source-insecure-skip-tls-verify
   --target-insecure-skip-tls-verify
-  --source-follow-info-refs-redirect
-  --target-follow-info-refs-redirect
   -v
 
 replicate flags:
@@ -476,8 +463,6 @@ replicate flags:
   --target-bearer-token ...
   --source-insecure-skip-tls-verify
   --target-insecure-skip-tls-verify
-  --source-follow-info-refs-redirect
-  --target-follow-info-refs-redirect
   -v
 
 plan flags:
@@ -501,8 +486,6 @@ plan flags:
   --target-bearer-token ...
   --source-insecure-skip-tls-verify
   --target-insecure-skip-tls-verify
-  --source-follow-info-refs-redirect
-  --target-follow-info-refs-redirect
   -v
 
 bootstrap flags:
@@ -523,8 +506,6 @@ bootstrap flags:
   --target-bearer-token ...
   --source-insecure-skip-tls-verify
   --target-insecure-skip-tls-verify
-  --source-follow-info-refs-redirect
-  --target-follow-info-refs-redirect
   -v
 
 probe flags:
@@ -541,8 +522,6 @@ probe flags:
   --target-bearer-token ...
   --source-insecure-skip-tls-verify
   --target-insecure-skip-tls-verify
-  --source-follow-info-refs-redirect
-  --target-follow-info-refs-redirect
 
 fetch flags:
   --branch main,dev
@@ -557,7 +536,6 @@ fetch flags:
   --source-username git
   --source-bearer-token ...
   --source-insecure-skip-tls-verify
-  --source-follow-info-refs-redirect
 `, unstable.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
