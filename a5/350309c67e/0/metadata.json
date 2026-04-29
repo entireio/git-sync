@@ -59,6 +59,56 @@
   "session_metrics": {
     "turn_count": 4
   },
+  "summary": {
+    "intent": "Upgrade Go toolchain to 1.26.2 and restructure the gitsync library by moving it from /pkg/gitsync to the repo root, then rename the Go module path from entire.io/entire/git-sync to entire.io/entire/gitsync.",
+    "outcome": "Go upgraded to 1.26.2, package files flattened to repo root (with unstable/ and internalbridge/ as siblings), pkg/ directory removed, and all import paths updated to entire.io/entire/gitsync. Build, tests, and lint all pass.",
+    "learnings": {
+      "repo": [
+        "Module path was entire.io/entire/git-sync, now entire.io/entire/gitsync — any external consumers would need to update their imports.",
+        "The repo uses mise for toolchain management (Go version and golangci-lint pinned in mise.toml).",
+        "golangci-lint v2.11.4 was already at the latest release at time of session.",
+        "Subpackages unstable/ and internalbridge/ live alongside root-level package files rather than nested under a parent package directory.",
+        "Binary entrypoint remains at cmd/git-sync — the CLI binary name was intentionally not renamed."
+      ],
+      "code": [
+        {
+          "path": "go.mod",
+          "finding": "Module renamed from entire.io/entire/git-sync to entire.io/entire/gitsync; Go directive bumped from 1.25.2 to 1.26.2."
+        },
+        {
+          "path": "client.go",
+          "finding": "Root-level file, previously pkg/gitsync/client.go; package name remains gitsync."
+        },
+        {
+          "path": "types.go",
+          "finding": "Root-level file, previously pkg/gitsync/types.go."
+        },
+        {
+          "path": "internalbridge/config.go",
+          "finding": "Previously pkg/gitsync/internalbridge/config.go; moved to repo root sibling."
+        },
+        {
+          "path": "unstable/client.go",
+          "finding": "Previously pkg/gitsync/unstable/client.go; moved to repo root sibling."
+        }
+      ],
+      "workflow": [
+        "Renaming package to 'sync' was explicitly rejected because it shadows Go's stdlib sync package, forcing callers to alias one of the two.",
+        "When bulk-replacing import paths in a repo, apply longest-match substitutions first to avoid partial replacements in prose and nested paths.",
+        "Git tracks directory moves as renames when files are moved atomically, preserving history."
+      ]
+    },
+    "friction": [
+      "Mid-task plan change: user interrupted the /pkg/gitsync → /sync move to redirect toward flattening everything to the repo root instead.",
+      "Package naming required a three-option analysis before proceeding due to the stdlib 'sync' collision risk.",
+      "Two-phase rename (directory restructure + module path rename) required separate bulk-replace passes to avoid leaving stale references."
+    ],
+    "open_items": [
+      "cmd/git-sync binary directory and CLI name were intentionally left unrenamed — user was offered the option to rename to 'gitsync' but did not confirm.",
+      "Any external consumers importing entire.io/entire/git-sync will be broken and need to update their import paths manually.",
+      "docs/embedding.md was updated but should be reviewed to confirm all prose references to the old path and CLI name are accurate."
+    ]
+  },
   "initial_attribution": {
     "calculated_at": "2026-04-29T15:21:26.788245Z",
     "agent_lines": 78,
