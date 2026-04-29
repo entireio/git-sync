@@ -1,0 +1,1 @@
+yeah let's do that, move details into a docs folder, maybe highlight architecture decisions
