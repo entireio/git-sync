@@ -1,0 +1,5 @@
+Add an installation instructions section to the README
+
+---
+
+Just swap the examples below to use git-sync
