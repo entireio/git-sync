@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "fbad5717af5f",
+  "strategy": "manual-commit",
+  "branch": "soph/plan-optimization",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fb/ad5717af5f/0/metadata.json",
+      "transcript": "/fb/ad5717af5f/0/transcript.jsonl",
+      "content_hash": "/fb/ad5717af5f/0/transcript_hash.txt",
+      "prompt": "/fb/ad5717af5f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 70479,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 65536,
+    "output_tokens": 691,
+    "api_call_count": 1
+  }
+}
