@@ -1,0 +1,18 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "be0975547aa9",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/0975547aa9/0/metadata.json",
+      "transcript": "/be/0975547aa9/0/transcript.jsonl",
+      "content_hash": "/be/0975547aa9/0/transcript_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
