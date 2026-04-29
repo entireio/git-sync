@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/entirehq/git-sync/internal/syncer"
-	"github.com/entirehq/git-sync/internal/validation"
+	"entire.io/git-sync/internal/syncer"
+	"entire.io/git-sync/internal/validation"
 )
 
 type ProtocolMode string

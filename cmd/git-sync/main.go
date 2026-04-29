@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/entirehq/git-sync/internal/validation"
-	"github.com/entirehq/git-sync/pkg/gitsync"
-	"github.com/entirehq/git-sync/pkg/gitsync/unstable"
+	"entire.io/git-sync/internal/validation"
+	"entire.io/git-sync/pkg/gitsync"
+	"entire.io/git-sync/pkg/gitsync/unstable"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 

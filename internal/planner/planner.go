@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/entirehq/git-sync/internal/validation"
+	"entire.io/git-sync/internal/validation"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/storer"

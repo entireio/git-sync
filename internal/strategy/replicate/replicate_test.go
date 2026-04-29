@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/entirehq/git-sync/internal/gitproto"
-	"github.com/entirehq/git-sync/internal/planner"
+	"entire.io/git-sync/internal/gitproto"
+	"entire.io/git-sync/internal/planner"
 )
 
 type fakeSourceService struct {
