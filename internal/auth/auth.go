@@ -3,14 +3,22 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 
-	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
 const defaultGitUsername = "git"
+
+// Method authorizes outbound HTTP requests for a remote. It is satisfied
+// by *transporthttp.BasicAuth and *transporthttp.TokenAuth, whose Authorizer
+// methods replaced the Method interface that go-git removed in v6 alpha.2.
+type Method interface {
+	Authorizer(req *http.Request) error
+}
 
 // Endpoint holds the authentication-related fields for a remote.
 type Endpoint struct {
@@ -22,7 +30,7 @@ type Endpoint struct {
 
 // Resolve resolves the auth method for the given endpoint configuration.
 // Order: explicit flags → Entire DB token → git credential helper → anonymous.
-func Resolve(raw Endpoint, ep *transport.Endpoint) (transport.AuthMethod, error) {
+func Resolve(raw Endpoint, ep *url.URL) (Method, error) {
 	if auth := explicitAuth(raw); auth != nil {
 		return auth, nil
 	}
@@ -43,7 +51,7 @@ func Resolve(raw Endpoint, ep *transport.Endpoint) (transport.AuthMethod, error)
 	return nil, nil //nolint:nilnil // nil signals no auth method found at this stage
 }
 
-func explicitAuth(raw Endpoint) transport.AuthMethod {
+func explicitAuth(raw Endpoint) Method {
 	if raw.BearerToken != "" {
 		return &transporthttp.TokenAuth{Token: raw.BearerToken}
 	}
@@ -64,7 +72,7 @@ var GitCredentialFillCommand = func(ctx context.Context, input string) ([]byte, 
 	return cmd.Output()
 }
 
-func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {
+func lookupGitCredential(ep *url.URL) (string, string, bool) {
 	input := credentialFillInput(ep)
 	if input == "" {
 		return "", "", false
@@ -89,7 +97,7 @@ func lookupGitCredential(ep *transport.Endpoint) (string, string, bool) {
 	return username, password, true
 }
 
-func credentialFillInput(ep *transport.Endpoint) string {
+func credentialFillInput(ep *url.URL) string {
 	if ep == nil || ep.Hostname() == "" {
 		return ""
 	}

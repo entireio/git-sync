@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -30,7 +29,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/revlist"
 	"github.com/go-git/go-git/v6/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
 )
 
@@ -2249,8 +2247,7 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 	}
 
 	var buf bytes.Buffer
-	svc := transport.Service(service)
-	if err := transport.AdvertiseReferences(r.Context(), s.repo.Storer, &buf, svc, false); err != nil {
+	if err := transport.AdvertiseRefs(r.Context(), s.repo.Storer, &buf, service, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2360,7 +2357,7 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 	var buf bytes.Buffer
 	reader := io.NopCloser(bytes.NewReader(body))
 	writer := nopWriteCloser{&buf}
-	if err := transport.UploadPack(r.Context(), s.repo.Storer, reader, writer, &transport.UploadPackOptions{
+	if err := transport.UploadPack(r.Context(), s.repo.Storer, reader, writer, &transport.UploadPackRequest{
 		StatelessRPC: true,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2579,7 +2576,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	var buf bytes.Buffer
 	reader := io.NopCloser(bytes.NewReader(body))
 	writer := nopWriteCloser{&buf}
-	rpErr := transport.ReceivePack(r.Context(), s.repo.Storer, reader, writer, &transport.ReceivePackOptions{
+	rpErr := transport.ReceivePack(r.Context(), s.repo.Storer, reader, writer, &transport.ReceivePackRequest{
 		StatelessRPC: true,
 	})
 
@@ -2725,24 +2722,4 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 			return req, fmt.Errorf("unexpected packet type %v", kind)
 		}
 	}
-}
-
-func TestMain(m *testing.M) {
-	originalHTTP, _ := transport.Get("http")   //nolint:errcheck // best-effort save; nil is acceptable
-	originalHTTPS, _ := transport.Get("https") //nolint:errcheck // best-effort save; nil is acceptable
-
-	customHTTP := transporthttp.NewTransport(&transporthttp.TransportOptions{Client: &http.Client{}})
-	transport.Register("http", customHTTP)
-	transport.Register("https", customHTTP)
-
-	code := m.Run()
-
-	if originalHTTP != nil {
-		transport.Register("http", originalHTTP)
-	}
-	if originalHTTPS != nil {
-		transport.Register("https", originalHTTPS)
-	}
-
-	os.Exit(code)
 }

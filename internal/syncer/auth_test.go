@@ -18,7 +18,7 @@ import (
 )
 
 func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://github.com/entireio/cli.git")
+	ep, err := transport.ParseURL("https://github.com/entireio/cli.git")
 	if err != nil {
 		t.Fatalf("new endpoint: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestResolveAuthMethodUsesEntireDBStoredToken(t *testing.T) {
 	t.Setenv("ENTIRE_TOKEN_STORE", "file")
 	t.Setenv("ENTIRE_TOKEN_STORE_PATH", tokenStorePath)
 
-	ep, err := transport.NewEndpoint("https://localhost:8080/git/test/repo")
+	ep, err := transport.ParseURL("https://localhost:8080/git/test/repo")
 	if err != nil {
 		t.Fatalf("new endpoint: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestResolveAuthMethodRefreshesExpiredEntireDBToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ep, err := transport.NewEndpoint(server.URL + "/git/test/repo")
+	ep, err := transport.ParseURL(server.URL + "/git/test/repo")
 	if err != nil {
 		t.Fatalf("new endpoint: %v", err)
 	}

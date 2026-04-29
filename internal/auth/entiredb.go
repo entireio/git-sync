@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/zalando/go-keyring"
 )
 
@@ -39,7 +38,7 @@ type oauthTokenResponse struct {
 // Returns (username, password, true, nil) on success, ("", "", false, nil) when
 // no credential is configured, or ("", "", false, err) when a credential exists
 // but refresh failed (issue #7).
-func LookupEntireDBCredential(raw Endpoint, ep *transport.Endpoint) (string, string, bool, error) {
+func LookupEntireDBCredential(raw Endpoint, ep *url.URL) (string, string, bool, error) {
 	if ep == nil || ep.Host == "" {
 		return "", "", false, nil
 	}
@@ -58,7 +57,7 @@ func LookupEntireDBCredential(raw Endpoint, ep *transport.Endpoint) (string, str
 	return username, token, true, nil
 }
 
-func endpointBaseURL(ep *transport.Endpoint) string {
+func endpointBaseURL(ep *url.URL) string {
 	if ep == nil || ep.Hostname() == "" {
 		return ""
 	}
@@ -70,7 +69,7 @@ func endpointBaseURL(ep *transport.Endpoint) string {
 	return scheme + "://" + host
 }
 
-func endpointCredentialHost(ep *transport.Endpoint) string {
+func endpointCredentialHost(ep *url.URL) string {
 	if ep == nil {
 		return ""
 	}

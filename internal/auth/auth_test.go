@@ -120,13 +120,11 @@ func TestTokenExpiredOrExpiring(t *testing.T) {
 }
 
 func TestCredentialFillInput(t *testing.T) {
-	ep := &transport.Endpoint{
-		URL: url.URL{
-			Scheme: "https",
-			Host:   "github.com",
-			Path:   "/owner/repo.git",
-			User:   url.User("myuser"),
-		},
+	ep := &url.URL{
+		Scheme: "https",
+		Host:   "github.com",
+		Path:   "/owner/repo.git",
+		User:   url.User("myuser"),
 	}
 
 	got := credentialFillInput(ep)
@@ -144,7 +142,7 @@ func TestCredentialFillInputNilEndpoint(t *testing.T) {
 }
 
 func TestCredentialFillInputEmptyHost(t *testing.T) {
-	ep := &transport.Endpoint{URL: url.URL{Scheme: "https"}}
+	ep := &url.URL{Scheme: "https"}
 	got := credentialFillInput(ep)
 	if got != "" {
 		t.Errorf("expected empty string for empty host, got %q", got)
@@ -152,12 +150,10 @@ func TestCredentialFillInputEmptyHost(t *testing.T) {
 }
 
 func TestCredentialFillInputNoUser(t *testing.T) {
-	ep := &transport.Endpoint{
-		URL: url.URL{
-			Scheme: "https",
-			Host:   "example.com",
-			Path:   "/repo.git",
-		},
+	ep := &url.URL{
+		Scheme: "https",
+		Host:   "example.com",
+		Path:   "/repo.git",
 	}
 	got := credentialFillInput(ep)
 	want := "protocol=https\nhost=example.com\npath=repo.git\n\n"
@@ -227,17 +223,17 @@ func TestParseCredentialOutput(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sshEP := &transport.Endpoint{URL: url.URL{Scheme: "ssh", Host: "example.com", Path: "/repo.git"}}
+	sshEP := &url.URL{Scheme: "ssh", Host: "example.com", Path: "/repo.git"}
 
 	tests := []struct {
 		name     string
 		raw      Endpoint
-		ep       *transport.Endpoint
+		ep       *url.URL
 		mockCred func(ctx context.Context, input string) ([]byte, error)
 		wantType string // "token", "basic", "nil"
 		wantUser string
@@ -414,17 +410,17 @@ func TestExplicitAuth(t *testing.T) {
 func TestEndpointBaseURL(t *testing.T) {
 	tests := []struct {
 		name string
-		ep   *transport.Endpoint
+		ep   *url.URL
 		want string
 	}{
 		{
 			name: "https host",
-			ep:   &transport.Endpoint{URL: url.URL{Scheme: "https", Host: "example.com"}},
+			ep:   &url.URL{Scheme: "https", Host: "example.com"},
 			want: "https://example.com",
 		},
 		{
 			name: "http host with port",
-			ep:   &transport.Endpoint{URL: url.URL{Scheme: "http", Host: "example.com:8080"}},
+			ep:   &url.URL{Scheme: "http", Host: "example.com:8080"},
 			want: "http://example.com:8080",
 		},
 		{
@@ -447,17 +443,17 @@ func TestEndpointBaseURL(t *testing.T) {
 func TestEndpointCredentialHost(t *testing.T) {
 	tests := []struct {
 		name string
-		ep   *transport.Endpoint
+		ep   *url.URL
 		want string
 	}{
 		{
 			name: "host without port",
-			ep:   &transport.Endpoint{URL: url.URL{Host: "example.com"}},
+			ep:   &url.URL{Host: "example.com"},
 			want: "example.com",
 		},
 		{
 			name: "host with port",
-			ep:   &transport.Endpoint{URL: url.URL{Host: "example.com:8080"}},
+			ep:   &url.URL{Host: "example.com:8080"},
 			want: "example.com:8080",
 		},
 		{

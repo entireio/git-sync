@@ -78,7 +78,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 }
 
 // AdvertisedRefsV1 fetches and decodes v1 advertised refs for the given service.
-func AdvertisedRefsV1(ctx context.Context, conn *Conn, service transport.Service) (*packp.AdvRefs, error) {
+func AdvertisedRefsV1(ctx context.Context, conn *Conn, service string) (*packp.AdvRefs, error) {
 	data, err := RequestInfoRefs(ctx, conn, service, "")
 	if err != nil {
 		return nil, err
