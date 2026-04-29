@@ -2,7 +2,7 @@ package gitsync
 
 import (
 	"context"
-	"entire.io/entire/git-sync/pkg/gitsync/internalbridge"
+	"entire.io/entire/git-sync/internalbridge"
 )
 
 // ProtocolMode controls source-side protocol negotiation.

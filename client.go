@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"entire.io/entire/git-sync/internal/validation"
-	"entire.io/entire/git-sync/pkg/gitsync/internalbridge"
+	"entire.io/entire/git-sync/internalbridge"
 )
 
 // Options configures a Client. It is intentionally small in the first public cut.
