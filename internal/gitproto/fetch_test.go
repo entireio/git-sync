@@ -334,7 +334,7 @@ func TestFetchCommitGraphRequiresFilter(t *testing.T) {
 
 func TestFetchPackV1ContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestFetchPackV1ContextCanceled(t *testing.T) {
 
 func TestFetchPackV2ContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestFetchPackV2ContextCanceled(t *testing.T) {
 
 func TestFetchToStoreV2ContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestFetchToStoreV2ContextCanceled(t *testing.T) {
 }
 
 func TestFetchToStoreV2ClosesBodyOnDecodeError(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -522,7 +522,7 @@ func TestFetchToStoreV2ClosesBodyOnDecodeError(t *testing.T) {
 
 func TestFetchToStoreV2ContextCanceledMidStream(t *testing.T) {
 	startedRead := make(chan struct{}, 1)
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestFetchToStoreV2ContextCanceledMidStream(t *testing.T) {
 }
 
 func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 }
 
 func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 }
 
 func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 	// This simulates that double-NAK followed by a sideband-wrapped PACK header
 	// (channel 0x01 + "PACK" magic).
 	payload := []byte("0008NAK\n0008NAK\n0009\x01PACK")
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 }
 
 func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -783,7 +783,7 @@ func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 }
 
 func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 }
 
 func TestFetchPackV2ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -882,7 +882,7 @@ func TestFetchPackV2ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 }
 
 func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}

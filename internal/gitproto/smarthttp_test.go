@@ -15,7 +15,7 @@ import (
 )
 
 func TestNewConn(t *testing.T) {
-	ep, err := transport.NewEndpoint("https://github.com/user/repo.git")
+	ep, err := transport.ParseURL("https://github.com/user/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -33,9 +33,6 @@ func TestNewConn(t *testing.T) {
 	}
 	if conn.HTTP == nil {
 		t.Error("HTTP client should not be nil")
-	}
-	if conn.Transport == nil {
-		t.Error("Transport should not be nil")
 	}
 }
 
@@ -94,7 +91,7 @@ func TestApplyAuth(t *testing.T) {
 
 func TestRequestInfoRefsContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -134,7 +131,7 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 
 func TestPostRPCStreamContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
-	ep, err := transport.NewEndpoint("https://example.com/repo.git")
+	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -191,7 +188,7 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 	}))
 	defer entry.Close()
 
-	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	ep, err := transport.ParseURL(entry.URL + "/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -244,7 +241,7 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
 	}))
 	defer entry.Close()
 
-	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	ep, err := transport.ParseURL(entry.URL + "/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -290,7 +287,7 @@ func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 	}))
 	defer entry.Close()
 
-	ep, err := transport.NewEndpoint(entry.URL + "/repo.git")
+	ep, err := transport.ParseURL(entry.URL + "/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}

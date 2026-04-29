@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v6/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
 const maxHTTPErrorBody = 64 * 1024
@@ -38,13 +37,19 @@ func httpError(res *http.Response) error {
 // current git-sync stats phase for round-trip tracking.
 const StatsPhaseHeader = "X-Git-Sync-Stats-Phase"
 
+// AuthMethod authorizes outbound HTTP requests for a remote. It is satisfied
+// by *transporthttp.BasicAuth and *transporthttp.TokenAuth, whose Authorizer
+// methods replaced the AuthMethod interface that go-git removed in v6 alpha.2.
+type AuthMethod interface {
+	Authorizer(req *http.Request) error
+}
+
 // Conn represents a connection to a remote Git HTTP endpoint.
 type Conn struct {
-	Label     string
-	Endpoint  *transport.Endpoint
-	Transport transport.Transport
-	HTTP      *http.Client
-	Auth      transport.AuthMethod
+	Label    string
+	Endpoint *url.URL
+	HTTP     *http.Client
+	Auth     AuthMethod
 
 	// FollowInfoRefsRedirect, when true, rewrites Endpoint.Scheme and
 	// Endpoint.Host to the final URL returned by RequestInfoRefs after
@@ -58,7 +63,7 @@ type Conn struct {
 }
 
 // NewConn creates a new connection to the given endpoint.
-func NewConn(ep *transport.Endpoint, label string, auth transport.AuthMethod, rt http.RoundTripper) *Conn {
+func NewConn(ep *url.URL, label string, auth AuthMethod, rt http.RoundTripper) *Conn {
 	httpClient := &http.Client{Transport: rt}
 	return NewConnWithHTTPClient(ep, label, auth, httpClient)
 }
@@ -66,16 +71,15 @@ func NewConn(ep *transport.Endpoint, label string, auth transport.AuthMethod, rt
 // NewConnWithHTTPClient creates a new connection using the provided HTTP client.
 // Passing nil falls back to a default client and is intended only for direct
 // callers outside git-sync's normal instrumented session setup.
-func NewConnWithHTTPClient(ep *transport.Endpoint, label string, auth transport.AuthMethod, httpClient *http.Client) *Conn {
+func NewConnWithHTTPClient(ep *url.URL, label string, auth AuthMethod, httpClient *http.Client) *Conn {
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: http.DefaultTransport}
 	}
 	return &Conn{
-		Label:     label,
-		Endpoint:  ep,
-		Transport: transporthttp.NewTransport(&transporthttp.TransportOptions{Client: httpClient}),
-		HTTP:      httpClient,
-		Auth:      auth,
+		Label:    label,
+		Endpoint: ep,
+		HTTP:     httpClient,
+		Auth:     auth,
 	}
 }
 
@@ -96,16 +100,15 @@ func NewHTTPTransport(skipTLS bool) http.RoundTripper {
 }
 
 // RequestInfoRefs fetches /info/refs for the given service.
-func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service, gitProtocol string) ([]byte, error) {
-	svc := service.String()
-	url := fmt.Sprintf("%s/info/refs?service=%s", conn.Endpoint.String(), svc)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func RequestInfoRefs(ctx context.Context, conn *Conn, service string, gitProtocol string) ([]byte, error) {
+	reqURL := fmt.Sprintf("%s/info/refs?service=%s", conn.Endpoint.String(), service)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create info-refs request: %w", err)
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", capability.DefaultAgent())
-	req.Header.Set(StatsPhaseHeader, svc+" info-refs")
+	req.Header.Set(StatsPhaseHeader, service+" info-refs")
 	if gitProtocol != "" {
 		req.Header.Set("Git-Protocol", gitProtocol)
 	}
@@ -141,7 +144,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service transport.Service,
 
 // PostRPC sends a buffered POST to the given service and returns the full response body.
 // Responses are bounded to prevent unbounded memory allocation (issue #9).
-func PostRPC(ctx context.Context, conn *Conn, service transport.Service, body []byte, v2 bool, phase string) ([]byte, error) {
+func PostRPC(ctx context.Context, conn *Conn, service string, body []byte, v2 bool, phase string) ([]byte, error) {
 	reader, err := PostRPCStream(ctx, conn, service, body, v2, phase)
 	if err != nil {
 		return nil, err
@@ -161,21 +164,20 @@ func PostRPC(ctx context.Context, conn *Conn, service transport.Service, body []
 
 // PostRPCStream sends a POST to the given service and returns the response body
 // as a streaming reader. Caller must close the returned ReadCloser.
-func PostRPCStream(ctx context.Context, conn *Conn, service transport.Service, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
+func PostRPCStream(ctx context.Context, conn *Conn, service string, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
 	return PostRPCStreamBody(ctx, conn, service, bytes.NewReader(body), v2, phase)
 }
 
 // PostRPCStreamBody sends a POST to the given service using a streaming request body.
 // Caller must close the returned ReadCloser.
-func PostRPCStreamBody(ctx context.Context, conn *Conn, service transport.Service, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
-	svc := service.String()
-	url := fmt.Sprintf("%s/%s", conn.Endpoint.String(), svc)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+func PostRPCStreamBody(ctx context.Context, conn *Conn, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
+	reqURL := fmt.Sprintf("%s/%s", conn.Endpoint.String(), service)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("create RPC request: %w", err)
 	}
-	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", svc))
-	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", svc))
+	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
+	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
 	req.Header.Set("User-Agent", capability.DefaultAgent())
 	req.Header.Set(StatsPhaseHeader, phase)
 	if v2 {
@@ -194,12 +196,13 @@ func PostRPCStreamBody(ctx context.Context, conn *Conn, service transport.Servic
 	return res.Body, nil
 }
 
-// ApplyAuth applies the given auth method to an HTTP request.
-func ApplyAuth(req *http.Request, auth transport.AuthMethod) {
-	switch a := auth.(type) {
-	case *transporthttp.BasicAuth:
-		a.SetAuth(req)
-	case *transporthttp.TokenAuth:
-		a.SetAuth(req)
+// ApplyAuth applies the given auth method to an HTTP request. Errors from
+// the Authorizer (e.g. transient signing failures) are surfaced as request
+// failures by leaving the Authorization header unset; the upstream server
+// will reject with 401 and the caller logs the surrounding context.
+func ApplyAuth(req *http.Request, auth AuthMethod) {
+	if auth == nil {
+		return
 	}
+	_ = auth.Authorizer(req) //nolint:errcheck // BasicAuth and TokenAuth never error; future authorizers should surface 401s instead
 }

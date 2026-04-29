@@ -862,9 +862,9 @@ func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
 	GitHubRepoAPIBaseURL = server.URL
 	defer func() { GitHubRepoAPIBaseURL = prevBaseURL }()
 
-	ep, err := transport.NewEndpoint("https://github.com/acme/repo.git")
+	ep, err := transport.ParseURL("https://github.com/acme/repo.git")
 	if err != nil {
-		t.Fatalf("transport.NewEndpoint: %v", err)
+		t.Fatalf("transport.ParseURL: %v", err)
 	}
 
 	_, err = Execute(context.Background(), Params{

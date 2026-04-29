@@ -169,7 +169,7 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 	}
 
 	var buf bytes.Buffer
-	if err := transport.AdvertiseReferences(r.Context(), s.repo.Storer, &buf, transport.Service(service), false); err != nil {
+	if err := transport.AdvertiseRefs(r.Context(), s.repo.Storer, &buf, service, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -191,7 +191,7 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 	var buf bytes.Buffer
 	reader := io.NopCloser(bytes.NewReader(body))
 	writer := nopWriteCloser{&buf}
-	if err := transport.UploadPack(r.Context(), s.repo.Storer, reader, writer, &transport.UploadPackOptions{
+	if err := transport.UploadPack(r.Context(), s.repo.Storer, reader, writer, &transport.UploadPackRequest{
 		StatelessRPC: true,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -244,7 +244,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	var buf bytes.Buffer
 	reader := io.NopCloser(bytes.NewReader(body))
 	writer := nopWriteCloser{&buf}
-	if err := transport.ReceivePack(r.Context(), s.repo.Storer, reader, writer, &transport.ReceivePackOptions{
+	if err := transport.ReceivePack(r.Context(), s.repo.Storer, reader, writer, &transport.ReceivePackRequest{
 		StatelessRPC: true,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -23,7 +23,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
-	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/go-git/go-git/v6/storage/memory"
 )
 
@@ -443,14 +442,14 @@ func (s *smartHTTPRepoServer) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Request) {
-	service := transport.Service(r.URL.Query().Get("service"))
+	service := r.URL.Query().Get("service")
 	if service != transport.UploadPackService && service != transport.ReceivePackService {
 		http.Error(w, "missing service", http.StatusBadRequest)
 		return
 	}
 
 	var buf bytes.Buffer
-	if err := transport.AdvertiseReferences(r.Context(), s.repo.Storer, &buf, service, false); err != nil {
+	if err := transport.AdvertiseRefs(r.Context(), s.repo.Storer, &buf, service, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -506,7 +505,7 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 	var buf bytes.Buffer
 	wc := nopWriteCloser{&buf}
 
-	err := transport.UploadPack(r.Context(), s.repo.Storer, r.Body, wc, &transport.UploadPackOptions{
+	err := transport.UploadPack(r.Context(), s.repo.Storer, r.Body, wc, &transport.UploadPackRequest{
 		StatelessRPC: true,
 	})
 	if err != nil {
@@ -528,7 +527,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	var buf bytes.Buffer
 	wc := nopWriteCloser{&buf}
 
-	err := transport.ReceivePack(r.Context(), s.repo.Storer, r.Body, wc, &transport.ReceivePackOptions{
+	err := transport.ReceivePack(r.Context(), s.repo.Storer, r.Body, wc, &transport.ReceivePackRequest{
 		StatelessRPC: true,
 	})
 
@@ -547,13 +546,3 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
-
-func TestMain(m *testing.M) {
-	customHTTP := transporthttp.NewTransport(&transporthttp.TransportOptions{
-		Client: &http.Client{},
-	})
-	transport.Register("http", customHTTP)
-	transport.Register("https", customHTTP)
-
-	os.Exit(m.Run())
-}
