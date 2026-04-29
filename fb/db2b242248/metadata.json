@@ -14,6 +14,19 @@
       "transcript": "/fb/db2b242248/0/transcript.jsonl",
       "content_hash": "/fb/db2b242248/0/transcript_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/fb/db2b242248/1/metadata.json",
+      "transcript": "/fb/db2b242248/1/transcript.jsonl",
+      "content_hash": "/fb/db2b242248/1/transcript_hash.txt",
+      "prompt": "/fb/db2b242248/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 1431226,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1225856,
+    "output_tokens": 4036,
+    "api_call_count": 8
+  }
 }
