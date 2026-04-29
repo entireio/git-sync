@@ -1,0 +1,21 @@
+question: so now we fixed if a branch is 100% included in the default branch (or another branch) but what if a branch is branched of the 10th commit (from HEAD) of main, how would the code handle this right now?
+
+---
+
+We usually have an orphaned branch in each repo (entire/checkpoints/v1) that might be part of a common set of repos to replicate through the tooling. In that case this might be worth the effort, right?
+
+---
+
+1. planStopSet / planHaves sounds good
+
+And yes do it
+
+---
+
+1. `internal/strategy/bootstrap/bootstrap.go:227` and `internal/strategy/bootstrap/bootstrap.go:462` leave stale bootstrap temp refs behind for branches that are now classified as `subsumed`. `planBatches` skips populating `TempRef`/`ResumeHash` for those branches, and `executeBatched` short-circuits straight to `PushCommands` on the final target ref without running any of the existing stale-temp cleanup logic at `:252-285` or the final delete at `:385-387`. A reproducible case is an interrupted bootstrap that left `refs/gitsync/bootstrap/heads/feature`, followed by a rerun where `feature` is now reachable from trunk and gets marked subsumed. The rerun succeeds, but the temp ref is never deleted. That leaves bootstrap garbage on the target indefinitely and bypasses the branch’s normal resume/cleanup path. I’d treat this as a real regression; it needs either explicit cleanup in the subsumed path or carrying `TempRef`/`ResumeHash` through subsumed batches too.
+
+I didn’t find a second concrete correctness issue in the changed code. I did run the relevant Go tests; the planner coverage passed, and the remaining failures were sandbox-related `httptest` listener setup rather than branch failures. Residual risk is mainly around resume behavior for interrupted batched bootstraps, because that path still lacks a test for “stale temp ref + later classified as subsumed.”
+
+---
+
+can you give me a PR description?

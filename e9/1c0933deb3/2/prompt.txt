@@ -1,0 +1,5 @@
+Quick review of commit ecd3908 (Clarify materialized limit flag semantics). Focus on whether the wording is now accurate and whether the usage/help text stays aligned with the actual CLI surface. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit c676521 (Cover returned fetch-pack reader interruptions). Focus on whether the new v1/v2 interruption tests are realistic, whether the updated tracker note is fair, and whether issue #5 now looks substantially closed in code. Findings only, ordered by severity, with file/line references where possible.
