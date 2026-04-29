@@ -54,7 +54,7 @@ go run ./cmd/git-sync replicate \
 
 If `replicate` cannot use relay against the target, it fails and tells you to rerun with `sync`.
 
-For very large initial migrations, add `--target-max-pack-bytes` to split the initial pack into multiple relay batches with temporary refs. The same flag works on `sync`, since `sync` auto-bootstraps on empty targets:
+For very large initial migrations, add `--target-max-pack-bytes` to split the initial pack into multiple smaller batches. The same flag works on `sync`, since `sync` auto-bootstraps on empty targets:
 
 ```bash
 go run ./cmd/git-sync sync \
