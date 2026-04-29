@@ -90,11 +90,11 @@ The current transfer modes are:
 
 ## Package Model
 
-- `pkg/gitsync`
+- `gitsync`
   - stable public embedding API
   - typed `Probe`, `Plan`, `Sync`, and `Replicate` requests/results
   - auth and HTTP client injection for worker-style callers
-- `pkg/gitsync/unstable`
+- `unstable`
   - explicitly non-stable first-party tooling surface
   - advanced controls, `Bootstrap`, `Fetch`, and CLI-oriented knobs
 - `internal/gitproto`
@@ -120,9 +120,9 @@ The current transfer modes are:
 
 The project now separates embedding concerns from first-party tooling concerns:
 
-- `pkg/gitsync` is the stable library boundary.
+- `gitsync` is the stable library boundary.
   Callers express orchestration intent through typed probe, plan, sync, and replicate requests. Auth and transport are injected. Execution strategy remains internal.
-- `pkg/gitsync/unstable` is the escape hatch for advanced controls.
+- `unstable` is the escape hatch for advanced controls.
   It exists so the CLI and benchmark tool can use batching limits, memory measurement, verbose progress, bootstrap, and fetch without widening the stable API prematurely.
 
 The stable result contract is also intentionally worker-oriented:
@@ -136,8 +136,8 @@ The stable result contract is also intentionally worker-oriented:
 
 That split is intentional:
 
-- external embedders should depend on `pkg/gitsync`
-- first-party tools inside this repo may use `pkg/gitsync/unstable`
+- external embedders should depend on `gitsync`
+- first-party tools inside this repo may use `unstable`
 - strategy selection, batching heuristics, and materialized fallback controls are not yet treated as stable product contracts
 
 ## Protocol Boundaries

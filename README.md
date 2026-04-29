@@ -65,17 +65,17 @@ The command surface is:
 
 `git-sync` now has a two-tier Go API:
 
-- `pkg/gitsync`
+- `gitsync`
   - stable embedding surface for queue workers and other external callers
   - typed `Probe`, `Plan`, `Sync`, and `Replicate` requests/results
   - injected auth and HTTP client support
-- `pkg/gitsync/unstable`
+- `unstable`
   - explicitly non-stable surface for first-party tooling and advanced controls
   - includes `Bootstrap`, `Fetch`, batching and measurement knobs, and CLI-oriented execution options
 
-If you are embedding `git-sync` outside this repo, prefer `pkg/gitsync`. The CLI and benchmark command use `pkg/gitsync/unstable` because they still need direct access to advanced engine controls that are intentionally not part of the stable API.
+If you are embedding `git-sync` outside this repo, prefer `gitsync`. The CLI and benchmark command use `unstable` because they still need direct access to advanced engine controls that are intentionally not part of the stable API.
 
-The stable `pkg/gitsync` results are shaped for workers:
+The stable `gitsync` results are shaped for workers:
 
 - `Refs`
   - per-ref outcomes

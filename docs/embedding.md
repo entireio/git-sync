@@ -4,12 +4,12 @@
 
 For most embedders, there are two important rules:
 
-- use `pkg/gitsync`
-- avoid depending on `pkg/gitsync/unstable` unless you are acting like first-party tooling
+- use `gitsync`
+- avoid depending on `unstable` unless you are acting like first-party tooling
 
 ## Stable vs Unstable
 
-Use `pkg/gitsync` when you want a durable worker-facing API:
+Use `gitsync` when you want a durable worker-facing API:
 
 - `Probe`
 - `Plan`
@@ -18,7 +18,7 @@ Use `pkg/gitsync` when you want a durable worker-facing API:
 - typed requests and results
 - injected auth and HTTP client support
 
-Use `pkg/gitsync/unstable` only when you need controls that are intentionally not yet stable:
+Use `unstable` only when you need controls that are intentionally not yet stable:
 
 - `Bootstrap`
 - `Fetch`
@@ -27,7 +27,7 @@ Use `pkg/gitsync/unstable` only when you need controls that are intentionally no
 - verbose execution controls
 - other engine-adjacent tuning
 
-The CLI and benchmark command use `pkg/gitsync/unstable` because they still need those controls. External workers should generally not.
+The CLI and benchmark command use `unstable` because they still need those controls. External workers should generally not.
 
 ## Worker Shape
 
@@ -49,7 +49,7 @@ import (
 	"context"
 	"net/http"
 
-	"entire.io/entire/git-sync/pkg/gitsync"
+	"entire.io/entire/gitsync"
 )
 
 func runSync(ctx context.Context) error {
@@ -83,7 +83,7 @@ func runSync(ctx context.Context) error {
 
 ## Auth Injection
 
-`pkg/gitsync` uses one auth ownership model:
+`gitsync` uses one auth ownership model:
 
 - requests carry endpoint identity
 - `AuthProvider` resolves source and target auth
@@ -161,4 +161,4 @@ If you want stability, do not build external worker logic around:
 - temp refs
 - exact relay strategy names beyond coarse execution summary
 
-Those are implementation details or advanced controls that currently belong in `pkg/gitsync/unstable`, not the stable embedding contract.
+Those are implementation details or advanced controls that currently belong in `unstable`, not the stable embedding contract.
