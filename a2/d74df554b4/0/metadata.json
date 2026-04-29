@@ -1,0 +1,37 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "a2d74df554b4",
+  "session_id": "019d6d29-8cf7-7fe3-adc9-8c3e4d9d5603",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:36:08.381875Z",
+  "branch": "soph/add-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/bootstrap-batching.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "18fc703b8f95",
+  "token_usage": {
+    "input_tokens": 93538461,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 87108096,
+    "output_tokens": 318314,
+    "api_call_count": 735
+  },
+  "session_metrics": {
+    "turn_count": 54
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-09T18:14:56.70081Z",
+    "agent_lines": 264,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 264,
+    "total_lines_changed": 264,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
