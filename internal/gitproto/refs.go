@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
@@ -21,6 +22,10 @@ type RefService struct {
 	Protocol string // "v1" or "v2"
 	V1Adv    *packp.AdvRefs
 	V2Caps   *V2Capabilities
+	// HeadTarget is the branch that HEAD points to on the source, when
+	// advertised as a symref. Empty for detached HEAD or when the source
+	// does not advertise symref information.
+	HeadTarget plumbing.ReferenceName
 	// Verbose, when true, streams source-side sideband progress ("Counting
 	// objects", "Compressing objects", ...) to stderr and asks the source
 	// upload-pack to emit progress by not sending the no-progress option.
@@ -36,7 +41,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 		if err != nil {
 			return nil, nil, err
 		}
-		return refs, &RefService{Protocol: "v1", V1Adv: adv}, nil
+		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
 
 	case "auto", "v2":
 		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, "version=2")
@@ -47,11 +52,11 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
 			}
-			refs, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
+			refs, headTarget, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
 				return nil, nil, err
 			}
-			return refs, &RefService{Protocol: "v2", V2Caps: caps}, nil
+			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget}, nil
 		}
 		if protocolMode == "v2" {
 			return nil, nil, errors.New("source did not negotiate protocol v2")
@@ -65,7 +70,7 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 		if err != nil {
 			return nil, nil, err
 		}
-		return refs, &RefService{Protocol: "v1", V1Adv: adv}, nil
+		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported protocol mode %q", protocolMode)
@@ -136,44 +141,79 @@ func listSourceRefsV1(ctx context.Context, conn *Conn) (*packp.AdvRefs, []*plumb
 	return adv, refs, nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn *Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, error) {
-	args := []string{"peel"}
+func listSourceRefsV2(ctx context.Context, conn *Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
+	// Always include "HEAD" so the server returns the symref-target attribute
+	// for HEAD. Without this, callers that pass only "refs/heads/" or
+	// "refs/tags/" prefixes filter HEAD out of the response and lose the
+	// default-branch hint that bootstrap planning uses as a trunk cutoff.
+	args := []string{"peel", "symrefs", "ref-prefix HEAD"}
 	for _, prefix := range prefixes {
 		args = append(args, "ref-prefix "+prefix)
 	}
 	body, err := EncodeCommand("ls-refs", caps.RequestCapabilities(), args)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	data, err := PostRPC(ctx, conn, transport.UploadPackService, body, true, "upload-pack ls-refs")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	return decodeV2LSRefs(bytes.NewReader(data))
 }
 
-func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, error) {
+func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
 	reader := NewPacketReader(r)
 	var refs []*plumbing.Reference
+	var headTarget plumbing.ReferenceName
 	for {
 		kind, payload, err := reader.ReadPacket()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if kind == PacketFlush {
-			return refs, nil
+			return refs, headTarget, nil
 		}
 		if kind != PacketData {
-			return nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
+			return nil, "", fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
 		}
 		fields := strings.Fields(strings.TrimSpace(string(payload)))
 		if len(fields) < 2 {
-			return nil, fmt.Errorf("malformed ls-refs response line %q", payload)
+			return nil, "", fmt.Errorf("malformed ls-refs response line %q", payload)
 		}
 		hash := plumbing.NewHash(fields[0])
 		name := plumbing.ReferenceName(fields[1])
+		if name == plumbing.HEAD {
+			// HEAD is surfaced via headTarget only; not appended to the ref
+			// slice because it is a symbolic ref, matching v1 behavior where
+			// symrefs are filtered out by downstream RefHashMap.
+			for _, attr := range fields[2:] {
+				if target, ok := strings.CutPrefix(attr, "symref-target:"); ok {
+					headTarget = plumbing.ReferenceName(target)
+					break
+				}
+			}
+			continue
+		}
 		refs = append(refs, plumbing.NewHashReference(name, hash))
 	}
+}
+
+// headTargetFromAdv extracts the branch HEAD points to from v1 advertised
+// capabilities. Returns empty when HEAD is detached or no symref is advertised.
+func headTargetFromAdv(adv *packp.AdvRefs) plumbing.ReferenceName {
+	if adv == nil || adv.Capabilities == nil {
+		return ""
+	}
+	for _, value := range adv.Capabilities.Get(capability.SymRef) {
+		parts := strings.SplitN(value, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if plumbing.ReferenceName(parts[0]) == plumbing.HEAD {
+			return plumbing.ReferenceName(parts[1])
+		}
+	}
+	return ""
 }
 
 func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {

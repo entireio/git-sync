@@ -776,7 +776,8 @@ func bootstrapWithInputs(
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
-		MaxPackBytes: s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
+		SourceHeadTarget: s.sourceService.HeadTarget,
+		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
 	}, relayReason)
 	if err != nil {

@@ -43,6 +43,30 @@ func TestRefHashMap(t *testing.T) {
 	}
 }
 
+func TestHeadTargetFromAdv(t *testing.T) {
+	// nil returns empty.
+	if got := headTargetFromAdv(nil); got != "" {
+		t.Errorf("headTargetFromAdv(nil) = %q, want empty", got)
+	}
+
+	adv := packp.NewAdvRefs()
+	if err := adv.Capabilities.Add(capability.SymRef, "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("Capabilities.Add: %v", err)
+	}
+	if got := headTargetFromAdv(adv); got.String() != "refs/heads/main" {
+		t.Errorf("headTargetFromAdv = %q, want refs/heads/main", got)
+	}
+
+	// Symref pointing at something other than HEAD is ignored.
+	adv = packp.NewAdvRefs()
+	if err := adv.Capabilities.Add(capability.SymRef, "refs/remotes/origin/HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("Capabilities.Add: %v", err)
+	}
+	if got := headTargetFromAdv(adv); got != "" {
+		t.Errorf("headTargetFromAdv ignored non-HEAD symref = %q, want empty", got)
+	}
+}
+
 func TestAdvRefsCaps(t *testing.T) {
 	// nil AdvRefs should return nil.
 	if got := AdvRefsCaps(nil); got != nil {

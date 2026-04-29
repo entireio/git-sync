@@ -396,9 +396,146 @@ func TestSubdivideCheckpoints(t *testing.T) {
 	})
 }
 
+func TestOrderTrunkFirstPutsHEADBranchFirst(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	hotfixRef := plumbing.NewBranchReferenceName("hotfix")
+
+	desired := []planner.DesiredRef{
+		{SourceRef: featureRef, TargetRef: featureRef, Label: "feature"},
+		{SourceRef: hotfixRef, TargetRef: hotfixRef, Label: "hotfix"},
+		{SourceRef: mainRef, TargetRef: mainRef, Label: "main"},
+	}
+
+	ordered, trunkIdx := orderTrunkFirst(desired, mainRef)
+	if trunkIdx != 0 {
+		t.Fatalf("trunkIdx = %d, want 0", trunkIdx)
+	}
+	if ordered[0].SourceRef != mainRef {
+		t.Fatalf("ordered[0] = %s, want main", ordered[0].SourceRef)
+	}
+	// Relative order of non-trunk refs preserved.
+	if ordered[1].SourceRef != featureRef || ordered[2].SourceRef != hotfixRef {
+		t.Fatalf("non-trunk relative order lost: %v", ordered)
+	}
+	// Original slice untouched.
+	if desired[0].SourceRef != featureRef {
+		t.Fatalf("orderTrunkFirst mutated input slice")
+	}
+}
+
+func TestOrderTrunkFirstNoHEADLeavesOrder(t *testing.T) {
+	a := planner.DesiredRef{SourceRef: plumbing.NewBranchReferenceName("a"), Label: "a"}
+	b := planner.DesiredRef{SourceRef: plumbing.NewBranchReferenceName("b"), Label: "b"}
+	desired := []planner.DesiredRef{a, b}
+
+	ordered, trunkIdx := orderTrunkFirst(desired, "")
+	if trunkIdx != -1 {
+		t.Fatalf("trunkIdx = %d, want -1", trunkIdx)
+	}
+	if ordered[0].Label != "a" || ordered[1].Label != "b" {
+		t.Fatalf("order changed without HEAD hint: %v", ordered)
+	}
+}
+
+func TestOrderTrunkFirstHEADNotInDesired(t *testing.T) {
+	a := planner.DesiredRef{SourceRef: plumbing.NewBranchReferenceName("a"), Label: "a"}
+	desired := []planner.DesiredRef{a}
+
+	ordered, trunkIdx := orderTrunkFirst(desired, plumbing.NewBranchReferenceName("main"))
+	if trunkIdx != -1 {
+		t.Fatalf("trunkIdx = %d, want -1 when HEAD filtered out", trunkIdx)
+	}
+	if len(ordered) != 1 || ordered[0].Label != "a" {
+		t.Fatalf("unexpected order: %v", ordered)
+	}
+}
+
+func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	// Linear chain: hashes[0] -> hashes[1] -> hashes[2]. main tip = hashes[2],
+	// feature tip = hashes[0]. feature is entirely within main's ancestry, so
+	// trunk-first planning should mark it subsumed and emit zero pack pushes
+	// for it.
+	hashes := makeLinearCommitChain(t, 3)
+	mainHash := hashes[2]
+	featureHash := hashes[0]
+
+	var (
+		graphFetches        int
+		packFetches         int
+		pushPackCalls       int
+		pushCommandsBatches [][]gitproto.PushCommand
+	)
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) error {
+				graphFetches++
+				if ref.SourceRef != mainRef {
+					t.Errorf("unexpected commit-graph fetch for %s; subsumed branch should have been skipped", ref.SourceRef)
+				}
+				writeLinearCommitChain(t, store, 3)
+				return nil
+			},
+			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				packFetches++
+				if _, ok := desired[featureRef]; ok {
+					t.Errorf("unexpected pack fetch including feature ref: %+v", desired)
+				}
+				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushPackCalls++
+				_ = pack.Close()
+				return nil
+			},
+			pushCommands: func(_ context.Context, cmds []gitproto.PushCommand) error {
+				pushCommandsBatches = append(pushCommandsBatches, append([]gitproto.PushCommand(nil), cmds...))
+				return nil
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef:    {SourceRef: mainRef, TargetRef: mainRef, SourceHash: mainHash, Kind: planner.RefKindBranch, Label: "main"},
+			featureRef: {SourceRef: featureRef, TargetRef: featureRef, SourceHash: featureHash, Kind: planner.RefKindBranch, Label: "feature"},
+		},
+		TargetRefs:       map[plumbing.ReferenceName]plumbing.Hash{},
+		SourceHeadTarget: mainRef,
+		TargetMaxPack:    1024 * 1024,
+	}, "empty target")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if graphFetches != 1 {
+		t.Errorf("fetchCommitGraph called %d times, want 1 (trunk only)", graphFetches)
+	}
+	if packFetches != 1 {
+		t.Errorf("fetchPack called %d times, want 1 (trunk only)", packFetches)
+	}
+	if pushPackCalls != 1 {
+		t.Errorf("PushPack called %d times, want 1 (trunk only)", pushPackCalls)
+	}
+
+	var foundFeatureCreate bool
+	for _, cmds := range pushCommandsBatches {
+		for _, cmd := range cmds {
+			if cmd.Name == featureRef && cmd.New == featureHash && cmd.Old == plumbing.ZeroHash && !cmd.Delete {
+				foundFeatureCreate = true
+			}
+		}
+	}
+	if !foundFeatureCreate {
+		t.Fatalf("expected ref-create command for feature at %s; got %v", featureHash, pushCommandsBatches)
+	}
+}
+
 type fakeBootstrapSource struct {
 	fetchPack        func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef) error
+	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) error
 }
 
 func (f fakeBootstrapSource) FetchPack(
@@ -415,9 +552,10 @@ func (f fakeBootstrapSource) FetchCommitGraph(
 	store storer.Storer,
 	conn *gitproto.Conn,
 	ref gitproto.DesiredRef,
+	haves []plumbing.Hash,
 ) error {
 	if f.fetchCommitGraph != nil {
-		return f.fetchCommitGraph(ctx, store, conn, ref)
+		return f.fetchCommitGraph(ctx, store, conn, ref, haves)
 	}
 	return nil
 }
@@ -595,7 +733,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
@@ -635,7 +773,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},

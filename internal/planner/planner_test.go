@@ -596,6 +596,79 @@ func TestFirstParentChain(t *testing.T) {
 	}
 }
 
+func TestFirstParentChainStoppingAt(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+
+	// root -> mid -> divergence -> tip. Mark root+mid as already-known (trunk).
+	root := seedCommit(t, repo, nil)
+	mid := seedCommit(t, repo, []plumbing.Hash{root})
+	div := seedCommit(t, repo, []plumbing.Hash{mid})
+	tip := seedCommit(t, repo, []plumbing.Hash{div})
+
+	stopAt := map[plumbing.Hash]struct{}{root: {}, mid: {}}
+	chain, err := FirstParentChainStoppingAt(repo.Storer, tip, stopAt)
+	if err != nil {
+		t.Fatalf("FirstParentChainStoppingAt: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("expected divergence-only chain of length 2, got %d: %v", len(chain), chain)
+	}
+	if chain[0] != div {
+		t.Errorf("chain[0] = %s, want div %s", chain[0], div)
+	}
+	if chain[1] != tip {
+		t.Errorf("chain[1] = %s, want tip %s", chain[1], tip)
+	}
+}
+
+func TestFirstParentChainStoppingAtTipInSet(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	tip := seedCommit(t, repo, []plumbing.Hash{root})
+
+	stopAt := map[plumbing.Hash]struct{}{tip: {}}
+	chain, err := FirstParentChainStoppingAt(repo.Storer, tip, stopAt)
+	if err != nil {
+		t.Fatalf("FirstParentChainStoppingAt: %v", err)
+	}
+	if len(chain) != 0 {
+		t.Fatalf("expected empty chain when tip is subsumed, got %v", chain)
+	}
+}
+
+func TestFirstParentChainStoppingAtNilBehaviourMatchesPlain(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	mid := seedCommit(t, repo, []plumbing.Hash{root})
+	tip := seedCommit(t, repo, []plumbing.Hash{mid})
+
+	plain, err := FirstParentChain(repo.Storer, tip)
+	if err != nil {
+		t.Fatalf("FirstParentChain: %v", err)
+	}
+	stop, err := FirstParentChainStoppingAt(repo.Storer, tip, nil)
+	if err != nil {
+		t.Fatalf("FirstParentChainStoppingAt: %v", err)
+	}
+	if len(plain) != len(stop) {
+		t.Fatalf("length mismatch plain=%d stop=%d", len(plain), len(stop))
+	}
+	for i := range plain {
+		if plain[i] != stop[i] {
+			t.Fatalf("chain[%d] differs: plain=%s stop=%s", i, plain[i], stop[i])
+		}
+	}
+}
+
 func TestValidateMappingsEmpty(t *testing.T) {
 	result, err := validation.ValidateMappings(nil)
 	if err != nil {

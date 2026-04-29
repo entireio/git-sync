@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const refsHeadsMain = "refs/heads/main"
+
 func TestCapabilities(t *testing.T) {
 	// v2 protocol
 	v2Caps := &V2Capabilities{
@@ -221,15 +223,15 @@ func TestDecodeV2LSRefs(t *testing.T) {
 		FormatPktLine("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/dev\n") +
 		"0000" // flush
 
-	refs, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 refs, got %d", len(refs))
 	}
-	if refs[0].Name().String() != "refs/heads/main" {
-		t.Errorf("refs[0].Name() = %q, want %q", refs[0].Name(), "refs/heads/main")
+	if refs[0].Name().String() != refsHeadsMain {
+		t.Errorf("refs[0].Name() = %q, want %q", refs[0].Name(), refsHeadsMain)
 	}
 	if refs[0].Hash().String() != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Errorf("refs[0].Hash() = %q", refs[0].Hash())
@@ -237,12 +239,36 @@ func TestDecodeV2LSRefs(t *testing.T) {
 	if refs[1].Name().String() != "refs/heads/dev" {
 		t.Errorf("refs[1].Name() = %q, want %q", refs[1].Name(), "refs/heads/dev")
 	}
+	if head != "" {
+		t.Errorf("head target = %q, want empty (no HEAD advertised)", head)
+	}
+}
+
+func TestDecodeV2LSRefsHeadSymref(t *testing.T) {
+	wire := "" +
+		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HEAD symref-target:refs/heads/main\n") +
+		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n") +
+		"0000"
+	refs, head, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	if err != nil {
+		t.Fatalf("decodeV2LSRefs: %v", err)
+	}
+	// HEAD is consumed for its symref target and not emitted as a ref.
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref (HEAD filtered), got %d", len(refs))
+	}
+	if refs[0].Name().String() != refsHeadsMain {
+		t.Errorf("refs[0].Name() = %q, want refs/heads/main", refs[0].Name())
+	}
+	if head.String() != refsHeadsMain {
+		t.Errorf("head target = %q, want refs/heads/main", head)
+	}
 }
 
 func TestDecodeV2LSRefsMalformed(t *testing.T) {
 	// Line with only one field (no refname).
 	wire := FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n") + "0000"
-	_, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	_, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err == nil {
 		t.Fatal("expected error for malformed ls-refs line, got nil")
 	}
@@ -251,7 +277,7 @@ func TestDecodeV2LSRefsMalformed(t *testing.T) {
 func TestDecodeV2LSRefsEmpty(t *testing.T) {
 	// Empty response (just flush).
 	wire := "0000"
-	refs, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -287,7 +313,7 @@ func TestFetchPackUnsupportedProtocol(t *testing.T) {
 
 func TestFetchCommitGraphRequiresV2(t *testing.T) {
 	rs := &RefService{Protocol: "v1"}
-	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{})
+	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-v2 protocol")
 	}
@@ -300,7 +326,7 @@ func TestFetchCommitGraphRequiresFilter(t *testing.T) {
 		},
 	}
 	rs := &RefService{Protocol: "v2", V2Caps: caps}
-	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{})
+	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{}, nil)
 	if err == nil {
 		t.Fatal("expected error when filter not supported")
 	}

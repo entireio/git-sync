@@ -88,12 +88,15 @@ func (s *RefService) FetchPack(
 }
 
 // FetchCommitGraph fetches only the commit graph (tree:0 filter) for a ref.
-// Requires v2 with filter support.
+// Requires v2 with filter support. Optional haves let the source skip commits
+// already reachable from those hashes, which is valuable when planning later
+// branches that share history with an already-planned trunk.
 func (s *RefService) FetchCommitGraph(
 	ctx context.Context,
 	store storer.Storer,
 	conn *Conn,
 	ref DesiredRef,
+	haves []plumbing.Hash,
 ) error {
 	if s.Protocol != "v2" {
 		return errors.New("commit graph fetch requires protocol v2")
@@ -102,13 +105,19 @@ func (s *RefService) FetchCommitGraph(
 		return errors.New("source does not advertise fetch filter support")
 	}
 
-	cmdArgs := []string{
+	sortedHaves := SortedUniqueHashes(haves)
+	cmdArgs := make([]string, 0, 4+len(sortedHaves))
+	cmdArgs = append(cmdArgs,
 		"ofs-delta",
 		"no-progress",
 		"filter tree:0",
-		"want " + ref.SourceHash.String(),
-		"done",
+		"want "+ref.SourceHash.String(),
+	)
+	for _, h := range sortedHaves {
+		cmdArgs = append(cmdArgs, "have "+h.String())
 	}
+	cmdArgs = append(cmdArgs, "done")
+
 	body, err := EncodeCommand("fetch", s.V2Caps.RequestCapabilities(), cmdArgs)
 	if err != nil {
 		return err
