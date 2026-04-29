@@ -782,6 +782,36 @@ func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 	}
 }
 
+func TestStoreV2FetchPackReturnsRemoteError(t *testing.T) {
+	var wire bytes.Buffer
+	if _, err := pktline.WriteString(&wire, "ERR upload-pack: not our ref"); err != nil {
+		t.Fatalf("write remote error: %v", err)
+	}
+
+	err := storeV2FetchPack(memory.NewStorage(), &wire, false)
+	if err == nil {
+		t.Fatal("expected remote error")
+	}
+	if got, want := err.Error(), "remote: upload-pack: not our ref"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestOpenV2PackStreamReturnsRemoteError(t *testing.T) {
+	var wire bytes.Buffer
+	if _, err := pktline.WriteString(&wire, "ERR upload-pack: not our ref"); err != nil {
+		t.Fatalf("write remote error: %v", err)
+	}
+
+	_, err := openV2PackStream(io.NopCloser(&wire), false)
+	if err == nil {
+		t.Fatal("expected remote error")
+	}
+	if got, want := err.Error(), "remote: upload-pack: not our ref"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
 func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {

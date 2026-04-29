@@ -265,6 +265,9 @@ func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 			continue
 		case PacketData:
 			line := string(payload)
+			if strings.HasPrefix(line, "ERR ") {
+				return errors.New("remote: " + line[4:])
+			}
 			switch line {
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
@@ -301,6 +304,9 @@ func openV2PackStream(body io.ReadCloser, verbose bool) (io.ReadCloser, error) {
 			continue
 		case PacketData:
 			line := string(payload)
+			if strings.HasPrefix(line, "ERR ") {
+				return nil, errors.New("remote: " + line[4:])
+			}
 			switch line {
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
