@@ -46,7 +46,7 @@ go-licenses csv ./cmd/git-sync 2>/dev/null | sort | uniq > "$TEMP_FILE"
 VIOLATIONS=()
 while IFS=',' read -r package _url license; do
     # Skip internal packages
-    if [[ "$package" == entire.io/git-sync/* ]]; then
+    if [[ "$package" == entire.io/entire/git-sync/* ]]; then
         continue
     fi
 

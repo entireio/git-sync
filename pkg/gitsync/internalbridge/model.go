@@ -3,8 +3,8 @@ package internalbridge
 import (
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"entire.io/git-sync/internal/planner"
-	"entire.io/git-sync/internal/syncer"
+	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/syncer"
 )
 
 type RefKind string
