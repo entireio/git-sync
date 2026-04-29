@@ -3,7 +3,7 @@
   "checkpoint_id": "be0975547aa9",
   "strategy": "manual-commit",
   "branch": "soph/rewrite",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "README.md"
   ],
@@ -19,13 +19,19 @@
       "transcript": "/be/0975547aa9/1/transcript.jsonl",
       "content_hash": "/be/0975547aa9/1/transcript_hash.txt",
       "prompt": "/be/0975547aa9/1/prompt.txt"
+    },
+    {
+      "metadata": "/be/0975547aa9/2/metadata.json",
+      "transcript": "/be/0975547aa9/2/transcript.jsonl",
+      "content_hash": "/be/0975547aa9/2/transcript_hash.txt",
+      "prompt": "/be/0975547aa9/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1638109,
+    "input_tokens": 25921424,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1609600,
-    "output_tokens": 4148,
-    "api_call_count": 12
+    "cache_read_tokens": 24374784,
+    "output_tokens": 86890,
+    "api_call_count": 196
   }
 }
