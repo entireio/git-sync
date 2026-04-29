@@ -1,7 +1,9 @@
 {
   "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
   "checkpoint_id": "e8501c11ba8a",
+  "session_id": "019d7d08-46c9-7f73-affe-4e6ca9852d56",
   "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:33.401965Z",
   "branch": "soph/rewrite",
   "checkpoints_count": 0,
   "files_touched": [
@@ -11,25 +13,30 @@
     "internal/strategy/incremental/incremental.go",
     "internal/strategy/materialized/materialized.go"
   ],
-  "sessions": [
-    {
-      "metadata": "/e8/501c11ba8a/0/metadata.json",
-      "transcript": "/e8/501c11ba8a/0/transcript.jsonl",
-      "content_hash": "/e8/501c11ba8a/0/transcript_hash.txt",
-      "prompt": ""
-    },
-    {
-      "metadata": "/e8/501c11ba8a/1/metadata.json",
-      "transcript": "/e8/501c11ba8a/1/transcript.jsonl",
-      "content_hash": "/e8/501c11ba8a/1/transcript_hash.txt",
-      "prompt": "/e8/501c11ba8a/1/prompt.txt"
-    }
-  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "a00beda44a0b",
+  "checkpoint_transcript_start": 141,
   "token_usage": {
     "input_tokens": 2798522,
     "cache_creation_tokens": 0,
     "cache_read_tokens": 2794112,
     "output_tokens": 3127,
     "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-11T20:41:32.947007Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 26,
+    "human_modified": 11,
+    "human_removed": 0,
+    "total_committed": 26,
+    "total_lines_changed": 37,
+    "agent_percentage": 0,
+    "metric_version": 2
   }
 }
