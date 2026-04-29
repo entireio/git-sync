@@ -1,0 +1,29 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "f2b685c45383",
+  "strategy": "manual-commit",
+  "branch": "soph/packagable",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/gitproto/smarthttp.go",
+    "pkg/gitsync/client.go",
+    "pkg/gitsync/internalbridge/config.go",
+    "pkg/gitsync/internalbridge/model_test.go",
+    "pkg/gitsync/unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f2/b685c45383/0/metadata.json",
+      "transcript": "/f2/b685c45383/0/transcript.jsonl",
+      "content_hash": "/f2/b685c45383/0/transcript_hash.txt",
+      "prompt": "/f2/b685c45383/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1117141,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 907136,
+    "output_tokens": 5498,
+    "api_call_count": 11
+  }
+}
