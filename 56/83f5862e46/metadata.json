@@ -1,0 +1,19 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "5683f5862e46",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/83f5862e46/0/metadata.json",
+      "transcript": "/56/83f5862e46/0/transcript.jsonl",
+      "content_hash": "/56/83f5862e46/0/transcript_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
