@@ -7,3 +7,7 @@ Register an empty config plugin https://github.com/go-git/go-git/blob/main/x/plu
     })
 
 TO remove settings such as gpgsign from both global and system levels.
+
+---
+
+commit staged changes
