@@ -1,0 +1,40 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "441e23e1e3f5",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/planner/planner_test.go",
+    "internal/planner/relay.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/1e23e1e3f5/0/metadata.json",
+      "transcript": "/44/1e23e1e3f5/0/transcript.jsonl",
+      "content_hash": "/44/1e23e1e3f5/0/transcript_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/44/1e23e1e3f5/1/metadata.json",
+      "transcript": "/44/1e23e1e3f5/1/transcript.jsonl",
+      "content_hash": "/44/1e23e1e3f5/1/transcript_hash.txt",
+      "prompt": "/44/1e23e1e3f5/1/prompt.txt"
+    },
+    {
+      "metadata": "/44/1e23e1e3f5/2/metadata.json",
+      "transcript": "/44/1e23e1e3f5/2/transcript.jsonl",
+      "content_hash": "/44/1e23e1e3f5/2/transcript_hash.txt",
+      "prompt": "/44/1e23e1e3f5/2/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26151969,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 24534272,
+    "output_tokens": 88513,
+    "api_call_count": 207
+  }
+}

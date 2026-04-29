@@ -1,0 +1,43 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "79aa4e9d44f3",
+  "session_id": "c7d001b2-f56b-4999-82ed-3af83b6837b6",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:44:27.656075Z",
+  "branch": "soph/add-ci-and-lint",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/refs.go",
+    "internal/gitproto/fetch.go",
+    "internal/planner/checkpoint.go",
+    "internal/syncer/syncer.go",
+    "internal/gitproto/fetch_test.go",
+    "internal/planner/planner_test.go",
+    "internal/gitproto/refs_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c762b6c7495e",
+  "token_usage": {
+    "input_tokens": 264,
+    "cache_creation_tokens": 1045649,
+    "cache_read_tokens": 28400434,
+    "output_tokens": 144109,
+    "api_call_count": 177
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-16T09:47:34.227786Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 146,
+    "human_removed": 144,
+    "total_committed": 0,
+    "total_lines_changed": 290,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

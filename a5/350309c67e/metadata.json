@@ -1,0 +1,61 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "a5350309c67e",
+  "strategy": "manual-commit",
+  "branch": "soph/move-to-root-package",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".golangci.yaml",
+    "client.go",
+    "client_test.go",
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go",
+    "cmd/git-sync/main.go",
+    "cmd/git-sync/main_test.go",
+    "docs/embedding.md",
+    "example_test.go",
+    "go.mod",
+    "internal/convert/convert.go",
+    "internal/convert/convert_test.go",
+    "internal/planner/planner.go",
+    "internal/planner/planner_test.go",
+    "internal/planner/types.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/strategy/incremental/incremental.go",
+    "internal/strategy/incremental/incremental_test.go",
+    "internal/strategy/materialized/materialized.go",
+    "internal/strategy/materialized/materialized_test.go",
+    "internal/strategy/replicate/replicate.go",
+    "internal/strategy/replicate/replicate_test.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/benchmark_test.go",
+    "internal/syncer/git_http_backend_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/stats.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go",
+    "internalbridge/config.go",
+    "internalbridge/model.go",
+    "internalbridge/model_test.go",
+    "mise-tasks/lint/licenses",
+    "types.go",
+    "unstable/client.go",
+    "unstable/client_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a5/350309c67e/0/metadata.json",
+      "transcript": "/a5/350309c67e/0/transcript.jsonl",
+      "content_hash": "/a5/350309c67e/0/transcript_hash.txt",
+      "prompt": "/a5/350309c67e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 6111,
+    "cache_read_tokens": 437948,
+    "output_tokens": 2698,
+    "api_call_count": 6
+  }
+}
