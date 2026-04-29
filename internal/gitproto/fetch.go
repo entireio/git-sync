@@ -372,6 +372,8 @@ func skipV2Acknowledgments(reader *PacketReader) (bool, error) {
 			default:
 				return false, fmt.Errorf("unexpected acknowledgment line %q", strings.TrimSpace(line))
 			}
+		case PacketResponseEnd:
+			return false, fmt.Errorf("unexpected packet type %v in acknowledgments section", kind)
 		default:
 			return false, fmt.Errorf("unexpected packet type %v in acknowledgments section", kind)
 		}

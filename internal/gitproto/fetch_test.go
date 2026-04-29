@@ -954,7 +954,7 @@ func TestFetchPackV2ManyHavesSendsDoneAndReadsPack(t *testing.T) {
 	}
 	desired := make(map[plumbing.ReferenceName]DesiredRef, refCount)
 	targetRefs := make(map[plumbing.ReferenceName]plumbing.Hash, refCount)
-	for i := 0; i < refCount; i++ {
+	for i := range refCount {
 		sourceRef := plumbing.ReferenceName(fmt.Sprintf("refs/heads/source-%02d", i))
 		targetRef := plumbing.ReferenceName(fmt.Sprintf("refs/heads/target-%02d", i))
 		desired[targetRef] = DesiredRef{
