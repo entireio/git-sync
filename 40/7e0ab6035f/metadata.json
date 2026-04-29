@@ -1,0 +1,20 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "407e0ab6035f",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/40/7e0ab6035f/0/metadata.json",
+      "transcript": "/40/7e0ab6035f/0/transcript.jsonl",
+      "content_hash": "/40/7e0ab6035f/0/transcript_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
