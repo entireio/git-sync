@@ -50,14 +50,18 @@ func TestHeadTargetFromAdv(t *testing.T) {
 	}
 
 	adv := packp.NewAdvRefs()
-	_ = adv.Capabilities.Add(capability.SymRef, "HEAD:refs/heads/main")
+	if err := adv.Capabilities.Add(capability.SymRef, "HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("Capabilities.Add: %v", err)
+	}
 	if got := headTargetFromAdv(adv); got.String() != "refs/heads/main" {
 		t.Errorf("headTargetFromAdv = %q, want refs/heads/main", got)
 	}
 
 	// Symref pointing at something other than HEAD is ignored.
 	adv = packp.NewAdvRefs()
-	_ = adv.Capabilities.Add(capability.SymRef, "refs/remotes/origin/HEAD:refs/heads/main")
+	if err := adv.Capabilities.Add(capability.SymRef, "refs/remotes/origin/HEAD:refs/heads/main"); err != nil {
+		t.Fatalf("Capabilities.Add: %v", err)
+	}
 	if got := headTargetFromAdv(adv); got != "" {
 		t.Errorf("headTargetFromAdv ignored non-HEAD symref = %q, want empty", got)
 	}

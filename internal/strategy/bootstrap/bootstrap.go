@@ -50,16 +50,16 @@ type Params struct {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 		PushCommands(ctx context.Context, cmds []gitproto.PushCommand) error
 	}
-	DesiredRefs  map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs   map[plumbing.ReferenceName]plumbing.Hash
+	DesiredRefs map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs  map[plumbing.ReferenceName]plumbing.Hash
 	// SourceHeadTarget is the source ref that HEAD points to, when advertised.
 	// Empty if unknown. When set, batched bootstrap plans this branch first and
 	// uses its commit-graph reachability as a cutoff for subsequent branches.
 	SourceHeadTarget plumbing.ReferenceName
-	MaxPackBytes int64
-	TargetMaxPack int64
-	Verbose       bool
-	Logger        *slog.Logger
+	MaxPackBytes     int64
+	TargetMaxPack    int64
+	Verbose          bool
+	Logger           *slog.Logger
 }
 
 // Result holds the outcome of the bootstrap strategy.
@@ -582,7 +582,8 @@ func planCheckpointsFromChain(
 	// their stop set. We only need the keys — ~8 bytes per commit, so the
 	// linux ancestry set is ~11 MB vs the store's ~4.6 GB.
 	ancestors := collectCommitHashes(graphStore)
-	graphStore = nil // allow GC to reclaim the commit graph store
+	// graphStore is unused beyond this point; runtime.GC reclaims its
+	// transient allocations before we move on to the next branch.
 	runtime.GC()
 
 	if len(chain) == 0 {
@@ -612,10 +613,12 @@ func collectCommitHashes(store *memory.Storage) map[plumbing.Hash]struct{} {
 	}
 	defer iter.Close()
 	out := map[plumbing.Hash]struct{}{}
-	_ = iter.ForEach(func(obj plumbing.EncodedObject) error {
+	if err := iter.ForEach(func(obj plumbing.EncodedObject) error {
 		out[obj.Hash()] = struct{}{}
 		return nil
-	})
+	}); err != nil {
+		return nil
+	}
 	return out
 }
 
@@ -625,10 +628,7 @@ func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
 	}
 	estimated := chainLen * estimatedBytesPerCommit
 	n := int((estimated + batchMaxPack - 1) / batchMaxPack)
-	if n < 1 {
-		n = 1
-	}
-	return n
+	return max(n, 1)
 }
 
 // estimatedBytesPerObject is a conservative average for compressed git objects

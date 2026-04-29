@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const refsHeadsMain = "refs/heads/main"
+
 func TestCapabilities(t *testing.T) {
 	// v2 protocol
 	v2Caps := &V2Capabilities{
@@ -228,8 +230,8 @@ func TestDecodeV2LSRefs(t *testing.T) {
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 refs, got %d", len(refs))
 	}
-	if refs[0].Name().String() != "refs/heads/main" {
-		t.Errorf("refs[0].Name() = %q, want %q", refs[0].Name(), "refs/heads/main")
+	if refs[0].Name().String() != refsHeadsMain {
+		t.Errorf("refs[0].Name() = %q, want %q", refs[0].Name(), refsHeadsMain)
 	}
 	if refs[0].Hash().String() != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Errorf("refs[0].Hash() = %q", refs[0].Hash())
@@ -255,10 +257,10 @@ func TestDecodeV2LSRefsHeadSymref(t *testing.T) {
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref (HEAD filtered), got %d", len(refs))
 	}
-	if refs[0].Name().String() != "refs/heads/main" {
+	if refs[0].Name().String() != refsHeadsMain {
 		t.Errorf("refs[0].Name() = %q, want refs/heads/main", refs[0].Name())
 	}
-	if head.String() != "refs/heads/main" {
+	if head.String() != refsHeadsMain {
 		t.Errorf("head target = %q, want refs/heads/main", head)
 	}
 }
