@@ -2,7 +2,7 @@ package syncer
 
 import (
 	"context"
-	"entire.io/entire/git-sync/internal/syncertest"
+	"entire.io/entire/gitsync/internal/syncertest"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/storer"

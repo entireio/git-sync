@@ -49,7 +49,7 @@ import (
 	"context"
 	"net/http"
 
-	"entire.io/entire/git-sync"
+	"entire.io/entire/gitsync"
 )
 
 func runSync(ctx context.Context) error {
