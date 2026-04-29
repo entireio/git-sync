@@ -15,8 +15,8 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 
-	"entire.io/entire/gitsync/internal/validation"
 	"entire.io/entire/gitsync"
+	"entire.io/entire/gitsync/internal/validation"
 	"entire.io/entire/gitsync/unstable"
 )
 
