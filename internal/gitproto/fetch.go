@@ -250,16 +250,23 @@ func fetchPackV2(
 
 func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 	reader := NewPacketReader(r)
+	expectPackfile := false
 	for {
 		kind, payload, err := reader.ReadPacket()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if expectPackfile {
+					return errors.New("expected packfile to be sent after 'ready'")
+				}
 				return nil
 			}
 			return fmt.Errorf("decode protocol v2 fetch response: %w", err)
 		}
 		switch kind {
 		case PacketFlush:
+			if expectPackfile {
+				return errors.New("expected packfile to be sent after 'ready'")
+			}
 			return nil
 		case PacketDelim, PacketResponseEnd:
 			continue
@@ -276,7 +283,14 @@ func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 					return fmt.Errorf("update object storage: %w", err)
 				}
 				return nil
-			case "acknowledgments\n", "shallow-info\n":
+			case "acknowledgments\n":
+				ready, err := skipV2Acknowledgments(reader)
+				if err != nil {
+					return err
+				}
+				expectPackfile = ready
+			case "shallow-info\n":
+				expectPackfile = true
 				if err := SkipSection(reader); err != nil {
 					return err
 				}
@@ -315,13 +329,51 @@ func openV2PackStream(body io.ReadCloser, verbose bool) (io.ReadCloser, error) {
 					Reader: demux,
 					Closer: body,
 				}, nil
-			case "acknowledgments\n", "shallow-info\n":
+			case "acknowledgments\n":
+				if _, err := skipV2Acknowledgments(reader); err != nil {
+					return nil, err
+				}
+			case "shallow-info\n":
 				if err := SkipSection(reader); err != nil {
 					return nil, err
 				}
 			default:
 				return nil, fmt.Errorf("unexpected protocol v2 fetch section %q", strings.TrimSpace(line))
 			}
+		}
+	}
+}
+
+func skipV2Acknowledgments(reader *PacketReader) (bool, error) {
+	ready := false
+	for {
+		kind, payload, err := reader.ReadPacket()
+		if err != nil {
+			return false, err
+		}
+		switch kind {
+		case PacketFlush:
+			if ready {
+				return false, errors.New("expected packfile to be sent after 'ready'")
+			}
+			return false, errors.New("protocol v2 fetch response ended without packfile after acknowledgments")
+		case PacketDelim:
+			if !ready {
+				return false, errors.New("expected no other sections to be sent after no 'ready'")
+			}
+			return true, nil
+		case PacketData:
+			line := string(payload)
+			switch {
+			case line == "NAK\n", strings.HasPrefix(line, "ACK "):
+				continue
+			case line == "ready\n":
+				ready = true
+			default:
+				return false, fmt.Errorf("unexpected acknowledgment line %q", strings.TrimSpace(line))
+			}
+		default:
+			return false, fmt.Errorf("unexpected packet type %v in acknowledgments section", kind)
 		}
 	}
 }

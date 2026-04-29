@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -835,6 +837,153 @@ func TestOpenV2PackStreamReturnsRemoteError(t *testing.T) {
 	}
 }
 
+func TestStoreV2FetchPackRejectsAcknowledgmentsWithoutReady(t *testing.T) {
+	var wire bytes.Buffer
+	if _, err := pktline.WriteString(&wire, "acknowledgments\n"); err != nil {
+		t.Fatalf("write acknowledgments header: %v", err)
+	}
+	if _, err := pktline.WriteString(&wire, "NAK\n"); err != nil {
+		t.Fatalf("write NAK: %v", err)
+	}
+	if err := pktline.WriteFlush(&wire); err != nil {
+		t.Fatalf("write flush: %v", err)
+	}
+
+	err := storeV2FetchPack(memory.NewStorage(), &wire, false)
+	if err == nil {
+		t.Fatal("expected missing packfile error")
+	}
+	if !strings.Contains(err.Error(), "ended without packfile after acknowledgments") {
+		t.Fatalf("error = %v, want missing packfile error", err)
+	}
+}
+
+func TestOpenV2PackStreamRejectsAcknowledgmentsWithoutReady(t *testing.T) {
+	var wire bytes.Buffer
+	if _, err := pktline.WriteString(&wire, "acknowledgments\n"); err != nil {
+		t.Fatalf("write acknowledgments header: %v", err)
+	}
+	if _, err := pktline.WriteString(&wire, "NAK\n"); err != nil {
+		t.Fatalf("write NAK: %v", err)
+	}
+	if err := pktline.WriteFlush(&wire); err != nil {
+		t.Fatalf("write flush: %v", err)
+	}
+
+	_, err := openV2PackStream(io.NopCloser(&wire), false)
+	if err == nil {
+		t.Fatal("expected missing packfile error")
+	}
+	if !strings.Contains(err.Error(), "ended without packfile after acknowledgments") {
+		t.Fatalf("error = %v, want missing packfile error", err)
+	}
+}
+
+func TestStoreV2FetchPackRejectsReadyWithoutPackfile(t *testing.T) {
+	var wire bytes.Buffer
+	if _, err := pktline.WriteString(&wire, "acknowledgments\n"); err != nil {
+		t.Fatalf("write acknowledgments header: %v", err)
+	}
+	if _, err := pktline.WriteString(&wire, "ready\n"); err != nil {
+		t.Fatalf("write ready: %v", err)
+	}
+	if err := pktline.WriteDelim(&wire); err != nil {
+		t.Fatalf("write delim: %v", err)
+	}
+	if err := pktline.WriteFlush(&wire); err != nil {
+		t.Fatalf("write flush: %v", err)
+	}
+
+	err := storeV2FetchPack(memory.NewStorage(), &wire, false)
+	if err == nil {
+		t.Fatal("expected missing packfile error")
+	}
+	if !strings.Contains(err.Error(), "expected packfile to be sent after 'ready'") {
+		t.Fatalf("error = %v, want expected packfile error", err)
+	}
+}
+
+func TestFetchPackV2ManyHavesSendsDoneAndReadsPack(t *testing.T) {
+	const negotiationBoundary = 16
+	const refCount = negotiationBoundary + 1
+
+	ep, err := transport.ParseURL("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	seenRequest := false
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		seenRequest = true
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		lines := readV2FetchRequestLines(t, body)
+		if got := countLinesWithPrefix(lines, "want "); got != refCount {
+			t.Fatalf("want lines = %d, want %d; lines=%q", got, refCount, lines)
+		}
+		if got := countLinesWithPrefix(lines, "have "); got != refCount {
+			t.Fatalf("have lines = %d, want %d; lines=%q", got, refCount, lines)
+		}
+		if !containsLine(lines, "done") {
+			t.Fatalf("fetch request did not send done; lines=%q", lines)
+		}
+
+		var wire bytes.Buffer
+		if _, err := pktline.WriteString(&wire, "packfile\n"); err != nil {
+			t.Fatalf("write packfile header: %v", err)
+		}
+		if _, err := pktline.Write(&wire, append([]byte{1}, []byte("PACK")...)); err != nil {
+			t.Fatalf("write sideband packet: %v", err)
+		}
+		if err := pktline.WriteFlush(&wire); err != nil {
+			t.Fatalf("write flush: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       io.NopCloser(bytes.NewReader(wire.Bytes())),
+		}, nil
+	}))
+
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"fetch": "",
+		},
+	}
+	desired := make(map[plumbing.ReferenceName]DesiredRef, refCount)
+	targetRefs := make(map[plumbing.ReferenceName]plumbing.Hash, refCount)
+	for i := 0; i < refCount; i++ {
+		sourceRef := plumbing.ReferenceName(fmt.Sprintf("refs/heads/source-%02d", i))
+		targetRef := plumbing.ReferenceName(fmt.Sprintf("refs/heads/target-%02d", i))
+		desired[targetRef] = DesiredRef{
+			SourceRef:  sourceRef,
+			TargetRef:  targetRef,
+			SourceHash: plumbing.NewHash(fmt.Sprintf("%040x", i+1)),
+		}
+		targetRefs[plumbing.ReferenceName(fmt.Sprintf("refs/haves/%02d", i))] = plumbing.NewHash(fmt.Sprintf("%040x", i+1000))
+	}
+
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, targetRefs, false)
+	if err != nil {
+		t.Fatalf("fetchPackV2: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read pack stream: %v", err)
+	}
+	if string(got) != "PACK" {
+		t.Fatalf("pack stream = %q, want PACK", got)
+	}
+	if closeErr := rc.Close(); closeErr != nil {
+		t.Fatalf("close pack stream: %v", closeErr)
+	}
+	if !seenRequest {
+		t.Fatal("expected fetch request")
+	}
+}
+
 func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 	ep, err := transport.ParseURL("https://example.com/repo.git")
 	if err != nil {
@@ -976,4 +1125,46 @@ func TestBuildV1UploadPackBodyEmptyWantSet(t *testing.T) {
 	if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		t.Fatalf("expected NoErrAlreadyUpToDate, got %v", err)
 	}
+}
+
+func readV2FetchRequestLines(t *testing.T, body []byte) []string {
+	t.Helper()
+
+	reader := NewPacketReader(bytes.NewReader(body))
+	var lines []string
+	for {
+		kind, payload, err := reader.ReadPacket()
+		if err != nil {
+			t.Fatalf("read v2 fetch request: %v", err)
+		}
+		switch kind {
+		case PacketFlush:
+			return lines
+		case PacketData:
+			lines = append(lines, strings.TrimSuffix(string(payload), "\n"))
+		case PacketDelim, PacketResponseEnd:
+			continue
+		default:
+			t.Fatalf("unexpected packet type %v in v2 fetch request", kind)
+		}
+	}
+}
+
+func countLinesWithPrefix(lines []string, prefix string) int {
+	var count int
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
 }
