@@ -1,0 +1,38 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "aac6eaf4698e",
+  "session_id": "019d7d08-46c9-7f73-affe-4e6ca9852d56",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:37.576814Z",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/rewrite-issue-list.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "ddba0724c5a3",
+  "checkpoint_transcript_start": 25,
+  "token_usage": {
+    "input_tokens": 2977878,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2476928,
+    "output_tokens": 9030,
+    "api_call_count": 28
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-11T20:14:57.052595Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 31,
+    "human_modified": 31,
+    "human_removed": 0,
+    "total_committed": 31,
+    "total_lines_changed": 62,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
