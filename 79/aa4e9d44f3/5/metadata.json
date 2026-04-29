@@ -1,9 +1,11 @@
 {
   "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
   "checkpoint_id": "79aa4e9d44f3",
+  "session_id": "6f83f5b0-4e8f-4253-88b5-25a20c159f0a",
   "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:04.565246Z",
   "branch": "soph/add-ci-and-lint",
-  "checkpoints_count": 5,
+  "checkpoints_count": 1,
   "files_touched": [
     "cmd/git-sync-bench/main.go",
     "cmd/git-sync/main.go",
@@ -57,49 +59,29 @@
     "pkg/gitsync/types.go",
     "pkg/gitsync/unstable/client.go"
   ],
-  "sessions": [
-    {
-      "metadata": "/79/aa4e9d44f3/0/metadata.json",
-      "transcript": "/79/aa4e9d44f3/0/transcript.jsonl",
-      "content_hash": "/79/aa4e9d44f3/0/transcript_hash.txt",
-      "prompt": "/79/aa4e9d44f3/0/prompt.txt"
-    },
-    {
-      "metadata": "/79/aa4e9d44f3/1/metadata.json",
-      "transcript": "/79/aa4e9d44f3/1/transcript.jsonl",
-      "content_hash": "/79/aa4e9d44f3/1/transcript_hash.txt",
-      "prompt": "/79/aa4e9d44f3/1/prompt.txt"
-    },
-    {
-      "metadata": "/79/aa4e9d44f3/2/metadata.json",
-      "transcript": "/79/aa4e9d44f3/2/transcript.jsonl",
-      "content_hash": "/79/aa4e9d44f3/2/transcript_hash.txt",
-      "prompt": "/79/aa4e9d44f3/2/prompt.txt"
-    },
-    {
-      "metadata": "/79/aa4e9d44f3/3/metadata.json",
-      "transcript": "/79/aa4e9d44f3/3/transcript.jsonl",
-      "content_hash": "/79/aa4e9d44f3/3/transcript_hash.txt",
-      "prompt": "/79/aa4e9d44f3/3/prompt.txt"
-    },
-    {
-      "metadata": "/79/aa4e9d44f3/4/metadata.json",
-      "transcript": "/79/aa4e9d44f3/4/transcript.jsonl",
-      "content_hash": "/79/aa4e9d44f3/4/transcript_hash.txt",
-      "prompt": "/79/aa4e9d44f3/4/prompt.txt"
-    },
-    {
-      "metadata": "/79/aa4e9d44f3/5/metadata.json",
-      "transcript": "/79/aa4e9d44f3/5/transcript.jsonl",
-      "content_hash": "/79/aa4e9d44f3/5/transcript_hash.txt",
-      "prompt": "/79/aa4e9d44f3/5/prompt.txt"
-    }
-  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3c017dc2b88a",
   "token_usage": {
-    "input_tokens": 32202306,
+    "input_tokens": 51,
     "cache_creation_tokens": 89588,
-    "cache_read_tokens": 27545787,
-    "output_tokens": 140441,
-    "api_call_count": 332
+    "cache_read_tokens": 604347,
+    "output_tokens": 7477,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-16T09:47:30.118358Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 448,
+    "total_committed": 0,
+    "total_lines_changed": 448,
+    "agent_percentage": 0,
+    "metric_version": 2
   }
 }
