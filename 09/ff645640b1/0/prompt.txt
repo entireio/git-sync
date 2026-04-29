@@ -1,0 +1,33 @@
+now looking at the json: I'm fine changing the stable API, this is a new project and there is only one external dependency using it yet. some of the reviews sounded as if the json isn't in a consistent state around casing, can we check?
+
+---
+
+is snake_case usually what go projects use for json? or is there no good best practice?
+
+---
+
+let's switch to camelCase
+
+---
+
+can you update README.md und docs/ for the new camelCase format
+
+---
+
+2. Low: .github/workflows/ci.yml:12 and .github/workflows/lint.yml:16 set actions/
+     checkout to ref: ${{ github.event.pull_request.head.sha }} even though both workflows
+     also run on push and workflow_dispatch. Outside PR events that field is unset, so the
+     checkout behavior depends on how actions/checkout treats an empty ref. It is safer to
+     omit ref entirely or gate it to PR events only.
+
+---
+
+can you pin the action versions to the latest release shas, also double check there are no newer versions
+
+---
+
+is there a newer golangci version yet?
+
+---
+
+yes
