@@ -31,10 +31,30 @@ Additional commands (`bootstrap`, `probe`, `fetch`) and advanced flags are avail
 
 `git-sync` is also a Go library. Use `entire.io/entire/gitsync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/gitsync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable.
 
+## Installation
+
+Requires Go 1.26 or newer.
+
+Install the latest release with `go install`:
+
+```bash
+go install entire.io/entire/gitsync/cmd/git-sync@latest
+```
+
+This drops a `git-sync` binary into `$(go env GOPATH)/bin`. Make sure that directory is on your `PATH`.
+
+Or build from source:
+
+```bash
+git clone https://github.com/entireio/gitsync.git
+cd gitsync
+go build -o git-sync ./cmd/git-sync
+```
+
 ## Quick Start
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --source-token "$GITSYNC_SOURCE_TOKEN" \
   --target-token "$GITSYNC_TARGET_TOKEN" \
   https://github.com/source-org/source-repo.git \
@@ -46,7 +66,7 @@ go run ./cmd/git-sync sync \
 Run a replication that overwrites differing target refs, and fail instead of falling back to local materialization:
 
 ```bash
-go run ./cmd/git-sync replicate \
+git-sync replicate \
   --stats \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
@@ -57,7 +77,7 @@ If `replicate` cannot use relay against the target, it fails and tells you to re
 For very large initial migrations, add `--target-max-pack-bytes` to split the initial pack into multiple smaller batches. The same flag works on `sync`, since `sync` auto-bootstraps on empty targets:
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --target-max-pack-bytes 536870912 \
   --protocol v2 \
   -v \
@@ -68,7 +88,7 @@ go run ./cmd/git-sync sync \
 Add `--measure-memory` to any command to sample elapsed time and Go heap usage:
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --measure-memory \
   --json \
   <source-url> \
@@ -82,7 +102,7 @@ go run ./cmd/git-sync sync \
 Sync specific branches:
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --branch main,release \
   --source-token "$GITSYNC_SOURCE_TOKEN" \
   --target-token "$GITSYNC_TARGET_TOKEN" \
@@ -93,7 +113,7 @@ go run ./cmd/git-sync sync \
 Map a source branch to a different target branch:
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --map main:stable \
   <source-url> \
   <target-url>
@@ -102,7 +122,7 @@ go run ./cmd/git-sync sync \
 Mirror tags and prune managed target refs that disappeared from source:
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --tags \
   --prune \
   <source-url> \
@@ -112,7 +132,7 @@ go run ./cmd/git-sync sync \
 Force source-side protocol v2:
 
 ```bash
-go run ./cmd/git-sync sync \
+git-sync sync \
   --protocol v2 \
   <source-url> \
   <target-url>
