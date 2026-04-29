@@ -1,0 +1,26 @@
+For --prune add negative tests proving --branch main --prune and --map main:stable --prune preserve unrelated target branches
+
+---
+
+Register an empty config plugin https://github.com/go-git/go-git/blob/main/x/plugin/config/empty.go via Register(ConfigLoader(), func() ConfigSource {
+        return config.NewEmpty()
+    })
+
+TO remove settings such as gpgsign from both global and system levels.
+
+---
+
+commit staged changes
+
+---
+
+There is no full sync integration test for branch prune in normal sync mode. Existing sync integration covers stale tags: internal/syncer/integration_test.go:1533. Branch prune is
+     covered at planner level, not end to end.
+
+---
+
+What if during the sync target receives a new tag, would that tag also be removed? Let's create a test to confirm that behaviour.
+
+---
+
+What about when --tags was used, however the tag was created in the target after the sync process started?
