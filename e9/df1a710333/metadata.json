@@ -3,7 +3,7 @@
   "checkpoint_id": "e9df1a710333",
   "strategy": "manual-commit",
   "branch": "soph/packagable",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "pkg/gitsync/unstable/client.go"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/e9/df1a710333/0/transcript.jsonl",
       "content_hash": "/e9/df1a710333/0/transcript_hash.txt",
       "prompt": "/e9/df1a710333/0/prompt.txt"
+    },
+    {
+      "metadata": "/e9/df1a710333/1/metadata.json",
+      "transcript": "/e9/df1a710333/1/transcript.jsonl",
+      "content_hash": "/e9/df1a710333/1/transcript_hash.txt",
+      "prompt": "/e9/df1a710333/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 2306095,
+    "input_tokens": 17970728,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 2093440,
-    "output_tokens": 3642,
-    "api_call_count": 17
+    "cache_read_tokens": 14762240,
+    "output_tokens": 64276,
+    "api_call_count": 164
   }
 }

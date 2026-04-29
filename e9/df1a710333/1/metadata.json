@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "e9df1a710333",
+  "session_id": "019d7e36-577c-7d90-9f1c-a447ba2254b4",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:05.263894Z",
+  "branch": "soph/packagable",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Codex",
+  "model": "",
+  "turn_id": "9b7fb5b1a78d",
+  "token_usage": {
+    "input_tokens": 15664633,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12668800,
+    "output_tokens": 60634,
+    "api_call_count": 147
+  },
+  "session_metrics": {
+    "turn_count": 1
+  }
+}
