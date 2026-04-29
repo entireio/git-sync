@@ -1,0 +1,23 @@
+{
+  "operation_mode": "replicate",
+  "relay": true,
+  "relay_reason": "empty-target-managed-refs",
+  "pushed": 61,
+  "deleted": 0,
+  "blocked": 0
+}
+
+---
+
+git-sync on  soph/replicate [⇡] via 🐹 v1.25.2 took 1m4s
+❯ go run ./cmd/git-sync replicate --measure-memory --stats --json $SRC $TGT | jq .
+error: push target refs: decode report-status: invalid pkt-len found: short pkt-line 4
+exit status 1
+
+---
+
+no wait, this was a new run with a new empty repo and the linux repo
+
+---
+
+you can look at those logs
