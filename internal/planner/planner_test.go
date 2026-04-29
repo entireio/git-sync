@@ -426,6 +426,165 @@ func TestBuildPlansDelete(t *testing.T) {
 	}
 }
 
+// TestBuildPlansPrunePreservesUnrelatedBranchesUnderFilter is a regression
+// guard for the prune-scoping rule in planner.go: --prune deletes orphan
+// target branches only when the user has not narrowed the source ref set
+// with --branch or --map. With either filter present, branches that exist
+// only on the target are out of scope and must be preserved.
+func TestBuildPlansPrunePreservesUnrelatedBranchesUnderFilter(t *testing.T) {
+	t.Parallel()
+
+	mainHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	releaseHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	mainRef := plumbing.NewBranchReferenceName("main")
+	stableRef := plumbing.NewBranchReferenceName("stable")
+	releaseRef := plumbing.NewBranchReferenceName("release")
+
+	sourceRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		mainRef: mainHash,
+	}
+
+	tests := []struct {
+		name         string
+		cfg          PlanConfig
+		targetRefs   map[plumbing.ReferenceName]plumbing.Hash
+		wantManaged  plumbing.ReferenceName
+		preservedRef plumbing.ReferenceName
+	}{
+		{
+			name: "branch filter --branch main --prune",
+			cfg: PlanConfig{
+				Branches: []string{"main"},
+				Prune:    true,
+			},
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{
+				mainRef:    mainHash,
+				releaseRef: releaseHash,
+			},
+			wantManaged:  mainRef,
+			preservedRef: releaseRef,
+		},
+		{
+			name: "rename mapping --map main:stable --prune",
+			cfg: PlanConfig{
+				Mappings: []RefMapping{{Source: "main", Target: "stable"}},
+				Prune:    true,
+			},
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{
+				stableRef:  mainHash,
+				releaseRef: releaseHash,
+			},
+			wantManaged:  stableRef,
+			preservedRef: releaseRef,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			desired, managed, err := BuildDesiredRefs(sourceRefs, tt.cfg)
+			if err != nil {
+				t.Fatalf("BuildDesiredRefs: %v", err)
+			}
+
+			plans, err := BuildPlans(nil, desired, tt.targetRefs, managed, tt.cfg)
+			if err != nil {
+				t.Fatalf("BuildPlans: %v", err)
+			}
+
+			for _, p := range plans {
+				if p.TargetRef == tt.preservedRef {
+					t.Fatalf("unrelated target branch %s emitted plan %+v; --prune must preserve it under filtered scope", tt.preservedRef, p)
+				}
+				if p.Action == ActionDelete && p.TargetRef != tt.preservedRef {
+					t.Fatalf("unexpected delete plan for %s: %+v", p.TargetRef, p)
+				}
+			}
+
+			if _, ok := managed[tt.preservedRef]; ok {
+				t.Fatalf("managed map leaked unrelated target ref %s under filtered prune scope", tt.preservedRef)
+			}
+			if _, ok := managed[tt.wantManaged]; !ok {
+				t.Fatalf("expected managed scope to include %s, got %+v", tt.wantManaged, managed)
+			}
+		})
+	}
+}
+
+// TestBuildReplicationPlansPrunePreservesUnrelatedBranchesUnderFilter is the
+// replicate-mode counterpart to the sync test above. The prune-scoping rule
+// must hold whether the operation is sync or replicate.
+func TestBuildReplicationPlansPrunePreservesUnrelatedBranchesUnderFilter(t *testing.T) {
+	t.Parallel()
+
+	mainHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	releaseHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	mainRef := plumbing.NewBranchReferenceName("main")
+	stableRef := plumbing.NewBranchReferenceName("stable")
+	releaseRef := plumbing.NewBranchReferenceName("release")
+
+	sourceRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		mainRef: mainHash,
+	}
+
+	tests := []struct {
+		name         string
+		cfg          PlanConfig
+		targetRefs   map[plumbing.ReferenceName]plumbing.Hash
+		preservedRef plumbing.ReferenceName
+	}{
+		{
+			name: "branch filter --branch main --prune",
+			cfg: PlanConfig{
+				Branches: []string{"main"},
+				Prune:    true,
+			},
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{
+				mainRef:    mainHash,
+				releaseRef: releaseHash,
+			},
+			preservedRef: releaseRef,
+		},
+		{
+			name: "rename mapping --map main:stable --prune",
+			cfg: PlanConfig{
+				Mappings: []RefMapping{{Source: "main", Target: "stable"}},
+				Prune:    true,
+			},
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{
+				stableRef:  mainHash,
+				releaseRef: releaseHash,
+			},
+			preservedRef: releaseRef,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			desired, managed, err := BuildDesiredRefs(sourceRefs, tt.cfg)
+			if err != nil {
+				t.Fatalf("BuildDesiredRefs: %v", err)
+			}
+
+			plans, err := BuildReplicationPlans(desired, tt.targetRefs, managed, tt.cfg)
+			if err != nil {
+				t.Fatalf("BuildReplicationPlans: %v", err)
+			}
+
+			for _, p := range plans {
+				if p.TargetRef == tt.preservedRef {
+					t.Fatalf("unrelated target branch %s emitted plan %+v; --prune must preserve it under filtered scope", tt.preservedRef, p)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildPlansTagBlock(t *testing.T) {
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {

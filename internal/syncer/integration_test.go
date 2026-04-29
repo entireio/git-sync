@@ -30,6 +30,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/revlist"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/go-git/go-git/v6/x/plugin"
+	"github.com/go-git/go-git/v6/x/plugin/config"
 )
 
 const (
@@ -1567,6 +1569,159 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// TestRun_IntegrationPrunePreservesUnrelatedTargetBranchUnderFilter is the
+// end-to-end counterpart to TestBuildPlansPrunePreservesUnrelatedBranchesUnderFilter
+// in internal/planner. Once a user filters source refs with --branch or --map,
+// --prune must only prune within that scope; branches that exist solely on the
+// target are out of scope and must survive.
+func TestRun_IntegrationPrunePreservesUnrelatedTargetBranchUnderFilter(t *testing.T) {
+	const orphanBranch = "release"
+
+	tests := []struct {
+		name     string
+		cfg      func(sourceURL, targetURL string) Config
+		wantRefs []plumbing.ReferenceName
+	}{
+		{
+			name: "branch filter --branch main --prune",
+			cfg: func(sourceURL, targetURL string) Config {
+				return Config{
+					Source:   Endpoint{URL: sourceURL},
+					Target:   Endpoint{URL: targetURL},
+					Branches: []string{testBranch},
+					Prune:    true,
+				}
+			},
+			wantRefs: []plumbing.ReferenceName{
+				plumbing.NewBranchReferenceName(testBranch),
+				plumbing.NewBranchReferenceName(orphanBranch),
+			},
+		},
+		{
+			name: "rename mapping --map main:stable --prune",
+			cfg: func(sourceURL, targetURL string) Config {
+				return Config{
+					Source:   Endpoint{URL: sourceURL},
+					Target:   Endpoint{URL: targetURL},
+					Mappings: []RefMapping{{Source: testBranch, Target: "stable"}},
+					Prune:    true,
+				}
+			},
+			wantRefs: []plumbing.ReferenceName{
+				plumbing.NewBranchReferenceName("stable"),
+				plumbing.NewBranchReferenceName(orphanBranch),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceRepo, sourceFS := newSourceRepo(t)
+			makeCommits(t, sourceRepo, sourceFS, 2)
+			targetRepo, _ := newSourceRepo(t)
+
+			sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+			targetServer := newSmartHTTPRepoServer(t, targetRepo)
+			targetServer.receivePackThinCap = true
+			defer sourceServer.Close()
+			defer targetServer.Close()
+
+			if _, err := Run(context.Background(), Config{
+				Source: Endpoint{URL: sourceServer.RepoURL()},
+				Target: Endpoint{URL: targetServer.RepoURL()},
+			}); err != nil {
+				t.Fatalf("seed sync: %v", err)
+			}
+
+			targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+			if err != nil {
+				t.Fatalf("target head after seed: %v", err)
+			}
+			orphanRef := plumbing.NewBranchReferenceName(orphanBranch)
+			if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanRef, targetHead.Hash())); err != nil {
+				t.Fatalf("seed orphan branch: %v", err)
+			}
+
+			if _, err := Run(context.Background(), tt.cfg(sourceServer.RepoURL(), targetServer.RepoURL())); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			for _, ref := range tt.wantRefs {
+				if _, err := targetRepo.Reference(ref, true); err != nil {
+					t.Fatalf("expected ref %s on target after filtered prune, got err=%v", ref, err)
+				}
+			}
+
+			orphanAfter, err := targetRepo.Reference(orphanRef, true)
+			if err != nil {
+				t.Fatalf("orphan branch missing after filtered prune: %v", err)
+			}
+			if orphanAfter.Hash() != targetHead.Hash() {
+				t.Fatalf("orphan branch hash changed: pre=%s post=%s", targetHead.Hash(), orphanAfter.Hash())
+			}
+		})
+	}
+}
+
+func TestRun_IntegrationTagsPruneDeletesTargetLocalTag(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, targetFS := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	sourceTag := plumbing.NewTagReferenceName("v1")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(sourceTag, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+
+	makeCommits(t, targetRepo, targetFS, 1)
+	targetOnlyHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target-only head: %v", err)
+	}
+	targetLocalTag := plumbing.NewTagReferenceName("prod-rollback")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(targetLocalTag, targetOnlyHead.Hash())); err != nil {
+		t.Fatalf("set target-local tag: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(testBranch), sourceHead.Hash())); err != nil {
+		t.Fatalf("reset target branch after target-local tag setup: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		IncludeTags: true,
+		Prune:       true,
+	})
+	if err != nil {
+		t.Fatalf("tag prune sync failed: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(sourceTag, true); err != nil {
+		t.Fatalf("expected source tag on target: %v", err)
+	}
+	if _, err := targetRepo.Reference(targetLocalTag, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected target-local tag to be pruned, got %v", err)
+	}
+}
+
 func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
 	// Replicate must tolerate targets that advertise no-thin. Source upload-pack
 	// never receives a thin-pack request from us (see gitproto/fetch.go), so
@@ -2722,4 +2877,16 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 			return req, fmt.Errorf("unexpected packet type %v", kind)
 		}
 	}
+}
+
+func TestMain(m *testing.M) {
+	// Ensures empty config files for system/global so that test execution
+	// is not affected by environmental settings (e.g. commit.gpgSign=true).
+	if err := plugin.Register(plugin.ConfigLoader(), func() plugin.ConfigSource {
+		return config.NewEmpty()
+	}); err != nil {
+		panic("register go-git empty config loader: " + err.Error())
+	}
+
+	m.Run()
 }
