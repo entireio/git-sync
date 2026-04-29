@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,51 @@ func TestNewConn(t *testing.T) {
 	}
 	if conn.HTTP == nil {
 		t.Error("HTTP client should not be nil")
+	}
+}
+
+func TestNewConnStripsTrailingEndpointSlash(t *testing.T) {
+	ep, err := url.Parse("https://example.com/repo.git///")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	var gotURLs []string
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		gotURLs = append(gotURLs, req.URL.String())
+		res := &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+		}
+		if req.Method == http.MethodGet {
+			res.Header.Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			res.Body = io.NopCloser(strings.NewReader("0000"))
+		}
+		return res, nil
+	}))
+
+	if got, want := conn.Endpoint.Path, "/repo.git"; got != want {
+		t.Fatalf("Endpoint.Path = %q, want %q", got, want)
+	}
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack test"); err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+
+	wantURLs := []string{
+		"https://example.com/repo.git/info/refs?service=git-upload-pack",
+		"https://example.com/repo.git/git-upload-pack",
+	}
+	if len(gotURLs) != len(wantURLs) {
+		t.Fatalf("got %d request URLs, want %d: %v", len(gotURLs), len(wantURLs), gotURLs)
+	}
+	for i := range wantURLs {
+		if gotURLs[i] != wantURLs[i] {
+			t.Fatalf("request URL %d = %q, want %q", i, gotURLs[i], wantURLs[i])
+		}
 	}
 }
 
@@ -126,6 +172,75 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRequestInfoRefsRequiresAdvertisementContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		wantErr     bool
+	}{
+		{
+			name:    "missing content type",
+			wantErr: true,
+		},
+		{
+			name:        "wrong content type",
+			contentType: "text/plain",
+			wantErr:     true,
+		},
+		{
+			name:        "wrong service advertisement",
+			contentType: "application/x-git-receive-pack-advertisement",
+			wantErr:     true,
+		},
+		{
+			name:        "expected content type",
+			contentType: "application/x-git-upload-pack-advertisement",
+		},
+		{
+			name:        "expected content type with parameter",
+			contentType: "application/x-git-upload-pack-advertisement; charset=utf-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep, err := transport.ParseURL("https://example.com/repo.git")
+			if err != nil {
+				t.Fatalf("parse endpoint: %v", err)
+			}
+			conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				res := &http.Response{
+					StatusCode: http.StatusOK,
+					Request:    req,
+					Body:       io.NopCloser(strings.NewReader("0000")),
+					Header:     make(http.Header),
+				}
+				if tt.contentType != "" {
+					res.Header.Set("Content-Type", tt.contentType)
+				}
+				return res, nil
+			}))
+
+			body, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, "")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected content type error")
+				}
+				if !strings.Contains(err.Error(), "unexpected info/refs content-type") {
+					t.Fatalf("error = %v, want content type error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RequestInfoRefs: %v", err)
+			}
+			if got, want := string(body), "0000"; got != want {
+				t.Fatalf("body = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

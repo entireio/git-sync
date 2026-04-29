@@ -180,6 +180,9 @@ func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceN
 		if len(fields) < 2 {
 			return nil, "", fmt.Errorf("malformed ls-refs response line %q", payload)
 		}
+		if fields[0] == "unborn" {
+			continue
+		}
 		hash := plumbing.NewHash(fields[0])
 		name := plumbing.ReferenceName(fields[1])
 		if name == plumbing.HEAD {

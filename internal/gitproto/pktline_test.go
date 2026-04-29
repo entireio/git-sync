@@ -5,7 +5,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strings"
 	"testing"
+
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 )
 
 func TestPacketReaderHandlesSpecialPackets(t *testing.T) {
@@ -41,6 +44,21 @@ func TestPacketReaderHandlesSpecialPackets(t *testing.T) {
 	}
 	if kind != PacketData || string(payload) != "a\n" {
 		t.Fatalf("unexpected data: kind=%v payload=%q", kind, payload)
+	}
+}
+
+func TestPacketReaderHandlesEmptyDataPacket(t *testing.T) {
+	reader := NewPacketReader(bytes.NewBufferString("0004"))
+
+	kind, payload, err := reader.ReadPacket()
+	if err != nil {
+		t.Fatalf("read empty data packet: %v", err)
+	}
+	if kind != PacketData {
+		t.Fatalf("kind = %v, want PacketData", kind)
+	}
+	if len(payload) != 0 {
+		t.Fatalf("payload length = %d, want 0", len(payload))
 	}
 }
 
@@ -83,6 +101,14 @@ func TestPacketReaderMalformedLength(t *testing.T) {
 			name:  "uppercase non-hex",
 			input: "ZZZZ",
 		},
+		{
+			name:  "length exceeds pkt-line max",
+			input: "fff1",
+		},
+		{
+			name:  "largest 16-bit length exceeds pkt-line max",
+			input: "ffff",
+		},
 	}
 
 	for _, tt := range tests {
@@ -92,7 +118,25 @@ func TestPacketReaderMalformedLength(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error for malformed hex length, got nil")
 			}
+			if !errors.Is(err, pktline.ErrInvalidPktLen) {
+				t.Fatalf("error = %v, want %v", err, pktline.ErrInvalidPktLen)
+			}
 		})
+	}
+}
+
+func TestPacketReaderAcceptsMaxLengthPacket(t *testing.T) {
+	reader := NewPacketReader(bytes.NewBufferString("fff0" + strings.Repeat("a", pktline.MaxPayloadSize)))
+
+	kind, payload, err := reader.ReadPacket()
+	if err != nil {
+		t.Fatalf("read max length packet: %v", err)
+	}
+	if kind != PacketData {
+		t.Fatalf("kind = %v, want PacketData", kind)
+	}
+	if len(payload) != pktline.MaxPayloadSize {
+		t.Fatalf("payload length = %d, want %d", len(payload), pktline.MaxPayloadSize)
 	}
 }
 

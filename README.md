@@ -101,7 +101,7 @@ See [docs/embedding.md](docs/embedding.md) for worker-oriented guidance.
 - Optional machine-readable output with `--json`
 - Optional source-side Git protocol v2 for `ls-refs` and `fetch`
 
-## Limits
+## Limitations
 
 - Push still uses the existing v1-style `receive-pack` path.
 - Protocol v2 support currently covers source discovery and source fetch only.

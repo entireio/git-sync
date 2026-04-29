@@ -61,8 +61,11 @@ func (pr *PacketReader) ReadPacket() (PacketType, []byte, error) {
 	if err != nil {
 		return PacketData, nil, err
 	}
-	if n <= 4 {
+	if n < 4 || n > pktline.MaxSize {
 		return PacketData, nil, pktline.ErrInvalidPktLen
+	}
+	if n == 4 {
+		return PacketData, pr.buf[:0], nil
 	}
 
 	payloadLen := n - 4

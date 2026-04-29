@@ -6,8 +6,10 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 )
@@ -75,12 +77,21 @@ func NewConnWithHTTPClient(ep *url.URL, label string, auth AuthMethod, httpClien
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: http.DefaultTransport}
 	}
+	normalizeEndpointPath(ep)
 	return &Conn{
 		Label:    label,
 		Endpoint: ep,
 		HTTP:     httpClient,
 		Auth:     auth,
 	}
+}
+
+func normalizeEndpointPath(ep *url.URL) {
+	if ep == nil {
+		return
+	}
+	ep.Path = strings.TrimRight(ep.Path, "/")
+	ep.RawPath = strings.TrimRight(ep.RawPath, "/")
 }
 
 // NewHTTPTransport creates an http.Transport with optional TLS skip.
@@ -121,6 +132,17 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service string, gitProtoco
 	defer res.Body.Close()
 	if err := httpError(res); err != nil {
 		return nil, err
+	}
+	wantContentType := fmt.Sprintf("application/x-%s-advertisement", service)
+	gotContentType := res.Header.Get("Content-Type")
+	gotMediaType := gotContentType
+	if gotContentType != "" {
+		if mediaType, _, err := mime.ParseMediaType(gotContentType); err == nil {
+			gotMediaType = mediaType
+		}
+	}
+	if gotMediaType != wantContentType {
+		return nil, fmt.Errorf("unexpected info/refs content-type %q, want %q", gotContentType, wantContentType)
 	}
 	if conn.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
 		final := res.Request.URL
