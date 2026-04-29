@@ -32,7 +32,3 @@ commit changes
 ---
 
 Add an integration test that confirm the handling and recovery from push failures when acting in incremental manner.
-
----
-
-commit changes
