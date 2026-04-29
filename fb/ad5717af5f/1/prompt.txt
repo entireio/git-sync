@@ -1,0 +1,13 @@
+Review commit 76823bf ("Tighten bootstrap checkpoint boundary search") in /Users/soph/Work/entire/devenv/git-sync. Focus on checkpoint planning correctness, whether the new bounded search could skip valid larger checkpoints or regress probe behavior badly, and whether the tests actually exercise the intended boundary-search behavior. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit aca59be ("Move probe and fetch shaping into session helpers") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new session-owned buildDesiredRefs/buildHaveRefMap/newProbeResult/newFetchResult helpers changed public entrypoint semantics, especially error messages and result fields, or introduced accidental coupling. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review the current worktree additions to pkg/gitsync docs/examples. Focus on whether the package docs and example accurately describe the current public API without overstating guarantees, and whether the example is a good worker-oriented usage sketch. Findings only, ordered by severity.
+
+---
+
+Review the current docs/embedding.md plus linked README/architecture changes. Focus on whether the embedding guidance accurately reflects the current stable vs unstable API split, whether the worker guidance is practical, and whether any claims overstate the current code. Findings only, ordered by severity.
