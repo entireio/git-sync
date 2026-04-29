@@ -1,9 +1,11 @@
 {
   "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
   "checkpoint_id": "27633b8ca595",
+  "session_id": "019d7d4c-fef7-7d21-908c-d8850b805a6d",
   "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:38.49738Z",
   "branch": "soph/rewrite",
-  "checkpoints_count": 2,
+  "checkpoints_count": 1,
   "files_touched": [
     "internal/auth/auth.go",
     "internal/auth/entiredb.go",
@@ -31,25 +33,29 @@
     "internal/syncer/syncer.go",
     "internal/syncer/syncer_test.go"
   ],
-  "sessions": [
-    {
-      "metadata": "/27/633b8ca595/0/metadata.json",
-      "transcript": "/27/633b8ca595/0/transcript.jsonl",
-      "content_hash": "/27/633b8ca595/0/transcript_hash.txt",
-      "prompt": "/27/633b8ca595/0/prompt.txt"
-    },
-    {
-      "metadata": "/27/633b8ca595/1/metadata.json",
-      "transcript": "/27/633b8ca595/1/transcript.jsonl",
-      "content_hash": "/27/633b8ca595/1/transcript_hash.txt",
-      "prompt": "/27/633b8ca595/1/prompt.txt"
-    }
-  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "706f59611e4e",
   "token_usage": {
-    "input_tokens": 126233865,
+    "input_tokens": 759060,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 115507840,
-    "output_tokens": 450645,
-    "api_call_count": 1027
+    "cache_read_tokens": 697344,
+    "output_tokens": 12079,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-11T18:47:15.027056Z",
+    "agent_lines": 0,
+    "agent_removed": 260,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 3699,
+    "total_committed": 884,
+    "total_lines_changed": 3959,
+    "agent_percentage": 6.567314978529931,
+    "metric_version": 2
   }
 }
