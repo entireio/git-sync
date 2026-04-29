@@ -359,7 +359,7 @@ func skipV2Acknowledgments(reader *PacketReader) (bool, error) {
 			return false, errors.New("protocol v2 fetch response ended without packfile after acknowledgments")
 		case PacketDelim:
 			if !ready {
-				return false, errors.New("expected no other sections to be sent after no 'ready'")
+				return false, errors.New("unexpected delimiter in acknowledgments section without 'ready'")
 			}
 			return true, nil
 		case PacketData:
