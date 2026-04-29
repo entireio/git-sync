@@ -99,7 +99,7 @@ type TargetFeatures struct {
 }
 ```
 
-The load-bearing capability for relay is **`no-thin`**. When the target advertises it, the relay paths can stream the source's pack directly without the target trying to reconstruct deltas against existing target objects. `git-sync` never asks the source for the `thin-pack` capability, so the source pack is always self-contained, but the target still needs to opt into accepting non-thin packs.
+`git-sync` never requests `thin-pack` on the source side, so the source pack is always self-contained. That makes the relayed pack safe to push to a target regardless of its `no-thin` advertisement. The relay paths still differ on what they do when the target advertises `no-thin`: see "Why `no-thin` matters" under Target Push.
 
 `DeleteRefs` gates `--prune` and explicit deletes. `ReportStatus` is required to learn which ref updates the target accepted. `OFSDelta` affects pack encoding compatibility. `Sideband` / `Sideband64k` allow the target to multiplex its own response.
 
@@ -233,12 +233,13 @@ Once the stream switches to pack mode, subsequent reads bypass pkt-line framing 
 
 ### Why `no-thin` matters
 
-A "thin pack" is one that contains delta objects whose base is not in the pack itself. The receiver is expected to resolve those bases against existing target objects. Thin packs are smaller on the wire but require the receiver to reach into the existing object database during indexing.
+A "thin pack" is one that contains delta objects whose base is not in the pack itself. The receiver is expected to resolve those bases against existing target objects. Thin packs are smaller on the wire but require the receiver to reach into the existing object database during indexing. When a `receive-pack` server advertises `no-thin`, it is signalling that it does not support thin packs — the client must send a self-contained pack.
 
-For relay, this is incompatible: the target must accept the source pack as-is without trying to resolve external bases. `git-sync` ensures this by:
+`git-sync` always sends self-contained packs because it never requests the `thin-pack` capability on `upload-pack` (see the comment in `internal/gitproto/fetch.go`). That means the relayed pack is safe for both kinds of target. The relay paths still make different choices given the target's advertisement:
 
-1. Never requesting the `thin-pack` capability on `upload-pack`. The source therefore produces a self-contained pack.
-2. Refusing to use the relay path unless the target advertises `no-thin` on `receive-pack`. That's the target's signal that it will accept and verify a non-thin pack.
+- **Replicate** explicitly tolerates `no-thin` and proceeds with relay. The comment in `internal/planner/relay.go` documents the reasoning: source never sends thin-pack, so the relayed pack is self-contained and safe.
+- **Incremental relay** inside `sync` is conservative: it skips `no-thin` targets and falls back to the materialized path. This is a safety-margin choice; it could in principle be relaxed using the same argument as replicate.
+- **Bootstrap** does not consult `no-thin` — empty-target relay is allowed regardless.
 
 ### report-status
 
@@ -344,7 +345,7 @@ Streaming RPC bodies (`PostRPCStreamBody`) bypass these caps because the consume
 
 - **v2 negotiation failed**: source returned a v1 advertisement when `--protocol v2` was forced. `auto` falls back; `v2` errors out. Causes: older server, intermediate proxy stripping the `Git-Protocol` header.
 - **Target rejected push (body too large)**: relay produced a pack larger than the target's request body limit. Solutions: lower `--target-max-pack-bytes` for batched bootstrap, or rerun on a target with a higher limit. Detected by `isTargetBodyLimitError` in `internal/strategy/bootstrap/bootstrap.go`.
-- **Target does not advertise `no-thin`**: relay paths refuse to run; `sync` falls back to the materialized path, `replicate` fails. See [replicate.md](replicate.md).
+- **Target advertises `no-thin`**: the incremental relay path inside `sync` skips it and falls back to the materialized path. `replicate` proceeds anyway. See [incremental-relay.md](incremental-relay.md) and [replicate.md](replicate.md).
 - **Redirect chain mismatch**: the GET redirects to host X, but a subsequent RPC POST gets a different redirect or a 404 because the server expected sticky sessions. Resolution: set `FollowInfoRefsRedirect=true` so RPC POSTs go directly to the post-redirect host.
 - **Auth 401 / 403**: 401 generally indicates missing or wrong credentials (will retry with credential helper if configured); 403 indicates the credentials were accepted but lack permission for the requested action.
 
@@ -354,4 +355,4 @@ Streaming RPC bodies (`PostRPCStreamBody`) bypass these caps because the consume
 - [bootstrap.md](bootstrap.md) — how the relay primitive composes into empty-target bootstrap
 - [bootstrap-batching.md](bootstrap-batching.md) — checkpoint planning, PACK header pre-check, target-rejection retry
 - [incremental-relay.md](incremental-relay.md) — narrow relay fast path inside `sync`
-- [replicate.md](replicate.md) — relay-only overwrite mode and the `no-thin` requirement
+- [replicate.md](replicate.md) — relay-only overwrite mode

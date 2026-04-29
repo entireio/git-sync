@@ -72,9 +72,9 @@ The current product modes are:
   - source-authoritative overwrite planning
   - relay-only execution
   - no materialized fallback
-  - works against targets that advertise `no-thin` (the relayed pack is
-    always self-contained because our upload-pack client does not request
-    the `thin-pack` capability)
+  - works against targets regardless of `no-thin` advertisement: the
+    relayed pack is always self-contained because our upload-pack client
+    does not request the `thin-pack` capability
 
 The current transfer modes are:
 

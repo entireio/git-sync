@@ -18,12 +18,14 @@ For when to use it (and when not), see [docs/architecture.md](docs/architecture.
 
 ## Commands
 
-The command surface is:
+The main commands are:
 
 - `git-sync sync`: mirror source refs into the target
 - `git-sync replicate`: overwrite target refs to match source via relay, and fail rather than materialize locally
 
 `sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `git-sync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
+
+Additional commands (`bootstrap`, `probe`, `fetch`) and advanced flags are available through `git-sync --help` and the [unstable library surface](docs/embedding.md). They are not part of the recommended public surface.
 
 ## Library API
 

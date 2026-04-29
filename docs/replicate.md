@@ -10,7 +10,7 @@ It exists for the case where the operator wants the target to look exactly like 
 
 - fast-forward checks by default
 - `--force` allows non-fast-forward updates
-- if relay is not safe (force, prune, tag retarget, or target without `no-thin`), `sync` falls back to a materialized path that decodes objects locally and re-encodes a push pack
+- when relay is not safe, `sync` falls back to a materialized path that decodes objects locally and re-encodes a push pack
 
 `replicate` is an overwrite operation:
 
@@ -22,12 +22,9 @@ This is intentional. The point of `replicate` is "make target match source via s
 
 ## Eligibility
 
-`replicate` requires the same relay-eligibility conditions as the incremental relay path inside `sync`:
+`replicate` requires that the source pack can be streamed directly into target `receive-pack` without local object decoding. Unlike the incremental relay path inside `sync`, `replicate` explicitly tolerates targets that advertise `no-thin`: the source pack is always self-contained because `git-sync` never requests `thin-pack` on `upload-pack`, so the relayed pack is safe regardless of `no-thin` advertisement. See [protocol.md](protocol.md#why-no-thin-matters) for the framing detail.
 
-- target advertises `no-thin` on `receive-pack`. The relayed pack must be self-contained because git-sync's source fetch never requests the `thin-pack` capability — see [protocol.md](protocol.md) for the framing detail.
-- the source pack can be streamed directly into target `receive-pack` without local object decoding.
-
-If those conditions are not met, `replicate` aborts before any push.
+If a relay-safe path is not available against the target (for example, target capabilities cannot be discovered), `replicate` aborts before any push.
 
 ## Comparison with `sync --force`
 
@@ -36,7 +33,7 @@ If those conditions are not met, `replicate` aborts before any push.
 - `sync --force` allows non-fast-forward updates and tag retargeting. It still uses whatever path `sync` chooses, including the materialized fallback.
 - `replicate` has the same overwrite intent but pins execution to a relay-only path and refuses to materialize.
 
-If you are running on a target where relay is not available (no `no-thin`, or the protocol shape blocks streaming), `sync --force` will succeed via materialization where `replicate` will fail. That is a feature: it forces the operator to choose between "I want overwrites but I do not want local materialization" (`replicate`) and "I want overwrites and I am fine with local materialization" (`sync --force`).
+If you are running on a target where relay is not available (for example, the protocol shape blocks streaming), `sync --force` will succeed via materialization where `replicate` will fail. That is a feature: it forces the operator to choose between "I want overwrites but I do not want local materialization" (`replicate`) and "I want overwrites and I am fine with local materialization" (`sync --force`).
 
 ## When to use `replicate`
 
@@ -44,11 +41,9 @@ Strong fit:
 
 - the operational contract is "target mirrors source," and any divergence on the target is by definition wrong
 - the source repository is large enough that local materialization on the runner is undesirable
-- the target advertises `no-thin` (most modern Git hosting endpoints and `receive-pack` configurations do)
 
 Weaker fit:
 
-- targets that don't advertise `no-thin`
 - workflows that need fast-forward safety on managed refs
 
 ## Planning

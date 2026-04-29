@@ -12,9 +12,9 @@ The incremental relay path is selected only when **all** of the following hold:
 - no `--prune`
 - no managed-ref deletes
 - no tag retargeting (creating a new tag at a new tip is allowed; moving an existing tag is not)
-- target advertises `no-thin` on `receive-pack`
+- target does **not** advertise `no-thin` on `receive-pack`
 
-`no-thin` is the load-bearing capability. The relayed pack must be self-contained because git-sync's source fetch never requests the `thin-pack` capability, so the target can apply the pack directly without resolving deltas against existing target objects. See [protocol.md](protocol.md) for the framing details.
+The `no-thin` check is conservative: when a target advertises `no-thin`, it is signalling that it does not support thin packs. `git-sync`'s source fetch never requests the `thin-pack` capability, so the relayed pack is always self-contained and would in fact be safe for a `no-thin` target — but the incremental relay planner skips this case as a safety margin and falls back to the materialized path instead. (`replicate` is less conservative and tolerates `no-thin` targets explicitly; see [replicate.md](replicate.md).) See [protocol.md](protocol.md#why-no-thin-matters) for the framing details.
 
 ## What the fast path covers
 
@@ -33,7 +33,7 @@ The materialized path (decode source objects into the local store, plan the push
 - `--force` and any non-fast-forward update
 - `--prune` and managed-ref deletes
 - tag retargeting (an existing tag pointing at a new object)
-- runs against targets that don't advertise `no-thin`
+- runs against targets that advertise `no-thin`
 
 The materialized path is bounded by `--materialized-max-objects` as a safety guardrail. See [architecture.md](architecture.md#memory-assumptions) for the memory model.
 

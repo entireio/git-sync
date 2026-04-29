@@ -78,7 +78,7 @@ Good bug reports help us fix issues quickly. When reporting a bug, please includ
 
 ### Required Information
 
-1. **git-sync version** - run `git-sync version`
+1. **git-sync commit** - `git rev-parse HEAD` of the build you used (or release tag/version if applicable)
 2. **Operating system**
 3. **Go version** - run `go version`
 
@@ -123,7 +123,7 @@ mise run build
 mise run test
 ```
 
-> See [CLAUDE.md](CLAUDE.md) for detailed architecture and development reference.
+> See [docs/architecture.md](docs/architecture.md) for the architecture and package layout.
 
 ---
 
@@ -147,7 +147,7 @@ mise run test
 
 ## Code Style
 
-Follow standard Go idioms and conventions. For detailed guidance, see the **Go Code Style** section in [CLAUDE.md](CLAUDE.md).
+Follow standard Go idioms and conventions.
 
 ### Key Points
 
@@ -161,79 +161,22 @@ Follow standard Go idioms and conventions. For detailed guidance, see the **Go C
 
 ## Testing
 
-> See [CLAUDE.md](CLAUDE.md) for complete testing documentation.
+> See [docs/testing.md](docs/testing.md) for the full set of test suites and integration coverage.
 
 ```bash
-# Unit tests - always run before committing
+# Default suite - always run before committing
 mise run test
 
-# Integration tests
-mise run test:integration
-
-# Full CI suite
+# With race detection
 mise run test:ci
+
+# Optional end-to-end against the system git-http-backend
+mise run test:git-http-backend
+
+# Optional live linux bootstrap smokes
+mise run test:linux-smoke
+mise run test:linux-smoke:batched
 ```
-
-Integration tests use the `//go:build integration` build tag and are located in `cmd/entire/cli/integration_test/`.
-
----
-
-## Creating an Agent
-
-
-Entire supports two ways to create agents:
-
-### 1. Claude Code Agent Personas (Markdown)
-
-These are markdown files that define specialized behaviors for Claude Code (e.g., developer, reviewer, etc.).
-
-- **Location:** `.claude/agents/`
-- **Structure:**
-   ```markdown
-   ---
-   name: my-agent
-   description: What this agent does
-   model: opus
-   color: blue
-   ---
-
-   # Agent Name
-   You are a **[Role]** with expertise in [domain].
-
-   ## Core Principles
-   - Principle 1
-   - Principle 2
-
-   ## Process
-   1. Step 1
-   2. Step 2
-
-   ## Output Format
-   How to structure responses...
-   ```
-- **To invoke:** Create a matching command in `.claude/commands/` that spawns the agent via the Task tool.
-- **Examples:**
-   - `.claude/agents/dev.md` - TDD Developer
-   - `.claude/agents/reviewer.md` - Code Reviewer
-
-### 2. Coding Agent Integrations (Go)
-
-These are Go implementations that integrate Entire with different AI coding tools (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI, etc.) using the Agent abstraction layer.
-
-- **Location:** `cmd/entire/cli/agent/`
-- **Steps:**
-   1. Implement the `Agent` interface in `agent/agent.go`
-   2. Register your agent in the agent registry
-   3. Add setup and hook configuration as needed
-   4. Ensure session and checkpoint tracking is handled per the abstraction
-- **Reference:** See [CLAUDE.md](CLAUDE.md) for architecture and code examples.
-
----
-
-**Which should I use?**
-
-- Use a persona markdown agent if you want to create a new role or workflow for Claude Code.
-- Use a coding agent integration if you want to add support for a new AI coding tool or extend agent capabilities in the CLI.
 
 ---
 
@@ -334,8 +277,8 @@ Join the Entire community:
 ## Additional Resources
 
 - [README](README.md) - Setup and usage documentation
-- [CLAUDE.md](CLAUDE.md) - Architecture and development reference (Claude Code)
-- [AGENTS.md](AGENTS.md) - Architecture and development reference (Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI)
+- [docs/architecture.md](docs/architecture.md) - Architecture and package layout
+- [docs/testing.md](docs/testing.md) - Test suites and integration coverage
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
 - [Security Policy](SECURITY.md) - Reporting security vulnerabilities
 
