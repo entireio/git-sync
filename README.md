@@ -10,66 +10,32 @@ That keeps the target side incremental without fetching target objects into the 
 
 ## Why This Exists
 
-Git already has pieces of this problem, but not this exact tool shape.
+The usual ways to mirror Git data between remotes are awkward at exactly the layer operators tend to need: a local `git clone --mirror` followed by `git push --mirror` turns a remote-to-remote movement into a local storage and bandwidth problem; host-specific migration features aren't portable across providers; and shell scripts around `git fetch` and `git push` usually lack planning, explicit policy, and machine-readable output.
 
-What usually exists today:
+`git-sync` is meant to be the missing middle layer: a provider-agnostic, remote-to-remote primitive that streams packs directly source-to-target when possible, front-loads validation, exposes typed JSON output, and covers both empty-target bootstrap and incremental sync with one tool. It's the right fit when relay is common enough to be the normal case rather than an exceptional optimization, and when avoiding persistent local repo storage is itself an operational advantage.
 
-- a full local `git clone --mirror` followed by `git push --mirror`
-- host-specific import or migration features
-- CI jobs or shell scripts that glue fetch and push steps together
-- one-off migration tooling tied to a specific platform
+For when to use it (and when not), how it compares to local-clone services, and the operation-mode and transfer-mode model, see [docs/architecture.md](docs/architecture.md).
 
-What those approaches usually do not give you:
-
-- direct remote-to-remote relay behavior
-- a small standalone CLI with explicit sync semantics
-- front-loaded validation and planning
-- machine-readable output for automation
-- one tool that covers empty-target bootstrap, normal sync, and large-repo bootstrap fallback
-
-That is the gap `git-sync` is trying to fill.
-
-The main value is operational:
-
-- avoid requiring a full local mirror checkout just to move refs between remotes
-- make initial seeding of large repositories cheaper and more predictable
-- keep incremental sync behavior explicit and safe
-- give operators and automation a stable way to inspect, plan, execute, and benchmark the same workflows
-
-This is especially useful when:
-
-- the target is a new hosted Git service or internal Git endpoint
-- bootstrap size matters more than local developer ergonomics
-- you want a repeatable machine-oriented sync primitive rather than an ad hoc migration script
-- you need clearer control over mapping, pruning, force rules, and relay behavior than generic shell glue usually provides
-
-Compared to a service that keeps persistent local clones, `git-sync` is the better fit when:
-
-- relay is common enough that streaming source-to-target is the normal case
-- avoiding persistent local repo storage is an operational advantage
-- remote-to-remote efficiency matters more than full local Git generality
-
-If you need arbitrary complex reconciliation through one always-warm local full-state model, a local-clone service is still the more general tool.
+## Commands
 
 The command surface is:
 
 - `git-sync probe`: inspect a source remote, and optionally a target remote
-- `git-sync fetch`: exercise source-side fetch negotiation without pushing
-- `git-sync bootstrap`: seed an empty target with create-only relay behavior
 - `git-sync plan`: compute source-to-target ref actions without pushing, with `--mode sync|replicate`
 - `git-sync sync`: execute the planned changes against the target
 - `git-sync replicate`: execute source-authoritative relay-only replication against the target
-- `git-sync-bench`: run repeatable benchmark scenarios against fresh empty targets
+
+`sync` auto-selects the bootstrap relay path on empty targets, so the same command covers initial seeding and ongoing sync.
 
 ## Library API
 
 `git-sync` now has a two-tier Go API:
 
-- `gitsync`
+- `entire.io/entire/gitsync`
   - stable embedding surface for queue workers and other external callers
   - typed `Probe`, `Plan`, `Sync`, and `Replicate` requests/results
   - injected auth and HTTP client support
-- `unstable`
+- `entire.io/entire/gitsync/unstable`
   - explicitly non-stable surface for first-party tooling and advanced controls
   - includes `Bootstrap`, `Fetch`, batching and measurement knobs, and CLI-oriented execution options
 
@@ -122,7 +88,7 @@ go run ./cmd/git-sync sync \
   https://github.com/target-org/target-repo.git
 ```
 
-## Commands
+## Examples
 
 Plan a sync without pushing anything:
 
@@ -154,52 +120,10 @@ go run ./cmd/git-sync replicate \
 
 If `replicate` cannot use relay against the target, it fails and tells you to rerun with `sync`.
 
-Bootstrap an empty target without using the normal local object-store sync path:
+For very large initial migrations, add `--target-max-pack-bytes` to split the initial pack into multiple relay batches with temporary refs. `sync` auto-bootstraps on empty targets, so the same flag works without invoking a separate command:
 
 ```bash
-go run ./cmd/git-sync bootstrap \
-  --stats \
-  https://github.com/source-org/source-repo.git \
-  https://github.com/target-org/target-repo.git
-```
-
-Add `--max-pack-bytes` to abort bootstrap if the streamed source pack grows past a safety threshold:
-
-```bash
-go run ./cmd/git-sync bootstrap \
-  --max-pack-bytes 104857600 \
-  <source-url> \
-  <target-url>
-```
-
-Add `--target-max-pack-bytes` to split large branch bootstraps into multiple relay batches with temporary refs:
-
-```bash
-go run ./cmd/git-sync bootstrap \
-  --target-max-pack-bytes 1073741824 \
-  <source-url> \
-  <target-url>
-```
-
-Current batching scope is intentionally narrow:
-
-- protocol v2 only
-- branch refs are batched
-- optional create-only tags are pushed after branch batches complete
-- temporary refs under `refs/gitsync/bootstrap/heads/`
-- resume from existing temp refs is supported when they match a planned checkpoint
-
-This mode is intended as an advanced large-repo fallback, not the default bootstrap path. Use plain `bootstrap` first when a single streamed initial sync is acceptable.
-
-A practical starting point is:
-
-- `--target-max-pack-bytes 536870912` for a conservative `512 MiB` target-side batch size
-- `--target-max-pack-bytes 1073741824` when you want fewer, larger batches and the target has more headroom
-
-For example:
-
-```bash
-go run ./cmd/git-sync bootstrap \
+go run ./cmd/git-sync sync \
   --target-max-pack-bytes 536870912 \
   --protocol v2 \
   -v \
@@ -207,54 +131,19 @@ go run ./cmd/git-sync bootstrap \
   <target-url>
 ```
 
-Add `--measure-memory` to `bootstrap`, `sync`, `plan`, `probe`, or `fetch` to sample elapsed time and Go heap usage:
+Add `--measure-memory` to any command to sample elapsed time and Go heap usage:
 
 ```bash
-go run ./cmd/git-sync bootstrap \
+go run ./cmd/git-sync sync \
   --measure-memory \
   --json \
   <source-url> \
   <target-url>
 ```
 
-That is useful for one-off measurements on the same fixture or test repo.
-
-## Benchmarking
-
-For repeated benchmark runs, prefer the dedicated benchmark command instead of manually wrapping `git-sync` invocations:
-
-```bash
-go run ./cmd/git-sync-bench \
-  --scenario bootstrap \
-  --source-url /tmp/git-sync-bench/kubernetes.git \
-  --repeat 3 \
-  --target-max-pack-bytes 104857600 \
-  --stats \
-  --json
-```
-
-`git-sync-bench` creates a fresh bare target repository for each run, executes the selected scenario in-process, and reports:
-
-- per-run wall-clock time
-- per-run `syncer.Result`
-- aggregate min/avg/max wall time
-- aggregate internal elapsed and heap metrics from `--measure-memory`
-- relay modes observed across successful runs
-
-If `--source-url` is a local path, it is converted to `file://...` automatically. The current scenarios are:
-
-- `--scenario bootstrap`
-- `--scenario sync`
-
-For large-repo measurements, use a local bare mirror as the source so the benchmark reflects `git-sync` behavior rather than internet variance. See [docs/benchmarking.md](docs/benchmarking.md) for details.
-
 ## Sync Behavior
 
-When `sync` sees that all managed target refs are absent and the run is compatible with bootstrap semantics, it automatically uses the bootstrap relay path instead of the normal decode-and-repack sync path.
-
-`sync` also uses a narrow incremental relay path for fast-forward branch updates and tag creation when there is no prune/delete, no force, and the target does not advertise `no-thin`. This now includes multi-branch batches, branch-to-branch mappings, and create-only tags. Tag retargeting and other more complex updates still fall back to the normal local decode-and-repack path.
-
-If `sync` falls back to the materialized path, `--materialized-max-objects` sets an explicit object-count safety bound for the in-memory object set. It is a conservative guardrail, not a precise heap-size limit.
+`sync` auto-selects the bootstrap relay path when the target has no managed refs and the run matches bootstrap semantics. It also has a narrow incremental relay path for safe fast-forward updates that streams the source pack directly into target `receive-pack` without local materialization. Updates that aren't relay-eligible (force, prune, deletes, tag retargets) fall back to a materialized path bounded by `--materialized-max-objects`. See [docs/incremental-relay.md](docs/incremental-relay.md) and [docs/bootstrap.md](docs/bootstrap.md) for details.
 
 Sync specific branches:
 
@@ -314,27 +203,6 @@ go run ./cmd/git-sync probe \
   <target-url>
 ```
 
-Fetch from a source remote into memory without pushing anywhere:
-
-```bash
-go run ./cmd/git-sync fetch \
-  --stats \
-  --protocol auto \
-  --branch main \
-  <source-url>
-```
-
-Advertise an existing source ref as a synthetic `have` to exercise incremental negotiation:
-
-```bash
-go run ./cmd/git-sync fetch \
-  --stats \
-  --protocol auto \
-  --branch main \
-  --have-ref main \
-  <source-url>
-```
-
 Dry run:
 
 ```bash
@@ -343,16 +211,14 @@ go run ./cmd/git-sync plan --stats <source-url> <target-url>
 
 ## JSON Output
 
-Add `--json` to `probe`, `fetch`, `bootstrap`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
+Add `--json` to `probe`, `plan`, or `sync` to emit machine-readable output instead of the default text format.
 
 The JSON interface is intentionally stable:
 
 - keys use `camelCase`
 - refs and hashes are serialized as strings, not raw byte arrays
 - `probe` returns top-level keys such as `sourceUrl`, `targetUrl`, `protocol`, `refPrefixes`, `sourceCapabilities`, `targetCapabilities`, `refs`, and `stats`
-- `fetch` returns top-level keys such as `sourceUrl`, `protocol`, `wants`, `haves`, `fetchedObjects`, and `stats`
-- `bootstrap`, `plan`, and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dryRun`, `protocol`, and `stats`
-- `bootstrap`, `plan`, and `sync` also expose `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
+- `plan` and `sync` return top-level keys such as `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dryRun`, `protocol`, and `stats`, and also expose `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
 - each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
 
 ## Auth
@@ -382,20 +248,13 @@ That means local testing against a dummy GitHub repo can reuse your regular Git 
 
 ## Protocol Notes
 
-- Source refs are listed with `GET /info/refs?service=git-upload-pack`.
-- When the source supports it, the client can negotiate protocol v2 with `Git-Protocol: version=2`, then use `ls-refs` and `fetch`.
-- Target refs are listed with `GET /info/refs?service=git-receive-pack`.
-- The source fetch advertises current target tip hashes as `have`, so reruns download less when source and target already share history.
-- Target push stays on the current `receive-pack` path.
-- If a target ref does not exist, it is created.
-- If a target ref already matches the source, it is skipped.
-- Branches are updated only when the target tip is an ancestor of the source tip, unless `--force` is set.
-- Tags are immutable by default. Retargeting an existing tag requires `--force`.
-- If `--prune` is set, managed target refs that are absent on source are deleted.
+- Source-side discovery and fetch can use protocol v2 when supported; push stays on the existing v1 `receive-pack` path. `--protocol auto` tries v2 first and falls back to v1; `--protocol v2` requires the source to negotiate v2.
+- Source fetch advertises current target tip hashes as `have`, so reruns download less when source and target already share history.
+- Branches are updated only when the target tip is an ancestor of the source tip, unless `--force` is set. Tags are immutable by default; retargeting an existing tag requires `--force`. If `--prune` is set, managed target refs that are absent on source are deleted.
 - `plan` never pushes. If `sync` finds blocked refs, it exits non-zero before pushing anything.
 - `--stats` adds per-service request, byte, want, have, and command counters to the output.
 
-Push still uses the current low-level `receive-pack` path. Protocol v2 is used where it materially improves this tool: source-side ref discovery and source-side object download.
+For the deeper protocol-level walkthrough (smart HTTP, pkt-line, capability negotiation, sideband stripping, relay framing), see [docs/protocol.md](docs/protocol.md).
 
 ## Testing
 
@@ -407,12 +266,18 @@ env GOCACHE=/tmp/go-build go test ./...
 
 Extended and environment-specific test instructions are in [docs/testing.md](docs/testing.md).
 
-## Design Notes
+## Documentation
 
-`bootstrap` is the dedicated path for large initial syncs into an empty target. The goal is to relay a fetched source pack directly into target `receive-pack` instead of decoding the full object graph into local memory first.
+- [docs/architecture.md](docs/architecture.md) — product rationale, package layout, operation modes vs transfer modes, memory model
+- [docs/protocol.md](docs/protocol.md) — smart HTTP, pkt-line, capability negotiation, sideband, relay framing
+- [docs/bootstrap.md](docs/bootstrap.md) — empty-target relay
+- [docs/bootstrap-batching.md](docs/bootstrap-batching.md) — checkpoint batching for very large initial migrations
+- [docs/incremental-relay.md](docs/incremental-relay.md) — narrow relay fast path inside `sync`
+- [docs/replicate.md](docs/replicate.md) — source-authoritative relay-only overwrite mode
+- [docs/embedding.md](docs/embedding.md) — using `git-sync` as a Go library
+- [docs/benchmarking.md](docs/benchmarking.md) — `git-sync-bench` usage
+- [docs/testing.md](docs/testing.md) — test suites and integration coverage
 
-Current architectural summary and package boundaries are in [docs/architecture.md](docs/architecture.md).
+## Contributing
 
-The design note is in [docs/bootstrap.md](docs/bootstrap.md).
-
-For very large single-branch repositories, there is also a batching design and initial implementation note in [docs/bootstrap-batching.md](docs/bootstrap-batching.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

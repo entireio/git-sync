@@ -23,9 +23,9 @@ That is a good general path, but it is a poor fit for very large initial syncs i
 - there is no need for fast-forward checks
 - the main cost is moving a large pack from source to target efficiently
 
-## V1 Scope
+## Scope
 
-`bootstrap` should be intentionally narrow:
+`bootstrap` is intentionally narrow:
 
 - create-only
 - fail if any managed target ref already exists
@@ -92,7 +92,7 @@ There are still some hard limits:
 - push still depends on target `receive-pack` behavior and capabilities
 - if a relay-safe path cannot be used, `bootstrap` should fail and tell the user to use `sync`
 
-V1 should stay strict rather than trying to be clever.
+`bootstrap` stays strict rather than trying to be clever.
 
 ## Implementation Notes
 
@@ -115,7 +115,7 @@ That keeps it efficient and conceptually simple.
 
 ## Failure Rules
 
-V1 should fail when:
+`bootstrap` fails when:
 
 - any managed target ref already exists
 - no source refs matched
@@ -124,65 +124,26 @@ V1 should fail when:
 
 The error should explicitly recommend normal `sync` when the repository is no longer in bootstrap shape.
 
-## Follow-Up Steps
+## Current Behavior
 
-Phase 1:
+Bootstrap supports:
 
-- implement `bootstrap` for create-only branch refs
-- support optional tag creation
-- add JSON and stats output
-- add in-process integration tests
-- add `git-http-backend` integration coverage for empty-target bootstrap
+- create-only branch refs
+- optional tag creation (non-batched path and after successful branch batches in the batched path)
+- explicit mapped refs (`--map src:dst`)
+- JSON and `--stats` output
+- `--max-pack-bytes` as a safety threshold for the streamed source pack
+- `--target-max-pack-bytes` for batched branch-only bootstrap on very large initial syncs
+- in-process integration coverage and `git-http-backend` integration coverage
 
-Progress:
+`sync` auto-selects the bootstrap relay path when all managed target refs are absent and the run matches bootstrap semantics. `plan` surfaces a bootstrap suggestion for the same target shape.
 
-- `bootstrap` is implemented
-- optional tag creation is supported on the non-batched path
-- JSON and stats output are supported
-- in-process integration coverage exists
-- `git-http-backend` integration coverage exists
+The batched bootstrap path is intentionally narrow:
 
-Phase 2:
+- requires source-side protocol v2 with fetch filters
+- batches branch refs, then optionally creates tags after the branch batches complete
+- resumes from an existing temp ref when that temp ref matches a planned checkpoint
+- uses temporary target refs under `refs/gitsync/bootstrap/heads/`
+- treat as an advanced large-repo fallback when one-shot bootstrap is too risky or fails under target-side unpack/index pressure
 
-- allow relay-safe create-only runs with explicit mapped refs
-- add better operator output for large initial transfers
-- add safety thresholds for advertised/fetched bytes
-
-Progress:
-
-- explicit mapped refs are supported
-- `--max-pack-bytes` provides a first safety threshold for the streamed source pack during bootstrap
-- `--target-max-pack-bytes` now enables a Phase A batched branch-only bootstrap mode for large initial syncs
-
-Phase 3:
-
-- investigate hybrid behavior: relay when the target is empty, otherwise fail fast into normal `sync`
-- investigate whether target capability combinations require alternate pack handling
-- measure source-to-target pack relay memory and CPU against current `sync`
-
-Progress:
-
-- `sync` now auto-selects the bootstrap relay path when all managed target refs are absent and the run matches bootstrap semantics
-- dry-run `plan` surfaces a bootstrap suggestion for the same target shape
-
-Batching note:
-
-- the current batched bootstrap path is intentionally narrow
-- it requires source-side protocol v2 with fetch filters
-- it batches branch refs and then optionally creates tags after the branch batches complete
-- it resumes from an existing temp ref when that temp ref matches a planned checkpoint
-- it uses temporary target refs under `refs/gitsync/bootstrap/heads/`
-- it should be treated as an advanced large-repo fallback when one-shot bootstrap is too risky or fails on target-side unpack/index pressure
-
-Phase 4:
-
-- consider a more advanced incremental relay mode for non-empty targets
-- only pursue this if large migration workflows become important enough to justify the added protocol complexity
-
-Progress:
-
-- there is now a narrow incremental relay path in `sync`
-- it now covers multi-branch fast-forward branch-only updates
-- it now also covers branch-to-branch mappings
-- it now also covers create-only tags
-- tag retargets, deletes, force, and prune still use the normal path
+Outside bootstrap, `sync` also has a narrow incremental relay path for non-empty targets that covers multi-branch fast-forward updates, branch-to-branch mappings, and create-only tags. Tag retargets, deletes, force, and prune still use the materialized path. See [incremental-relay.md](incremental-relay.md).

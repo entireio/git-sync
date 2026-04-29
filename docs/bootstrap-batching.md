@@ -14,7 +14,7 @@ Reduce per-push size and target-side `receive-pack` / `index-pack` pressure for 
 
 ## Non-Goals
 
-V1 batching should not try to solve every large-migration problem.
+Batching does not try to solve every large-migration problem.
 
 Out of scope:
 
@@ -121,6 +121,19 @@ If the estimate is too optimistic (fewer batches than needed), two safeguards ca
 
 Both safeguards converge in O(log n) splits — each failure halves the commit range.
 
+### Trunk-aware planning
+
+For multi-branch bootstraps, planning each branch in isolation re-fetches commit graph history that earlier branches have already reached. With one trunk and many feature branches that all descend from it, that becomes N full-history fetches and N independent first-parent walks over the same shared commits.
+
+`git-sync` avoids this by:
+
+1. Identifying the trunk via the source's HEAD symref (see [protocol.md](protocol.md#head-symref-discovery)) and ordering it first.
+2. After each branch is planned, accumulating its first-parent commits into a `planStopSet` and its tip into `planHaves`.
+3. For subsequent branches, passing `planHaves` as `have` lines on the commit-graph fetch, and stopping the first-parent walk when it hits a commit in `planStopSet`.
+4. Skipping the pack push entirely when a branch tip is already in `planStopSet` — a *subsumed* branch. The only command emitted is a single ref-create to point the target ref at the tip, optionally combined with a temp-ref delete if a previous interrupted run left one behind.
+
+Falls back to the per-branch behavior described above when HEAD is not advertised, or when the trunk ref is filtered out by `--branch` / `--map`.
+
 ### Why not probe (the previous design)
 
 The previous implementation did full `FetchPack` round-trips per probe candidate to measure actual pack sizes. For linux/master (75k commits) this required 13+ fetch-and-discard cycles, downloading gigabytes of throwaway data and taking minutes before any real push started. The estimate approach reduces planning to one commit-graph fetch (~20 seconds) plus arithmetic.
@@ -165,11 +178,7 @@ Recommended rule:
 
 This avoids cases where a tag points at an object graph that is not yet fully present on target.
 
-V1 batching should support:
-
-- branch refs only
-
-Tag batching can be added later.
+Branch batches push first; create-only tags are pushed after all branch batches complete. Tag retargeting is not supported in the batched path.
 
 ## Restart and Recovery
 
@@ -185,9 +194,7 @@ If `--keep-temp-refs-on-failure` is false, cleanup can still happen on clean fai
 
 ## Safety Model
 
-V1 batching should remain strict.
-
-Allow only:
+Batching remains strict. It allows only:
 
 - empty managed target refs
 - branch-only bootstrap
@@ -248,23 +255,18 @@ JSON should include:
 
 This is still likely worthwhile for very large initial migrations because it changes a single huge risky operation into several bounded ones.
 
-## Recommended Phases
+## Current Behavior
 
-Phase A:
+Batched bootstrap is invoked via `git-sync bootstrap --target-max-pack-bytes`.
 
-- batch branch-only bootstrap
-- no tags
-- temp refs required
-- no resume
-- manual cleanup if interrupted
+It:
 
-Progress:
-
-- implemented via `git-sync bootstrap --target-max-pack-bytes`
-- currently requires source-side protocol v2 with fetch filter support
+- batches branch refs only, with create-only tags pushed after all branch batches complete
+- requires source-side protocol v2 with fetch filter support
+- uses temporary target refs under `refs/gitsync/bootstrap/heads/`
 - resumes from an existing temp ref when that temp ref matches a planned checkpoint
-- exercised by `TestBootstrap_GitHTTPBackendBatchedBranch`
-- validated against `torvalds/linux` as a large-source manual stress path
+- plans the source's trunk first (when its HEAD symref is advertised) and reuses its commit-graph reachability to short-circuit later branches' walks and skip pack pushes for subsumed branches
+- is exercised by `TestBootstrap_GitHTTPBackendBatchedBranch` and validated against `torvalds/linux` as a large-source manual stress path
 
 Operator guidance:
 
@@ -272,21 +274,4 @@ Operator guidance:
 - use batching when a single large bootstrap push is too risky, too large, or fails on the target side
 - start with `--target-max-pack-bytes 536870912` and adjust upward only if the target has enough headroom
 
-Phase B:
-
-- add resume from existing temp refs
-- add better progress reporting
-- add batch-size estimation metrics
-
-Phase C:
-
-- consider tag creation after successful branch completion
-- consider whether per-ref or per-branch parallelism is worth it
-
-Progress:
-
-- create-only tags are now pushed after successful branch batches complete
-
-Phase D:
-
-- only then consider using similar checkpoint batching ideas for non-empty target incremental relay
+The current implementation does not parallelize across branches and does not extend the same checkpoint-batching idea to non-empty target incremental relay.
