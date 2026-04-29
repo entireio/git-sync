@@ -1,4 +1,8 @@
 {
   "enabled": true,
-  "telemetry": true
+  "telemetry": true,
+  "strategy_options": {
+    "checkpoints_v2": true,
+    "push_v2_refs": true
+  }
 }
