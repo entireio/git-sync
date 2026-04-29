@@ -24,3 +24,7 @@ What if during the sync target receives a new tag, would that tag also be remove
 ---
 
 What about when --tags was used, however the tag was created in the target after the sync process started?
+
+---
+
+commit changes
