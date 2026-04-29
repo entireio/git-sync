@@ -20,13 +20,19 @@
       "transcript": "/fb/ad5717af5f/1/transcript.jsonl",
       "content_hash": "/fb/ad5717af5f/1/transcript_hash.txt",
       "prompt": "/fb/ad5717af5f/1/prompt.txt"
+    },
+    {
+      "metadata": "/fb/ad5717af5f/2/metadata.json",
+      "transcript": "/fb/ad5717af5f/2/transcript.jsonl",
+      "content_hash": "/fb/ad5717af5f/2/transcript_hash.txt",
+      "prompt": "/fb/ad5717af5f/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 321099,
+    "input_tokens": 461069,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 304384,
-    "output_tokens": 3060,
-    "api_call_count": 5
+    "cache_read_tokens": 435200,
+    "output_tokens": 3883,
+    "api_call_count": 6
   }
 }
