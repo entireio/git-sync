@@ -98,7 +98,6 @@ Please answer these questions in your bug report:
 
 ### Prerequisites
 
-- **Go 1.26.x** - Check with `go version`
 - **mise** - Task runner and version manager. Install with `curl https://mise.run | sh`
 
 ### Clone and Install
