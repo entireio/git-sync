@@ -48,6 +48,32 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -ru
 
 These are useful for large-source relay and memory checks while keeping the target local and disposable.
 
+## Benchmarking
+
+`git-sync-bench` runs repeatable empty-target benchmarks against a source repository. It creates a fresh bare target for each run and reports wall-clock time plus internal `syncer` measurement data.
+
+Build it with:
+
+```bash
+go build -o /tmp/git-sync-bench ./cmd/git-sync-bench
+```
+
+Example against a local mirror:
+
+```bash
+/tmp/git-sync-bench \
+  --scenario bootstrap \
+  --source-url /tmp/git-sync-bench/kubernetes.git \
+  --repeat 3 \
+  --target-max-pack-bytes 104857600 \
+  --stats \
+  --json
+```
+
+The JSON report includes per-run results, aggregate min/avg/max timings, batch counts for batched runs, heap peaks, and relay modes seen across successful runs. If `--source-url` is a filesystem path, the tool converts it to `file://...` automatically.
+
+Use `--keep-targets` to retain generated bare targets under `--work-dir` for inspection. For large real-repo runs, prefer a local mirror instead of benchmarking directly against a hosted remote.
+
 ## `mise` Tasks
 
 - `mise run test` — default suite

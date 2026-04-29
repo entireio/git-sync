@@ -155,7 +155,7 @@ Follow standard Go idioms and conventions.
 - **Formatting**: Code must pass `gofmt` (run `mise run fmt`)
 - **Linting**: Code must pass `golangci-lint` (run `mise run lint`)
 - **Naming**: Use meaningful, descriptive names following Go conventions
-- **Public API**: `entire.io/entire/gitsync` is the stable embedding surface. Additions there should be reviewed carefully. `entire.io/entire/gitsync/unstable` is for advanced controls and may change. See [docs/embedding.md](docs/embedding.md).
+- **Public API**: `entire.io/entire/gitsync` is the stable embedding surface. Additions there should be reviewed carefully. `entire.io/entire/gitsync/unstable` is for advanced controls and may change.
 
 ---
 

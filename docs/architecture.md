@@ -193,7 +193,5 @@ That is why the rewrite keeps an explicit `--materialized-max-objects` guardrail
 
 ## Related Notes
 
-- [bootstrap.md](bootstrap.md)
-- [bootstrap-batching.md](bootstrap-batching.md)
-- [benchmarking.md](benchmarking.md)
-- [embedding.md](embedding.md)
+- [protocol.md](protocol.md)
+- [testing.md](testing.md)

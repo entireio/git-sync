@@ -2,7 +2,7 @@
 
 This document is a code-grounded walkthrough of the Git wire protocol pieces that `git-sync` implements directly: smart HTTP transport, pkt-line framing, capability negotiation, sideband multiplexing, and the relay path that streams a source pack into target `receive-pack` without local materialization.
 
-It is aimed at contributors and embedders who want to understand *why* the implementation looks the way it does. For higher-level operational behavior, see [architecture.md](architecture.md). For the bootstrap and incremental relay strategies built on top of these primitives, see [bootstrap.md](bootstrap.md), [bootstrap-batching.md](bootstrap-batching.md), and [incremental-relay.md](incremental-relay.md).
+It is aimed at contributors and embedders who want to understand *why* the implementation looks the way it does. For higher-level operational behavior, see [architecture.md](architecture.md).
 
 ## Scope
 
@@ -117,7 +117,7 @@ Protocol v2 was introduced to make ref discovery cheaper (you can ask for a ref 
 
 `git-sync` uses v2 on the source side when supported, and v1 on the target side always. The reasons:
 
-- **Source-side v2** enables features `git-sync` actually uses: `ls-refs` for cheaper ref listing, and `fetch` with `filter=tree:0` for the commit-graph-only fetches that batched bootstrap planning relies on (see [bootstrap-batching.md](bootstrap-batching.md)).
+- **Source-side v2** enables features `git-sync` actually uses: `ls-refs` for cheaper ref listing, and `fetch` with `filter=tree:0` for the commit-graph-only fetches that batched bootstrap planning relies on.
 - **Target-side push** stays on v1 because v2 receive-pack is not yet adopted broadly enough to rely on, and because `git-sync` already needs explicit command construction and streaming control on the push path.
 
 The CLI flag is `--protocol auto|v1|v2`. `auto` (the default) tries source-side v2 first via the `Git-Protocol: version=2` header, and falls back to v1 if the server doesn't acknowledge v2 in its response. `v2` requires the source to negotiate v2 and fails otherwise. `v1` skips the v2 attempt.
@@ -126,7 +126,7 @@ The negotiation is done in `internal/gitproto/refs.go` via `ListSourceRefs(ctx, 
 
 ## HEAD Symref Discovery
 
-When the source advertises HEAD as a symbolic ref, `git-sync` records what branch it points to. This is used by batched bootstrap planning as a *trunk hint*: the trunk branch is planned first so its commit graph becomes a stop-set for subsequent branches' first-parent walks, dramatically cutting per-branch graph fetches on multi-branch repos. See [bootstrap-batching.md](bootstrap-batching.md).
+When the source advertises HEAD as a symbolic ref, `git-sync` records what branch it points to. This is used by batched bootstrap planning as a *trunk hint*: the trunk branch is planned first so its commit graph becomes a stop-set for subsequent branches' first-parent walks, dramatically cutting per-branch graph fetches on multi-branch repos.
 
 The hint is exposed as `RefService.HeadTarget plumbing.ReferenceName`. Empty value means "detached HEAD or no symref advertised", in which case the caller falls back to the original branch order.
 
@@ -278,7 +278,7 @@ This is why the relay paths (bootstrap, replicate, and the incremental relay pat
 
 ### PACK header pre-check
 
-The batched bootstrap path (see [bootstrap-batching.md](bootstrap-batching.md)) needs to make a sizing decision before committing to a full transfer. Every pack starts with a 12-byte header:
+The batched bootstrap path needs to make a sizing decision before committing to a full transfer. Every pack starts with a 12-byte header:
 
 ```
 "PACK"  uint32 version  uint32 object_count
@@ -304,7 +304,7 @@ Resolution order (CLI side):
 3. `git credential fill` helper lookup, for `http://` and `https://` URLs
 4. Anonymous (no `Authorization` header)
 
-Library callers inject auth via the `AuthProvider` interface in `entire.io/entire/gitsync` instead. See [embedding.md](embedding.md).
+Library callers inject auth via the `AuthProvider` interface in `entire.io/entire/gitsync` instead.
 
 ### TLS
 
@@ -345,14 +345,11 @@ Streaming RPC bodies (`PostRPCStreamBody`) bypass these caps because the consume
 
 - **v2 negotiation failed**: source returned a v1 advertisement when `--protocol v2` was forced. `auto` falls back; `v2` errors out. Causes: older server, intermediate proxy stripping the `Git-Protocol` header.
 - **Target rejected push (body too large)**: relay produced a pack larger than the target's request body limit. Solutions: lower `--target-max-pack-bytes` for batched bootstrap, or rerun on a target with a higher limit. Detected by `isTargetBodyLimitError` in `internal/strategy/bootstrap/bootstrap.go`.
-- **Target advertises `no-thin`**: the incremental relay path inside `sync` skips it and falls back to the materialized path. `replicate` proceeds anyway. See [incremental-relay.md](incremental-relay.md) and [replicate.md](replicate.md).
+- **Target advertises `no-thin`**: the incremental relay path inside `sync` skips it and falls back to the materialized path. `replicate` proceeds anyway.
 - **Redirect chain mismatch**: the GET redirects to host X, but a subsequent RPC POST gets a different redirect or a 404 because the server expected sticky sessions. Resolution: set `FollowInfoRefsRedirect=true` so RPC POSTs go directly to the post-redirect host.
 - **Auth 401 / 403**: 401 generally indicates missing or wrong credentials (will retry with credential helper if configured); 403 indicates the credentials were accepted but lack permission for the requested action.
 
 ## Related
 
 - [architecture.md](architecture.md) — package layout and where each protocol piece lives
-- [bootstrap.md](bootstrap.md) — how the relay primitive composes into empty-target bootstrap
-- [bootstrap-batching.md](bootstrap-batching.md) — checkpoint planning, PACK header pre-check, target-rejection retry
-- [incremental-relay.md](incremental-relay.md) — narrow relay fast path inside `sync`
-- [replicate.md](replicate.md) — relay-only overwrite mode
+- [testing.md](testing.md) — test suites and integration coverage

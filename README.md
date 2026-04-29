@@ -25,11 +25,11 @@ The main commands are:
 
 `sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `git-sync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
 
-Additional commands (`bootstrap`, `probe`, `fetch`) and advanced flags are available through `git-sync --help` and the [unstable library surface](docs/embedding.md). They are not part of the recommended public surface.
+Additional commands (`bootstrap`, `probe`, `fetch`) and advanced flags are available through `git-sync --help` and the unstable library surface. They are not part of the recommended public surface.
 
 ## Library API
 
-`git-sync` is also a Go library. Use `entire.io/entire/gitsync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/gitsync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable. See [docs/embedding.md](docs/embedding.md) for the worker-oriented guide.
+`git-sync` is also a Go library. Use `entire.io/entire/gitsync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/gitsync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable.
 
 ## Quick Start
 
@@ -77,7 +77,7 @@ go run ./cmd/git-sync sync \
 
 ## Sync Behavior
 
-`sync` picks the bootstrap relay path automatically when the target is empty. For non-empty targets, safe fast-forward updates also use a relay path that streams the source pack directly into target `receive-pack` without local materialization. Anything not relay-eligible (force, prune, deletes, tag retargets) falls back to a materialized path bounded by `--materialized-max-objects`. See [docs/incremental-relay.md](docs/incremental-relay.md) and [docs/bootstrap.md](docs/bootstrap.md) for details.
+`sync` picks the bootstrap relay path automatically when the target is empty. For non-empty targets, safe fast-forward updates also use a relay path that streams the source pack directly into target `receive-pack` without local materialization. Anything not relay-eligible (force, prune, deletes, tag retargets) falls back to a materialized path bounded by `--materialized-max-objects`.
 
 Sync specific branches:
 
@@ -178,12 +178,6 @@ Extended and environment-specific test instructions are in [docs/testing.md](doc
 
 - [docs/architecture.md](docs/architecture.md) — product rationale, package layout, operation modes vs transfer modes, memory model
 - [docs/protocol.md](docs/protocol.md) — smart HTTP, pkt-line, capability negotiation, sideband, relay framing
-- [docs/bootstrap.md](docs/bootstrap.md) — empty-target relay
-- [docs/bootstrap-batching.md](docs/bootstrap-batching.md) — checkpoint batching for very large initial migrations
-- [docs/incremental-relay.md](docs/incremental-relay.md) — narrow relay fast path inside `sync`
-- [docs/replicate.md](docs/replicate.md) — source-authoritative relay-only overwrite mode
-- [docs/embedding.md](docs/embedding.md) — using `git-sync` as a Go library
-- [docs/benchmarking.md](docs/benchmarking.md) — `git-sync-bench` usage
 - [docs/testing.md](docs/testing.md) — test suites and integration coverage
 
 ## Contributing
