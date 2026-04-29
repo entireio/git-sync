@@ -1,0 +1,1 @@
+Review commit b074cde in this repo. Focus narrowly on whether the new source-side interfaces in internal/strategy/{bootstrap,incremental,materialized} are coherent, whether gitproto.RefService gained the right boundary methods, and whether any coupling or test gaps remain. Return findings only, ordered by severity, with file references. Do not make changes.
