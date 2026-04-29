@@ -1,0 +1,37 @@
+Review the latest changes since commit 4b7a223, focusing on the session-owned logger wiring in internal/syncer/syncer.go and the tracker change marking packet allocation work done. Check for factual mismatches, regressions, or overstatement in the tracker. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review commit 0ed62c5 on this branch. Focus on the restored streaming receive-pack implementation in internal/gitproto/push.go, the new PostRPCStreamBody and bounded httpError handling in internal/gitproto/smarthttp.go, and the new regression tests. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit c567560 (Unify repo test fixtures). Focus on whether internal/syncertest is now a coherent shared test-support package, whether benchmark comparability was preserved, and whether any test-specific behavior was accidentally changed. Concrete findings only.
+
+---
+
+Review commit 68845c9 (Cover batched checkpoint retry recovery). Focus on the new receive-pack test hook in internal/syncer/integration_test.go and whether the new batched checkpoint failure/retry integration test is realistic, sufficiently precise, or introduces harness risks. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit 579d626 (Cover v2 fetch cancellation behavior). Focus on whether the new v2 cancellation test is exercising the right boundary and whether the tracker note is now accurate about cancellation coverage. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit 3d6606d ("Bundle target state in sync session") in /Users/soph/Work/entire/devenv/git-sync. Focus on behavioral regressions, nil-target assumptions, and whether grouping target adv/ref map/features/policy/pusher changed semantics or introduced brittleness. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit 59b4a85 ("Cover mid-stream v1 fetch failures in syncer") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new v1 raw upload-pack hook and tests meaningfully exercise started-stream failure/cancellation, and whether the assertions or streaming setup are timing-fragile or semantically off. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit 3e236b4 introducing pkg/gitsync. Focus on: 1) public API boundary quality, especially whether it leaks unstable engine details, 2) correctness of request/result translation over internal/syncer, 3) any missing validation or clearly wrong semantics for a first public cut. Findings only, ordered by severity with file references.
+
+---
+
+Review the current README/docs changes describing pkg/gitsync vs pkg/gitsync/unstable. Focus on whether the wording accurately matches the current code and whether it could mislead embedders about stability or capabilities. Findings only.
+
+---
+
+Review the current uncommitted changes in pkg/gitsync/internalbridge/config.go, pkg/gitsync/client.go, pkg/gitsync/unstable/client.go, pkg/gitsync/internalbridge/model_test.go, and internal/gitproto/smarthttp.go. Focus on the recent cleanup: deduplication, validation guard, mapper tests, and doc note. Report only actionable findings with file references.
