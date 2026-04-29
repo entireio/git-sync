@@ -25,6 +25,21 @@ type NormalizedMapping struct {
 	TargetRef plumbing.ReferenceName
 }
 
+// ValidateEndpoints rejects configurations where the source and target URLs
+// point at the same repository. Empty URLs are ignored so the caller can
+// surface a more specific "missing URL" error.
+func ValidateEndpoints(sourceURL, targetURL string) error {
+	src := strings.TrimSpace(sourceURL)
+	dst := strings.TrimSpace(targetURL)
+	if src == "" || dst == "" {
+		return nil
+	}
+	if src == dst {
+		return fmt.Errorf("source and target must not be the same repository: %s", src)
+	}
+	return nil
+}
+
 // NormalizeProtocolMode validates the configured protocol mode and applies the
 // default auto mode when the user did not specify one.
 func NormalizeProtocolMode(mode string) (string, error) {

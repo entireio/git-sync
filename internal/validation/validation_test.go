@@ -73,6 +73,42 @@ func TestParseMapping(t *testing.T) {
 	}
 }
 
+func TestValidateEndpoints(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		source  string
+		target  string
+		wantErr bool
+	}{
+		{name: "different URLs", source: "https://src.example/r.git", target: "https://dst.example/r.git"},
+		{name: "same URL", source: "https://example.com/r.git", target: "https://example.com/r.git", wantErr: true},
+		{name: "same URL with surrounding whitespace", source: "  https://example.com/r.git", target: "https://example.com/r.git\t", wantErr: true},
+		{name: "empty source defers to other checks", source: "", target: "https://example.com/r.git"},
+		{name: "empty target defers to other checks", source: "https://example.com/r.git", target: ""},
+		{name: "both empty defers to other checks", source: "", target: ""},
+		{name: "differ only by trailing slash", source: "https://example.com/r.git", target: "https://example.com/r.git/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateEndpoints(tt.source, tt.target)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ValidateEndpoints(%q, %q) = nil, want error", tt.source, tt.target)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateEndpoints(%q, %q) = %v, want nil", tt.source, tt.target, err)
+			}
+		})
+	}
+}
+
 func TestParseHaveRef(t *testing.T) {
 	tests := []struct {
 		name  string
