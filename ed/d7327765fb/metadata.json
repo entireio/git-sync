@@ -1,0 +1,33 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "edd7327765fb",
+  "strategy": "manual-commit",
+  "branch": "soph/add-ci-and-lint",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go",
+    "internal/gitproto/target_features.go",
+    "internal/planner/types.go",
+    "internal/syncer/measurement.go",
+    "internal/syncer/stats.go",
+    "internal/syncer/syncer.go",
+    "pkg/gitsync/internalbridge/model.go",
+    "pkg/gitsync/types.go",
+    "pkg/gitsync/unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ed/d7327765fb/0/metadata.json",
+      "transcript": "/ed/d7327765fb/0/full.jsonl",
+      "content_hash": "/ed/d7327765fb/0/content_hash.txt",
+      "prompt": "/ed/d7327765fb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 39348,
+    "cache_read_tokens": 3932411,
+    "output_tokens": 10255,
+    "api_call_count": 25
+  }
+}
