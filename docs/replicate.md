@@ -53,7 +53,7 @@ Weaker fit:
 
 ## Planning
 
-`git-sync plan --mode replicate` produces the same per-ref action plan as `replicate` would execute, without pushing. It is the recommended dry-run companion before running `replicate` against a non-empty target for the first time.
+`git-sync plan --mode replicate` produces the same per-ref action plan as `replicate` would execute, without pushing. Use it before running `replicate` against a non-empty target for the first time.
 
 ## Implementation
 

@@ -168,7 +168,7 @@ The server's HEAD line then looks like:
 
 ### Consumers
 
-The trunk hint flows through `syncer.Config.SourceHeadTarget` into `bootstrap.Params.SourceHeadTarget`, where `orderTrunkFirst` (in `internal/strategy/bootstrap/bootstrap.go`) reorders the desired-ref list so the trunk is planned first. If the trunk is not in the desired set (filtered out by `--branch` or `--map`), the original order is preserved and the trunk-first optimization is skipped.
+The trunk hint is read from `RefService.HeadTarget` and passed into `bootstrap.Params.SourceHeadTarget` (the wiring lives in `internal/syncer/syncer.go`). `orderTrunkFirst` (in `internal/strategy/bootstrap/bootstrap.go`) reorders the desired-ref list so the trunk is planned first. If the trunk is not in the desired set (filtered out by `--branch` or `--map`), the original order is preserved and the trunk-first optimization is skipped.
 
 ## Source Fetch
 
@@ -186,7 +186,7 @@ have <hash>\n
 done\n
 ```
 
-Capabilities are appended to the first `want` line, separated from the hash by a space. `git-sync` includes `multi_ack_detailed no-done side-band-64k ofs-delta agent=...` (and `no-progress` unless `Verbose` is set on the `RefService`).
+Capabilities are appended to the first `want` line, separated from the hash by a space. `git-sync` requests `agent=...`, the preferred sideband (`side-band-64k` when supported, otherwise `side-band`), `ofs-delta` when supported, and `include-tag` when the request asks for tags. It adds `no-progress` unless `Verbose` is set on the `RefService`. `git-sync` deliberately does *not* request `thin-pack` — see "Why no-thin matters" under Target Push.
 
 Response: a pkt-line stream that begins with NAK / ACK negotiation packets and transitions into pack data on sideband channel `0x01`. Channel `0x02` carries progress text; channel `0x03` is fatal.
 
@@ -227,7 +227,7 @@ Once the stream switches to pack mode, subsequent reads bypass pkt-line framing 
    ```
    <old-hash> <new-hash> <refname>\0<capabilities>\n
    ```
-   Capabilities are appended to the first command after a NUL byte. `git-sync` includes `report-status` (and `report-status-v2` when supported), `side-band-64k`, `ofs-delta`, and optionally `atomic` and `quiet`.
+   Capabilities are appended to the first command after a NUL byte. `git-sync` requests `report-status` and the preferred sideband (`side-band-64k` when available, otherwise `side-band`); `delete-refs` is added when the command list contains a delete. `ofs-delta` is consulted from the target advertisement to choose pack-encoding behavior in `useRefDeltas`, but is not itself requested as a wire capability.
 2. **Flush packet** (`0000`) terminating the command section.
 3. **Raw pack bytes**. The pack itself is NOT pkt-line framed — the receive-pack server reads the pack directly off the request body after the flush.
 

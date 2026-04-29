@@ -1,16 +1,16 @@
 # Contributing to git-sync
 
-Thank you for your interest in contributing! `git-sync` is a remote-to-remote Git mirroring tool and library; we welcome contributions from everyone.
+Thank you for your interest in contributing to Entire! We welcome contributions from everyone.
 
 Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
-> **New here?** See the [README](README.md) for setup and usage, and [docs/architecture.md](docs/architecture.md) for the technical overview.
+> **New to Entire?** See the [README](README.md) for setup and usage documentation.
 
 ---
 
 ## Before You Code: Discuss First
 
-The fastest way to get a contribution merged is to align with maintainers before writing code. Please **open an issue first** on [GitHub Issues](https://github.com/entireio/gitsync/issues) and wait for maintainer feedback before starting implementation.
+The fastest way to get a contribution merged is to align with maintainers before writing code. Please **open an issue first** using our [issue templates](https://github.com/entireio/gitsync/issues/new/choose) and wait for maintainer feedback before starting implementation.
 
 ### Contribution Workflow
 
@@ -18,17 +18,20 @@ The fastest way to get a contribution merged is to align with maintainers before
 2. **Wait for maintainer feedback** -- we may have relevant context or plans
 3. **Get approval** before starting implementation
 4. **Submit your PR** referencing the approved issue
-5. **Address all feedback** including automated review comments
+5. **Address all feedback** including automated Copilot comments
 6. **Maintainer review and merge**
 
 ---
 
 ## First-Time Contributors
 
-New to the project? Welcome! Good places to start:
+New to the project? Welcome! Here's how to get started:
 
+### Good First Issues
+
+We recommend starting with:
 - **Documentation improvements** - Fix typos, clarify explanations, add examples
-- **Test contributions** - Add test cases, improve coverage of edge protocol behaviors
+- **Test contributions** - Add test cases, improve coverage
 - **Small bug fixes** - Issues labeled `good-first-issue`
 
 ---
@@ -37,11 +40,28 @@ New to the project? Welcome! Good places to start:
 
 All feature requests, bug reports, and general issues should be submitted through [GitHub Issues](https://github.com/entireio/gitsync/issues). Please search for existing issues before opening a new one.
 
-For security-related issues, see [SECURITY.md](SECURITY.md) instead.
+For security-related issues, see the Security section below.
 
 ---
 
+## Security
+
+If you discover a security vulnerability, **do not report it through GitHub Issues**. Instead, please follow the instructions in our [SECURITY.md](SECURITY.md) file for responsible disclosure. All security reports are kept confidential as described in SECURITY.md.
+
+---
+
+## Contributions & Communication
+
+Contributions and communications are expected to occur through:
+
+- [GitHub Issues](https://github.com/entireio/gitsync/issues) - Bug reports and feature requests
+- [Discord](https://discord.gg/jZJs3Tue4S) - Questions, general conversation, and real-time support
+
+Please represent the project and community respectfully in all public and private interactions.
+
+
 ## How to Contribute
+
 
 There are many ways to contribute:
 
@@ -58,18 +78,19 @@ Good bug reports help us fix issues quickly. When reporting a bug, please includ
 
 ### Required Information
 
-1. **`git-sync` version or commit** - the binary you ran or `git rev-parse HEAD` if building from source
+1. **git-sync version** - run `git-sync version`
 2. **Operating system**
 3. **Go version** - run `go version`
-4. **Source and target hosts** - what kind of remote (GitHub, GitLab, self-hosted, etc.) — this matters because protocol behavior differs
 
 ### What to Include
 
-1. **What did you do?** - The exact `git-sync` command you ran (redact tokens)
+Please answer these questions in your bug report:
+
+1. **What did you do?** - Include the exact commands you ran
 2. **What did you expect to happen?**
-3. **What actually happened?** - Full error message, and `--json` output if available
-4. **Can you reproduce it?** - Every time, or intermittently?
-5. **Any additional context?** - `--stats` output, `-v` verbose log, related issues
+3. **What actually happened?** - Include the full error message or unexpected output
+4. **Can you reproduce it?** - Does it happen every time or intermittently?
+5. **Any additional context?** - Logs, screenshots, or related issues
 
 ---
 
@@ -80,7 +101,7 @@ Good bug reports help us fix issues quickly. When reporting a bug, please includ
 - **Go 1.26.x** - Check with `go version`
 - **mise** - Task runner and version manager. Install with `curl https://mise.run | sh`
 
-### Clone and Build
+### Clone and Install
 
 ```bash
 git clone https://github.com/entireio/gitsync.git
@@ -102,26 +123,31 @@ mise run build
 mise run test
 ```
 
+> See [CLAUDE.md](CLAUDE.md) for detailed architecture and development reference.
+
 ---
 
 ## Making Changes
 
 1. **Create a branch** for your changes:
    ```bash
-   git checkout -b your-name/feature-name
+   git checkout -b feature/your-feature-name
    ```
 
-2. **Make your changes** - follow the [Code Style](#code-style) guidelines.
+2. **Make your changes** - follow the [Code Style](#code-style) guidelines
 
-3. **Test your changes** - see [Testing](#testing).
+3. **Test your changes** - see [Testing](#testing)
 
-4. **Commit** with clear, descriptive messages.
+4. **Commit** with clear, descriptive messages:
+   ```bash
+   git commit -m "Add feature: description of what you added"
+   ```
 
 ---
 
 ## Code Style
 
-Follow standard Go idioms and conventions.
+Follow standard Go idioms and conventions. For detailed guidance, see the **Go Code Style** section in [CLAUDE.md](CLAUDE.md).
 
 ### Key Points
 
@@ -135,22 +161,79 @@ Follow standard Go idioms and conventions.
 
 ## Testing
 
+> See [CLAUDE.md](CLAUDE.md) for complete testing documentation.
+
 ```bash
-# Default suite (in-process smart HTTP, no listener required)
+# Unit tests - always run before committing
 mise run test
 
-# With race detection
+# Integration tests
+mise run test:integration
+
+# Full CI suite
 mise run test:ci
-
-# Optional: end-to-end against the system git-http-backend
-mise run test:git-http-backend
-
-# Optional: live linux bootstrap smoke (downloads from github)
-mise run test:linux-smoke
-mise run test:linux-smoke:batched
 ```
 
-See [docs/testing.md](docs/testing.md) for the full list of suites and environment flags.
+Integration tests use the `//go:build integration` build tag and are located in `cmd/entire/cli/integration_test/`.
+
+---
+
+## Creating an Agent
+
+
+Entire supports two ways to create agents:
+
+### 1. Claude Code Agent Personas (Markdown)
+
+These are markdown files that define specialized behaviors for Claude Code (e.g., developer, reviewer, etc.).
+
+- **Location:** `.claude/agents/`
+- **Structure:**
+   ```markdown
+   ---
+   name: my-agent
+   description: What this agent does
+   model: opus
+   color: blue
+   ---
+
+   # Agent Name
+   You are a **[Role]** with expertise in [domain].
+
+   ## Core Principles
+   - Principle 1
+   - Principle 2
+
+   ## Process
+   1. Step 1
+   2. Step 2
+
+   ## Output Format
+   How to structure responses...
+   ```
+- **To invoke:** Create a matching command in `.claude/commands/` that spawns the agent via the Task tool.
+- **Examples:**
+   - `.claude/agents/dev.md` - TDD Developer
+   - `.claude/agents/reviewer.md` - Code Reviewer
+
+### 2. Coding Agent Integrations (Go)
+
+These are Go implementations that integrate Entire with different AI coding tools (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI, etc.) using the Agent abstraction layer.
+
+- **Location:** `cmd/entire/cli/agent/`
+- **Steps:**
+   1. Implement the `Agent` interface in `agent/agent.go`
+   2. Register your agent in the agent registry
+   3. Add setup and hook configuration as needed
+   4. Ensure session and checkpoint tracking is handled per the abstraction
+- **Reference:** See [CLAUDE.md](CLAUDE.md) for architecture and code examples.
+
+---
+
+**Which should I use?**
+
+- Use a persona markdown agent if you want to create a new role or workflow for Claude Code.
+- Use a coding agent integration if you want to add support for a new AI coding tool or extend agent capabilities in the CLI.
 
 ---
 
@@ -159,9 +242,10 @@ See [docs/testing.md](docs/testing.md) for the full list of suites and environme
 ### Before You Submit
 
 - **Related issue exists and is approved** -- Your PR references an issue where a maintainer has acknowledged the approach. (Exceptions: documentation fixes, typo corrections, and `good-first-issue` items.)
-- **Linting passes** -- Run `mise run lint`
-- **Tests pass** -- Run `mise run test`
-- **Tests included** -- New Go code and behavior changes should have accompanying tests. Protocol-level changes should ideally be covered both in `internal/gitproto` unit tests and in an `internal/syncer` integration test.
+- **Linting passes** -- Run `mise run lint` (includes golangci-lint, gofmt, gomod, shellcheck)
+- **Tests pass** -- Run `mise run test` to verify your changes
+- **Tests included** -- New Go code and functionality should have accompanying tests
+- **Entire checkpoint trailers included** -- See [Using Entire While Contributing](#using-entire-while-contributing) below
 
 PRs that skip these steps are likely to be closed without merge.
 
@@ -170,24 +254,88 @@ PRs that skip these steps are likely to be closed without merge.
 1. **Push** your branch to your fork
 2. **Open a PR** against the `main` branch
 3. **Describe your changes** -- Link the related issue, summarize what changed and what testing you did
-4. **Address automated review feedback**
+4. **Address Copilot feedback** -- See [Responding to Automated Review](#responding-to-automated-review)
 5. **Wait for maintainer review**
+
+---
+
+## Responding to Automated Review
+
+Co-pilot agent reviews every PR and provides feedback on code quality, potential bugs, and project conventions.
+
+**Read and respond to every Copilot comment.** PRs with unaddressed Copilot feedback will not move to maintainer review.
+
+- **Fixed** -- Push a commit addressing the issue.
+- **Disagree** -- Reply explaining your reasoning. The Copilot isn't always right.
+- **Question** -- Ask for clarification. We're happy to help.
+
+Addressing Copilot feedback upfront is the fastest path to maintainer review.
+
+---
+
+## Using Entire While Contributing
+
+We use Entire on Entire. When contributing, install the Entire CLI and let it capture your coding sessions -- this gives us valuable dogfooding data and helps improve the tool.
+
+### Setup
+
+Install the latest version of the Entire CLI (see [installation docs](https://docs.entire.io/cli/installation)) and verify with `entire version`. Entire is already configured in this repository, so there's no need to run `entire enable`.
+
+### Checkpoint Trailers
+
+All commits should include `Entire-Checkpoint` trailers from your sessions. These are added automatically by the `prepare-commit-msg` hook when Entire is enabled. The trailers link your commits to session metadata on the `entire/checkpoints/v1` branch.
+
+### Sessions Branch
+
+When you push your PR branch, Entire can automatically push the `entire/checkpoints/v1` branch alongside it (if `push_sessions` is enabled in your settings). Include this in your PR so maintainers can review the session context behind your changes.
+
+---
+
+## Troubleshooting
+
+### Common Setup Issues
+
+**`go mod download` fails with timeout**
+```bash
+# Try using direct mode
+GOPROXY=direct go mod download
+```
+
+**`mise install` fails**
+```bash
+# Ensure mise is properly installed
+curl https://mise.run | sh
+
+# Reload your shell
+source ~/.zshrc  # or ~/.bashrc
+```
+
+**Binary not updating after rebuild**
+```bash
+# Check which binary is being used
+which git-sync
+type -a git-sync
+
+# You may have multiple installations - update the correct path
+```
 
 ---
 
 ## Community
 
-- **GitHub Issues** - bug reports, feature discussions
-- **Discord** - [Join our server](https://discord.gg/jZJs3Tue4S) for questions and real-time conversation
+Join the Entire community:
+
+- **Discord** - [Join our server][discord] for discussions and support
+
+[discord]: https://discord.gg/jZJs3Tue4S
 
 ---
 
 ## Additional Resources
 
 - [README](README.md) - Setup and usage documentation
-- [docs/architecture.md](docs/architecture.md) - Technical architecture and package layout
-- [docs/embedding.md](docs/embedding.md) - Library embedding guide
-- [docs/testing.md](docs/testing.md) - Test suites and integration coverage
+- [CLAUDE.md](CLAUDE.md) - Architecture and development reference (Claude Code)
+- [AGENTS.md](AGENTS.md) - Architecture and development reference (Gemini CLI, OpenCode, Cursor, Factory AI Droid, Copilot CLI)
 - [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
 - [Security Policy](SECURITY.md) - Reporting security vulnerabilities
 
