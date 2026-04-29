@@ -1,0 +1,42 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "0917b3232b96",
+  "session_id": "019d7e48-96e2-77a0-b4ce-607c7aba4b96",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:09.105614Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync/main.go",
+    "pkg/gitsync/unstable/client.go",
+    "pkg/gitsync/unstable/client_test.go",
+    "pkg/gitsync/unstable/doc.go"
+  ],
+  "agent": "Codex",
+  "model": "",
+  "turn_id": "d0a99023c465",
+  "checkpoint_transcript_start": 354,
+  "token_usage": {
+    "input_tokens": 414138,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 209920,
+    "output_tokens": 676,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-13T09:28:59.458232Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 258,
+    "human_modified": 258,
+    "human_removed": 0,
+    "total_committed": 258,
+    "total_lines_changed": 516,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
