@@ -44,6 +44,21 @@ func TestPacketReaderHandlesSpecialPackets(t *testing.T) {
 	}
 }
 
+func TestPacketReaderHandlesEmptyDataPacket(t *testing.T) {
+	reader := NewPacketReader(bytes.NewBufferString("0004"))
+
+	kind, payload, err := reader.ReadPacket()
+	if err != nil {
+		t.Fatalf("read empty data packet: %v", err)
+	}
+	if kind != PacketData {
+		t.Fatalf("kind = %v, want PacketData", kind)
+	}
+	if len(payload) != 0 {
+		t.Fatalf("payload length = %d, want 0", len(payload))
+	}
+}
+
 func TestDecodeV2Capabilities(t *testing.T) {
 	wire := "" +
 		"000eversion 2\n" +
