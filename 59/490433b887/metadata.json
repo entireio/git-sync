@@ -3,7 +3,7 @@
   "checkpoint_id": "59490433b887",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "pkg/gitsync/client_test.go",
     "pkg/gitsync/types.go"
@@ -14,13 +14,19 @@
       "transcript": "/59/490433b887/0/transcript.jsonl",
       "content_hash": "/59/490433b887/0/transcript_hash.txt",
       "prompt": "/59/490433b887/0/prompt.txt"
+    },
+    {
+      "metadata": "/59/490433b887/1/metadata.json",
+      "transcript": "/59/490433b887/1/transcript.jsonl",
+      "content_hash": "/59/490433b887/1/transcript_hash.txt",
+      "prompt": "/59/490433b887/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 2044159,
+    "input_tokens": 17708792,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1862528,
-    "output_tokens": 6080,
-    "api_call_count": 13
+    "cache_read_tokens": 14531328,
+    "output_tokens": 66714,
+    "api_call_count": 160
   }
 }
