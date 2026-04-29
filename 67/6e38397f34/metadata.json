@@ -3,7 +3,7 @@
   "checkpoint_id": "676e38397f34",
   "strategy": "manual-commit",
   "branch": "soph/rewrite",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "internal/planner/types.go",
     "internal/syncer/syncer.go",
@@ -15,6 +15,19 @@
       "transcript": "/67/6e38397f34/0/transcript.jsonl",
       "content_hash": "/67/6e38397f34/0/transcript_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/67/6e38397f34/1/metadata.json",
+      "transcript": "/67/6e38397f34/1/transcript.jsonl",
+      "content_hash": "/67/6e38397f34/1/transcript_hash.txt",
+      "prompt": "/67/6e38397f34/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 65500157,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 63243648,
+    "output_tokens": 203222,
+    "api_call_count": 512
+  }
 }
