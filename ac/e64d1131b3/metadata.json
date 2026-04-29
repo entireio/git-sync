@@ -14,6 +14,19 @@
       "transcript": "/ac/e64d1131b3/0/transcript.jsonl",
       "content_hash": "/ac/e64d1131b3/0/transcript_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/ac/e64d1131b3/1/metadata.json",
+      "transcript": "/ac/e64d1131b3/1/transcript.jsonl",
+      "content_hash": "/ac/e64d1131b3/1/transcript_hash.txt",
+      "prompt": "/ac/e64d1131b3/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 1208904,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1025664,
+    "output_tokens": 1954,
+    "api_call_count": 8
+  }
 }
