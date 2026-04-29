@@ -1,0 +1,9 @@
+Review commit 5923020 ("Narrow sync execution through session helpers") in /Users/soph/Work/entire/devenv/git-sync. Focus on behavioral regressions, incorrect wiring, and whether the new session-owned executeIncremental/executeMaterialized helpers changed semantics. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit 838472e ("Cover mid-stream v2 fetch failures in syncer") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new smartHTTPRepoServer raw fetch hook is safe, whether the integration tests are meaningful and not timing-fragile, and whether the cancellation/malformed cases truly exercise started streaming rather than startup failures. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review the current worktree changes introducing pkg/gitsync. Focus on: 1) public API boundary quality, especially whether it leaks internal engine knobs or types too much, 2) obvious correctness issues in request->syncer config translation, 3) whether the result conversion is sufficient and safe for a first public cut. Report findings only, ordered by severity, with file references if possible.
