@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 
-	"entire.io/git-sync/internal/auth"
+	"entire.io/entire/git-sync/internal/auth"
 )
 
 func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {

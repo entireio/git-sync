@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"entire.io/git-sync/pkg/gitsync/unstable"
+	"entire.io/entire/git-sync/pkg/gitsync/unstable"
 )
 
 func TestSummarizeRuns(t *testing.T) {

@@ -15,9 +15,9 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 
-	"entire.io/git-sync/internal/validation"
-	"entire.io/git-sync/pkg/gitsync"
-	"entire.io/git-sync/pkg/gitsync/unstable"
+	"entire.io/entire/git-sync/internal/validation"
+	"entire.io/entire/git-sync/pkg/gitsync"
+	"entire.io/entire/git-sync/pkg/gitsync/unstable"
 )
 
 type scenario string
