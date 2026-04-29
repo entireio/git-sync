@@ -1,0 +1,17 @@
+Are there good enough coverage around --prune as to avoid data loss?
+
+---
+
+What is the use case with managed tags that could lead to data loss?
+
+---
+
+Add a test to confirm that behaviour.
+
+---
+
+Register an empty config plugin https://github.com/go-git/go-git/blob/main/x/plugin/config/empty.go via Register(ConfigLoader(), func() ConfigSource {
+          return config.NewEmpty()
+      })
+
+  TO remove settings such as gpgsign from both global and system levels.
