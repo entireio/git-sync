@@ -1,0 +1,43 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "be84133ec5bb",
+  "session_id": "019d86e6-9142-7b52-8050-d4e421a38051",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:36:05.170999Z",
+  "branch": "soph/replicate",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/planner/planner.go",
+    "internal/planner/planner_test.go",
+    "internal/planner/relay.go",
+    "internal/strategy/replicate/replicate.go",
+    "internal/strategy/replicate/replicate_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "e59b33fcd177",
+  "token_usage": {
+    "input_tokens": 15234096,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 14687104,
+    "output_tokens": 58566,
+    "api_call_count": 142
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-13T13:40:27.165597Z",
+    "agent_lines": 692,
+    "agent_removed": 20,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 692,
+    "total_lines_changed": 712,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
