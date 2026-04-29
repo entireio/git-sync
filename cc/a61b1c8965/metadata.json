@@ -3,7 +3,7 @@
   "checkpoint_id": "cca61b1c8965",
   "strategy": "manual-commit",
   "branch": "soph/rewrite",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "README.md",
     "docs/architecture.md",
@@ -21,13 +21,19 @@
       "transcript": "/cc/a61b1c8965/1/transcript.jsonl",
       "content_hash": "/cc/a61b1c8965/1/transcript_hash.txt",
       "prompt": "/cc/a61b1c8965/1/prompt.txt"
+    },
+    {
+      "metadata": "/cc/a61b1c8965/2/metadata.json",
+      "transcript": "/cc/a61b1c8965/2/transcript.jsonl",
+      "content_hash": "/cc/a61b1c8965/2/transcript_hash.txt",
+      "prompt": "/cc/a61b1c8965/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1464264,
+    "input_tokens": 25747579,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1435904,
-    "output_tokens": 4405,
-    "api_call_count": 10
+    "cache_read_tokens": 24201088,
+    "output_tokens": 87147,
+    "api_call_count": 194
   }
 }
