@@ -1,0 +1,104 @@
+can you get yourself an overview over the repo, and then the implemented code, and then kick of specific agents reviewing everything. One of them should look at "what if we would write this from scratch, what would we do differently"
+
+---
+
+put it in a review memo
+
+---
+
+can you incorporate: 
+
+All 5 reviews are in. Here's the compiled report:
+
+---
+
+## git-sync Code Review — 5 Perspectives
+
+### 1. Code Quality & Correctness
+
+**Real bugs found:**
+
+- **Sideband priority is backwards** (`syncer.go:3022-3026`): `buildSidebandIfSupported` checks `Sideband` before `Sideband64k`. Per Git protocol, 64k is preferred — the current code picks the lower-bandwidth variant even when 64k is available on both sides.
+
+- **Pack reader leak in batch loop** (`syncer.go:1257-1263`): In `bootstrapBatchedWithInputs`, each iteration fetches a `packReader` but never defers its close. If `pushPackToTarget` errors before `ReceivePack` finishes, the HTTP response body leaks.
+
+- **Data race in statsCollector** (`syncer.go:3036-3088`): The `items` map is mutated from `countingRoundTripper.RoundTrip` (HTTP goroutine via `onClose`) and read by the main goroutine (`snapshot()`, `addWantsHaves()`). No mutex protects it.
+
+**Other concerns:**
+
+- **Unbounded `io.ReadAll`** on server responses (`protocol_v2.go:713`) — a malicious server could OOM the process.
+- **Swallowed refresh error** (`syncer.go:2789`): When OAuth token refresh fails, the stale token is silently returned with no logging.
+- **File token store has no locking** (`syncer.go:2931`): Concurrent processes can corrupt `tokens.json`.
+
+---
+
+### 2. Architecture & Design
+
+**What's good:** `sourceRefService` cleanly hides v1/v2 behind `Fetch`/`FetchPack`. Guard functions (`canBootstrapRelay`, `canIncrementalRelay`) return reason strings for diagnostics. Clean public API (`Run`/`Bootstrap`/`Probe`/`Fetch` + typed results). No global state.
+
+**Main concerns:**
+
+- **syncer.go is doing 6 jobs in 3143 lines**: transport, auth (~350 lines), planning, push (3 variants), bootstrap batching, stats. Natural split points exist with minimal cross-coupling.
+- **Repeated setup across entry points**: `Run()`, `Bootstrap()`, `Probe()`, `Fetch()` all repeat: validate protocol → create stats → create connections → list refs. Needs a shared session/setup struct.
+- **10+ parameter functions**: `bootstrapBatchedWithInputs` takes 11 args. A "sync session" struct would clean this up.
+- **`Bootstrap()` duplicates `Run()`'s setup** (lines 569-624 mirror 397-466).
+- **Growth risks**: Auth chain is 4 strategies deep, relay decision tree has 4 branches, `Result` struct has 14 fields — all will grow without structural refactoring.
+
+---
+
+### 3. Test Coverage & Quality
+
+**Major gaps:**
+
+- **No unit tests** for many complex pure functions: `buildDesiredRefs`, `buildPlans`, `planRef`, `objectsToPush`, `collectPushObjects`, `firstParentChain`, `normalizeMapping`, `autoBatchMaxPackBytes`, `bootstrapResumeIndex` (error path).
+- **Relay path selection untested in isolation**: `canIncrementalRelay`, `canFullTagCreateRelay`, `relayFallbackReason` — only exercised implicitly.
+- **No protocol v2 error handling tests**: Malformed server responses, truncated packets, missing `version 2` line — all have explicit error returns that are never tested.
+- **Empty source repo** never tested. **Tag force-retarget** never tested.
+- **No benchmarks** at all — the relay path and `collectPushObjects` are performance-sensitive.
+- **No context cancellation tests**.
+
+**Infra risks:**
+
+- `t.Fatalf` used inside HTTP handler goroutines → can hang instead of failing cleanly.
+- Test helpers (`newSourceRepo`, `makeCommits`) duplicated between `main_test.go` and `integration_test.go`.
+
+---
+
+### 4. "From Scratch" Redesign
+
+**Top 3 changes, in priority order:**
+
+1. **Drop go-git's transport layer, own the HTTP layer entirely.** git-sync already bypasses go-git for v2 (`protocol_v2.go`), for relay streaming, and partly for v1 (`requestInfoRefs`). The result is two parallel HTTP stacks. A custom `gitproto` package handling pkt-line + smart HTTP for both v1/v2 would eliminate ~30 transitive dependencies and the dual-stack problem. Keep go-git's packfile codec for the decode-repack fallback.
+
+2. **Split into focused packages**: `gitproto` (protocol), `planner` (ref comparison, checkpoint planning), `auth` (credential chain), `syncer` (orchestration). Key interfaces: `RefLister`, `PackFetcher`, `PackPusher`. Makes batch planning testable without HTTP.
+
+3. **Replace `progressf` with `slog`**: Leveled structured logging (`branch=main batch=3/7`) instead of ad-hoc stderr formatting. Matches the existing `--json` output philosophy.
+
+**Pack relay design is correct** — streaming source→target without decode is the right core insight. The CLI flat `Config` struct is fine for a tool invoked by automation.
+
+---
+
+### 5. Performance & Scalability
+
+**Critical issues:**
+
+- **The probing problem**: `sourcePackExceedsLimit` (`syncer.go:1601`) fetches the **entire pack** from source just to check if it exceeds a size limit, then discards all bytes. With ~5 probes per checkpoint, a 10-checkpoint branch does up to 50 full pack fetches thrown away. Fix: reuse a pack that fits instead of re-fetching, or use object count from pack header as a heuristic.
+
+- **In-memory object store** doesn't scale: The non-relay fallback path materializes every fetched object in heap. A 1GB repo needs >1GB heap. Worst case is multi-branch non-relay sync on a large repo.
+
+- **Unbounded graph walking**: `reachesCommitHash` (`syncer.go:2533`) does BFS through entire commit ancestry with no depth limit. A force-push scenario on a 100K-commit repo visits every commit.
+
+**Moderate issues:**
+
+- **Allocation churn in pkt-line reader** (`protocol_v2.go:76`): Two `make([]byte, ...)` per packet. Thousands of packets per fetch = significant GC pressure. Reusable buffer would help.
+- **`ReadMemStats` every 10ms** causes ~100 STW pauses/second — acceptable since opt-in, but worth noting.
+- **go-git v1 sessions bypass the custom `http.Client`**, so stats counting and TLS skip may not apply on v1 paths.
+- **Batching overhead**: 2N+2 HTTP round-trips for N batches vs. 2 for single push, plus repeated server-side pack computation.
+
+---
+
+Let's turn this into an issue list in a markdown file, I'm fine doing a full rewrite in a branch that we can compare to the existing code so we are throwing out wrong things and rebuild properly from scratch and address the issues
+
+---
+
+also put the rewrite memo into a markdown file for future reference
