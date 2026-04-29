@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,51 @@ func TestNewConn(t *testing.T) {
 	}
 	if conn.HTTP == nil {
 		t.Error("HTTP client should not be nil")
+	}
+}
+
+func TestNewConnStripsTrailingEndpointSlash(t *testing.T) {
+	ep, err := url.Parse("https://example.com/repo.git///")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	var gotURLs []string
+	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		gotURLs = append(gotURLs, req.URL.String())
+		res := &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+		}
+		if req.Method == http.MethodGet {
+			res.Header.Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			res.Body = io.NopCloser(strings.NewReader("0000"))
+		}
+		return res, nil
+	}))
+
+	if got, want := conn.Endpoint.Path, "/repo.git"; got != want {
+		t.Fatalf("Endpoint.Path = %q, want %q", got, want)
+	}
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack test"); err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+
+	wantURLs := []string{
+		"https://example.com/repo.git/info/refs?service=git-upload-pack",
+		"https://example.com/repo.git/git-upload-pack",
+	}
+	if len(gotURLs) != len(wantURLs) {
+		t.Fatalf("got %d request URLs, want %d: %v", len(gotURLs), len(wantURLs), gotURLs)
+	}
+	for i := range wantURLs {
+		if gotURLs[i] != wantURLs[i] {
+			t.Fatalf("request URL %d = %q, want %q", i, gotURLs[i], wantURLs[i])
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 )
@@ -76,12 +77,21 @@ func NewConnWithHTTPClient(ep *url.URL, label string, auth AuthMethod, httpClien
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: http.DefaultTransport}
 	}
+	normalizeEndpointPath(ep)
 	return &Conn{
 		Label:    label,
 		Endpoint: ep,
 		HTTP:     httpClient,
 		Auth:     auth,
 	}
+}
+
+func normalizeEndpointPath(ep *url.URL) {
+	if ep == nil {
+		return
+	}
+	ep.Path = strings.TrimRight(ep.Path, "/")
+	ep.RawPath = strings.TrimRight(ep.RawPath, "/")
 }
 
 // NewHTTPTransport creates an http.Transport with optional TLS skip.
