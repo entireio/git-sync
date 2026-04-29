@@ -1,0 +1,5 @@
+Review the latest changes since commit f9170fc, focusing on the structured logging change in internal/strategy/bootstrap/bootstrap.go, the wiring in internal/syncer/syncer.go, and the tracker update. Check whether slog was introduced coherently, whether any useful context was lost compared to the old progress messages, and whether marking logging done is justified. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review commit 07ddaa2 on this branch. Focus on the new centralized bootstrap capability checks in gitproto/fetch.go, the bootstrap strategy wiring changes, the missing-TargetPusher fix, and the related tests/docs updates. Return findings only, ordered by severity, with file references. Do not make changes.
