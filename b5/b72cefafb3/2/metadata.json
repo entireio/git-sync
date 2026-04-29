@@ -1,9 +1,11 @@
 {
   "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
   "checkpoint_id": "b5b72cefafb3",
+  "session_id": "c8453209-604f-4c87-adea-08757dd367a8",
   "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:31.144007Z",
   "branch": "soph/rewrite",
-  "checkpoints_count": 4,
+  "checkpoints_count": 2,
   "files_touched": [
     "cmd/git-sync/main.go",
     "cmd/git-sync/main_test.go",
@@ -47,31 +49,29 @@
     "internal/syncer/live_bootstrap_test.go",
     "internal/syncer/syncer.go"
   ],
-  "sessions": [
-    {
-      "metadata": "/b5/b72cefafb3/0/metadata.json",
-      "transcript": "/b5/b72cefafb3/0/transcript.jsonl",
-      "content_hash": "/b5/b72cefafb3/0/transcript_hash.txt",
-      "prompt": ""
-    },
-    {
-      "metadata": "/b5/b72cefafb3/1/metadata.json",
-      "transcript": "/b5/b72cefafb3/1/transcript.jsonl",
-      "content_hash": "/b5/b72cefafb3/1/transcript_hash.txt",
-      "prompt": "/b5/b72cefafb3/1/prompt.txt"
-    },
-    {
-      "metadata": "/b5/b72cefafb3/2/metadata.json",
-      "transcript": "/b5/b72cefafb3/2/transcript.jsonl",
-      "content_hash": "/b5/b72cefafb3/2/transcript_hash.txt",
-      "prompt": "/b5/b72cefafb3/2/prompt.txt"
-    }
-  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "e3b48e954502",
   "token_usage": {
-    "input_tokens": 37108074,
+    "input_tokens": 146,
     "cache_creation_tokens": 179627,
-    "cache_read_tokens": 50534225,
-    "output_tokens": 177284,
-    "api_call_count": 420
+    "cache_read_tokens": 14907857,
+    "output_tokens": 55149,
+    "api_call_count": 128
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-12T09:05:55.955563Z",
+    "agent_lines": 636,
+    "agent_removed": 743,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 636,
+    "total_lines_changed": 1379,
+    "agent_percentage": 100,
+    "metric_version": 2
   }
 }
