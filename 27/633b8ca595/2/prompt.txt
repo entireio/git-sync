@@ -1,0 +1,1 @@
+Review the staged git changes (git diff --staged main) in this Go repository. This is a rewrite of a git-sync tool. Focus on: 1) any remaining correctness bugs 2) regressions from the old code 3) concurrency issues 4) error handling gaps. Be concise — under 500 words.
