@@ -1,0 +1,208 @@
+/simplify
+
+---
+
+<task-notification>
+<task-id>a97915efb5e80653b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/0843583b-95af-4b6e-9887-1bb36c4b32ca/tasks/a97915efb5e80653b.output</output-file>
+<status>completed</status>
+<summary>Agent "Review docs for content reuse" completed</summary>
+<result>CODE_OF_CONDUCT.md is verbatim Entire boilerplate, generic and fine — not cli-specific. Now I have enough to assess duplication. Let me double-check the bootstrap.md "Why" section vs architecture.md to confirm overlap, and protocol.md's relay-framing vs architecture.md's relay-first/no-thin sections.
+
+Now I have all I need to compose the review.
+
+Findings (under 200 words):
+
+1. **README.md:11-15 vs docs/architecture.md:7-19** — "Why This Exists" paragraph re-states architecture.md's "Product Rationale" at near-equal depth (local mirror clone, host-specific, scripts; missing middle layer). Fix: keep one short sentence in README and link out — the explicit cross-link on line 17 already exists, so just trim the duplicate paragraph.
+
+2. **README.md:97-99 ("Sync Behavior")** — duplicates incremental-relay.md:1-6 and bootstrap.md:139 at the same depth (auto-select bootstrap, narrow relay path, materialized fallback, `--materialized-max-objects`). Fix: collapse to one sentence pointing at docs/incremental-relay.md and docs/bootstrap.md.
+
+3. **docs/bootstrap.md:9-25 ("Why")** — re-explains the materialized-vs-relay memory story already covered in architecture.md:160-192 ("Memory Assumptions") and architecture.md:55-63 ("Relay First"). Fix: replace with two-line summary plus link to architecture.md#memory-assumptions.
+
+4. **docs/replicate.md:25-30 and incremental-relay.md:9-17** — both restate the `no-thin` / never-request-thin-pack rule already in protocol.md:235-242 and architecture.md:73-78 at full depth. Fix: keep one sentence ("see protocol.md#why-no-thin-matters") instead of re-deriving the constraint twice.
+
+5. **docs/bootstrap.md:127-149 ("Current Behavior")** — restates batched-bootstrap scope (temp refs, v2-with-filter, resume) that bootstrap-batching.md:258-277 already covers verbatim. Fix: drop the bullet list and link to bootstrap-batching.md#current-behavior.
+
+6. **docs/bootstrap-batching.md:115-123 ("Adaptive size correction")** vs **protocol.md:278-288 ("PACK header pre-check")** — same PACK-header / target-rejection retry mechanism described twice at equal depth. Fix: keep the operational version in bootstrap-batching.md, reduce protocol.md to a one-line pointer (or vice versa).
+
+7. **CONTRIBUTING.md:181 ("Discord")** and CONTRIBUTING.md:328-330 in cli — Discord invite carried over unchanged; fine if intentional, but flag: there is no git-sync-specific channel mention, so this is cli-shared boilerplate kept as-is.
+
+8. **CODE_OF_CONDUCT.md** — verbatim copy of cli/CODE_OF_CONDUCT.md with no git-sync tailoring; acceptable as generic org policy, no action needed.
+
+9. **CONTRIBUTING.md:38, 48-49, 64** — three separate "open a GitHub Issue" bullets within the same file repeating the same instruction. Fix: keep the workflow list (lines 17-22) and trim the redundant restatements in "Submitting Issues" and "How to Contribute".
+
+SECURITY.md was correctly tailored (mentions `git-sync-bench`, `pkg/gitsync`, remote-to-remote relay) — no carryover concerns.</result>
+<usage><total_tokens>58977</total_tokens><tool_uses>19</tool_uses><duration_ms>82828</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0a3a871d8cac75ce</task-id>
+<tool-use-id>toolu_01Kn4HPMBZCYutqrK57YjnZ2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/0843583b-95af-4b6e-9887-1bb36c4b32ca/tasks/a0a3a871d8cac75ce.output</output-file>
+<status>completed</status>
+<summary>Agent "Review docs for quality" completed</summary>
+<result>Good. Now I have enough material. Let me synthesize findings.
+
+Key checks:
+- README.md links: docs/architecture.md (exists), docs/protocol.md (exists), docs/bootstrap.md (exists), docs/bootstrap-batching.md (exists), docs/incremental-relay.md (exists), docs/replicate.md (exists), docs/embedding.md (exists), docs/benchmarking.md (exists), docs/testing.md (exists). CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md - exist.
+- `architecture.md#memory-assumptions` (heading "## Memory Assumptions" → `memory-assumptions`) - matches.
+- `protocol.md#head-symref-discovery` (heading "## HEAD Symref Discovery" → `head-symref-discovery`) - matches.
+- bootstrap.md does NOT mention docs/embedding.md but README references it.
+
+Now let me look for prescriptive voice systematically:
+
+**bootstrap.md** is loaded with prescriptive design-doc voice:
+- Line 5 "Instead, `bootstrap` should fetch a pack..."
+- Line 19 "`bootstrap` is meant to cover..."
+- Line 41 "After that, operators should use `sync`."
+- Line 45 "Preferred CLI:" 
+- Line 51 "Expected v1 flags:" (also leftover V1 marker!)
+- Line 62 "Intended Flow"
+- Line 70 "should avoid that cost"
+- Line 80 "expected wins"
+- Line 93 "if a relay-safe path cannot be used, `bootstrap` should fail"
+- Line 99 "The cleanest implementation shape is..."
+- Line 101 "Suggested pieces:"
+- Line 109 "The initial implementation should prefer:"
+- Line 119 "The error should explicitly recommend..."
+
+**bootstrap-batching.md** has tons of prescriptive/suggested voice:
+- Line 5 "This note sketches a batching design"
+- Line 40 "Preferred Model"
+- Line 60 "Possible CLI extension:"
+- Line 68 "Possible related flags:"
+- Line 74 "The first version should only need..."
+- Line 89-99 prescriptive
+- Line 163 "The first version should prefer..."
+- Line 168-172 "Tags should not be pushed... Recommended rule:"
+- Line 188 "Minimum restart model:"
+- Line 211 "Implementation Shape", "Suggested pieces:"
+- Line 223 "The estimator should reuse..."
+- Line 232-247 "Operator Output", "should be explicit", "should include"
+
+**replicate.md** - Line 56 "It is the recommended dry-run companion"
+
+Now let me compose the final output, capped at 250 words:
+
+Findings (mostly prescriptive voice surviving the prune):
+
+1. **bootstrap.md:1-126** — Entire doc title is "Bootstrap Design" and the body is design-doc voice ("should fetch", "is meant to cover", "Intended Flow", "Suggested pieces", "The initial implementation should prefer"); fix: rename to "Bootstrap" and rewrite present-tense around the "Current Behavior" section that already exists at line 127.
+
+2. **bootstrap.md:51** — "Expected v1 flags:" leaks the V1 phase marker the user explicitly asked to prune; fix: drop "v1" or rewrite as "Flags:".
+
+3. **bootstrap.md:45,62,97,101,109** — "Preferred CLI:", "Intended Flow", "Implementation Notes", "Suggested pieces:", "The initial implementation should prefer:" are all design-doc tone for already-shipped code; fix: convert to declarative "CLI", "Flow", "Implementation".
+
+4. **bootstrap-batching.md:5** — "This note sketches a batching design for large bootstrap jobs" — sketchy/prescriptive opener for shipped code; fix: state what batching is and does.
+
+5. **bootstrap-batching.md:40,58-74,162-168,188,211-228,232-247** — "Preferred Model", "Possible CLI extension", "Possible related flags", "The first version should only need", "The first version should prefer the separate final ref creation", "Minimum restart model", "Implementation Shape" / "Suggested pieces", "The estimator should reuse", "Operator Output ... should include" are leftover design-doc voice; fix: rewrite in present indicative against actual implementation, or delete (the "Current Behavior" section at line 258 already covers this).
+
+6. **bootstrap-batching.md:174-179** — "Recommended rule:" plus "Tags should not be pushed during intermediate branch batches" duplicated immediately after by "Branch batches push first; create-only tags are pushed after..." (line 181); fix: keep only the present-tense restatement on line 181.
+
+7. **bootstrap-batching.md:50-56** — "This gives:" bullet list of design-rationale benefits is followed by the same content elsewhere; trim to one statement of behavior.
+
+8. **replicate.md:56** — "It is the recommended dry-run companion before running `replicate`..." — soft prescriptive; fix: "Use it before running `replicate` against a non-empty target."
+
+9. **README.md:226 / docs/bootstrap.md** — README describes bootstrap as "empty-target relay" but the doc title is "Bootstrap Design" and body says it's for "initial remote-to-remote seeding when the target does not yet contain the managed refs" — terminology drift between "empty-target", "initial sync", "first-time seeding", "bootstrap" used interchangeably; fix: pick "empty-target bootstrap" and use it consistently.
+
+10. **architecture.md vs incremental-relay.md / README.md** — terminology drift on transfer paths: "bootstrap relay path", "incremental relay path", "narrow relay fast path", "incremental relay strategy", "materialized fallback", "materialized path"; fix: standardize on a single noun per concept (e.g., "bootstrap relay", "incremental relay", "materialized fallback") and use consistently.
+
+11. **bootstrap.md:127 "Current Behavior"** vs **bootstrap-batching.md:258 "Current Behavior"** — both docs end with a "Current Behavior" tail that exists because the prescriptive front half was never rewritten; fix: either delete the prescriptive front half and promote "Current Behavior" to be the document, or merge.
+
+12. **CONTRIBUTING.md:13,38,48,49,64** — repeats the same "open an issue first" message four times across "Before You Code", "Submitting Issues", "How to Contribute"; fix: consolidate to one section.
+
+13. **CONTRIBUTING.md:27-33 "First-Time Contributors"** — three-bullet section adds no nav value and overlaps "How to Contribute" at line 44; fix: remove or fold.
+
+14. **CONTRIBUTING.md:60-72** — H3 "Required Information" + "What to Include" both under H2 "Reporting Bugs"; unnecessary sub-sub-heading split; fix: collapse to single bullet list.
+
+15. **CODE_OF_CONDUCT.md:62-86** — "1. Correction / 2. Warning / 3. Temporary Ban / 4. Permanent Ban" each given own H4 with `---` separators; over-nested for a 4-item list; fix: convert to simpler bold/bullet form.
+
+That's well past 250 words. Let me trim to the highest-value items.
+
+Findings (cap 250 words):
+
+1. **docs/bootstrap.md:1-126** — Entire first half is design-doc voice ("should", "is meant to", "Intended Flow", "Suggested pieces"); the present-tense "Current Behavior" section at line 127 is what survived. Fix: delete the design-doc front half, promote "Current Behavior" as the doc.
+
+2. **docs/bootstrap.md:51** — "Expected v1 flags:" leaks the V1 phase marker. Fix: drop "v1".
+
+3. **docs/bootstrap-batching.md:5** — "This note sketches a batching design" is sketch-tone for shipped code. Fix: state what batching does in present tense.
+
+4. **docs/bootstrap-batching.md:40,60-74,162-168,188,211-228,232-247** — "Preferred Model", "Possible CLI extension", "Possible related flags", "The first version should only need", "Minimum restart model", "Implementation Shape" / "Suggested pieces", "Operator Output ... should include" are all leftover design voice; "Current Behavior" at line 258 already covers it. Fix: delete or rewrite indicative.
+
+5. **docs/bootstrap-batching.md:172-181** — "Recommended rule:" / "Tags should not be pushed..." is immediately restated on line 181 as present-tense fact. Fix: keep only the line-181 form.
+
+6. **docs/replicate.md:56** — "It is the recommended dry-run companion..." soft prescriptive. Fix: "Use it before running `replicate` against a non-empty target."
+
+7. **Terminology drift across README.md:226, docs/bootstrap.md, docs/incremental-relay.md, docs/architecture.md** — "bootstrap relay path" / "bootstrap relay" / "empty-target relay" / "first-time seeding" / "initial sync" used interchangeably; same for "incremental relay path" / "narrow relay fast path" / "incremental relay strategy"; "materialized path" / "materialized fallback". Fix: pick one noun per concept and use it consistently.
+
+8. **CONTRIBUTING.md:13,38,48** — "open an issue first" repeated three times across "Before You Code", "Submitting Issues", "How to Contribute". Fix: consolidate.
+
+9. **CONTRIBUTING.md:27-33** — "First-Time Contributors" three-bullet section overlaps "How to Contribute" at line 44 with no added value. Fix: fold or remove.
+
+10. **CONTRIBUTING.md:59-72** — H3 "Required Information" + H3 "What to Include" both under "Reporting Bugs"; unnecessary nesting. Fix: collapse to a single list.
+
+11. **CODE_OF_CONDUCT.md:62-86** — Four enforcement levels each given an H4 plus `---` separator for what is a 4-item list. Fix: convert to bold-label bullets.
+
+12. **docs/bootstrap.md:99** — "The cleanest implementation shape is a separate code path, not an optimization hidden inside `sync`." — implementation-decision rationale that's already done. Fix: delete.
+
+That's roughly 250 words. Let me finalize.
+
+1. docs/bootstrap.md:1-126 - Entire first half is design-doc voice ("should fetch", "is meant to cover", "Intended Flow", "Suggested pieces", "The initial implementation should prefer") for already-shipped code; the present-tense "Current Behavior" at line 127 is what survived the prune. Fix: delete the design-doc front half, promote "Current Behavior" as the document.
+
+2. docs/bootstrap.md:51 - "Expected v1 flags:" leaks the V1 phase marker the prune was supposed to remove. Fix: drop "v1", rewrite as "Flags:".
+
+3. docs/bootstrap-batching.md:5 - "This note sketches a batching design" is sketch-tone for shipped code. Fix: state present-tense what batching does.
+
+4. docs/bootstrap-batching.md:40,58-74,162-168,188,211-228,232-247 - "Preferred Model", "Possible CLI extension", "Possible related flags", "The first version should only need", "Minimum restart model", "Implementation Shape" / "Suggested pieces", "Operator Output ... should include" are leftover design-doc voice; "Current Behavior" at line 258 already says what shipped. Fix: delete or rewrite indicative.
+
+5. docs/bootstrap-batching.md:172-181 - "Recommended rule:" plus "Tags should not be pushed during intermediate branch batches" is immediately restated on line 181 as present-tense fact. Fix: keep only the line-181 form.
+
+6. docs/replicate.md:56 - "It is the recommended dry-run companion before running `replicate`..." is soft prescriptive. Fix: "Use it before running `replicate` against a non-empty target."
+
+7. README.md:226-228 vs docs/bootstrap.md vs docs/incremental-relay.md vs docs/architecture.md - terminology drift: "bootstrap relay path" / "bootstrap relay" / "empty-target relay" / "first-time seeding" used interchangeably; same for "incremental relay path" / "narrow relay fast path" / "incremental relay strategy"; "materialized path" / "materialized fallback". Fix: pick one noun per concept and use it consistently.
+
+8. CONTRIBUTING.md:13,38,48 - "open an issue first" repeated across "Before You Code", "Submitting Issues", "How to Contribute". Fix: consolidate to one section.
+
+9. CONTRIBUTING.md:27-33 - "First-Time Contributors" three-bullet section overlaps "How to Contribute" at line 44 with no added value. Fix: fold or remove.
+
+10. CONTRIBUTING.md:59-72 - H3 "Required Information" + H3 "What to Include" both under "Reporting Bugs"; unnecessary sub-sub-heading split. Fix: collapse to a single list.
+
+11. CODE_OF_CONDUCT.md:62-86 - Four enforcement levels each given an H4 plus `---` separator for what is a flat 4-item list. Fix: convert to bold-label bullets.
+
+12. docs/bootstrap.md:99 - "The cleanest implementation shape is a separate code path, not an optimization hidden inside `sync`." is past-tense implementation rationale. Fix: delete.
+
+13. docs/bootstrap.md:139, README.md:28 - README claims `sync` "auto-selects the bootstrap relay path on empty targets" while bootstrap.md still says "After that, operators should use `sync`" (line 41); contradicts the auto-bootstrap behavior described elsewhere. Fix: align bootstrap.md with the auto-selection story.
+
+(Note: I did not find any broken markdown cross-links — all referenced files exist and `#memory-assumptions` and `#head-symref-discovery` slugs match. CONTRIBUTING/SECURITY/CODE_OF_CONDUCT do not leak "Entire CLI" — only the legitimate "Entire" company/email references.)</result>
+<usage><total_tokens>52653</total_tokens><tool_uses>17</tool_uses><duration_ms>122547</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acc0fa18e891fdf30</task-id>
+<tool-use-id>toolu_01RHHgwvKqAG1dhrMBFhoZhm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/0843583b-95af-4b6e-9887-1bb36c4b32ca/tasks/acc0fa18e891fdf30.output</output-file>
+<status>completed</status>
+<summary>Agent "Review docs for code grounding" completed</summary>
+<result>All structurally correct. Now I have enough for the review.
+
+## Findings
+
+1. **docs/bootstrap-batching.md:131-133** — Claims the trunk-aware planner accumulates state into `planStopSet` and `planHaves`. Source uses the names `trunkStopSet` and `trunkHaves` (`internal/strategy/bootstrap/bootstrap.go:449-490`); rename or quote-strip these to match.
+
+2. **docs/protocol.md:171** — Claims the trunk hint flows "through `syncer.Config.SourceHeadTarget` into `bootstrap.Params.SourceHeadTarget`". `syncer.Config` (`internal/syncer/syncer.go:64-82`) has no `SourceHeadTarget` field; it flows from `s.sourceService.HeadTarget` (a `gitproto.RefService` field) into `bootstrap.Params.SourceHeadTarget` at `syncer.go:779`.
+
+3. **docs/protocol.md:230** — Claims push includes `report-status-v2`, `ofs-delta`, and optionally `atomic` and `quiet` as wire capabilities. `internal/gitproto/push.go:60-94` only sets sideband (via `PreferredSideband`), `report-status`, and conditionally `delete-refs`; `report-status-v2`, `atomic`, and `quiet` are not set anywhere in the repo, and `ofs-delta` is consulted only for pack-encoding choice (`useRefDeltas` at push.go:166), not advertised as a request capability.
+
+4. **docs/protocol.md:81, 189** — Claims v1 `git-sync` includes `multi_ack_detailed no-done` on the first `want` line. Neither string appears anywhere in the source; `buildV1UploadPackBody` (`internal/gitproto/fetch.go:318`) only explicitly sets `no-progress`, `include-tag`, sideband, and `ofs-delta` on top of the go-git `NewUploadRequest()` defaults.
+
+Everything else checked out: file paths, `RequestInfoRefs`/`PostRPC*`/`NewHTTPTransport`/`ApplyAuth`/`StatsPhaseHeader`, pkt-line markers and `PacketReader`/`ReadPacket`/`EncodeCommand`/`FormatPktLine`, `PreferredSideband`/`DecodeV2Capabilities`/`V2Capabilities`/`FetchSupports`, `TargetFeaturesFromAdvRefs`/`TargetFeatures` struct shape, `ListSourceRefs`/`RefService`/`headTargetFromAdv`/`decodeV2LSRefs`, `orderTrunkFirst`/`checkPackSizeAndSubdivide`/`isTargetBodyLimitError`, `bootstrap.Params.SourceHeadTarget`, the 64 MiB info-refs and 128 MiB RPC caps, the no-thin/thin-pack invariant, the subsumed-branch fast path, and the `FollowInfoRefsRedirect` field on both `gitproto.Conn` and `gitsync.Endpoint`.</result>
+<usage><total_tokens>68927</total_tokens><tool_uses>58</tool_uses><duration_ms>230000</duration_ms></usage>
+</task-notification>
+
+---
+
+I feel contributing, code of conduct should stay 1:1 copies from ../cli except maybe the updates to reflect the different repo name
