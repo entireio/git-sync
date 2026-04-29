@@ -1,0 +1,22 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "e8501c11ba8a",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/gitproto/fetch.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/incremental/incremental.go",
+    "internal/strategy/materialized/materialized.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e8/501c11ba8a/0/metadata.json",
+      "transcript": "/e8/501c11ba8a/0/full.jsonl",
+      "content_hash": "/e8/501c11ba8a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
