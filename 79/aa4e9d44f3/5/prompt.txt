@@ -1,0 +1,1 @@
+can you review the changes focus on go best practices and if linting isn't just silenced to get linting green
