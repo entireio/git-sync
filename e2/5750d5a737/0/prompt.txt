@@ -1,0 +1,25 @@
+this should work right, or did the syntax change: 
+
+❯ go run ./cmd/git-sync sync \
+    --protocol v2 \
+    --measure-memory \
+    -v \
+    --target-username git \
+    --target-insecure-skip-tls-verify \
+    --tags \
+    https://github.com/kubernetes/kubernetes.git \
+    https://localhost:8080/git/test/git-sync-smoke-8
+error: list target refs: pkt-line 1: cannot read hash, pkt-line too short (# service=git-receive-pack)
+exit status 1
+
+---
+
+this is the exact same command that worked before, same source, same target (but new repo)
+
+---
+
+we did do a pretty big rewrite of the code base since I last run this, so maybe any idea where this could have been broken?
+
+---
+
+yes, do this
