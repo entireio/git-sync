@@ -1,0 +1,85 @@
+{
+  "cli_version": "v0.5.7-nightly.202604280703.51ccd662-dev-a72a26b7c",
+  "checkpoint_id": "a6b0ab05d37d",
+  "session_id": "537bd5df-4238-4e76-8ef4-b589e1217cfc",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T13:47:24.763393Z",
+  "branch": "nodo/entire-module-name",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".golangci.yaml",
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go",
+    "cmd/git-sync/main.go",
+    "cmd/git-sync/main_test.go",
+    "docs/embedding.md",
+    "go.mod",
+    "internal/convert/convert.go",
+    "internal/convert/convert_test.go",
+    "internal/planner/planner.go",
+    "internal/planner/planner_test.go",
+    "internal/planner/types.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/strategy/incremental/incremental.go",
+    "internal/strategy/incremental/incremental_test.go",
+    "internal/strategy/materialized/materialized.go",
+    "internal/strategy/materialized/materialized_test.go",
+    "internal/strategy/replicate/replicate.go",
+    "internal/strategy/replicate/replicate_test.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/benchmark_test.go",
+    "internal/syncer/git_http_backend_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/stats.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go",
+    "mise-tasks/lint/licenses",
+    "pkg/gitsync/client.go",
+    "pkg/gitsync/client_test.go",
+    "pkg/gitsync/example_test.go",
+    "pkg/gitsync/internalbridge/config.go",
+    "pkg/gitsync/internalbridge/model.go",
+    "pkg/gitsync/internalbridge/model_test.go",
+    "pkg/gitsync/types.go",
+    "pkg/gitsync/unstable/client.go",
+    "pkg/gitsync/unstable/client_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "f81138cd0f48",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 17779,
+    "cache_read_tokens": 203998,
+    "output_tokens": 1347,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-29T13:47:24.754989Z",
+    "agent_lines": 78,
+    "agent_removed": 78,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 78,
+    "total_lines_changed": 156,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 7
+      }
+    }
+  ]
+}
