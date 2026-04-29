@@ -1,0 +1,88 @@
+can you give me a command to test replicate with kubernetes and then linux
+
+---
+
+❯ go run ./cmd/git-sync plan --mode replicate --stats --json $SRC $TGT | jq .
+error: replicate requires relay-capable target: replicate-target-no-thin; use sync instead
+exit status 1
+
+But I suspect this is more an auth issue
+
+---
+
+❯ go run ./cmd/git-sync probe --json $SRC $TGT | jq '.target.capabilities'
+null
+
+---
+
+export TGT=https://localhost:8080/git/test/git-sync-smoke-10
+
+---
+
+but again: the local target requires auth, how should that work?
+
+---
+
+❯   go run ./cmd/git-sync replicate \
+    --target-insecure-skip-tls-verify \
+    --target-username test \
+    --target-token password1234 \
+    --stats --measure-memory --json \
+    $SRC $TGT | jq .
+error: list target refs: http 401: https://localhost:8080/git/test/git-sync-smoke-10/info/refs?service=git-receive-pack Invalid token format
+exit status 1
+
+---
+
+I need to use the git auth helper somehow as we did before with the sync command
+
+---
+
+I need to use the git auth helper somehow as we did before with the sync command
+
+---
+
+❯ go run ./cmd/git-sync replicate \
+    --target-username git --target-insecure-skip-tls-verify \
+    --stats --measure-memory --json \
+    $SRC $TGT | jq .
+error: replicate requires relay-capable target: replicate-target-no-thin; use sync instead
+exit status 1
+
+hmm but no-thin would have popped up before when I used sync with kubernetes?
+
+---
+
+❯   git credential fill <<<'protocol=https
+  host=localhost:8080
+  path=git/test/git-sync-smoke-10
+
+  ' | {
+    read _u; user=${_u#*=}
+    read _p; pass=${_p#*=}
+    curl -sk -u "$user:$pass" \
+      "$TGT/info/refs?service=git-receive-pack" \
+    | strings | grep -o 'no-thin\|ofs-delta\|report-status\|side-band-64k\|delete-refs' | sort -u
+  }
+fatal: refusing to work with credential missing host field
+
+---
+
+❯ printf 'protocol=https\nhost=localhost:8080\npath=git/test/git-sync-smoke-10\n\n' \
+    | git credential fill
+Username for 'https://localhost:8080': test
+Password for 'https://test@localhost:8080':
+protocol=https
+host=localhost:8080
+username=test
+password=passwrod1234
+
+I don't think this is working as it should
+
+---
+
+I'm using "entiredb auth login" that sets a credential in the keychain
+
+---
+
+yes, add a no-thin option and just fallback to that if thin is not supported
