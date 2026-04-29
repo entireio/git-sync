@@ -129,6 +129,75 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestRequestInfoRefsRequiresAdvertisementContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		wantErr     bool
+	}{
+		{
+			name:    "missing content type",
+			wantErr: true,
+		},
+		{
+			name:        "wrong content type",
+			contentType: "text/plain",
+			wantErr:     true,
+		},
+		{
+			name:        "wrong service advertisement",
+			contentType: "application/x-git-receive-pack-advertisement",
+			wantErr:     true,
+		},
+		{
+			name:        "expected content type",
+			contentType: "application/x-git-upload-pack-advertisement",
+		},
+		{
+			name:        "expected content type with parameter",
+			contentType: "application/x-git-upload-pack-advertisement; charset=utf-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep, err := transport.ParseURL("https://example.com/repo.git")
+			if err != nil {
+				t.Fatalf("parse endpoint: %v", err)
+			}
+			conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				res := &http.Response{
+					StatusCode: http.StatusOK,
+					Request:    req,
+					Body:       io.NopCloser(strings.NewReader("0000")),
+					Header:     make(http.Header),
+				}
+				if tt.contentType != "" {
+					res.Header.Set("Content-Type", tt.contentType)
+				}
+				return res, nil
+			}))
+
+			body, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, "")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected content type error")
+				}
+				if !strings.Contains(err.Error(), "unexpected info/refs content-type") {
+					t.Fatalf("error = %v, want content type error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RequestInfoRefs: %v", err)
+			}
+			if got, want := string(body), "0000"; got != want {
+				t.Fatalf("body = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPostRPCStreamContextCanceled(t *testing.T) {
 	started := make(chan struct{}, 1)
 	ep, err := transport.ParseURL("https://example.com/repo.git")

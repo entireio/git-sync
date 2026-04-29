@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 
@@ -121,6 +122,17 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service string, gitProtoco
 	defer res.Body.Close()
 	if err := httpError(res); err != nil {
 		return nil, err
+	}
+	wantContentType := fmt.Sprintf("application/x-%s-advertisement", service)
+	gotContentType := res.Header.Get("Content-Type")
+	gotMediaType := gotContentType
+	if gotContentType != "" {
+		if mediaType, _, err := mime.ParseMediaType(gotContentType); err == nil {
+			gotMediaType = mediaType
+		}
+	}
+	if gotMediaType != wantContentType {
+		return nil, fmt.Errorf("unexpected info/refs content-type %q, want %q", gotContentType, wantContentType)
 	}
 	if conn.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
 		final := res.Request.URL
