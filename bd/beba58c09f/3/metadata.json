@@ -1,0 +1,21 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "bdbeba58c09f",
+  "session_id": "019d7e48-96e2-77a0-b4ce-607c7aba4b96",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:31.918075Z",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "0149ce42a1bb",
+  "checkpoint_transcript_start": 253,
+  "token_usage": {
+    "input_tokens": 1880405,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1871872,
+    "output_tokens": 5184,
+    "api_call_count": 17
+  }
+}

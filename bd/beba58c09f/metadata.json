@@ -30,13 +30,19 @@
       "transcript": "/bd/beba58c09f/2/transcript.jsonl",
       "content_hash": "/bd/beba58c09f/2/transcript_hash.txt",
       "prompt": "/bd/beba58c09f/2/prompt.txt"
+    },
+    {
+      "metadata": "/bd/beba58c09f/3/metadata.json",
+      "transcript": "/bd/beba58c09f/3/transcript.jsonl",
+      "content_hash": "/bd/beba58c09f/3/transcript_hash.txt",
+      "prompt": "/bd/beba58c09f/3/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 14722303,
+    "input_tokens": 16602708,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 13312256,
-    "output_tokens": 54840,
-    "api_call_count": 132
+    "cache_read_tokens": 15184128,
+    "output_tokens": 60024,
+    "api_call_count": 149
   }
 }
