@@ -1,0 +1,38 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "26d96c05aedf",
+  "session_id": "019d7e36-577c-7d90-9f1c-a447ba2254b4",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:24.73791Z",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
+  "agent": "Codex",
+  "model": "",
+  "turn_id": "91b30138a23c",
+  "token_usage": {
+    "input_tokens": 13427150,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11213952,
+    "output_tokens": 49204,
+    "api_call_count": 118
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-12T11:43:55.194679Z",
+    "agent_lines": 58,
+    "agent_removed": 3,
+    "human_added": 3,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 62,
+    "total_lines_changed": 65,
+    "agent_percentage": 93.84615384615384,
+    "metric_version": 2
+  }
+}
