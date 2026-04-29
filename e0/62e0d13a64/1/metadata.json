@@ -1,7 +1,9 @@
 {
   "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
   "checkpoint_id": "e062e0d13a64",
+  "session_id": "019d7d08-46c9-7f73-affe-4e6ca9852d56",
   "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:24.235184Z",
   "branch": "soph/rewrite",
   "checkpoints_count": 0,
   "files_touched": [
@@ -11,25 +13,30 @@
     "internal/planner/relay.go",
     "internal/syncer/syncer.go"
   ],
-  "sessions": [
-    {
-      "metadata": "/e0/62e0d13a64/0/metadata.json",
-      "transcript": "/e0/62e0d13a64/0/transcript.jsonl",
-      "content_hash": "/e0/62e0d13a64/0/transcript_hash.txt",
-      "prompt": ""
-    },
-    {
-      "metadata": "/e0/62e0d13a64/1/metadata.json",
-      "transcript": "/e0/62e0d13a64/1/transcript.jsonl",
-      "content_hash": "/e0/62e0d13a64/1/transcript_hash.txt",
-      "prompt": "/e0/62e0d13a64/1/prompt.txt"
-    }
-  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "0e4a525e140c",
+  "checkpoint_transcript_start": 541,
   "token_usage": {
     "input_tokens": 1733071,
     "cache_creation_tokens": 0,
     "cache_read_tokens": 1671296,
     "output_tokens": 7120,
     "api_call_count": 21
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-12T11:48:10.845276Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 52,
+    "human_modified": 30,
+    "human_removed": 0,
+    "total_committed": 52,
+    "total_lines_changed": 82,
+    "agent_percentage": 0,
+    "metric_version": 2
   }
 }
