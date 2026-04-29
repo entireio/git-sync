@@ -3,7 +3,7 @@
   "checkpoint_id": "15ba661d1843",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "internal/gitproto/smarthttp.go",
     "internal/syncer/auth_test.go",
@@ -25,13 +25,19 @@
       "transcript": "/15/ba661d1843/1/transcript.jsonl",
       "content_hash": "/15/ba661d1843/1/transcript_hash.txt",
       "prompt": "/15/ba661d1843/1/prompt.txt"
+    },
+    {
+      "metadata": "/15/ba661d1843/2/metadata.json",
+      "transcript": "/15/ba661d1843/2/transcript.jsonl",
+      "content_hash": "/15/ba661d1843/2/transcript_hash.txt",
+      "prompt": "/15/ba661d1843/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 18022738,
+    "input_tokens": 42034146,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 15149312,
-    "output_tokens": 67217,
-    "api_call_count": 167
+    "cache_read_tokens": 36563200,
+    "output_tokens": 154399,
+    "api_call_count": 361
   }
 }
