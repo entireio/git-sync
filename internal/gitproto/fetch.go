@@ -59,14 +59,22 @@ func (s *RefService) FetchToStore(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) error {
+	var err error
 	switch s.Protocol {
 	case "v2":
-		return fetchToStoreV2(ctx, store, conn, s.V2Caps, desired, targetRefs, s.Verbose)
+		err = fetchToStoreV2(ctx, store, conn, s.V2Caps, desired, targetRefs, s.Verbose)
 	case "v1":
-		return fetchToStoreV1(ctx, store, conn, s.V1Adv, desired, targetRefs, s.Verbose)
+		err = fetchToStoreV1(ctx, store, conn, s.V1Adv, desired, targetRefs, s.Verbose)
 	default:
 		return fmt.Errorf("unsupported source protocol %q", s.Protocol)
 	}
+	// If the context was canceled, surface that as the primary error — any
+	// downstream parse/network failure is a side effect of cancellation and
+	// would race with ctx.Err() depending on read timing.
+	if err != nil && ctx.Err() != nil {
+		return errors.Join(ctx.Err(), err)
+	}
+	return err
 }
 
 // FetchPack fetches a packfile from source and returns the pack stream as a reader.
