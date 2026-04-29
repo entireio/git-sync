@@ -581,7 +581,10 @@ func planCheckpointsFromChain(
 	// Collect all commit hashes in the fetched graph so callers can extend
 	// their stop set. We only need the keys — ~8 bytes per commit, so the
 	// linux ancestry set is ~11 MB vs the store's ~4.6 GB.
-	ancestors := collectCommitHashes(graphStore)
+	ancestors, err := collectCommitHashes(graphStore)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("collect commit hashes for %s: %w", ref.TargetRef, err)
+	}
 	// graphStore is unused beyond this point; runtime.GC reclaims its
 	// transient allocations before we move on to the next branch.
 	runtime.GC()
@@ -606,10 +609,10 @@ func planCheckpointsFromChain(
 
 // collectCommitHashes returns the set of commit hashes in store. Used to build
 // the trunk reachability set for subsequent branches' stop-at walks.
-func collectCommitHashes(store *memory.Storage) map[plumbing.Hash]struct{} {
+func collectCommitHashes(store *memory.Storage) (map[plumbing.Hash]struct{}, error) {
 	iter, err := store.IterEncodedObjects(plumbing.CommitObject)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("iterate commit objects: %w", err)
 	}
 	defer iter.Close()
 	out := map[plumbing.Hash]struct{}{}
@@ -617,9 +620,9 @@ func collectCommitHashes(store *memory.Storage) map[plumbing.Hash]struct{} {
 		out[obj.Hash()] = struct{}{}
 		return nil
 	}); err != nil {
-		return nil
+		return nil, fmt.Errorf("walk commit objects: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
