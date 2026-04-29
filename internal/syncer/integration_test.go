@@ -1208,6 +1208,99 @@ func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 	}
 }
 
+// TestRun_IntegrationIncrementalPushFailureRecoversOnRetry covers the
+// failure-and-retry contract for the incremental relay path. When the
+// receive-pack rejects the push (here, a one-shot "ng" status), the run
+// must surface an error and leave the target unchanged — receive-pack
+// only commits refs that the server itself reports as ok. A retry against
+// the same source/target must then drive the incremental relay to
+// completion, leaving the target at the new source head.
+func TestRun_IntegrationIncrementalPushFailureRecoversOnRetry(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}
+
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	preRetryHead, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("target head after seed: %v", err)
+	}
+
+	// Advance source so the next sync produces a fast-forward update plan,
+	// the only branch shape that takes the incremental relay path.
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	sourceHead, err := sourceRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+
+	var pushAttempts int
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		pushAttempts++
+		if pushAttempts > 1 {
+			return nil
+		}
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ng simulated incremental push failure",
+			})
+		}
+		return report
+	}
+
+	if _, err := Run(context.Background(), cfg); err == nil {
+		t.Fatal("expected first incremental sync to fail under injected push rejection")
+	}
+
+	afterFail, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("target head after failed sync: %v", err)
+	}
+	if afterFail.Hash() != preRetryHead.Hash() {
+		t.Fatalf("target advanced despite rejected push: pre=%s post=%s", preRetryHead.Hash(), afterFail.Hash())
+	}
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("retry after incremental failure: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay on retry, got %+v", result)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected exactly one pushed ref on retry, got %+v", result)
+	}
+	if pushAttempts != 2 {
+		t.Fatalf("expected exactly two receive-pack attempts (fail + retry), got %d", pushAttempts)
+	}
+
+	finalHead, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("target head after retry: %v", err)
+	}
+	if finalHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("target head not at source after retry: target=%s source=%s", finalHead.Hash(), sourceHead.Hash())
+	}
+}
+
 func TestRun_IntegrationBranchMappingAndStats(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
