@@ -1,0 +1,11 @@
+question: so now we fixed if a branch is 100% included in the default branch (or another branch) but what if a branch is branched of the 10th commit (from HEAD) of main, how would the code handle this right now?
+
+---
+
+We usually have an orphaned branch in each repo (entire/checkpoints/v1) that might be part of a common set of repos to replicate through the tooling. In that case this might be worth the effort, right?
+
+---
+
+1. planStopSet / planHaves sounds good
+
+And yes do it
