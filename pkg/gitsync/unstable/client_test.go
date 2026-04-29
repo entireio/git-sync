@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/entirehq/git-sync/pkg/gitsync"
+	"entire.io/git-sync/pkg/gitsync"
 )
 
 func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {

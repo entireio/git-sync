@@ -3,7 +3,7 @@ package syncer
 import (
 	"testing"
 
-	bstrap "github.com/entirehq/git-sync/internal/strategy/bootstrap"
+	bstrap "entire.io/git-sync/internal/strategy/bootstrap"
 )
 
 func TestGitHubOwnerRepo(t *testing.T) {

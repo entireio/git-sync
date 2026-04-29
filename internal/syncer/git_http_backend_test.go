@@ -15,9 +15,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/entirehq/git-sync/internal/gitproto"
-	"github.com/entirehq/git-sync/internal/planner"
-	bstrap "github.com/entirehq/git-sync/internal/strategy/bootstrap"
+	"entire.io/git-sync/internal/gitproto"
+	"entire.io/git-sync/internal/planner"
+	bstrap "entire.io/git-sync/internal/strategy/bootstrap"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 

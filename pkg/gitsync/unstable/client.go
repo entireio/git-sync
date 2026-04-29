@@ -7,10 +7,10 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 
-	"github.com/entirehq/git-sync/internal/syncer"
-	"github.com/entirehq/git-sync/internal/validation"
-	"github.com/entirehq/git-sync/pkg/gitsync"
-	"github.com/entirehq/git-sync/pkg/gitsync/internalbridge"
+	"entire.io/git-sync/internal/syncer"
+	"entire.io/git-sync/internal/validation"
+	"entire.io/git-sync/pkg/gitsync"
+	"entire.io/git-sync/pkg/gitsync/internalbridge"
 )
 
 const DefaultMaterializedMaxObjects = syncer.DefaultMaterializedMaxObjects

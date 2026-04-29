@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/entirehq/git-sync/pkg/gitsync"
+	"entire.io/git-sync/pkg/gitsync"
 )
 
 func ExampleClient_Sync() {
