@@ -1,0 +1,39 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "79aa4e9d44f3",
+  "session_id": "019d7e3a-8c28-7662-aaba-a2d9ed140081",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:38:04.365181Z",
+  "branch": "soph/add-ci-and-lint",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/smarthttp_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/planner/planner_test.go"
+  ],
+  "agent": "Codex",
+  "model": "",
+  "turn_id": "a1ae767de92a",
+  "token_usage": {
+    "input_tokens": 15453113,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 13302528,
+    "output_tokens": 61513,
+    "api_call_count": 149
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-16T09:47:26.589787Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 18,
+    "human_modified": 56,
+    "human_removed": 0,
+    "total_committed": 18,
+    "total_lines_changed": 74,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

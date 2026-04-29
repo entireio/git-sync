@@ -3,7 +3,7 @@
   "checkpoint_id": "79aa4e9d44f3",
   "strategy": "manual-commit",
   "branch": "soph/add-ci-and-lint",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "internal/gitproto/smarthttp_test.go",
     "internal/planner/planner_test.go",
@@ -15,13 +15,19 @@
       "transcript": "/79/aa4e9d44f3/0/transcript.jsonl",
       "content_hash": "/79/aa4e9d44f3/0/transcript_hash.txt",
       "prompt": "/79/aa4e9d44f3/0/prompt.txt"
+    },
+    {
+      "metadata": "/79/aa4e9d44f3/1/metadata.json",
+      "transcript": "/79/aa4e9d44f3/1/transcript.jsonl",
+      "content_hash": "/79/aa4e9d44f3/1/transcript_hash.txt",
+      "prompt": "/79/aa4e9d44f3/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 15664633,
+    "input_tokens": 31117746,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 12668800,
-    "output_tokens": 60634,
-    "api_call_count": 147
+    "cache_read_tokens": 25971328,
+    "output_tokens": 122147,
+    "api_call_count": 296
   }
 }
