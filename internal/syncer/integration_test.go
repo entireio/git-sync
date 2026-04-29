@@ -1722,6 +1722,191 @@ func TestRun_IntegrationTagsPruneDeletesTargetLocalTag(t *testing.T) {
 	}
 }
 
+// TestRun_IntegrationSyncPruneDeletesOrphanedBranch fills the gap between the
+// existing tag-prune coverage (TestRun_IntegrationTagsPruneAndForce) and the
+// replicate-mode branch-prune coverage (TestRun_IntegrationReplicatePruneDeletesOrphanedManagedRef):
+// neither exercises sync-mode branch prune end-to-end. Without a filter,
+// --prune must delete orphan target branches while leaving in-scope refs alone.
+func TestRun_IntegrationSyncPruneDeletesOrphanedBranch(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head after seed: %v", err)
+	}
+	orphanRef := plumbing.NewBranchReferenceName("release")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanRef, targetHead.Hash())); err != nil {
+		t.Fatalf("seed orphan branch: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Prune:  true,
+	})
+	if err != nil {
+		t.Fatalf("sync --prune: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref, got %+v", result)
+	}
+
+	if _, err := targetRepo.Reference(orphanRef, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected orphan branch pruned, got err=%v", err)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+// TestRun_IntegrationSyncPrunePreservesTargetTagWithoutIncludeTags pins the
+// scope of --prune in sync mode: tags are only in scope when the user also
+// passes --tags (IncludeTags). A tag that the target gained on its own —
+// e.g. a release marker pushed after a previous sync — must survive a
+// branch-only --prune run.
+func TestRun_IntegrationSyncPrunePreservesTargetTagWithoutIncludeTags(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head after seed: %v", err)
+	}
+	targetTag := plumbing.NewTagReferenceName("deployed")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(targetTag, targetHead.Hash())); err != nil {
+		t.Fatalf("seed target-only tag: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Prune:  true,
+	})
+	if err != nil {
+		t.Fatalf("sync --prune: %v", err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("expected no deletes when --tags is unset, got %+v", result)
+	}
+
+	tagAfter, err := targetRepo.Reference(targetTag, true)
+	if err != nil {
+		t.Fatalf("target-only tag missing after sync --prune: %v", err)
+	}
+	if tagAfter.Hash() != targetHead.Hash() {
+		t.Fatalf("target-only tag hash changed: pre=%s post=%s", targetHead.Hash(), tagAfter.Hash())
+	}
+}
+
+// TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync simulates a
+// race: the target gains a brand-new tag after git-sync has snapshotted its
+// refs but before the receive-pack push lands. Even with --tags --prune, the
+// new tag must survive — the prune set is built from the planning snapshot
+// only, and the receive-pack protocol only acts on refs that appear in the
+// command list. The injection point is the receive-pack hook on the test
+// server: by the time it fires, target ref discovery is already complete and
+// git-sync's plans are fixed.
+func TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	staleTag := plumbing.NewTagReferenceName("stale")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(staleTag, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source stale tag: %v", err)
+	}
+
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		IncludeTags: true,
+	}); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	// Drop the tag from source so the next sync produces a delete plan for it.
+	if err := sourceRepo.Storer.RemoveReference(staleTag); err != nil {
+		t.Fatalf("remove source stale tag: %v", err)
+	}
+
+	raceTag := plumbing.NewTagReferenceName("deployed")
+	var once sync.Once
+	targetServer.receivePackHook = func(_ *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		// Fires after target ref discovery and after the planner has fixed
+		// the delete set, but before the test server applies the commands.
+		// This is the race window: the new tag is invisible to the snapshot
+		// the planner already used, so it must not appear in any command.
+		once.Do(func() {
+			if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(raceTag, sourceHead.Hash())); err != nil {
+				t.Fatalf("inject race tag: %v", err)
+			}
+		})
+		return nil
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		IncludeTags: true,
+		Prune:       true,
+	})
+	if err != nil {
+		t.Fatalf("sync --prune --tags: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref (stale), got %+v", result)
+	}
+
+	if _, err := targetRepo.Reference(staleTag, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected stale tag pruned, got err=%v", err)
+	}
+	tagAfter, err := targetRepo.Reference(raceTag, true)
+	if err != nil {
+		t.Fatalf("race-created tag missing after sync: %v", err)
+	}
+	if tagAfter.Hash() != sourceHead.Hash() {
+		t.Fatalf("race-created tag hash changed: pre=%s post=%s", sourceHead.Hash(), tagAfter.Hash())
+	}
+}
+
 func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
 	// Replicate must tolerate targets that advertise no-thin. Source upload-pack
 	// never receives a thin-pack request from us (see gitproto/fetch.go), so
