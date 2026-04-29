@@ -265,6 +265,29 @@ func TestDecodeV2LSRefsHeadSymref(t *testing.T) {
 	}
 }
 
+func TestDecodeV2LSRefsSkipsUnbornLines(t *testing.T) {
+	wire := "" +
+		FormatPktLine("unborn HEAD symref-target:refs/heads/main\n") +
+		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n") +
+		"0000"
+	refs, head, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	if err != nil {
+		t.Fatalf("decodeV2LSRefs: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d", len(refs))
+	}
+	if refs[0].Name().String() != refsHeadsMain {
+		t.Errorf("refs[0].Name() = %q, want refs/heads/main", refs[0].Name())
+	}
+	if refs[0].Hash().IsZero() {
+		t.Fatal("unborn line was decoded as a zero-hash ref")
+	}
+	if head != "" {
+		t.Errorf("head target = %q, want empty", head)
+	}
+}
+
 func TestDecodeV2LSRefsMalformed(t *testing.T) {
 	// Line with only one field (no refname).
 	wire := FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n") + "0000"
