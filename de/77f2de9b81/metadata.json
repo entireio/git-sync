@@ -1,0 +1,19 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "de77f2de9b81",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/strategy/materialized/materialized.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/de/77f2de9b81/0/metadata.json",
+      "transcript": "/de/77f2de9b81/0/transcript.jsonl",
+      "content_hash": "/de/77f2de9b81/0/transcript_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
