@@ -1,0 +1,1 @@
+I'm fine separating this more, maybe we have a validation package or e2e test package or if you have a better name, so it's a clear separation?
