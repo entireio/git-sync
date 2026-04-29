@@ -203,7 +203,7 @@ PRs that skip these steps are likely to be closed without merge.
 
 ## Responding to Automated Review
 
-Co-pilot agent reviews every PR and provides feedback on code quality, potential bugs, and project conventions.
+Copilot agent reviews every PR and provides feedback on code quality, potential bugs, and project conventions.
 
 **Read and respond to every Copilot comment.** PRs with unaddressed Copilot feedback will not move to maintainer review.
 
