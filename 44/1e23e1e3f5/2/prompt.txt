@@ -1,0 +1,13 @@
+Review the latest changes since commit 4b7a223, focusing on the session-owned logger wiring in internal/syncer/syncer.go and the tracker change marking packet allocation work done. Check for factual mismatches, regressions, or overstatement in the tracker. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review commit 0ed62c5 on this branch. Focus on the restored streaming receive-pack implementation in internal/gitproto/push.go, the new PostRPCStreamBody and bounded httpError handling in internal/gitproto/smarthttp.go, and the new regression tests. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit c567560 (Unify repo test fixtures). Focus on whether internal/syncertest is now a coherent shared test-support package, whether benchmark comparability was preserved, and whether any test-specific behavior was accidentally changed. Concrete findings only.
+
+---
+
+Review commit 68845c9 (Cover batched checkpoint retry recovery). Focus on the new receive-pack test hook in internal/syncer/integration_test.go and whether the new batched checkpoint failure/retry integration test is realistic, sufficiently precise, or introduces harness risks. Findings only, ordered by severity, with file/line references where possible.

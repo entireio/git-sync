@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "bab2cea0784a",
+  "strategy": "manual-commit",
+  "branch": "soph/replicate",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ba/b2cea0784a/0/metadata.json",
+      "transcript": "/ba/b2cea0784a/0/transcript.jsonl",
+      "content_hash": "/ba/b2cea0784a/0/transcript_hash.txt",
+      "prompt": "/ba/b2cea0784a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65,
+    "cache_creation_tokens": 37586,
+    "cache_read_tokens": 9658933,
+    "output_tokens": 17528,
+    "api_call_count": 40
+  }
+}

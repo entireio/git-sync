@@ -1,0 +1,1 @@
+can you rename the module to `entire.io/entire/git-sync`

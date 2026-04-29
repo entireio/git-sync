@@ -1,0 +1,1 @@
+Review the latest changes since commit 4b7a223, focusing on the session-owned logger wiring in internal/syncer/syncer.go and the tracker change marking packet allocation work done. Check for factual mismatches, regressions, or overstatement in the tracker. Do not edit files. Return concise findings first with file references.

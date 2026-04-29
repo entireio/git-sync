@@ -1,0 +1,1 @@
+Review the latest changes since commit d11c597, focusing on internal/syncer/benchmark_test.go and the related tracker update. Check whether the new benchmarks are meaningful execution-path coverage, whether the setup is sound, and whether marking benchmark coverage done is justified. Do not edit files. Return concise findings first with file references.

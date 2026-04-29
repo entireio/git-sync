@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "cb31ffcdfeaa",
+  "strategy": "manual-commit",
+  "branch": "soph/branch-optimizations",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cb/31ffcdfeaa/0/metadata.json",
+      "transcript": "/cb/31ffcdfeaa/0/transcript.jsonl",
+      "content_hash": "/cb/31ffcdfeaa/0/transcript_hash.txt",
+      "prompt": "/cb/31ffcdfeaa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 239,
+    "cache_creation_tokens": 821246,
+    "cache_read_tokens": 24043041,
+    "output_tokens": 125394,
+    "api_call_count": 159
+  }
+}
