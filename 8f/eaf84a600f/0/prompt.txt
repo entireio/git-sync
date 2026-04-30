@@ -1,0 +1,13 @@
+Same-repo check bypassed by trailing slash difference
+
+Low Severity
+
+ValidateEndpoints compares URLs with plain string equality after trimming whitespace, but doesn't normalize trailing slashes. URLs like https://example.com/r.git and https://example.com/r.git/ point to the same repository on virtually all Git hosting platforms, yet bypass this safety check. The test at line 91 documents this gap as accepted behavior (wantErr defaults to false). Since the function's doc comment states it "rejects configurations where the source and target URLs point at the same repository," stripping trailing slashes before comparison would close this gap.
+
+---
+
+do we also want to check for https://user@example.com/r.git ?
+
+---
+
+yes, let's do this
