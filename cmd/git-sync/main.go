@@ -425,12 +425,12 @@ func envBool(key string) bool {
 
 func usageError(message string) error {
 	usage := fmt.Sprintf(`usage:
-  git-sync sync [flags] <source-url> <target-url>
-  git-sync replicate [flags] <source-url> <target-url>
-  git-sync plan [flags] <source-url> <target-url>
-  git-sync bootstrap [flags] <source-url> <target-url>
-  git-sync probe [flags] <source-url> [target-url]
-  git-sync fetch [flags] <source-url>
+  %[1]s sync [flags] <source-url> <target-url>
+  %[1]s replicate [flags] <source-url> <target-url>
+  %[1]s plan [flags] <source-url> <target-url>
+  %[1]s bootstrap [flags] <source-url> <target-url>
+  %[1]s probe [flags] <source-url> [target-url]
+  %[1]s fetch [flags] <source-url>
 
 sync flags:
   --branch main,dev
@@ -441,7 +441,7 @@ sync flags:
   --stats
   --measure-memory
   --json
-  --materialized-max-objects %d
+  --materialized-max-objects %[2]d
   --max-pack-bytes <bytes>
   --target-max-pack-bytes <bytes>
   --protocol auto|v1|v2
@@ -558,7 +558,7 @@ fetch flags:
   --source-bearer-token ...
   --source-insecure-skip-tls-verify
   --source-follow-info-refs-redirect
-`, unstable.DefaultMaterializedMaxObjects)
+`, os.Args[0], unstable.DefaultMaterializedMaxObjects)
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}
