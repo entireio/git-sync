@@ -1,0 +1,32 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "002f876fb8bb",
+  "strategy": "manual-commit",
+  "branch": "soph/cover-image",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/images/gh-repo-cover.png"
+  ],
+  "sessions": [
+    {
+      "metadata": "/00/2f876fb8bb/0/metadata.json",
+      "transcript": "/00/2f876fb8bb/0/transcript.jsonl",
+      "content_hash": "/00/2f876fb8bb/0/transcript_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/00/2f876fb8bb/1/metadata.json",
+      "transcript": "/00/2f876fb8bb/1/transcript.jsonl",
+      "content_hash": "/00/2f876fb8bb/1/transcript_hash.txt",
+      "prompt": "/00/2f876fb8bb/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 712,
+    "cache_creation_tokens": 461913,
+    "cache_read_tokens": 8004840,
+    "output_tokens": 49919,
+    "api_call_count": 94
+  }
+}
