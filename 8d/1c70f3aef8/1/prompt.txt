@@ -1,11 +1,1 @@
-can we try this
-
-hmm I think it just didn't work before because you used <video>
-[11:28 AM]google says ![]() should work with video
-[11:28 AM]like how you do it now means we are losing those if we show the repo on entire.io in the future
-
-And put the videos assets in docs/images instead
-
----
-
 put it back to the version before where it uses the github user content
