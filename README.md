@@ -121,9 +121,9 @@ For concrete numbers on your own setup, run the included benchmark tool against 
 
 No. `git-sync` supports smart HTTP/HTTPS only.
 
-### Is this one-time or does it run in the background?
+### Does it run as a daemon or watch for changes?
 
-`git-sync` is a one-shot CLI/library operation. It does not run as a daemon or background watcher. Run it manually, from CI, cron, a worker, or another service.
+No. `git-sync` is a one-shot CLI/library operation. To sync on a schedule or in response to events, run it from cron, CI, a worker, or another service.
 
 ## Contributing
 
