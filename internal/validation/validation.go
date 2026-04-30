@@ -2,6 +2,8 @@ package validation
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -29,8 +31,8 @@ type NormalizedMapping struct {
 // point at the same repository. Empty URLs are ignored so the caller can
 // surface a more specific "missing URL" error.
 func ValidateEndpoints(sourceURL, targetURL string) error {
-	src := strings.TrimSpace(sourceURL)
-	dst := strings.TrimSpace(targetURL)
+	src := normalizeEndpointURL(sourceURL)
+	dst := normalizeEndpointURL(targetURL)
 	if src == "" || dst == "" {
 		return nil
 	}
@@ -38,6 +40,46 @@ func ValidateEndpoints(sourceURL, targetURL string) error {
 		return fmt.Errorf("source and target must not be the same repository: %s", src)
 	}
 	return nil
+}
+
+func normalizeEndpointURL(raw string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if trimmed == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return trimmed
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return trimmed
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if port != "" && !isDefaultPort(scheme, port) {
+		host = net.JoinHostPort(host, port)
+	}
+
+	path := strings.TrimRight(parsed.EscapedPath(), "/")
+	if path == "" {
+		path = "/"
+	}
+
+	normalized := scheme + "://" + host + path
+	if parsed.RawQuery != "" {
+		normalized += "?" + parsed.RawQuery
+	}
+	if parsed.Fragment != "" {
+		normalized += "#" + parsed.Fragment
+	}
+	return normalized
+}
+
+func isDefaultPort(scheme, port string) bool {
+	return (scheme == "http" && port == "80") || (scheme == "https" && port == "443")
 }
 
 // NormalizeProtocolMode validates the configured protocol mode and applies the

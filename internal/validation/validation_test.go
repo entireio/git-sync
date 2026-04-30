@@ -85,10 +85,16 @@ func TestValidateEndpoints(t *testing.T) {
 		{name: "different URLs", source: "https://src.example/r.git", target: "https://dst.example/r.git"},
 		{name: "same URL", source: "https://example.com/r.git", target: "https://example.com/r.git", wantErr: true},
 		{name: "same URL with surrounding whitespace", source: "  https://example.com/r.git", target: "https://example.com/r.git\t", wantErr: true},
+		{name: "same URL with userinfo", source: "https://user@example.com/r.git", target: "https://example.com/r.git", wantErr: true},
+		{name: "same URL with default https port", source: "https://example.com:443/r.git", target: "https://example.com/r.git", wantErr: true},
+		{name: "same URL with default http port", source: "http://example.com:80/r.git", target: "http://example.com/r.git", wantErr: true},
+		{name: "same URL with mixed host case", source: "https://EXAMPLE.com/r.git", target: "https://example.com/r.git", wantErr: true},
+		{name: "different non-default port", source: "https://example.com:8443/r.git", target: "https://example.com/r.git"},
 		{name: "empty source defers to other checks", source: "", target: "https://example.com/r.git"},
 		{name: "empty target defers to other checks", source: "https://example.com/r.git", target: ""},
 		{name: "both empty defers to other checks", source: "", target: ""},
-		{name: "differ only by trailing slash", source: "https://example.com/r.git", target: "https://example.com/r.git/"},
+		{name: "differ only by trailing slash", source: "https://example.com/r.git", target: "https://example.com/r.git/", wantErr: true},
+		{name: "differ only by repeated trailing slashes", source: "https://example.com/r.git//", target: "https://example.com/r.git/", wantErr: true},
 	}
 
 	for _, tt := range tests {
