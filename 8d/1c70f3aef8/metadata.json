@@ -1,0 +1,18 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "8d1c70f3aef8",
+  "strategy": "manual-commit",
+  "branch": "codex/add-repo-header-image",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8d/1c70f3aef8/0/metadata.json",
+      "transcript": "/8d/1c70f3aef8/0/full.jsonl",
+      "content_hash": "/8d/1c70f3aef8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
