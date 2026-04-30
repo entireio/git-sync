@@ -3,7 +3,7 @@
   "checkpoint_id": "002f876fb8bb",
   "strategy": "manual-commit",
   "branch": "soph/cover-image",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "README.md",
     "docs/images/gh-repo-cover.png"
@@ -23,10 +23,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 333,
-    "cache_creation_tokens": 330520,
-    "cache_read_tokens": 5213100,
-    "output_tokens": 35702,
-    "api_call_count": 71
+    "input_tokens": 712,
+    "cache_creation_tokens": 461913,
+    "cache_read_tokens": 8004840,
+    "output_tokens": 49919,
+    "api_call_count": 94
   }
 }
