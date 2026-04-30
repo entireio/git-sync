@@ -61,7 +61,7 @@ Security advisories are issued when a confirmed vulnerability can be exploited b
 - Resource exhaustion that requires local access to trigger
 - Issues that cannot be exploited without direct access to the user's machine or to credentials the user already controls
 
-Use [GitHub Issues](https://github.com/entireio/gitsync/issues) to report bugs.
+Use [GitHub Issues](https://github.com/entireio/git-sync/issues) to report bugs.
 
 ---
 

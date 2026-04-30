@@ -10,7 +10,7 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ## Before You Code: Discuss First
 
-The fastest way to get a contribution merged is to align with maintainers before writing code. Please **open an issue first** using our [issue templates](https://github.com/entireio/gitsync/issues/new/choose) and wait for maintainer feedback before starting implementation.
+The fastest way to get a contribution merged is to align with maintainers before writing code. Please **open an issue first** using our [issue templates](https://github.com/entireio/git-sync/issues/new/choose) and wait for maintainer feedback before starting implementation.
 
 ### Contribution Workflow
 
@@ -38,7 +38,7 @@ We recommend starting with:
 
 ## Submitting Issues
 
-All feature requests, bug reports, and general issues should be submitted through [GitHub Issues](https://github.com/entireio/gitsync/issues). Please search for existing issues before opening a new one.
+All feature requests, bug reports, and general issues should be submitted through [GitHub Issues](https://github.com/entireio/git-sync/issues). Please search for existing issues before opening a new one.
 
 For security-related issues, see the Security section below.
 
@@ -54,7 +54,7 @@ If you discover a security vulnerability, **do not report it through GitHub Issu
 
 Contributions and communications are expected to occur through:
 
-- [GitHub Issues](https://github.com/entireio/gitsync/issues) - Bug reports and feature requests
+- [GitHub Issues](https://github.com/entireio/git-sync/issues) - Bug reports and feature requests
 - [Discord](https://discord.gg/jZJs3Tue4S) - Questions, general conversation, and real-time support
 
 Please represent the project and community respectfully in all public and private interactions.
@@ -65,8 +65,8 @@ Please represent the project and community respectfully in all public and privat
 
 There are many ways to contribute:
 
-- **Feature requests** - Open a [GitHub Issue](https://github.com/entireio/gitsync/issues) to discuss your idea
-- **Bug reports** - Report issues via [GitHub Issues](https://github.com/entireio/gitsync/issues) (see [Reporting Bugs](#reporting-bugs))
+- **Feature requests** - Open a [GitHub Issue](https://github.com/entireio/git-sync/issues) to discuss your idea
+- **Bug reports** - Report issues via [GitHub Issues](https://github.com/entireio/git-sync/issues) (see [Reporting Bugs](#reporting-bugs))
 - **Code contributions** - Fix bugs, add features, improve tests
 - **Documentation** - Improve guides, fix typos, add examples
 - **Community** - Help others, answer questions, share knowledge
@@ -103,7 +103,7 @@ Please answer these questions in your bug report:
 ### Clone and Install
 
 ```bash
-git clone https://github.com/entireio/gitsync.git
+git clone https://github.com/entireio/git-sync.git
 cd gitsync
 
 # Trust the mise configuration (required on first setup)
