@@ -1,0 +1,17 @@
+lets do this instead
+
+
+git sync https://github.com/user-attachments/assets/60adb873-4032-4ab7-b236-24d038e04681
+
+
+plan https://github.com/user-attachments/assets/f2d03e83-b532-4e43-9569-e1ce798c5c6b
+
+---
+
+can we try this
+
+hmm I think it just didn't work before because you used <video>
+[11:28 AM]google says ![]() should work with video
+[11:28 AM]like how you do it now means we are losing those if we show the repo on entire.io in the future
+
+And put the videos assets in docs/images instead
