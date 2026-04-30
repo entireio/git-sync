@@ -1,0 +1,296 @@
+i need to figure out how to run this project...and do some demo examples..i need you to make me some kind of tutorial
+
+---
+
+do i need a demo repo or something to try this out on
+
+---
+
+what parts of this would be cool to screen record or screenshot to show the value of git sync
+
+---
+
+how long do you think the video will be
+
+---
+
+what about a screnshot..yeah i was looking for like 30 - 60 seconds of certain things
+
+---
+
+okay there's a little drama around people wanting to get off of github cuz github has been so unreliable lately so i was thinking of doing a tweet thread of the Entire account that says this 
+
+
+For anyone suddenly feeling the urge to move their project somewhere new, we’re open sourcing our latest project, git-sync, today.
+
+git-sync mirrors refs from an source remote to a target remote without a local checkout, streaming packfiles directly over smart HTTP with an in-memory object store.
+
+A step forward as we build an agent-native git layer where code and agent activity move, sync, and evolve across systems continuously.
+
+< picture> <link to repo>
+
+---
+
+well im already doing thi for the first part of the thread..like this is tweet 1
+
+For anyone suddenly feeling the urge to move their project somewhere new, we’re open sourcing our latest project, git-sync, today.
+
+git-sync mirrors refs from an source remote to a target remote without a local checkout, streaming packfiles directly over smart HTTP with an in-memory object store.
+
+A step forward as we build an agent-native git layer where code and agent activity move, sync, and evolve across systems continuously.
+
+< picture> <link to repo>
+
+---
+
+okay yeah yeah yeah..now we need tweet 2 and tweet 3..something that slightly leans into the controversy but really leans more on showing off how cool this is so pthat developers would want to try it out. here's an example 
+
+For the past few months, 
+@pierrecomputer
+ has been working on a brand new primitive, Trees. Just like Diffs, it’s an incredibly fast, modern, and beautiful library for rendering lists of files and folders.
+2:26 PM · Apr 22, 2026
+·
+157.4K
+ Views
+Relevant
+View quotes
+
+Mark Otto
+
+@mdo
+·
+Apr 22
+When we say incredibly fast, it can render a fully interactive file tree for the entire Linux codebase (93,000 paths) in under 50ms. Here's a little taste of that, plus sticky headers, from our homepage demo. Amazing engineering from 
+@SlexAxton
+ and 
+@amadeus
+ for Trees & Diffs.
+0:08 / 0:09
+Mark Otto
+
+@mdo
+·
+Apr 22
+We built our own VS Code icon extension and then brought it back into Trees for custom file icons. We also added support for bringing in Shiki themes, just like our Diffs, so you can build matching components. Plus CSS variables, density options, and more.
+Mark Otto
+
+@mdo
+·
+Apr 22
+It's all at https://trees.software. Happy Earth Day, y'all—go plant, err, build some trees.
+
+---
+
+isnt your spicier tweet 2 just basically my tweet 1
+
+---
+
+the other thing is i need them to match with 1 screenshot and 1 screen recording..so i kinda liked this but how would it match 
+
+Most git migration tools assume you’ll make a local mirror clone, fetch everything down, then push it back up somewhere else.
+
+git-sync takes a different path: it talks smart HTTP directly, plans every ref update first, and streams source packs into the target when it can.
+
+it can be more than 3 tweets..if needed..but like let's figure out
+
+[nexttweet] 
+simple video
+
+[next tweet] 
+simple screenshot
+
+---
+
+no it needs to be the terminal with git sync for any screenshots/graphics/screen recordings
+
+---
+
+is there a deno scenario for plan
+
+---
+
+what would be my urls..i have everything on github
+
+---
+
+i dont think i want to really put in a target url and source url..but i wish i could just have it be faked or something
+
+---
+
+i think i want to be able to run 
+
+ ./git-sync plan --branch main --json former-host/former-repo new-host/new-repo
+
+or something like that..that way im not promoting any site
+
+---
+
+i want to be able to type this in myself
+
+---
+
+it asks for my username and password again. i dont want that. and it has ./ in front of git-sync..i thought we found a way to include it in the script
+
+---
+
+why does it name the folder  tmp.4M8311LTc3 is that what would happen in real life
+
+---
+
+oh i wonder if we can name it something more intuitive so when people read the demo they understand
+
+---
+
+feel like it should say former repo or new repo or which ever wouuld be the appropriate oen
+
+---
+
+rizel@Rizels-MacBook-Pro git-sync-recording-demo % git-sync plan --branch main --json former-host/former-repo new-host/new-repo
+error: sync: plan: list source refs: request info-refs: Get "http://127.0.0.1:63083/former-repo.git/info/refs?service=git-upload-pack": round trip: dial tcp 127.0.0.1:63083: connect: connection refused
+
+---
+
+alright..what would be the next command to run
+
+---
+
+what about probe or something else
+
+---
+
+if i run sync..i wont be able to run it a second time right?
+
+---
+
+yeah but it wont do the same results right? so i gotta do them separately
+
+---
+
+oh okay..i would just need to restart the demo shell for this? to be able to run sync?
+
+---
+
+okay i need to put these things on social media..in a way that's easy to consume whats going on.
+
+Theres a little drama around people leaving github for unreliability right now..so im thinking this will be my first tweet. it's not subject to your feedback or change. it is as is. 
+
+
+For anyone suddenly feeling the urge to move their project somewhere new, we’re open sourcing our latest project, git-sync, today.
+
+git-sync mirrors refs from a source remote to a target remote without a local checkout, streaming packfiles directly over smart HTTP with an in-memory object store.
+
+A step forward as we build an agent-native git layer where code and agent activity move, sync, and evolve across systems continuously.
+
+---
+
+too much jargon and not enough why do we care..why would someone want this..but still have the examples
+
+---
+
+oh no theyre not going to have access to the local demo..thats just for me
+
+---
+
+Tweet 1: 
+
+For anyone suddenly feeling the urge to move their project somewhere new, we’re open sourcing our latest project, git-sync, today.
+
+git-sync mirrors refs from a source remote to a target remote without a local checkout, streaming packfiles directly over smart HTTP with an in-memory object store.
+
+A step forward as we build an agent-native git layer where code and agent activity move, sync, and evolve across systems continuously.
+
+< picture> <link to repo>
+
+Tweet 2: 
+
+Most git migration tools assume you’ll make a local mirror clone, fetch everything down, then push it back up somewhere else. But moving a repo should not mean babysitting a giant local mirror clone.
+
+git-sync lets you point at an old home and a new home, preview what would change, then sync the refs directly.
+
+Before it makes any changes, you can ask for a plan that’s meant to be readable by both humans and scripts. You can see which branch would move, which ref would be created or updated, and that `dryRun` is true before anything touches the target
+
+
+[screenrecording of running plan and highlight ref, dryRun etc] 
+
+
+Tweet 3: 
+
+The actual sync is just as explicit.
+
+git-sync reports what changed, what was skipped, whether the operation used relay, and enough structured output to wire it into migration jobs, backups, mirrors, or agent workflows.
+
+And reruns are boring in the best way. If nothing changes, nothing gets pushed.
+
+You can try it here. Happy syncing! [link to repo] 
+
+[screen recording of running git-sync]
+
+---
+
+wish it could end cute than just try it here
+
+---
+
+we need a screen recording or something for the first tweet
+
+---
+
+but i thought the third tweet was already going to to plan, sync? 
+
+Tweet 1: 
+
+For anyone suddenly feeling the urge to move their project somewhere new, we’re open sourcing our latest project, git-sync, today.
+
+git-sync mirrors refs from a source remote to a target remote without a local checkout, streaming packfiles directly over smart HTTP with an in-memory object store.
+
+A step forward as we build an agent-native git layer where code and agent activity move, sync, and evolve across systems continuously.
+
+< picture> <link to repo>
+
+Tweet 2: 
+
+Most git migration tools assume you’ll make a local mirror clone, fetch everything down, then push it back up somewhere else.
+
+But moving a repo should not mean babysitting a giant local mirror clone.
+
+git-sync lets you point at an old home and a new home, preview what would change, then sync the refs directly.
+
+Before it makes any changes, you can ask for a plan that’s readable by both humans and scripts.
+
+
+
+[screenrecording of running plan and highlight ref, dryRun etc] 
+
+
+Tweet 3: 
+
+The actual sync is just as explicit.
+
+git-sync reports what changed, what was skipped, whether it used relay, and enough structured output to wire into migration jobs, backups, mirrors, or agent workflows.
+
+And reruns are boring in the best way: if nothing changed, nothing gets pushed.
+
+Give it a spin: <link>
+
+
+[screen recording of running git-sync]
+
+---
+
+does this run in the background at all
+
+---
+
+are these answers in the readme?
+
+some other questions that you might get asked:
+does it shallow clones/syncs or full historical data syncs as well
+is it just refs or objects as well? (demo just shows a ref but i assume objects too)
+is it bidirectional? or just one way?
+does it support all actions? (create, modify, delete)?
+how does it scale? if it's an in-memory store, does it stream through the in-memory store by writing to it and then reading from it to write to the target? or does it first dump everything into the in-memory store? 
+how long does it take for a medium sized repo?
+how does it deal with partial successes? is it atomic?
+does it support SSH? 
+
+i haven't been involved with this at all but this is what first comes to mind if I was thinking about using it. i'm sure there are other questions too. you also don't have to answer all of these in the tweet thread, but probably in the readme would be good.

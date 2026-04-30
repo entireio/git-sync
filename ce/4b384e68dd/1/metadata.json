@@ -1,0 +1,47 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "ce4b384e68dd",
+  "session_id": "7b2777b1-8075-41f4-a62a-cbfc1b76c01b",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:44:31.12715Z",
+  "branch": "soph/replicate",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md",
+    "cmd/git-sync/main.go",
+    "cmd/git-sync/main_test.go",
+    "docs/architecture.md",
+    "pkg/gitsync/client.go",
+    "pkg/gitsync/client_test.go",
+    "pkg/gitsync/internalbridge/config.go",
+    "pkg/gitsync/internalbridge/model.go",
+    "pkg/gitsync/internalbridge/model_test.go",
+    "pkg/gitsync/types.go",
+    "pkg/gitsync/unstable/client.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "589e3907a3ca",
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-13T13:40:44.192286Z",
+    "agent_lines": 244,
+    "agent_removed": 19,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 244,
+    "total_lines_changed": 263,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

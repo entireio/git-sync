@@ -1,0 +1,17 @@
+Review the latest changes since commit e9b6ed4, focusing on the new batched-bootstrap resume/cutover integration tests in internal/syncer/integration_test.go and the related tracker update. Check whether these tests cover meaningful real states, whether any assumptions in the fixture setup are too artificial, and whether the tracker note is accurate. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review commit bf3b784 on this branch. Focus on the new batched delete-failure retry integration coverage and receive-pack hook changes in internal/syncer/integration_test.go, plus the incremental CanTagRelay requirement relaxation. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit 353954d (Move ref mappings into validation). Focus on whether the dependency direction is cleaner now, whether the remaining planner alias is a reasonable compatibility compromise, and whether the change introduces any hidden API confusion. Concrete findings only.
+
+---
+
+Review commit 61e809e (Type target relay capability checks). Focus on whether introducing internal/gitproto.TargetFeatures is the right abstraction boundary, whether any behavior changed unintentionally in planner relay gating, and whether tests look sufficient. Please return findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit 5ca5f37 (Cover v2 fetch body closure on decode errors). Focus on whether the new v2 test exercises the intended body-closure path and whether there are any nearby lifecycle gaps still obvious in internal/gitproto/fetch.go. Findings only, ordered by severity, with file/line references where possible.

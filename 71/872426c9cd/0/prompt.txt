@@ -1,0 +1,78 @@
+now looking at the json: I'm fine changing the stable API, this is a new project and there is only one external dependency using it yet. some of the reviews sounded as if the json isn't in a consistent state around casing, can we check?
+
+---
+
+is snake_case usually what go projects use for json? or is there no good best practice?
+
+---
+
+let's switch to camelCase
+
+---
+
+can you update README.md und docs/ for the new camelCase format
+
+---
+
+2. Low: .github/workflows/ci.yml:12 and .github/workflows/lint.yml:16 set actions/
+     checkout to ref: ${{ github.event.pull_request.head.sha }} even though both workflows
+     also run on push and workflow_dispatch. Outside PR events that field is unset, so the
+     checkout behavior depends on how actions/checkout treats an empty ref. It is safer to
+     omit ref entirely or gate it to PR events only.
+
+---
+
+can you pin the action versions to the latest release shas, also double check there are no newer versions
+
+---
+
+is there a newer golangci version yet?
+
+---
+
+yes
+
+---
+
+❯ mise install
+mise Cannot parse Rekor public key with id cf1199155bddd051268d1f16ac5c0c75c009f6fb5a63f4177f8e18d7051e3fa0: Pkcs8 spki error : Ecdsa-P256 from der bytes to public key failed: unknown/unsupported algorithm OID: 1.2.840.10045.2.1
+golangci-lint@2.11.4                extract golangci-lint-2.11.4-darwin-arm64.tar.gz      ✔
+
+---
+
+Run echo "❌ License check task not found"
+❌ License check task not found
+
+Either:
+1. Implement mise lint:licenses task in this repository
+2. Remove the license-check workflow if not needed for this repo
+Error: Process completed with exit code 1.
+
+---
+
+any issues with        5 MIT
+       6 BSD-2-Clause
+       7 BSD-3-Clause
+       8 Apache-2.0
+       9 MPL-2.0
+      10 CC0-1.0
+
+---
+
+no I mean with the license types
+
+---
+
+these are stuck now for a really long time and making no progress:
+
+[test:ci] $ go test -race ./...
+ok      github.com/entirehq/git-sync/cmd/git-sync       1.585s
+ok      github.com/entirehq/git-sync/cmd/git-sync-bench 1.950s
+ok      github.com/entirehq/git-sync/internal/auth      (cached)
+ok      github.com/entirehq/git-sync/internal/convert   1.665s
+ok      github.com/entirehq/git-sync/internal/gitproto  2.224s
+ok      github.com/entirehq/git-sync/internal/planner   2.486s
+ok      github.com/entirehq/git-sync/internal/strategy/bootstrap        2.605s
+ok      github.com/entirehq/git-sync/internal/strategy/incremental      1.285s
+Username for 'https://example.com': ok          github.com/entirehq/git-sync/internal/strategy/materialized        1.426s
+ok      github.com/entirehq/git-sync/internal/strategy/replicate        1.495s

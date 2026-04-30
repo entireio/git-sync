@@ -1,0 +1,5 @@
+what test coverage do we have now for replicate?
+
+---
+
+let's add more tests for each the gap you listed, do commits

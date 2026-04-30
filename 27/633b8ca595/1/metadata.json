@@ -1,0 +1,61 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "27633b8ca595",
+  "session_id": "019d7d4c-fef7-7d21-908c-d8850b805a6d",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:45:05.195489Z",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/auth/auth.go",
+    "internal/auth/entiredb.go",
+    "internal/auth/tokenstore.go",
+    "internal/gitproto/capability.go",
+    "internal/gitproto/fetch.go",
+    "internal/gitproto/pktline.go",
+    "internal/gitproto/pktline_test.go",
+    "internal/gitproto/push.go",
+    "internal/gitproto/refs.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/planner/checkpoint.go",
+    "internal/planner/mapping.go",
+    "internal/planner/planner.go",
+    "internal/planner/planner_test.go",
+    "internal/planner/relay.go",
+    "internal/planner/types.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/git_http_backend_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/measurement.go",
+    "internal/syncer/protocol_v2.go",
+    "internal/syncer/protocol_v2_test.go",
+    "internal/syncer/stats.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "706f59611e4e",
+  "token_usage": {
+    "input_tokens": 759060,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 697344,
+    "output_tokens": 12079,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-11T18:47:15.027056Z",
+    "agent_lines": 0,
+    "agent_removed": 260,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 3699,
+    "total_committed": 884,
+    "total_lines_changed": 3959,
+    "agent_percentage": 6.567314978529931,
+    "metric_version": 2
+  }
+}

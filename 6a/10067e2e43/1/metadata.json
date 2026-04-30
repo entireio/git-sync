@@ -1,0 +1,46 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "6a10067e2e43",
+  "session_id": "ff472454-eb84-4842-8ba7-e8420248533a",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:45:04.598181Z",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/convert/convert.go",
+    "internal/gitproto/convert.go",
+    "internal/gitproto/fetch.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/incremental/incremental.go",
+    "internal/strategy/incremental/incremental_test.go",
+    "internal/strategy/materialized/materialized.go",
+    "internal/strategy/materialized/materialized_test.go",
+    "internal/syncer/stats.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "a620a47b6d2c",
+  "token_usage": {
+    "input_tokens": 1971,
+    "cache_creation_tokens": 881721,
+    "cache_read_tokens": 65967963,
+    "output_tokens": 147257,
+    "api_call_count": 275
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-11T19:39:11.024778Z",
+    "agent_lines": 64,
+    "agent_removed": 117,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 64,
+    "total_lines_changed": 181,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

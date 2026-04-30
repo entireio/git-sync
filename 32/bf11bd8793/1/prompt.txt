@@ -1,0 +1,57 @@
+question: if we would push to a backend that supports sha256 could we do the translation on the fly?
+
+---
+
+different question: if the target supports SHA256 could it translate on receive? is that a thing?
+
+---
+
+and if we pick up sync later this would also work?
+
+---
+
+on the tool: The tool would easily support moving only branches around, right? like for example we could setup that `main` comes always from source but we push feature branches from target to source
+
+---
+
+time=2026-04-15T13:45:04.173+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=152 planner=graph
+time=2026-04-15T13:45:04.173+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/20260116-git-hook-absolute-path
+time=2026-04-15T13:45:04.358+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/20260116-git-hook-absolute-path chain_len=40 estimated_batches=1
+time=2026-04-15T13:45:04.358+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/20260119-do-not-pin-go
+time=2026-04-15T13:45:04.516+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/20260119-do-not-pin-go chain_len=41 estimated_batches=1
+time=2026-04-15T13:45:04.516+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/20260128-goreleaser-does-not-create-GH-releases
+time=2026-04-15T13:45:04.826+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/20260128-goreleaser-does-not-create-GH-releases chain_len=82 estimated_batches=1
+time=2026-04-15T13:45:04.826+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/20260206-farting-around-with-secrets
+time=2026-04-15T13:45:05.210+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/20260206-farting-around-with-secrets chain_len=128 estimated_batches=1
+
+I guess one optimization could be that we try to find the default branch first?
+
+---
+
+can we just implement both?
+
+---
+
+❯ time go run ./cmd/git-sync replicate -v \
+    --target-max-pack-bytes 2000000000 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-11.log
+time=2026-04-15T14:31:44.639+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=152
+time=2026-04-15T14:31:44.639+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/20260116-git-hook-absolute-path have_count=0 stop_at_count=0
+time=2026-04-15T14:31:44.832+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/20260116-git-hook-absolute-path chain_len=40 estimated_batches=1
+time=2026-04-15T14:31:44.832+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/20260119-do-not-pin-go have_count=0 stop_at_count=0
+time=2026-04-15T14:31:45.011+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/20260119-do-not-pin-go chain_len=41 estimated_batches=1
+
+Do we log anything when head couldn't be found?
+
+---
+
+the old run did cause a lot of webhook triggers from github, which I guess is expected given we pushed each branch individually. Should this still be the case with the new approach?
+
+---
+
+to do 2, we need the whole graph in memory?
+
+---
+
+yes

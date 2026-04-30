@@ -1,0 +1,1 @@
+Review the latest changes on the rewrite branch since commit 4b63c50, focusing on the new context-cancellation tests and the tracker adjustments. Check whether the tests are meaningful, whether they actually cover cancellation propagation at the right layer, and whether the tracker edits are now accurate. Do not edit files. Return concise findings first with file references.
