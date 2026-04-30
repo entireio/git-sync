@@ -1,0 +1,44 @@
+git pull from the main branch..make sure there's nothing onthis branch
+
+---
+
+anything that's like just laying around..uncommitted..we should remove
+
+---
+
+why did i even have those untracked config/tooling directories
+
+---
+
+okay so for git sync..we need to research how the repo works
+
+---
+
+okay we need to answer the following questions..the answers dont need to be long but they should be concise and clear:
+
+
+- does it shallow clones/syncs or full historical data syncs as well
+- is it just refs or objects as well? (demo just shows a ref but i assume objects too)
+- is it bidirectional? or just one way?
+- does it support all actions? (create, modify, delete)?
+- how does it scale? if it's an in-memory store, does it stream through the in-memory store by writing to it and then - - reading from it to write to the target? or does it first dump everything into the in-memory store? 
+- how long does it take for a medium sized repo?
+- how does it deal with partial successes? is it atomic?
+- does it support SSH? 
+- is this just one time or does it run in the background?
+
+---
+
+where did you find these answers
+
+---
+
+this one feels likeit doesnt make sense as a question..is it worded right? Does it shallow clone/sync or full historical data?
+
+---
+
+okay cool..show all the questions and answers again
+
+---
+
+okay lets add an FAQ with this information to the readme..of course open a PR
