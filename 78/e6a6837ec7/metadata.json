@@ -1,0 +1,32 @@
+{
+  "cli_version": "v0.5.7-nightly.202604280703.51ccd662-dev-a72a26b7c",
+  "checkpoint_id": "78e6a6837ec7",
+  "strategy": "manual-commit",
+  "branch": "nodo/gitsync-rename",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go",
+    "cmd/git-sync/main.go",
+    "cmd/git-sync/main_test.go",
+    "cmd/gitsync-bench/main.go",
+    "cmd/gitsync-bench/main_test.go",
+    "cmd/gitsync/main.go",
+    "cmd/gitsync/main_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/e6a6837ec7/0/metadata.json",
+      "transcript": "/78/e6a6837ec7/0/transcript.jsonl",
+      "content_hash": "/78/e6a6837ec7/0/transcript_hash.txt",
+      "prompt": "/78/e6a6837ec7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 25416,
+    "cache_read_tokens": 449113,
+    "output_tokens": 3680,
+    "api_call_count": 13
+  }
+}

@@ -1,0 +1,1 @@
+the repo has been renamed to `gitsync` can you change all the `git-sync` occurrences?
