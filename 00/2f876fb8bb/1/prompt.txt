@@ -1,0 +1,14 @@
+weg got a question: 
+
+How does it deal with partial successes? Is it atomic?
+
+A coworker said this is related:
+
+Push uses report-status, parsed per-ref (internal/gitproto/push.go:136-142), so each ref update succeeds or fails independently — you get per-ref outcomes in the result. However: planning is front-loaded and if any ref is Blocked (e.g. non-fast-forward without --force), sync exits non-zero before pushing anything (README.md:162). So: blocked-at-plan = nothing pushed; per-ref failures during push = partial.
+
+
+Can you help me understand if this is related?
+
+---
+
+can you take a look, I'd like to add a homebrew release to @../homebrew-tap/ for `git-sync` cli based on v0.1.0 tag
