@@ -45,3 +45,6 @@ go.work.sum
 tmp/
 .tmp/
 .superpowers/
+
+# Build output directory
+/dist/

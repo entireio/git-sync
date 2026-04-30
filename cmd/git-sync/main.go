@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"entire.io/entire/git-sync"
+	"entire.io/entire/git-sync/cmd/git-sync/internal/versioninfo"
 	"entire.io/entire/git-sync/internal/validation"
 	"entire.io/entire/git-sync/unstable"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -40,6 +41,10 @@ func run(ctx context.Context, args []string) error {
 		return runProbe(ctx, args[1:])
 	case "fetch":
 		return runFetch(ctx, args[1:])
+	case "version", "--version":
+		fmt.Printf("git-sync %s (commit %s, built %s)\n",
+			versioninfo.Version, versioninfo.Commit, versioninfo.Date)
+		return nil
 	case "help", "-h", "--help":
 		return usageError("")
 	default:
@@ -431,6 +436,7 @@ func usageError(message string) error {
   %[1]s bootstrap [flags] <source-url> <target-url>
   %[1]s probe [flags] <source-url> [target-url]
   %[1]s fetch [flags] <source-url>
+  %[1]s version
 
 sync flags:
   --branch main,dev
