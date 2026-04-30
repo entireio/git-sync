@@ -1,13 +1,3 @@
-lets do this instead
-
-
-git sync https://github.com/user-attachments/assets/60adb873-4032-4ab7-b236-24d038e04681
-
-
-plan https://github.com/user-attachments/assets/f2d03e83-b532-4e43-9569-e1ce798c5c6b
-
----
-
 can we try this
 
 hmm I think it just didn't work before because you used <video>
