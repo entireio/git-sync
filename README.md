@@ -84,6 +84,44 @@ Extended and environment-specific test instructions are in [docs/testing.md](doc
 - [docs/protocol.md](docs/protocol.md) — smart HTTP, pkt-line, capability negotiation, sideband, relay framing
 - [docs/testing.md](docs/testing.md) — test suites and integration coverage
 
+## FAQ
+
+### Does it sync complete Git history or only perform a shallow/partial sync?
+
+`git-sync` syncs the complete Git object history required for the selected refs. It does not create a shallow clone. Some planning paths may use filtered fetches, but the target receives the full objects needed for valid refs.
+
+### Is it just refs, or objects as well?
+
+Objects as well. Refs are what `git-sync` plans and updates, but it also transfers the commits, trees, blobs, and tags needed for those refs to exist on the target.
+
+### Is it bidirectional?
+
+No. `git-sync` is one-way: source remote to target remote.
+
+### Does it support create, update, and delete actions?
+
+Yes. It supports creating refs, updating refs, force updates with `--force`, and deleting managed refs with `--prune`. `replicate` can overwrite target refs, but it is relay-only and more restrictive than `sync`.
+
+### How does it scale?
+
+The scalable path streams pack data from the source directly into the target without materializing the full object graph locally. The in-memory `go-git` store is used for planning, ancestry checks, and fallback materialized pushes. In fallback mode, `git-sync` fetches objects into memory, computes what must be pushed, then encodes and sends a pack to the target.
+
+### How long does it take for a medium-sized repo?
+
+There is no fixed runtime. It depends on repository size, pack size, network latency, provider speed, and whether relay is used. On the relay path, time is mostly source pack generation plus network transfer plus target receive time.
+
+### How does it deal with partial successes? Is it atomic?
+
+`git-sync` plans before pushing and blocks unsafe refs before starting. A single target `receive-pack` push is atomic in the normal Git sense for that push. Across multiple batches or separate push requests, especially batched bootstrap, it is not globally atomic; batched bootstrap uses temporary refs and resume behavior.
+
+### Does it support SSH?
+
+No. `git-sync` supports smart HTTP/HTTPS only.
+
+### Is this one-time or does it run in the background?
+
+`git-sync` is a one-shot CLI/library operation. It does not run as a daemon or background watcher. Run it manually, from CI, cron, a worker, or another service.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
