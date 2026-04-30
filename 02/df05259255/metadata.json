@@ -1,0 +1,26 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "02df05259255",
+  "strategy": "manual-commit",
+  "branch": "naming",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/planner/planner_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/02/df05259255/0/metadata.json",
+      "transcript": "/02/df05259255/0/full.jsonl",
+      "content_hash": "/02/df05259255/0/content_hash.txt",
+      "prompt": "/02/df05259255/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 234,
+    "cache_creation_tokens": 413698,
+    "cache_read_tokens": 24240378,
+    "output_tokens": 78231,
+    "api_call_count": 179
+  }
+}
