@@ -70,6 +70,8 @@ git-sync sync \
   https://github.com/target-org/target-repo.git
 ```
 
+https://github.com/user-attachments/assets/60adb873-4032-4ab7-b236-24d038e04681
+
 ## Sync Behavior
 
 `sync` picks the bootstrap relay path automatically when the target is empty. For non-empty targets, safe fast-forward updates also use a relay path that streams the source pack directly into target `receive-pack` without local materialization. Anything not relay-eligible (force, prune, deletes, tag retargets) falls back to a materialized path bounded by `--materialized-max-objects`.
