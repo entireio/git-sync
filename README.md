@@ -96,7 +96,7 @@ Objects as well. Refs are what `git-sync` plans and updates, but it also transfe
 
 ### Is it bidirectional?
 
-No. `git-sync` is one-way: source remote to target remote.
+No. `git-sync` is one-way: source remote to target remote. To go the other way you'd run a second invocation with the endpoints swapped.
 
 ### Does it support create, update, and delete actions?
 
