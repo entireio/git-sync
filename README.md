@@ -46,8 +46,8 @@ This drops a `git-sync` binary into `$(go env GOPATH)/bin`. Make sure that direc
 Or build from source:
 
 ```bash
-git clone https://github.com/entireio/gitsync.git
-cd gitsync
+git clone https://github.com/entireio/git-sync.git
+cd git-sync
 go build -o git-sync ./cmd/git-sync
 ```
 
