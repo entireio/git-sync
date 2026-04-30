@@ -1,0 +1,20 @@
+# Files mentioned by the user:
+
+## gitsync.mp4: /Users/rizel/Documents/work/entire-screen-recordings/gitsync.mp4
+
+## gitsyncplan.mp4: /Users/rizel/Documents/work/entire-screen-recordings/gitsyncplan.mp4
+
+## My request for Codex:
+the first one is  sync..the second one is plan
+
+---
+
+okay so main actually got something merged..which was that image at the top ..someone did it just before me..so i dont want a merge conflict..we should make sure it's up to date with main and only add the videos
+
+---
+
+okay open PR
+
+---
+
+when merged the videos dont show up
