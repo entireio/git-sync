@@ -233,7 +233,7 @@ func TestDecodeV2CapabilitiesEmptyFlush(t *testing.T) {
 func TestEncodeCommand(t *testing.T) {
 	req, err := EncodeCommand(
 		"ls-refs",
-		[]string{"agent=git-sync/test"},
+		[]string{"agent=gitsync/test"},
 		[]string{"peel", "ref-prefix refs/heads/"},
 	)
 	if err != nil {
@@ -241,7 +241,7 @@ func TestEncodeCommand(t *testing.T) {
 	}
 	want := "" +
 		"0014command=ls-refs\n" +
-		"0018agent=git-sync/test\n" +
+		"0018agent=gitsync/test\n" +
 		"0001" +
 		"0009peel\n" +
 		"001bref-prefix refs/heads/\n" +
@@ -256,7 +256,7 @@ func TestEncodeCommandNoArgs(t *testing.T) {
 	// flush, with no delimiter section.
 	req, err := EncodeCommand(
 		"ls-refs",
-		[]string{"agent=git-sync/test"},
+		[]string{"agent=gitsync/test"},
 		nil,
 	)
 	if err != nil {
@@ -264,7 +264,7 @@ func TestEncodeCommandNoArgs(t *testing.T) {
 	}
 	want := "" +
 		"0014command=ls-refs\n" +
-		"0018agent=git-sync/test\n" +
+		"0018agent=gitsync/test\n" +
 		"0000"
 	if string(req) != want {
 		t.Fatalf("unexpected request:\ngot:  %q\nwant: %q", string(req), want)

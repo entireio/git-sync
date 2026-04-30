@@ -85,7 +85,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("git-sync-bench", flag.ContinueOnError)
+	fs := flag.NewFlagSet("gitsync-bench", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
 	var scenarioName string
@@ -158,7 +158,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if workDir == "" {
-		workDir, err = os.MkdirTemp("", "git-sync-bench-*")
+		workDir, err = os.MkdirTemp("", "gitsync-bench-*")
 		if err != nil {
 			return fmt.Errorf("create temp work dir: %w", err)
 		}
@@ -450,7 +450,7 @@ func splitCSV(value string) []string {
 }
 
 func usageError(message string) error {
-	usage := "usage:\n  git-sync-bench --source-url <repo> [flags]\n\nflags:\n  --scenario bootstrap|sync\n  --repeat 3\n  --work-dir /tmp/git-sync-bench\n  --keep-targets\n  --json\n  --branch main,release\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --max-pack-bytes 104857600\n  --target-max-pack-bytes 104857600\n  --protocol auto|v1|v2\n  -v\n"
+	usage := "usage:\n  gitsync-bench --source-url <repo> [flags]\n\nflags:\n  --scenario bootstrap|sync\n  --repeat 3\n  --work-dir /tmp/gitsync-bench\n  --keep-targets\n  --json\n  --branch main,release\n  --map main:stable\n  --tags\n  --force\n  --prune\n  --stats\n  --measure-memory\n  --max-pack-bytes 104857600\n  --target-max-pack-bytes 104857600\n  --protocol auto|v1|v2\n  -v\n"
 	if message == "" {
 		return errors.New(strings.TrimSpace(usage))
 	}

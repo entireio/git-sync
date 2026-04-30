@@ -1,4 +1,4 @@
-// Package bootstrap implements the bootstrap relay strategy for git-sync.
+// Package bootstrap implements the bootstrap relay strategy for gitsync.
 // This handles initial seeding of an empty target, both one-shot and batched.
 package bootstrap
 

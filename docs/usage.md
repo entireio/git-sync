@@ -1,24 +1,24 @@
 # Usage
 
-This guide covers day-to-day `git-sync` CLI usage: commands, common examples, machine-readable output, auth, and protocol behavior. For product rationale and memory model details, see [architecture.md](architecture.md). For the wire protocol walkthrough, see [protocol.md](protocol.md).
+This guide covers day-to-day `gitsync` CLI usage: commands, common examples, machine-readable output, auth, and protocol behavior. For product rationale and memory model details, see [architecture.md](architecture.md). For the wire protocol walkthrough, see [protocol.md](protocol.md).
 
 ## Commands
 
 The main commands are:
 
-- `git-sync sync`: mirror source refs into the target
-- `git-sync replicate`: overwrite target refs to match source via relay, and fail rather than materialize locally
+- `gitsync sync`: mirror source refs into the target
+- `gitsync replicate`: overwrite target refs to match source via relay, and fail rather than materialize locally
 
-`sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `git-sync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
+`sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `gitsync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
 
-Additional commands (`bootstrap`, `probe`, `fetch`) and advanced flags are available through `git-sync --help` and the unstable library surface. They are not part of the recommended public surface.
+Additional commands (`bootstrap`, `probe`, `fetch`) and advanced flags are available through `gitsync --help` and the unstable library surface. They are not part of the recommended public surface.
 
 ## Examples
 
 Run a replication that overwrites differing target refs, and fail instead of falling back to local materialization:
 
 ```bash
-git-sync replicate \
+gitsync replicate \
   --stats \
   https://github.com/source-org/source-repo.git \
   https://github.com/target-org/target-repo.git
@@ -29,7 +29,7 @@ If `replicate` cannot use relay against the target, it fails and tells you to re
 For very large initial migrations, add `--target-max-pack-bytes` to split the initial pack into multiple smaller batches. The same flag works on `sync`, since `sync` auto-bootstraps on empty targets:
 
 ```bash
-git-sync sync \
+gitsync sync \
   --target-max-pack-bytes 536870912 \
   --protocol v2 \
   -v \
@@ -40,7 +40,7 @@ git-sync sync \
 Add `--measure-memory` to any command to sample elapsed time and Go heap usage:
 
 ```bash
-git-sync sync \
+gitsync sync \
   --measure-memory \
   --json \
   <source-url> \
@@ -54,7 +54,7 @@ git-sync sync \
 Sync specific branches:
 
 ```bash
-git-sync sync \
+gitsync sync \
   --branch main,release \
   --source-token "$GITSYNC_SOURCE_TOKEN" \
   --target-token "$GITSYNC_TARGET_TOKEN" \
@@ -65,7 +65,7 @@ git-sync sync \
 Map a source branch to a different target branch:
 
 ```bash
-git-sync sync \
+gitsync sync \
   --map main:stable \
   <source-url> \
   <target-url>
@@ -74,7 +74,7 @@ git-sync sync \
 Mirror tags and prune managed target refs that disappeared from source:
 
 ```bash
-git-sync sync \
+gitsync sync \
   --tags \
   --prune \
   <source-url> \
@@ -84,7 +84,7 @@ git-sync sync \
 Force source-side protocol v2:
 
 ```bash
-git-sync sync \
+gitsync sync \
   --protocol v2 \
   <source-url> \
   <target-url>

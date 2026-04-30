@@ -425,12 +425,12 @@ func envBool(key string) bool {
 
 func usageError(message string) error {
 	usage := fmt.Sprintf(`usage:
-  git-sync sync [flags] <source-url> <target-url>
-  git-sync replicate [flags] <source-url> <target-url>
-  git-sync plan [flags] <source-url> <target-url>
-  git-sync bootstrap [flags] <source-url> <target-url>
-  git-sync probe [flags] <source-url> [target-url]
-  git-sync fetch [flags] <source-url>
+  gitsync sync [flags] <source-url> <target-url>
+  gitsync replicate [flags] <source-url> <target-url>
+  gitsync plan [flags] <source-url> <target-url>
+  gitsync bootstrap [flags] <source-url> <target-url>
+  gitsync probe [flags] <source-url> [target-url]
+  gitsync fetch [flags] <source-url>
 
 sync flags:
   --branch main,dev

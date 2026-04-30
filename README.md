@@ -1,6 +1,6 @@
-# git-sync
+# gitsync
 
-`git-sync` mirrors refs from a source remote to a target remote without creating a local checkout. It uses an in-memory `go-git` object store and talks smart HTTP directly:
+`gitsync` mirrors refs from a source remote to a target remote without creating a local checkout. It uses an in-memory `go-git` object store and talks smart HTTP directly:
 
 - `info/refs` ref advertisement for source and target
 - `upload-pack` fetch from source with target tip hashes advertised as `have`
@@ -12,7 +12,7 @@ That keeps the target side incremental without fetching target objects into the 
 
 Mirroring Git data between remotes usually means a local mirror clone followed by a mirror push. That's fine for small repos but turns a remote-to-remote operation into a local storage problem at scale, and shell glue around `git fetch` / `git push` tends to skip planning and structured output.
 
-`git-sync` fills that gap. It streams source packs directly into target `receive-pack` when it can, plans every action before pushing, and emits typed JSON for automation.
+`gitsync` fills that gap. It streams source packs directly into target `receive-pack` when it can, plans every action before pushing, and emits typed JSON for automation.
 
 For when to use it (and when not), see [docs/architecture.md](docs/architecture.md).
 
@@ -20,16 +20,16 @@ For when to use it (and when not), see [docs/architecture.md](docs/architecture.
 
 The main commands are:
 
-- `git-sync sync`: mirror source refs into the target
-- `git-sync replicate`: overwrite target refs to match source via relay, and fail rather than materialize locally
+- `gitsync sync`: mirror source refs into the target
+- `gitsync replicate`: overwrite target refs to match source via relay, and fail rather than materialize locally
 
-`sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `git-sync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
+`sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `gitsync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
 
 For command examples, JSON output, auth, protocol flags, and advanced command notes, see [docs/usage.md](docs/usage.md).
 
 ## Library API
 
-`git-sync` is also a Go library. Use `entire.io/entire/gitsync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/gitsync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable.
+`gitsync` is also a Go library. Use `entire.io/entire/gitsync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/gitsync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable.
 
 ## Installation
 
@@ -38,23 +38,23 @@ Requires Go 1.26 or newer.
 Install the latest release with `go install`:
 
 ```bash
-go install entire.io/entire/gitsync/cmd/git-sync@latest
+go install entire.io/entire/gitsync/cmd/gitsync@latest
 ```
 
-This drops a `git-sync` binary into `$(go env GOPATH)/bin`. Make sure that directory is on your `PATH`.
+This drops a `gitsync` binary into `$(go env GOPATH)/bin`. Make sure that directory is on your `PATH`.
 
 Or build from source:
 
 ```bash
 git clone https://github.com/entireio/gitsync.git
 cd gitsync
-go build -o git-sync ./cmd/git-sync
+go build -o gitsync ./cmd/gitsync
 ```
 
 ## Quick Start
 
 ```bash
-git-sync sync \
+gitsync sync \
   --source-token "$GITSYNC_SOURCE_TOKEN" \
   --target-token "$GITSYNC_TARGET_TOKEN" \
   https://github.com/source-org/source-repo.git \

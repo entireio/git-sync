@@ -16,7 +16,7 @@ type Options struct {
 	Auth       AuthProvider
 }
 
-// Client provides the public orchestration API for git-sync.
+// Client provides the public orchestration API for gitsync.
 type Client struct {
 	httpClient *http.Client
 	auth       AuthProvider

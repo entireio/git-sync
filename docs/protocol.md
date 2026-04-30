@@ -1,6 +1,6 @@
 # Protocol
 
-This document is a code-grounded walkthrough of the Git wire protocol pieces that `git-sync` implements directly: smart HTTP transport, pkt-line framing, capability negotiation, sideband multiplexing, and the relay path that streams a source pack into target `receive-pack` without local materialization.
+This document is a code-grounded walkthrough of the Git wire protocol pieces that `gitsync` implements directly: smart HTTP transport, pkt-line framing, capability negotiation, sideband multiplexing, and the relay path that streams a source pack into target `receive-pack` without local materialization.
 
 It is aimed at contributors and embedders who want to understand *why* the implementation looks the way it does. For higher-level operational behavior, see [architecture.md](architecture.md).
 
@@ -19,13 +19,13 @@ Covered:
 Out of scope (with pointers):
 
 - The pack format itself (object types, deltas, index format) — see [Git's pack-format docs](https://git-scm.com/docs/pack-format)
-- Dumb HTTP — `git-sync` does not support it
-- SSH transport — `git-sync` is HTTPS-only
+- Dumb HTTP — `gitsync` does not support it
+- SSH transport — `gitsync` is HTTPS-only
 - Bundle URI, partial clones, and other newer extensions
 
 ## Smart HTTP Overview
 
-`git-sync` talks to two RPC services per remote:
+`gitsync` talks to two RPC services per remote:
 
 | Service          | Discovery endpoint                            | RPC endpoint        | Direction             |
 |------------------|-----------------------------------------------|---------------------|-----------------------|
@@ -34,7 +34,7 @@ Out of scope (with pointers):
 
 The `/info/refs` GET serves two purposes: it advertises the available refs (in v1) or the v2 capability set, and it acts as the negotiation handshake — the response tells the client which protocol version the server speaks and which capabilities are available. The subsequent POST to the RPC endpoint carries the request body in `application/x-<service>-request` format and receives `application/x-<service>-result` back.
 
-`git-sync` is smart-HTTP-only. Dumb HTTP is not supported because relay-friendly negotiation depends on capability discovery and `have`/`want` exchange that dumb HTTP does not provide.
+`gitsync` is smart-HTTP-only. Dumb HTTP is not supported because relay-friendly negotiation depends on capability discovery and `have`/`want` exchange that dumb HTTP does not provide.
 
 The transport implementation lives in `internal/gitproto/smarthttp.go`. The two main entry points are `RequestInfoRefs` (the GET) and `PostRPC` / `PostRPCStream` / `PostRPCStreamBody` (the POST, with buffered or streaming response bodies).
 
@@ -64,19 +64,19 @@ When the server advertises `side-band-64k`, the response payload is multiplexed 
 | `0x02`  | progress text (stderr)   |
 | `0x03`  | fatal error              |
 
-`git-sync` always negotiates `side-band-64k` when available. `PreferredSideband` in `capability.go` enforces preferring `side-band-64k` over the older `side-band` capability. The demux happens in the fetch path; see "Source Fetch" below for how the pack stream is unwrapped.
+`gitsync` always negotiates `side-band-64k` when available. `PreferredSideband` in `capability.go` enforces preferring `side-band-64k` over the older `side-band` capability. The demux happens in the fetch path; see "Source Fetch" below for how the pack stream is unwrapped.
 
 ## Capability Negotiation
 
 ### Source side (upload-pack)
 
-For v1, capabilities are advertised at the end of the first ref line in the `info/refs` response, separated from the ref by a NUL byte. `git-sync` parses these via `go-git`'s `packp.AdvRefs`.
+For v1, capabilities are advertised at the end of the first ref line in the `info/refs` response, separated from the ref by a NUL byte. `gitsync` parses these via `go-git`'s `packp.AdvRefs`.
 
 For v2, capabilities are advertised as their own pkt-line section after a `version 2\n` payload. `DecodeV2Capabilities` in `internal/gitproto/capability.go` parses this into `V2Capabilities{Caps: map[string]string}`. Each capability is either a bare name or `name=value`.
 
-The capabilities `git-sync` cares about on the source side:
+The capabilities `gitsync` cares about on the source side:
 
-- `agent` — informational; `git-sync` echoes its own agent string back
+- `agent` — informational; `gitsync` echoes its own agent string back
 - `side-band-64k` — multiplexed responses with progress
 - `multi_ack_detailed`, `no-done` — fetch negotiation efficiency
 - `ofs-delta` — pack encoding capability
@@ -99,7 +99,7 @@ type TargetFeatures struct {
 }
 ```
 
-`git-sync` never requests `thin-pack` on the source side, so the source pack is always self-contained. That makes the relayed pack safe to push to a target regardless of its `no-thin` advertisement. The relay paths still differ on what they do when the target advertises `no-thin`: see "Why `no-thin` matters" under Target Push.
+`gitsync` never requests `thin-pack` on the source side, so the source pack is always self-contained. That makes the relayed pack safe to push to a target regardless of its `no-thin` advertisement. The relay paths still differ on what they do when the target advertises `no-thin`: see "Why `no-thin` matters" under Target Push.
 
 `DeleteRefs` gates `--prune` and explicit deletes. `ReportStatus` is required to learn which ref updates the target accepted. `OFSDelta` affects pack encoding compatibility. `Sideband` / `Sideband64k` allow the target to multiplex its own response.
 
@@ -115,10 +115,10 @@ Protocol v2 was introduced to make ref discovery cheaper (you can ask for a ref 
 | Filtering (`tree:0`)  | not standardized                            | supported via `fetch` capability `filter` feature |
 | Push                  | command list + pack on `receive-pack`       | (not yet standardized; not used)                 |
 
-`git-sync` uses v2 on the source side when supported, and v1 on the target side always. The reasons:
+`gitsync` uses v2 on the source side when supported, and v1 on the target side always. The reasons:
 
-- **Source-side v2** enables features `git-sync` actually uses: `ls-refs` for cheaper ref listing, and `fetch` with `filter=tree:0` for the commit-graph-only fetches that batched bootstrap planning relies on.
-- **Target-side push** stays on v1 because v2 receive-pack is not yet adopted broadly enough to rely on, and because `git-sync` already needs explicit command construction and streaming control on the push path.
+- **Source-side v2** enables features `gitsync` actually uses: `ls-refs` for cheaper ref listing, and `fetch` with `filter=tree:0` for the commit-graph-only fetches that batched bootstrap planning relies on.
+- **Target-side push** stays on v1 because v2 receive-pack is not yet adopted broadly enough to rely on, and because `gitsync` already needs explicit command construction and streaming control on the push path.
 
 The CLI flag is `--protocol auto|v1|v2`. `auto` (the default) tries source-side v2 first via the `Git-Protocol: version=2` header, and falls back to v1 if the server doesn't acknowledge v2 in its response. `v2` requires the source to negotiate v2 and fails otherwise. `v1` skips the v2 attempt.
 
@@ -126,7 +126,7 @@ The negotiation is done in `internal/gitproto/refs.go` via `ListSourceRefs(ctx, 
 
 ## HEAD Symref Discovery
 
-When the source advertises HEAD as a symbolic ref, `git-sync` records what branch it points to. This is used by batched bootstrap planning as a *trunk hint*: the trunk branch is planned first so its commit graph becomes a stop-set for subsequent branches' first-parent walks, dramatically cutting per-branch graph fetches on multi-branch repos.
+When the source advertises HEAD as a symbolic ref, `gitsync` records what branch it points to. This is used by batched bootstrap planning as a *trunk hint*: the trunk branch is planned first so its commit graph becomes a stop-set for subsequent branches' first-parent walks, dramatically cutting per-branch graph fetches on multi-branch repos.
 
 The hint is exposed as `RefService.HeadTarget plumbing.ReferenceName`. Empty value means "detached HEAD or no symref advertised", in which case the caller falls back to the original branch order.
 
@@ -142,11 +142,11 @@ In v1, HEAD's symref target is announced as a `symref=` capability on the first 
 
 ### v2
 
-In v2, the symref-target attribute is delivered as part of the `ls-refs` response. To get it, `git-sync` always requests HEAD and the `symrefs` argument:
+In v2, the symref-target attribute is delivered as part of the `ls-refs` response. To get it, `gitsync` always requests HEAD and the `symrefs` argument:
 
 ```
 command=ls-refs
-agent=git-sync/...
+agent=gitsync/...
 0001
 peel
 symrefs
@@ -186,7 +186,7 @@ have <hash>\n
 done\n
 ```
 
-Capabilities are appended to the first `want` line, separated from the hash by a space. `git-sync` requests `agent=...`, the preferred sideband (`side-band-64k` when supported, otherwise `side-band`), `ofs-delta` when supported, and `include-tag` when the request asks for tags. It adds `no-progress` unless `Verbose` is set on the `RefService`. `git-sync` deliberately does *not* request `thin-pack` — see "Why no-thin matters" under Target Push.
+Capabilities are appended to the first `want` line, separated from the hash by a space. `gitsync` requests `agent=...`, the preferred sideband (`side-band-64k` when supported, otherwise `side-band`), `ofs-delta` when supported, and `include-tag` when the request asks for tags. It adds `no-progress` unless `Verbose` is set on the `RefService`. `gitsync` deliberately does *not* request `thin-pack` — see "Why no-thin matters" under Target Push.
 
 Response: a pkt-line stream that begins with NAK / ACK negotiation packets and transitions into pack data on sideband channel `0x01`. Channel `0x02` carries progress text; channel `0x03` is fatal.
 
@@ -196,7 +196,7 @@ Request body is built by `EncodeCommand("fetch", capabilityArgs, commandArgs)`:
 
 ```
 command=fetch\n
-agent=git-sync/...\n
+agent=gitsync/...\n
 0001
 want <hash>\n
 have <hash>\n
@@ -227,7 +227,7 @@ Once the stream switches to pack mode, subsequent reads bypass pkt-line framing 
    ```
    <old-hash> <new-hash> <refname>\0<capabilities>\n
    ```
-   Capabilities are appended to the first command after a NUL byte. `git-sync` requests `report-status` and the preferred sideband (`side-band-64k` when available, otherwise `side-band`); `delete-refs` is added when the command list contains a delete. `ofs-delta` is consulted from the target advertisement to choose pack-encoding behavior in `useRefDeltas`, but is not itself requested as a wire capability.
+   Capabilities are appended to the first command after a NUL byte. `gitsync` requests `report-status` and the preferred sideband (`side-band-64k` when available, otherwise `side-band`); `delete-refs` is added when the command list contains a delete. `ofs-delta` is consulted from the target advertisement to choose pack-encoding behavior in `useRefDeltas`, but is not itself requested as a wire capability.
 2. **Flush packet** (`0000`) terminating the command section.
 3. **Raw pack bytes**. The pack itself is NOT pkt-line framed — the receive-pack server reads the pack directly off the request body after the flush.
 
@@ -235,7 +235,7 @@ Once the stream switches to pack mode, subsequent reads bypass pkt-line framing 
 
 A "thin pack" is one that contains delta objects whose base is not in the pack itself. The receiver is expected to resolve those bases against existing target objects. Thin packs are smaller on the wire but require the receiver to reach into the existing object database during indexing. When a `receive-pack` server advertises `no-thin`, it is signalling that it does not support thin packs — the client must send a self-contained pack.
 
-`git-sync` always sends self-contained packs because it never requests the `thin-pack` capability on `upload-pack` (see the comment in `internal/gitproto/fetch.go`). That means the relayed pack is safe for both kinds of target. The relay paths still make different choices given the target's advertisement:
+`gitsync` always sends self-contained packs because it never requests the `thin-pack` capability on `upload-pack` (see the comment in `internal/gitproto/fetch.go`). That means the relayed pack is safe for both kinds of target. The relay paths still make different choices given the target's advertisement:
 
 - **Replicate** explicitly tolerates `no-thin` and proceeds with relay. The comment in `internal/planner/relay.go` documents the reasoning: source never sends thin-pack, so the relayed pack is self-contained and safe.
 - **Incremental relay** inside `sync` is conservative: it skips `no-thin` targets and falls back to the materialized path. This is a safety-margin choice; it could in principle be relaxed using the same argument as replicate.
@@ -251,13 +251,13 @@ ok refs/heads/main\n
 ng refs/heads/release pre-receive-hook-rejected\n
 ```
 
-`git-sync` parses this in `internal/gitproto/push.go` and surfaces per-ref outcomes through the higher-level result types.
+`gitsync` parses this in `internal/gitproto/push.go` and surfaces per-ref outcomes through the higher-level result types.
 
 The push implementation lives in `internal/gitproto/push.go`.
 
 ## Relay Framing
 
-The conceptual move that distinguishes `git-sync` from a `clone --mirror` + `push --mirror` workflow is **relay**: the source's pack bytes are forwarded into the target's `receive-pack` request body without going through a local object decode + repack cycle.
+The conceptual move that distinguishes `gitsync` from a `clone --mirror` + `push --mirror` workflow is **relay**: the source's pack bytes are forwarded into the target's `receive-pack` request body without going through a local object decode + repack cycle.
 
 In framing terms:
 
@@ -272,7 +272,7 @@ pkt-line(0x01 [pack chunk]) ───────┘       raw pack bytes ◄─
 pkt-line(flush)
 ```
 
-The source's pack chunks come out one-per-pkt-line on sideband channel `0x01`. `git-sync` strips the pkt-line + sideband envelope and concatenates the raw pack bytes into the target push body, after the command list and flush. The pack itself is not re-encoded: byte for byte, the source-produced pack shows up on the target's wire.
+The source's pack chunks come out one-per-pkt-line on sideband channel `0x01`. `gitsync` strips the pkt-line + sideband envelope and concatenates the raw pack bytes into the target push body, after the command list and flush. The pack itself is not re-encoded: byte for byte, the source-produced pack shows up on the target's wire.
 
 This is why the relay paths (bootstrap, replicate, and the incremental relay path inside `sync`) avoid the in-memory cost that the materialized fallback pays. The local process never holds the object graph; it holds at most one pack chunk at a time.
 
@@ -316,7 +316,7 @@ This is intended for local self-signed targets. Do not use it against the public
 
 Some hosting providers respond to `/info/refs` with a 307 redirect to a different host (typically a regional replica or a canonicalized URL). Vanilla `git` follows the redirect for the discovery GET but also retargets the subsequent RPC POSTs at the redirect target.
 
-`git-sync` exposes this as the `FollowInfoRefsRedirect` field on `gitproto.Conn`, and as the CLI flags `--source-follow-info-refs-redirect` and `--target-follow-info-refs-redirect`:
+`gitsync` exposes this as the `FollowInfoRefsRedirect` field on `gitproto.Conn`, and as the CLI flags `--source-follow-info-refs-redirect` and `--target-follow-info-refs-redirect`:
 
 - **Off (default)**: redirects are followed for the GET, but the subsequent RPC POSTs go to the original `Endpoint.Host`. This preserves stable behavior for callers that build URLs ahead of time.
 - **On**: after `RequestInfoRefs` follows redirects, `Endpoint.Scheme` and `Endpoint.Host` are rewritten to the final URL's scheme and host. `Endpoint.Path` is never modified — it still contains the repo path.

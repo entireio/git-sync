@@ -1,16 +1,16 @@
 # Architecture
 
-`git-sync` is a remote-to-remote Git mirroring tool and library over smart HTTP.
+`gitsync` is a remote-to-remote Git mirroring tool and library over smart HTTP.
 
 ## Product Rationale
 
-The point of `git-sync` is not that Git mirroring is impossible without it. The point is that the usual alternatives are awkward at the exact layer operators often need:
+The point of `gitsync` is not that Git mirroring is impossible without it. The point is that the usual alternatives are awkward at the exact layer operators often need:
 
 - a full local mirror clone and mirror push is simple, but it turns remote-to-remote movement into a local storage and local bandwidth problem
 - host-specific migration tools are useful, but they are not portable and they usually do not expose one consistent sync primitive across providers
 - scripts around `git fetch` and `git push` can work, but they usually lack planning, explicit policy checks, stable machine-readable output, and a clean distinction between bootstrap and incremental sync
 
-`git-sync` is meant to be that missing middle layer:
+`gitsync` is meant to be that missing middle layer:
 
 - provider-agnostic
 - remote-to-remote
@@ -25,9 +25,9 @@ That is why the design leans so heavily on:
 - typed results and JSON output
 - explicit operation modes instead of a single opaque "mirror" operation
 
-## When To Use `git-sync`
+## When To Use `gitsync`
 
-`git-sync` is most useful when the main problem is moving Git data between remotes without turning that into a persistent local clone service.
+`gitsync` is most useful when the main problem is moving Git data between remotes without turning that into a persistent local clone service.
 
 Strong fit:
 
@@ -46,7 +46,7 @@ Weaker fit:
 The practical tradeoff is:
 
 - a local-clone service is the more general model
-- `git-sync` is the lower-state, relay-first, operationally cheaper model
+- `gitsync` is the lower-state, relay-first, operationally cheaper model
 
 That means the tool gets most of its advantage when relay is common enough to be the normal case rather than an exceptional optimization.
 
@@ -162,9 +162,9 @@ Protocol v2 is used where it materially improves discovery and fetch behavior. P
 The relay paths and the materialized fallback have very different memory stories.
 
 - Relay paths scale with streaming behavior.
-  The source computes the pack, `git-sync` coordinates the transfer, and the target receives it directly. Large repositories are expected to stay viable primarily through bootstrap and incremental relay.
+  The source computes the pack, `gitsync` coordinates the transfer, and the target receives it directly. Large repositories are expected to stay viable primarily through bootstrap and incremental relay.
 - Materialized fallback scales with the local object set that must be pushed.
-  Once `git-sync` stops relaying and starts building a local push, it must hold the relevant Git objects in memory long enough to compute object closure and encode the outgoing pack.
+  Once `gitsync` stops relaying and starts building a local push, it must hold the relevant Git objects in memory long enough to compute object closure and encode the outgoing pack.
 
 Useful rules of thumb:
 

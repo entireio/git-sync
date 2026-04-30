@@ -15,7 +15,7 @@ When reporting a vulnerability, please include:
 1. **Description** - A clear description of the vulnerability
 2. **Impact** - What an attacker could achieve by exploiting this issue
 3. **Steps to reproduce** - Detailed steps to reproduce the vulnerability
-4. **Affected versions** - Which versions of `git-sync` are affected (if known)
+4. **Affected versions** - Which versions of `gitsync` are affected (if known)
 5. **Suggested fix** - If you have ideas on how to fix it (optional)
 
 ### What to Expect
@@ -30,13 +30,13 @@ When reporting a vulnerability, please include:
 
 ## Supported Versions
 
-We recommend always running the latest version of `git-sync`.
+We recommend always running the latest version of `gitsync`.
 
 ## Scope
 
 This security policy applies to:
 
-- The `git-sync` CLI and `git-sync-bench` benchmark command
+- The `gitsync` CLI and `gitsync-bench` benchmark command
 - The `entire.io/entire/gitsync` and `entire.io/entire/gitsync/unstable` Go packages
 - Official Entire GitHub repositories
 
@@ -49,7 +49,7 @@ The following are generally not considered security vulnerabilities:
 - Denial of service attacks against remotes you do not control
 - Issues requiring physical access to a user's device
 
-Because `git-sync` operates against Git remotes, please be especially careful when reporting issues that involve credentials, TLS verification, or remote-to-remote relay behavior — include the exact remote configuration that triggers the issue if it is reproducible.
+Because `gitsync` operates against Git remotes, please be especially careful when reporting issues that involve credentials, TLS verification, or remote-to-remote relay behavior — include the exact remote configuration that triggers the issue if it is reproducible.
 
 ---
 
@@ -65,4 +65,4 @@ Use [GitHub Issues](https://github.com/entireio/gitsync/issues) to report bugs.
 
 ---
 
-Thank you for helping keep `git-sync` and the Entire community safe!
+Thank you for helping keep `gitsync` and the Entire community safe!

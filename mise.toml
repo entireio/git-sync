@@ -43,5 +43,5 @@ description = "Run optional single-pack smoke syncing the Linux repo into a runn
 run = "GITSYNC_E2E_ENTIRE=1 GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/torvalds/linux.git GITSYNC_E2E_ENTIRE_BRANCH=master go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 60m -v"
 
 [tasks.build]
-description = "Build git-sync"
-run = "go build ./cmd/git-sync"
+description = "Build gitsync"
+run = "go build ./cmd/gitsync"

@@ -40,7 +40,7 @@ echo ""
 # Get licenses from dependencies
 TEMP_FILE=$(mktemp)
 # shellcheck disable=SC2312
-go-licenses csv ./cmd/git-sync 2>/dev/null | sort | uniq > "$TEMP_FILE"
+go-licenses csv ./cmd/gitsync 2>/dev/null | sort | uniq > "$TEMP_FILE"
 
 # Check each dependency
 VIOLATIONS=()

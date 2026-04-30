@@ -41,8 +41,8 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 
 	writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
 	runGit(t, worktree, "add", "README.md")
@@ -113,8 +113,8 @@ func TestRun_GitHTTPBackendSyncDivergedTarget(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, sourceWorktree)
-	runGit(t, sourceWorktree, "config", "user.name", "git-sync test")
-	runGit(t, sourceWorktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, sourceWorktree, "config", "user.name", "gitsync test")
+	runGit(t, sourceWorktree, "config", "user.email", "gitsync@example.com")
 
 	writeFile(t, filepath.Join(sourceWorktree, "README.md"), "base\n")
 	runGit(t, sourceWorktree, "add", "README.md")
@@ -128,8 +128,8 @@ func TestRun_GitHTTPBackendSyncDivergedTarget(t *testing.T) {
 	runGit(t, targetWorktree, "remote", "add", "origin", targetBare)
 	runGit(t, targetWorktree, "fetch", "origin", testBranch)
 	runGit(t, targetWorktree, "reset", "--hard", "origin/"+testBranch)
-	runGit(t, targetWorktree, "config", "user.name", "git-sync test")
-	runGit(t, targetWorktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, targetWorktree, "config", "user.name", "gitsync test")
+	runGit(t, targetWorktree, "config", "user.email", "gitsync@example.com")
 	writeFile(t, filepath.Join(targetWorktree, "TARGET.txt"), "target-only\n")
 	runGit(t, targetWorktree, "add", "TARGET.txt")
 	runGit(t, targetWorktree, "commit", "-m", "target diverges")
@@ -173,8 +173,8 @@ func TestRun_GitHTTPBackendSyncMultiBranchFastForward(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 
 	writeFile(t, filepath.Join(worktree, "README.md"), "base\n")
 	runGit(t, worktree, "add", "README.md")
@@ -245,8 +245,8 @@ func TestRun_GitHTTPBackendSyncMappedBranchFastForward(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 
 	writeFile(t, filepath.Join(worktree, "README.md"), "mapped\n")
 	runGit(t, worktree, "add", "README.md")
@@ -316,8 +316,8 @@ func TestRun_GitHTTPBackendSyncTagCreate(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 
 	writeFile(t, filepath.Join(worktree, "README.md"), "tag\n")
 	runGit(t, worktree, "add", "README.md")
@@ -377,8 +377,8 @@ func TestBootstrap_GitHTTPBackendSync(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 
 	writeFile(t, filepath.Join(worktree, "README.md"), "bootstrap\n")
 	runGit(t, worktree, "add", "README.md")
@@ -426,8 +426,8 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 	runGit(t, worktree, "remote", "add", "origin", sourceBare)
 
 	for i := range 6 {
@@ -491,8 +491,8 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 	runGit(t, worktree, "remote", "add", "origin", sourceBare)
 
 	for i := range 6 {
@@ -590,8 +590,8 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 	runGit(t, worktree, "remote", "add", "origin", sourceBare)
 
 	for i := range 8 {
@@ -680,8 +680,8 @@ func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "config", "user.name", "gitsync test")
+	runGit(t, worktree, "config", "user.email", "gitsync@example.com")
 	runGit(t, worktree, "remote", "add", "origin", sourceBare)
 
 	for i := range 5 {

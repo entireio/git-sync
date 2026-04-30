@@ -50,20 +50,20 @@ These are useful for large-source relay and memory checks while keeping the targ
 
 ## Benchmarking
 
-`git-sync-bench` runs repeatable empty-target benchmarks against a source repository. It creates a fresh bare target for each run and reports wall-clock time plus internal `syncer` measurement data.
+`gitsync-bench` runs repeatable empty-target benchmarks against a source repository. It creates a fresh bare target for each run and reports wall-clock time plus internal `syncer` measurement data.
 
 Build it with:
 
 ```bash
-go build -o /tmp/git-sync-bench ./cmd/git-sync-bench
+go build -o /tmp/gitsync-bench ./cmd/gitsync-bench
 ```
 
 Example against a local mirror:
 
 ```bash
-/tmp/git-sync-bench \
+/tmp/gitsync-bench \
   --scenario bootstrap \
-  --source-url /tmp/git-sync-bench/kubernetes.git \
+  --source-url /tmp/gitsync-bench/kubernetes.git \
   --repeat 3 \
   --target-max-pack-bytes 104857600 \
   --stats \

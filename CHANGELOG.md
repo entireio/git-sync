@@ -6,7 +6,7 @@ Entries are grouped per release. Unreleased changes sit at the top.
 
 ### Added
 
-- `git-sync replicate` subcommand and `git-sync plan --mode replicate` for
+- `gitsync replicate` subcommand and `gitsync plan --mode replicate` for
   source-authoritative, relay-only replication. Divergent branches and tags
   are retargeted against the source; `--prune` deletes orphan managed refs.
   Relay-only by design: no materialized fallback. Replicate works against

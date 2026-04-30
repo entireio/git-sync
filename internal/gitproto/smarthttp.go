@@ -36,7 +36,7 @@ func httpError(res *http.Response) error {
 }
 
 // StatsPhaseHeader is the HTTP header used to annotate requests with the
-// current git-sync stats phase for round-trip tracking.
+// current gitsync stats phase for round-trip tracking.
 const StatsPhaseHeader = "X-Git-Sync-Stats-Phase"
 
 // AuthMethod authorizes outbound HTTP requests for a remote. It is satisfied
@@ -72,7 +72,7 @@ func NewConn(ep *url.URL, label string, auth AuthMethod, rt http.RoundTripper) *
 
 // NewConnWithHTTPClient creates a new connection using the provided HTTP client.
 // Passing nil falls back to a default client and is intended only for direct
-// callers outside git-sync's normal instrumented session setup.
+// callers outside gitsync's normal instrumented session setup.
 func NewConnWithHTTPClient(ep *url.URL, label string, auth AuthMethod, httpClient *http.Client) *Conn {
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: http.DefaultTransport}

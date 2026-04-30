@@ -1,4 +1,4 @@
-// Package syncer provides the top-level orchestration for git-sync.
+// Package syncer provides the top-level orchestration for gitsync.
 // It delegates to internal/gitproto for protocol, internal/planner for
 // planning, and internal/auth for credentials.
 package syncer

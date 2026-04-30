@@ -41,7 +41,7 @@ type DesiredRef struct {
 	SourceHash plumbing.Hash
 }
 
-// ManagedTarget tracks which target refs are managed by git-sync.
+// ManagedTarget tracks which target refs are managed by gitsync.
 type ManagedTarget struct {
 	Kind  RefKind
 	Label string

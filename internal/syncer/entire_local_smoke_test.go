@@ -65,7 +65,7 @@ func TestRun_EntireLocalPublicRepoSmoke(t *testing.T) {
 	)
 	repoName := firstNonEmpty(
 		os.Getenv("GITSYNC_E2E_ENTIRE_REPO"),
-		"git-sync-smoke",
+		"gitsync-smoke",
 	)
 	username := os.Getenv("GITSYNC_E2E_ENTIRE_USERNAME")
 	token := os.Getenv("GITSYNC_E2E_ENTIRE_TOKEN")

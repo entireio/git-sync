@@ -1919,13 +1919,13 @@ func TestRun_IntegrationSyncPrunePreservesTargetTagWithoutIncludeTags(t *testing
 }
 
 // TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync simulates a
-// race: the target gains a brand-new tag after git-sync has snapshotted its
+// race: the target gains a brand-new tag after gitsync has snapshotted its
 // refs but before the receive-pack push lands. Even with --tags --prune, the
 // new tag must survive — the prune set is built from the planning snapshot
 // only, and the receive-pack protocol only acts on refs that appear in the
 // command list. The injection point is the receive-pack hook on the test
 // server: by the time it fires, target ref discovery is already complete and
-// git-sync's plans are fixed.
+// gitsync's plans are fixed.
 func TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -2651,7 +2651,7 @@ func (s *smartHTTPRepoServer) handle(w http.ResponseWriter, r *http.Request) {
 	if s.username != "" || s.password != "" {
 		username, password, ok := r.BasicAuth()
 		if !ok || username != s.username || password != s.password {
-			w.Header().Set("WWW-Authenticate", `Basic realm="git-sync-test"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="gitsync-test"`)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}

@@ -1,4 +1,4 @@
-// Package gitsync provides the public orchestration API for git-sync.
+// Package gitsync provides the public orchestration API for gitsync.
 //
 // The public surface is intentionally narrower than the internal engine:
 // callers express sync intent through typed probe, plan, and sync requests,

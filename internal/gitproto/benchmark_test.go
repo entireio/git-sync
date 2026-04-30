@@ -68,7 +68,7 @@ func BenchmarkDecodeV2Capabilities(b *testing.B) {
 
 func BenchmarkEncodeCommand(b *testing.B) {
 	// Build a fetch command with 50 wants.
-	capArgs := []string{"agent=git-sync/bench"}
+	capArgs := []string{"agent=gitsync/bench"}
 	cmdArgs := make([]string, 0, 52)
 	cmdArgs = append(cmdArgs, "ofs-delta", "no-progress")
 	for i := range 50 {

@@ -1,4 +1,4 @@
-// Package incremental implements the incremental relay strategy for git-sync.
+// Package incremental implements the incremental relay strategy for gitsync.
 // This fast-path streams a pack from source directly to target when all updates
 // are fast-forward branch updates or new tag creates.
 package incremental

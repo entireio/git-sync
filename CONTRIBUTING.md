@@ -1,4 +1,4 @@
-# Contributing to git-sync
+# Contributing to gitsync
 
 Thank you for your interest in contributing to Entire! We welcome contributions from everyone.
 
@@ -78,7 +78,7 @@ Good bug reports help us fix issues quickly. When reporting a bug, please includ
 
 ### Required Information
 
-1. **git-sync commit** - `git rev-parse HEAD` of the build you used (or release tag/version if applicable)
+1. **gitsync commit** - `git rev-parse HEAD` of the build you used (or release tag/version if applicable)
 2. **Operating system**
 3. **Go version** - run `go version`
 
@@ -255,8 +255,8 @@ source ~/.zshrc  # or ~/.bashrc
 **Binary not updating after rebuild**
 ```bash
 # Check which binary is being used
-which git-sync
-type -a git-sync
+which gitsync
+type -a gitsync
 
 # You may have multiple installations - update the correct path
 ```
