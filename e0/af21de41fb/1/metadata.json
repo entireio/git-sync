@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.5.6",
+  "checkpoint_id": "e0af21de41fb",
+  "session_id": "019ddcb1-07d7-7821-9b36-168174c16562",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-30T05:10:54.508201Z",
+  "branch": "codex/readme-faq",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "2a69e6daa064",
+  "checkpoint_transcript_start": 45,
+  "token_usage": {
+    "input_tokens": 10160,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 302080,
+    "output_tokens": 1681,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-30T05:10:54.491216Z",
+    "agent_lines": 17,
+    "agent_removed": 17,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 34,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

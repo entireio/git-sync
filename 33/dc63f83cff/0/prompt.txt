@@ -1,0 +1,170 @@
+can you look at the changes in this branch, I want to run the smoke test against a local entire using the linux repo. I did it run once before and it seems no matter what I do it just finishs quickly doing the regular cli repo
+
+---
+
+❯ mise run test:entire-local-smoke:linux
+[test:entire-local-smoke:linux] $ GITSYNC_E2E_ENTIRE=1 GITSYNC_E2E_ENTIRE_SOURCE_URL=https://github.com/torvalds/linux.git GITSYNC_E2E_ENTIRE_BRANCH=master go…
+=== RUN   TestRun_EntireLocalPublicRepoSmoke
+    entire_local_smoke_test.go:87: Entire local smoke config: source=https://github.com/torvalds/linux.git branch=master target=https://localhost:8080/git/test/git-sync-smoke-2 repo=git-sync-smoke-2
+[git-sync] bootstrap: fetching 1 ref(s) from source
+[git-sync] bootstrap: pushing 1 ref(s) to target
+    entire_local_smoke_test.go:100: sync public source into Entire failed: push target refs: unpack error: push rejected: body exceeded size limit 2147483648 (trace_id=00000000000000000000000000000000)
+--- FAIL: TestRun_EntireLocalPublicRepoSmoke (209.28s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        209.982s
+FAIL
+[test:entire-local-smoke:linux] ERROR task failed
+
+---
+
+Sending to replicas: 307.2 MiB, done.
+Storing objects: 641756/641756 (2 replicas), done.
+
+where is this coming from?
+
+---
+
+what's the name of the repo now on entire git backend?
+
+---
+
+❯ git clone https://localhost:8080/git/test/git-sync-smoke-2
+Cloning into 'git-sync-smoke-2'...
+Username for 'https://localhost:8080': test
+Password for 'https://test@localhost:8080':
+remote: Invalid token format
+fatal: Authentication failed for 'https://localhost:8080/git/test/git-sync-smoke-2/'+
+
+---
+
+can I get the token from the entire-git-helper somehow
+
+---
+
+if I would use batched and the source repo is less then the batchsize intotal it would be as quick as without batching?
+
+---
+
+could we unify this somehow? that when I kick of a sync I don't need to know if I need to batch or not but we can figure this out on the size of the repo? Like is this an inexpensive call to get the size?
+
+---
+
+yes, let's do this
+
+---
+
+how can I pass in any repo now?
+
+---
+
+=== RUN   TestRun_EntireLocalPublicRepoSmoke
+    entire_local_smoke_test.go:100: Entire local smoke config: source=https://github.com/kubernetes/kubernetes.git branch=main target=https://localhost:8080/git/test/git-sync-smoke-3 repo=git-sync-smoke-3 protocol=auto max_pack_bytes=0 batch_max_pack_bytes=0
+    entire_local_smoke_test.go:125: sync public source into Entire failed: no source refs matched
+
+---
+
+❯ go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 60m -v
+=== RUN   TestRun_EntireLocalPublicRepoSmoke
+    entire_local_smoke_test.go:100: Entire local smoke config: source=https://github.com/kubernetes/kubernetes.git branch=master target=https://localhost:8080/git/test/git-sync-smoke-3 repo=git-sync-smoke-3 protocol=auto max_pack_bytes=0 batch_max_pack_bytes=0
+[git-sync] bootstrap: fetching 1 ref(s) from source
+[git-sync] bootstrap: pushing 1 ref(s) to target
+Sending to replicas: 1139.3 MiB, done.
+Storing objects: 1588569/1588569 (2 replicas), done.
+--- PASS: TestRun_EntireLocalPublicRepoSmoke (151.62s)
+PASS
+ok      github.com/soph/git-sync/internal/syncer        151.890s
+
+This included now all branches?
+
+---
+
+❯   go run ./cmd/git-sync sync \
+    --target-token "$GITSYNC_E2E_ENTIRE_TOKEN" \
+    --target-username git \
+    --target-insecure-skip-tls-verify \
+    https://github.com/kubernetes/kubernetes.git \
+    https://localhost:8080/git/test/git-sync-smoke-4
+Username for 'https://localhost':
+
+---
+
+❯ entiredb auth
+Authenticate with Entire
+
+Usage:
+  entiredb auth [command]
+
+Available Commands:
+  link-github Link your GitHub account for push attribution
+  list        List all authenticated sessions
+  login       Login using browser-based authentication
+  logout      Logout
+  signup      Sign up with user name, password and invite token
+
+Flags:
+  -h, --help   help for auth
+
+Use "entiredb auth [command] --help" for more information about a command.
+
+---
+
+Tasks dev:publish
+[dev:publish] $ ~/Work/entire/devenv/entire/mise-tasks/dev/publish
+NOTE: we're overriding $GOBIN: /Users/soph/go/bin
+Installed: 'entiredb'
+Installed: 'entire-backup'
+Installed: 'entire-core'
+Installed: 'entire-deploy'
+Installed: 'entire-server'
+Installed: 'git-remote-entire'
+
+---
+
+I think you have old information, there is no `entire` cli in ../entire anymore, or is there?
+
+---
+
+where is `entiredb auth login` writing too?
+
+---
+
+but what is `git-remote-entire` doing then?
+
+---
+
+can we integrate it? or can I use `git-remote-entire` to get the token?
+
+---
+
+do this
+
+---
+
+but how did go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 60m -v work auth wise?
+
+---
+
+ok, continue
+
+---
+
+go run ./cmd/git-sync sync \
+    --protocol v2 \
+    --target-username git \
+    --target-insecure-skip-tls-verify \
+    https://github.com/kubernetes/kubernetes.git \
+    https://localhost:8080/git/test/git-sync-smoke-4
+
+---
+
+❯   go run ./cmd/git-sync sync \
+    --protocol v2 \
+    --target-username git \
+    --target-insecure-skip-tls-verify \
+    https://github.com/kubernetes/kubernetes.git \
+    https://localhost:8080/git/test/git-sync-smoke-4
+Username for 'https://localhost':
+
+---
+
+runs now, which logic is this command using under the hood?

@@ -1,0 +1,13 @@
+Review commit b718e82 ("Add batched planning backend sensitivity test") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new git-http-backend test is a sound experiment surface for batching, whether the assertions are meaningful without being flaky, and whether there are any setup mistakes in the source transport/planning wiring. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit 359d4e9 ("Add materialized object handling examples") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new tests actually illustrate materialized object handling correctly, especially the distinction between branch-update object closure, target-have cutoff, and delete-only ref operations. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review the current worktree changes adding HTTPClient injection through pkg/gitsync into internal/syncer. Focus on: 1) whether the injected client precedence/semantics are sane, 2) whether wrapping the client's transport for stats is safe, 3) any missing tests or obvious edge-case bugs in the new connection setup. Findings only, ordered by severity with file references.
+
+---
+
+Review the current pkg/gitsync result-shaping changes. Focus on whether the new stable Ref/Counts/Execution grouping is a better public contract than the previous flat engine-shaped fields, and whether any obviously useful worker-facing information was lost or still leaks too much engine detail. Findings only, ordered by severity with file references.
