@@ -3,21 +3,30 @@
   "checkpoint_id": "1ecffd82af56",
   "strategy": "manual-commit",
   "branch": "codex/readme-usage-doc",
-  "checkpoints_count": 8,
-  "files_touched": null,
+  "checkpoints_count": 10,
+  "files_touched": [
+    "README.md",
+    "docs/usage.md"
+  ],
   "sessions": [
     {
       "metadata": "/1e/cffd82af56/0/metadata.json",
       "transcript": "/1e/cffd82af56/0/transcript.jsonl",
       "content_hash": "/1e/cffd82af56/0/transcript_hash.txt",
       "prompt": "/1e/cffd82af56/0/prompt.txt"
+    },
+    {
+      "metadata": "/1e/cffd82af56/1/metadata.json",
+      "transcript": "/1e/cffd82af56/1/transcript.jsonl",
+      "content_hash": "/1e/cffd82af56/1/transcript_hash.txt",
+      "prompt": "/1e/cffd82af56/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 272926,
+    "input_tokens": 374692,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 6435712,
-    "output_tokens": 31291,
-    "api_call_count": 135
+    "cache_read_tokens": 7308672,
+    "output_tokens": 40353,
+    "api_call_count": 179
   }
 }
