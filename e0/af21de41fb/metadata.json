@@ -3,7 +3,7 @@
   "checkpoint_id": "e0af21de41fb",
   "strategy": "manual-commit",
   "branch": "codex/readme-faq",
-  "checkpoints_count": 1,
+  "checkpoints_count": 0,
   "files_touched": [
     "README.md"
   ],
@@ -12,7 +12,7 @@
       "metadata": "/e0/af21de41fb/0/metadata.json",
       "transcript": "/e0/af21de41fb/0/transcript.jsonl",
       "content_hash": "/e0/af21de41fb/0/transcript_hash.txt",
-      "prompt": "/e0/af21de41fb/0/prompt.txt"
+      "prompt": ""
     },
     {
       "metadata": "/e0/af21de41fb/1/metadata.json",
@@ -22,10 +22,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 411891,
+    "input_tokens": 138965,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 7686784,
-    "output_tokens": 39469,
-    "api_call_count": 173
+    "cache_read_tokens": 1251072,
+    "output_tokens": 8178,
+    "api_call_count": 38
   }
 }
