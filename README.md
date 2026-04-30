@@ -33,9 +33,16 @@ For command examples, JSON output, auth, protocol flags, and advanced command no
 
 ## Installation
 
-Requires Go 1.26 or newer.
+### Homebrew (macOS, Linux)
 
-Install the latest release with `go install`:
+```bash
+brew tap entireio/tap
+brew install --cask git-sync
+```
+
+### `go install`
+
+Requires Go 1.26 or newer.
 
 ```bash
 go install entire.io/entire/git-sync/cmd/git-sync@latest
@@ -43,7 +50,7 @@ go install entire.io/entire/git-sync/cmd/git-sync@latest
 
 This drops a `git-sync` binary into `$(go env GOPATH)/bin`. Make sure that directory is on your `PATH`.
 
-Or build from source:
+### From source
 
 ```bash
 git clone https://github.com/entireio/git-sync.git
