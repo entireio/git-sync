@@ -68,35 +68,3 @@ jobs:
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
-
-  notify-slack:
-    runs-on: ubuntu-latest
-    needs: [release]
-    if: ${{ always() && needs.release.result == 'failure' }}
-    steps:
-      - name: Notify Slack of release failure
-        uses: slackapi/slack-github-action@03ea5433c137af7c0495bc0cad1af10403fc800c # v3.0.2
-        with:
-          webhook: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": ":red_circle: *Release Failed* for `${{ env.RELEASE_TAG }}`\n\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run details>"
-                  }
-                },
-                {
-                  "type": "context",
-                  "elements": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "Tag: `${{ env.RELEASE_TAG }}` by ${{ github.actor }}"
-                    }
-                  ]
-                }
-              ]
-            }
