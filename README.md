@@ -37,7 +37,7 @@ For command examples, JSON output, auth, protocol flags, and advanced command no
 
 ```bash
 brew tap entireio/tap
-brew install entireio/tap/git-sync
+brew install --cask git-sync
 ```
 
 ### `go install`
