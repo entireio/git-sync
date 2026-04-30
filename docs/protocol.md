@@ -304,7 +304,7 @@ Resolution order (CLI side):
 3. `git credential fill` helper lookup, for `http://` and `https://` URLs
 4. Anonymous (no `Authorization` header)
 
-Library callers inject auth via the `AuthProvider` interface in `entire.io/entire/gitsync` instead.
+Library callers inject auth via the `AuthProvider` interface in `entire.io/entire/git-sync` instead.
 
 ### TLS
 

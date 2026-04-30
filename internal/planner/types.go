@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"entire.io/entire/gitsync/internal/validation"
+	"entire.io/entire/git-sync/internal/validation"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 

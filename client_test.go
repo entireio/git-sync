@@ -15,7 +15,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 
-	"entire.io/entire/gitsync/internal/syncertest"
+	"entire.io/entire/git-sync/internal/syncertest"
 )
 
 type errAuthProvider struct{}

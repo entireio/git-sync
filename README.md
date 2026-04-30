@@ -29,7 +29,7 @@ For command examples, JSON output, auth, protocol flags, and advanced command no
 
 ## Library API
 
-`git-sync` is also a Go library. Use `entire.io/entire/gitsync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/gitsync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable.
+`git-sync` is also a Go library. Use `entire.io/entire/git-sync` for the stable embedding surface (`Probe`, `Plan`, `Sync`, `Replicate`, typed results, auth and HTTP injection). `entire.io/entire/git-sync/unstable` exposes advanced controls (`Bootstrap`, `Fetch`, batching knobs, heap measurement) and is not stable.
 
 ## Installation
 
@@ -38,7 +38,7 @@ Requires Go 1.26 or newer.
 Install the latest release with `go install`:
 
 ```bash
-go install entire.io/entire/gitsync/cmd/git-sync@latest
+go install entire.io/entire/git-sync/cmd/git-sync@latest
 ```
 
 This drops a `git-sync` binary into `$(go env GOPATH)/bin`. Make sure that directory is on your `PATH`.

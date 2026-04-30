@@ -37,7 +37,7 @@ We recommend always running the latest version of `git-sync`.
 This security policy applies to:
 
 - The `git-sync` CLI and `git-sync-bench` benchmark command
-- The `entire.io/entire/gitsync` and `entire.io/entire/gitsync/unstable` Go packages
+- The `entire.io/entire/git-sync` and `entire.io/entire/git-sync/unstable` Go packages
 - Official Entire GitHub repositories
 
 ### Out of Scope

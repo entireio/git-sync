@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"entire.io/entire/gitsync/internal/gitproto"
+	"entire.io/entire/git-sync/internal/gitproto"
 )
 
 // ServiceStats tracks transfer statistics for a single service.
