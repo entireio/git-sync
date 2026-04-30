@@ -1,0 +1,26 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "e8ae87b8f128",
+  "strategy": "manual-commit",
+  "branch": "naming",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync/main.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e8/ae87b8f128/0/metadata.json",
+      "transcript": "/e8/ae87b8f128/0/full.jsonl",
+      "content_hash": "/e8/ae87b8f128/0/content_hash.txt",
+      "prompt": "/e8/ae87b8f128/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27,
+    "cache_creation_tokens": 50340,
+    "cache_read_tokens": 630010,
+    "output_tokens": 6141,
+    "api_call_count": 17
+  }
+}

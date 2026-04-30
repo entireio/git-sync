@@ -1,0 +1,1 @@
+Replace the hardcoded binary name in usage with os.Args[0]
