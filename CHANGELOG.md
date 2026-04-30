@@ -63,50 +63,10 @@ and the protocol plumbing they share.
   ([#25](https://github.com/entireio/git-sync/pull/25)).
 - GoReleaser-based release pipeline for cross-platform binaries
   ([#26](https://github.com/entireio/git-sync/pull/26)).
+- Identical source and target endpoints are rejected before any network
+  round-trips.
 - Documentation set: `docs/usage.md`, `docs/architecture.md`,
   `docs/protocol.md`, `docs/testing.md`, plus README installation,
   quick-start, and FAQ ([#21](https://github.com/entireio/git-sync/pull/21),
   [#22](https://github.com/entireio/git-sync/pull/22),
   [#23](https://github.com/entireio/git-sync/pull/23)).
-
-### Changed
-
-- Module path consolidated to `entire.io/entire/git-sync`, with the package
-  moved to the repo root for ergonomic imports
-  ([#5](https://github.com/entireio/git-sync/pull/5),
-  [#12](https://github.com/entireio/git-sync/pull/12),
-  [#15](https://github.com/entireio/git-sync/pull/15),
-  [#17](https://github.com/entireio/git-sync/pull/17),
-  [#27](https://github.com/entireio/git-sync/pull/27)).
-- Go 1.26.2 minimum ([#16](https://github.com/entireio/git-sync/pull/16)).
-- `go-git` upgraded to `v6.0.0-alpha.2`, which also pulls in the fix for
-  CVE-2026-41506 ([#11](https://github.com/entireio/git-sync/pull/11)).
-- Identical source and target endpoints are now rejected before any network
-  round-trips.
-
-### Fixed
-
-- Worked around a `go-git` v6 upload-pack bug where the server emits two
-  consecutive `NAK` pktlines in stateless-RPC mode when the client sends
-  haves that are not reachable from any want. The second NAK was otherwise
-  misread by the sideband demuxer as an unknown-channel frame.
-- Hardened pkt-line parsing and error handling for malformed advertisements,
-  oversized packets, and v2 remote `ERR` frames
-  ([#14](https://github.com/entireio/git-sync/pull/14)).
-- Bootstrap resume now finds the chain position from stale temp refs instead
-  of failing on resume mismatch, and clears them when no recoverable
-  position exists.
-- Skip pack push for branches fully subsumed by trunk to avoid redundant
-  receive-pack POSTs.
-
-### Housekeeping
-
-- GitHub Actions CI with `golangci-lint`, license check, and pinned action
-  SHAs for supply-chain hygiene
-  ([#7](https://github.com/entireio/git-sync/pull/7)).
-- Integration-test harness against `git-http-backend`, plus end-to-end
-  coverage of plan, dry-run, prune scope, identical-endpoint rejection, and
-  incremental push failure recovery
-  ([#18](https://github.com/entireio/git-sync/pull/18)).
-- Removed Slack failure notification from the release workflow
-  ([#28](https://github.com/entireio/git-sync/pull/28)).
