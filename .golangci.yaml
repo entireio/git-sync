@@ -97,7 +97,7 @@ linters:
         - github.com/go-git/go-git/v6/storage.Storer
         - github.com/go-git/go-git/v6/plumbing/storer.EncodedObjectIter
         - github.com/go-git/go-billy/v6.Filesystem
-        - entire.io/entire/gitsync/internal/auth.Method
+        - entire.io/entire/git-sync/internal/auth.Method
     nolintlint:
       require-explanation: true
       require-specific: true

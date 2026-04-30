@@ -23,9 +23,9 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/memory"
 
-	"entire.io/entire/gitsync/internal/convert"
-	"entire.io/entire/gitsync/internal/gitproto"
-	"entire.io/entire/gitsync/internal/planner"
+	"entire.io/entire/git-sync/internal/convert"
+	"entire.io/entire/git-sync/internal/gitproto"
+	"entire.io/entire/git-sync/internal/planner"
 )
 
 const (

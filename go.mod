@@ -1,4 +1,4 @@
-module entire.io/entire/gitsync
+module entire.io/entire/git-sync
 
 go 1.26.2
 
