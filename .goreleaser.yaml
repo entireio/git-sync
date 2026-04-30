@@ -19,9 +19,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X entire.io/entire/gitsync/cmd/git-sync/internal/versioninfo.Version={{.Version}}
-      - -X entire.io/entire/gitsync/cmd/git-sync/internal/versioninfo.Commit={{.ShortCommit}}
-      - -X entire.io/entire/gitsync/cmd/git-sync/internal/versioninfo.Date={{.CommitDate}}
+      - -X entire.io/entire/git-sync/cmd/git-sync/internal/versioninfo.Version={{.Version}}
+      - -X entire.io/entire/git-sync/cmd/git-sync/internal/versioninfo.Commit={{.ShortCommit}}
+      - -X entire.io/entire/git-sync/cmd/git-sync/internal/versioninfo.Date={{.CommitDate}}
 
 notarize:
   macos:
