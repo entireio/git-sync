@@ -1,0 +1,34 @@
+can you loc at 
+
+  - docs/rewrite-issue-list.md
+  - docs/rewrite-memo.md
+
+and do the implementation in a dev cycle, can you use codex as a review agent, the cli is installed and you can call it
+
+---
+
+So everything done?
+
+---
+
+Yes. Maybe run simplify now first. And then continue
+
+---
+
+Yes
+
+---
+
+Whats next?
+
+---
+
+I want to go through the whole issue list first.
+
+---
+
+Can you do abother pass of simplify and also let codex review
+
+---
+
+Can we improve the coverage more? Are there tests from the git repo ../../research/git we could use?

@@ -1,0 +1,39 @@
+can you look at ../cli and the github actions for CI there, can we add them
+
+---
+
+can you look at ../cli and the github actions for CI there, can we add similar ones we need? can you give me an overview and we decide together? main focus is on PR gates
+
+---
+
+1. full
+2. yes add -race
+3. can you check if we do that yet? but also if we don't have tests we should look into adding them
+4. yes, need to set the baseline then
+
+---
+
+let's fix them all in one large PR
+
+---
+
+1. High: internal/strategy/bootstrap/bootstrap.go:458 likely regresses peak-memory
+     behavior by removing graphStore = nil before the explicit runtime.GC(). The
+     surrounding comment says this store can reach roughly 4.6 GB for large repos and
+     should be discarded immediately after extracting the first-parent chain. Without
+     clearing the last local reference, the compiler/runtime may keep graphStore live until
+     function exit, defeating the intended early reclamation.
+  2. Medium: pkg/gitsync/types.go:68 changes the JSON wire format of exported stable API
+     types. Adding tags to RefMapping, RefScope, and SyncPolicy changes serialized names
+     from Source/Branches/IncludeTags/Protocol to source/branches/includeTags/protocol.
+     That is a real compatibility change for any external caller persisting or exchanging
+     these structs as JSON, and it also creates a mixed-casing payload because the outer
+     request structs still use default field names.
+  3. Low: pkg/gitsync/client.go:39 and pkg/gitsync/internalbridge/config.go:87 now double-
+     wrap probe errors, producing messages like probe: probe: .... That does not break
+     behavior, but it degrades error quality and makes the layering look accidental. The
+     bridge is the better place to remove wrapping, since it is mostly pass-through.
+  4. Low: pkg/gitsync/unstable/client.go:37 also changes JSON field names for exported
+     unstable.AdvancedOptions (CollectStats -> collectStats, etc.). This is less serious
+     because the package is explicitly unstable, but it is still a public serialization
+     change, not just a lint cleanup.

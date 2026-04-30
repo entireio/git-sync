@@ -1,0 +1,5 @@
+let's focus on: I’d first exhaust client-side improvements:
+
+  - better adaptive estimation from previous successful probes
+  - caching probe results more aggressively
+  - reducing how often we need exact pack-size checks at all

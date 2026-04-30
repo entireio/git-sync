@@ -1,0 +1,5 @@
+Review the latest changes since commit 4e9ecda, focusing on internal/planner/planner_test.go and the related status change in docs/rewrite-issue-list.md. Check whether the new relay-decision tests are meaningful, whether they lock in the right behavior rather than an accidental quirk, and whether marking issue #19 done is justified. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review the latest commit 689eadd on this branch. Focus on the new gitproto.Pusher boundary, strategy Params changes in bootstrap/incremental/materialized, syncer wiring, and the new direct strategy tests. Return findings only, ordered by severity, with file references. Do not make changes.

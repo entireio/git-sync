@@ -1,0 +1,54 @@
+can you look at the latest changes for the replicate command, can you look at https://git-scm.com/docs/bitmap-format and I wonder if this could help with some things?
+
+---
+
+how to exploit native Git bitmaps here <- do that, but only if there is any chance of using them without a local disc
+
+---
+
+what does: 
+
+- plan batches from observed pack/object counts during adaptive subdivision,
+
+mean?
+
+---
+
+I still wonder if there isn't a better way to get the first root commit
+
+---
+
+If you can tolerate approximation, you can avoid the full chain and adaptively bisect
+    on observed pack sizes.
+
+what does that mean?
+
+---
+
+the thing I'm trying to wrap my head around right now: if we don't pull the graph, how would we know what an older ancestor is to reduce the packsize?
+
+---
+
+could the GitHub API provide us the right informations? Assuming we have access through proper auth but maybe even for public repos?
+
+---
+
+can you maybe also check ../../git if that has some tricks talking to a git server we didn't think about yet?
+
+---
+
+first one question before we try this: When the target already got a packfile, and we retry, then the graph fetch is not needed since we already easily get the base comit for "have" or do we need the graph anyway to get the "want" ?
+
+---
+
+ok, for you idea: the linux kernel - probably an extreme example - is just one branch (currently two, but usually it's just one) since it's actually just a copy of the real source repo. That means all the data is in this one long commit history. 
+
+with that in mind, would this help at all?
+
+---
+
+can you think of a repo that is big and has many branches?
+
+---
+
+can we expose the bootstrap planer through a param (so basically it does the planing but not the actual fetching then, we can test this later) and then support this idea as a second strategy? this way we can easily test this with different repos without causing to much load on the source servers when we actually request packfiles and I need to cancel in time

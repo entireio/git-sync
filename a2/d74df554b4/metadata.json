@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "a2d74df554b4",
+  "strategy": "manual-commit",
+  "branch": "soph/add-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/bootstrap-batching.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a2/d74df554b4/0/metadata.json",
+      "transcript": "/a2/d74df554b4/0/transcript.jsonl",
+      "content_hash": "/a2/d74df554b4/0/transcript_hash.txt",
+      "prompt": "/a2/d74df554b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 93538461,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 87108096,
+    "output_tokens": 318314,
+    "api_call_count": 735
+  }
+}

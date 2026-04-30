@@ -1,0 +1,65 @@
+what's next
+
+---
+
+what's next
+
+---
+
+what's next
+
+---
+
+ok, just keep going, do individual commits
+
+---
+
+something is wrong, why would there be a .git/index.lock now every other commit?
+
+---
+
+what's next
+
+---
+
+ok, let's continue going through this
+
+---
+
+why is this happening?
+
+---
+
+if cmd is ignored that's an issue with .gitignore, let's fix that
+
+---
+
+ok, now continue
+
+---
+
+continue
+
+---
+
+do that
+
+---
+
+what's next
+
+---
+
+yeah do 1
+
+---
+
+yes
+
+---
+
+now do   2. Stabilize --json
+
+  - add explicit JSON field tags with lowercase names
+  - avoid Go-struct field names leaking into the external interface
+  - document the shape once and keep it stable
