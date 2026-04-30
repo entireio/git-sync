@@ -104,15 +104,18 @@ Yes. It supports creating refs, updating refs, force updates with `--force`, and
 
 ### How does it scale?
 
-The scalable path streams pack data from the source directly into the target without materializing the full object graph locally. The in-memory `go-git` store is used for planning, ancestry checks, and fallback materialized pushes. In fallback mode, `git-sync` fetches objects into memory, computes what must be pushed, then encodes and sends a pack to the target.
+`git-sync` has two transfer paths:
+
+- **Relay** — pack data streams from source `upload-pack` directly into target `receive-pack`. The local process holds no object graph, so memory stays bounded regardless of repo size. Used when the target supports relay.
+- **Materialized fallback** — when relay isn't available, `git-sync` fetches the needed objects into an in-memory `go-git` store, plans, then encodes and pushes a packfile. Memory scales with the diff being pushed and is guarded by an explicit object-count limit. Bootstrap can batch large initial syncs to keep this bounded.
+
+Planning itself is cheap: ref-only round-trips, plus a `filter tree:0` fetch for ancestry checks when the source advertises filter support.
 
 ### How long does it take for a medium-sized repo?
 
-There is no fixed runtime. It depends on repository size, pack size, network latency, provider speed, and whether relay is used. On the relay path, time is mostly source pack generation plus network transfer plus target receive time.
+It depends on repository size, network speed, and whether the relay path is available. As a rule of thumb, the relay path is bounded by source pack generation + network transfer + target receive-pack time — roughly the time of a `git clone` from the source plus a `git push` of the same pack. The materialized fallback adds local memory work for objects that need inspection.
 
-### How does it deal with partial successes? Is it atomic?
-
-`git-sync` plans before pushing and blocks unsafe refs before starting. A single target `receive-pack` push is atomic in the normal Git sense for that push. Across multiple batches or separate push requests, especially batched bootstrap, it is not globally atomic; batched bootstrap uses temporary refs and resume behavior.
+For concrete numbers on your own setup, run the included benchmark tool against a representative repo; see [docs/testing.md](docs/testing.md#benchmarking).
 
 ### Does it support SSH?
 
