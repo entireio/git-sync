@@ -1,3 +1,5 @@
+![git-sync theme](docs/images/gh-repo-cover.png "git-sync cover image")
+
 # git-sync
 
 `git-sync` mirrors refs from a source remote to a target remote without creating a local checkout. It uses an in-memory `go-git` object store and talks smart HTTP directly:
