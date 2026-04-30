@@ -1,1 +1,5 @@
 review the changes, I'm adding for the first time the goreleaser configuration to release versions using goreleaser. Review the changes, and, there are a couple of things missing like, completions (is it implemented? if not. skip ), version replacement via ldflags ( do we have version variables to replace ? ), any other findings?
+
+---
+
+commit only the add version command for now
