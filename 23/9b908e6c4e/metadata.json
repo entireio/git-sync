@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.7-nightly.202604280703.51ccd662",
+  "checkpoint_id": "239b908e6c4e",
+  "strategy": "manual-commit",
+  "branch": "soph/docs-update-for-oss-release",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "README.md",
+    "docs/architecture.md",
+    "docs/benchmarking.md",
+    "docs/bootstrap-batching.md",
+    "docs/bootstrap.md",
+    "docs/embedding.md",
+    "docs/incremental-relay.md",
+    "docs/protocol.md",
+    "docs/replicate.md",
+    "docs/testing.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/23/9b908e6c4e/0/metadata.json",
+      "transcript": "/23/9b908e6c4e/0/transcript.jsonl",
+      "content_hash": "/23/9b908e6c4e/0/transcript_hash.txt",
+      "prompt": "/23/9b908e6c4e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 146620,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2434304,
+    "output_tokens": 18365,
+    "api_call_count": 53
+  }
+}

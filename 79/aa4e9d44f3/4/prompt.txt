@@ -1,0 +1,146 @@
+can you review the changes
+
+---
+
+can you merge the findings with these ones and maybe also review them: 
+
+Here's my review of the `reapply-pr-1521-with-fix` branch (9 commits, 33 files, +778/-332 lines):
+
+## Summary
+
+This branch migrates the URL scheme from `/checkpoints/$branch` to `/commits/$branch` and makes commit detail canonical at `/commit/$commitSha` (removing the branch segment from commit URLs). Legacy `/checkpoints/` routes now redirect to `/commits/`. It also simplifies branch resolution for commit detail — branch context is resolved in-page from the resolve API rather than being required in the URL.
+
+## What looks good
+
+- **Clean route migration**: Old `/checkpoints/$branch/` and `/checkpoints/$branch/$checkpointId` routes redirect properly to their new `/commits/` equivalents.
+- **Canonical commit URLs**: `/commit/$commitSha` is now the single canonical route. The old `/commit/$branch/$commitSha` route is deleted. This eliminates the resolve-then-redirect waterfall that the branchless URL previously required.
+- **Query options extraction**: `commitsQueryOptions`, `checkpointStatusQueryOptions`, `branchesQueryOptions` are extracted for use in route loaders via `ensureQueryData`. Good pattern for TanStack Router data loading.
+- **Thorough test coverage**: New tests for navigation helpers, commit list branch-aware links, OverviewCheckpointsCard, and CommitDetailPage's single/multi-branch behavior.
+- **API branch validation**: The `assertBranchExistsInDb` helper in `cache.ts` centralizes the "empty results → check if branch exists" logic, replacing the more complex GitHub API fallback.
+
+## Issues / Questions
+
+### 1. RepositoriesPage navigates to `/commit` (singular) instead of `/commits`
+
+`RepositoriesPage.tsx:1411` navigates to `"/gh/$org/$repo/commit"` when a repo row is clicked. This will hit the `/commit/` index route which redirects to `/commits/$defaultBranch`. While it "works" via redirect, it seems like a typo — should this be `"/gh/$org/$repo/commits"` to avoid the extra redirect hop?
+
+### 2. `openCheckpoint` error handling — unhandled async rejection
+
+In `navigation.ts:68,80`, `openCheckpoint` is called with `void` (fire-and-forget). If `resolveCheckpoint()` throws (network error, 500), the rejection is silently swallowed. Consider wrapping the async path in a try/catch that falls back to the branch commits list, or at least logs the error.
+
+### 3. Branch validation simplified but loses GitHub API fallback
+
+The old `/checkpoints` endpoint had a GitHub API `checkBranchExists` fallback for repos where the app doesn't have access or the branch hasn't been synced yet. The new `assertBranchExistsInDb` only checks the DB. This means:
+- If a branch exists on GitHub but hasn't been synced to your DB yet, users will get a 404 instead of an empty state.
+- The `appHasAccess === false` case that previously skipped the check is now gone — these users will also hit the 404.
+
+Is this intentional? It simplifies the code significantly, but changes behavior for edge cases.
+
+### 4. `resolvedBranch ?? "unknown branch"` fallback
+
+In `CommitDetailPage.tsx:239,242`, if `resolvedBranch` is null, the string `"unknown branch"` is passed to `CheckpointHeader`/`CommitHeader`. Depending on how that's rendered, users could see "unknown branch" in the UI. Might be better to pass `null` and let the header components handle the missing state.
+
+### 5. `openRepoCommits` navigates to typed route without trailing slash
+
+`navigation.ts:20` navigates to `"/gh/$org/$repo/commits"` (no trailing slash). The index route is at `"/gh/$org/$repo/commits/"`. This should work with TanStack Router's route matching, but worth verifying it doesn't cause a double navigation (route → redirect to index → redirect to default branch).
+
+### 6. Minor: `eslint-disable` comments for `as any` casts
+
+There are several `as any` casts in `routeConfig.ts` and the redirect routes (lines using `buildBranchHref`). These are understandable since the routes are dynamically constructed strings, but it might be worth a `// TODO` to revisit once the route tree types stabilize.
+
+## Overall
+
+The migration is well-structured and the redirect chain for backwards compatibility looks correct. The main concern is #3 (behavior change in branch validation) — worth confirming that's intentional. #1 looks like a small bug, and #2 is a resilience gap that could bite in production.
+
+---
+
+ignore the last message, this is the right copy&paste: 
+
+can you review these findings and then give me a joined list of relevant findings:
+
+Now I have a complete picture. Here's my review:
+
+---
+
+## Review: `soph/add-ci-and-lint`
+
+### Overall
+
+Good work. The CI setup is solid, the golangci-lint config is thorough, and the vast majority of linter fixes are genuine improvements — not silencing. A few items need attention though.
+
+### CI & Lint Config
+
+The `.golangci.yaml` is well thought out:
+- `nolintlint` requires both explanation and specificity — this is the right call and it forces all `//nolint` directives to justify themselves
+- `testifylint` with `enable-all` is good given you're adding testify
+- gosec exclusions (G104, G115, G204, G301, G304, G703) all have inline comments with valid reasons
+- `wrapcheck` and `gosec` excluded from `_test.go` makes sense
+- `govet.disable: [fieldalignment, shadow]` — both are common and reasonable
+
+The workflow files and mise tasks look clean. The `mise-tasks/lint/go` script correctly skips golangci-lint in CI (where the GitHub Action handles it with inline annotations).
+
+### Genuine Improvements (not silencing)
+
+- `for i := 0; i < N; i++` → `for i := range N` / `for range b.N` — idiomatic Go 1.22+
+- `fmt.Errorf("static string")` → `errors.New(...)` — correct, avoids unnecessary formatting
+- `err == packp.ErrEmptyAdvRefs` → `errors.Is(err, ...)` — proper error chain checking
+- `http.NewRequest` → `http.NewRequestWithContext` with `t.Context()` — fixes `noctx`
+- `exec.Command` → `exec.CommandContext` in tests — good practice
+- `_ = caps.Set(...)` in tests → `require.NoError(t, caps.Set(...))` — these actually assert now instead of ignoring
+- Import grouping sorted alphabetically — standard Go convention
+- Named params on interface method signatures — improves readability
+- Exhaustive switch cases (e.g. `ActionSkip`, `ActionBlock`, `PacketResponseEnd`) — prevents silent bugs when new enum values are added
+
+### `//nolint` Directives — Verdict
+
+All well-justified except one (see bugs below). Each has an explanation as required by the config. Highlights:
+- `//nolint:wrapcheck // io.EOF must pass through` — correct, wrapping io.EOF breaks the io.Reader contract
+- `//nolint:nilnil // nil signals no auth method found` — legitimate API design
+- `//nolint:nilerr // missing config dir means no stored credentials` — correct, `os.UserHomeDir` error is expected in some envs
+- `//nolint:errcheck // best-effort refresh token storage` — reasonable, access token is already saved
+
+### Issues
+
+**1. `graphStore = nil` removed — this is a functional regression**
+
+`internal/strategy/bootstrap/bootstrap.go:458` — The line `graphStore = nil` was removed (likely flagged by `wastedassign` or `ineffassign`), but it's load-bearing. The comment above explains it allows GC to reclaim a **~4.6 GB** allocation for the linux kernel repo before the explicit `runtime.GC()` on the next line. Without it, the Go runtime may keep `graphStore` alive on the stack until the function returns.
+
+Fix: restore the line with a nolint directive:
+```go
+chain, err := planner.FirstParentChain(graphStore, ref.SourceHash)
+graphStore = nil //nolint:wastedassign // allow GC to reclaim ~4.6 GB commit graph store
+runtime.GC()
+```
+
+**2. Double error wrapping in `pkg/gitsync/client.go` → `internalbridge/config.go`**
+
+`client.Probe` wraps with `"probe: %w"`, calls `internalbridge.Probe` which also wraps with `"probe: %w"`. Result: `probe: probe: <original>`. Same issue with `Run` → `"run: %w"` in the bridge and then `"sync: %w"` or `"plan: %w"` in the client (those are different, so fine).
+
+Fix: remove the wrapping in `internalbridge/config.go` (it's a thin pass-through) or use distinct prefixes.
+
+**3. `//nolint:unparam // error return kept for future use`** (`bootstrap.go:505`, `checkPackSizeAndSubdivide`)
+
+"For future use" is speculative. Either the error return is useful now or it should be removed. If there's a concrete plan to use it, reference the issue. If not, use `// kept for API consistency` or remove the return value.
+
+### Minor Nits
+
+- **`X-GitHub-Api-Version` → `X-Github-Api-Version`** (`bootstrap.go:664`): This is the `canonicalheader` linter normalizing to Go's `http.CanonicalHeaderKey`. HTTP headers are case-insensitive so it's functionally fine, but it diverges from [GitHub's documented header](https://docs.github.com/en/rest/about-the-rest-api/api-versions). Worth noting in case someone searches for the exact string.
+
+- **`fmt.Sprintf` → string concatenation** in `planner.go` reason messages: Fine for performance (these are hot paths during planning), but make sure the team is OK with the readability tradeoff. The `perfsprint` linter drives this.
+
+- **Adding `stretchr/testify`**: The project was previously stdlib-only for testing. The usage here is limited to `require.NoError` to replace `_ = err` in tests. Reasonable, but worth calling out as a new dependency.
+
+- **`PlanReplicationRef` switch** (`planner.go:340-344`): Added `case RefKindBranch:` to the switch, but its body is identical to the `default:` case. If this is for exhaustive checking, consider using the same body or a `fallthrough`. Currently it's:
+  ```go
+  case RefKindTag:
+      plan.Reason = "... (replicate tag overwrite)"
+  case RefKindBranch:
+      plan.Reason = "... (replicate overwrite)"
+  default:
+      plan.Reason = "... (replicate overwrite)"
+  ```
+  The branch and default cases are the same string. You could do `case RefKindBranch: fallthrough` or combine them.
+
+### Summary
+
+The `graphStore = nil` removal is the only real bug — everything else ranges from solid to nitpick. The linting is genuinely fixing issues, not just adding `//nolint` to get green.

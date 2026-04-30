@@ -1,0 +1,287 @@
+what's next
+
+---
+
+what's next
+
+---
+
+what's next
+
+---
+
+ok, just keep going, do individual commits
+
+---
+
+something is wrong, why would there be a .git/index.lock now every other commit?
+
+---
+
+what's next
+
+---
+
+ok, let's continue going through this
+
+---
+
+why is this happening?
+
+---
+
+if cmd is ignored that's an issue with .gitignore, let's fix that
+
+---
+
+ok, now continue
+
+---
+
+continue
+
+---
+
+do that
+
+---
+
+what's next
+
+---
+
+yeah do 1
+
+---
+
+yes
+
+---
+
+now do   2. Stabilize --json
+
+  - add explicit JSON field tags with lowercase names
+  - avoid Go-struct field names leaking into the external interface
+  - document the shape once and keep it stable
+
+---
+
+why you are needing that again
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+what's next
+
+---
+
+can you check if the readme is still up2date
+
+---
+
+patch it
+
+---
+
+yes
+
+---
+
+to use this as a syncing tool, what's left to do there?
+
+---
+
+how could we do 1?
+
+---
+
+I think setting this up as an action is to much, but using a dummy repo for testing is probably a good idea. Can we use the regular github credential helper locally?
+
+---
+
+yeah, let's implement this
+
+---
+
+so could we now do the integration tests with write but still not sure how we make this portal being dependent on a remote github, could we spin up a local server like gitea
+
+---
+
+is there an alternative to gitea?
+
+---
+
+yeah, then let's do a write integration test with git-http-backend, we can add more backends later
+
+---
+
+can we think a bit about some feasability studies, like when the tool makes sense. For example an initial empty repo from a to b, is it good for that? after which gap in changes the memory consumption becomes to much? can we control memory when larger gaps happen?
+
+---
+
+4. Longer-term: true source-to-target pack relay.
+      - best possible for initial empty-target syncs
+      - much more complex
+      - only really worth it if large migrations are a primary use case
+
+can we investigae this a bit?
+
+---
+
+yeah let's sketch this as an additional command path we could use for initial sync
+
+---
+
+let's call it bootstrap, go with the plan for v1, but maybe write down follow up steps
+
+---
+
+ok, let's start implementing go through each phase until you need my input, make meaningful commits
+
+---
+
+yeah let's do both one after another
+
+---
+
+what would phase 4 be again?
+
+---
+
+let's give it a try? build proper test harness first?
+
+---
+
+yes, we could also do a test case on https://github.com/torvalds/linux
+
+---
+
+do that
+
+---
+
+can we now expand this?
+
+---
+
+let's go through them, do commits build necessary tests, ask me if you need input
+
+---
+
+what is - tag retarget relay
+
+---
+
+can you give me a good pr description for the changes in this branch?
+
+---
+
+can you create me a mise.toml, can you llok at ../cli
+
+---
+
+can you create me a mise.toml, can you llok at ../cli/mise.toml for comparision
+
+---
+
+I had to cancel the linux smoke test due to eating to much memory, but I wonder is this a sign of the syncer having an issue or is the git-http-backend keeping everything in memoryß
+
+---
+
+ah so should the linux smoke test rather use bootstra?
+
+---
+
+yeah let's do that
+
+---
+
+❯ mise run test:linux-smoke
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+    live_bootstrap_test.go:43: live linux bootstrap failed: push target refs: source pack exceeded max-pack-bytes limit (536870912)
+--- FAIL: TestBootstrap_LiveLinuxSource (44.16s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        44.521s
+FAIL
+[test:linux-smoke] ERROR task failed
+
+---
+
+patch it
+
+---
+
+❯ mise run test:linux-smoke
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+    live_bootstrap_test.go:43: live linux bootstrap failed: push target refs: source pack exceeded max-pack-bytes limit (2147483648)
+--- FAIL: TestBootstrap_LiveLinuxSource (100.53s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        101.145s
+FAIL
+[test:linux-smoke] ERROR task failed
+
+---
+
+can this work in batches too? otherwise remove the limit for now and I want to see if it works
+
+---
+
+do that
+
+---
+
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+panic: test timed out after 10m0s
+        running tests:
+                TestBootstrap_LiveLinuxSource (10m0s)
+
+goroutine 71 [running]:
+testing.(*M).startAlarm.func1()
+        /Users/soph/.local/share/mise/installs/go/1.25.2/src/testing/testing.go:2682 +0x2b0
+created by time.goFunc
+        /Users/soph/.local/share/mise/installs/go/1.25.2/src/time/sleep.go:215 +0x38
+
+---
+
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+    live_bootstrap_test.go:42: live linux bootstrap failed: push target refs: unpack error: index-pack abnormal exit
+--- FAIL: TestBootstrap_LiveLinuxSource (268.29s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        268.914s
+FAIL
+[test:linux-smoke] ERROR task failed
+
+---
+
+yes do that
+
+---
+
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+--- PASS: TestBootstrap_LiveLinuxSource (506.67s)
+PASS
+ok      github.com/soph/git-sync/internal/syncer        507.293s
+
+---
+
+how would batching look for large bootstrap jobs?
+
+---
+
+ok, let's design this
+
+---
+
+let's start Phase A, do commits, keep going

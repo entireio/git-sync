@@ -1,0 +1,37 @@
+Review commit b074cde in this repo. Focus narrowly on whether the new source-side interfaces in internal/strategy/{bootstrap,incremental,materialized} are coherent, whether gitproto.RefService gained the right boundary methods, and whether any coupling or test gaps remain. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit e2a5ee2 on this branch. Focus on the new direct v1 upload-pack tests in internal/gitproto/fetch_test.go: cancellation propagation, malformed-response body closure, and empty-want handling. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit be94300 on this branch. Focus on the new deterministic bootstrap probe-count visibility tests in internal/strategy/bootstrap/bootstrap_test.go, including the synthetic commit-chain helper and span-based pack sizing model. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit f87ea42 (Move mapping validation into validation). Focus on whether the validation/planner ownership boundary is now clean, whether deriving ref kind in planner from normalized target refs is safe, and whether any important mapping-validation behavior changed. Concrete findings only.
+
+---
+
+Review commit 1a9efa9 (Narrow planner relay policy input). Focus on whether the planner boundary is now cleaner, whether any relay reason behavior changed, and whether the updated tracker note remains accurate. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit f7ab510 (Encapsulate materialized execution stages). Focus on whether the executor refactor actually improves the boundary/state shape, whether any behavior changed, and whether the tracker note remains accurate. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit 25d21fe (Close incremental pack streams on read errors). Focus on whether the incremental strategy fix is correct, whether the new interruption test is realistic, and whether the tracker note is fair for issue #5. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit c3b7fa0 ("Expose batch metrics in benchmark summaries") in /Users/soph/Work/entire/devenv/git-sync. Focus on summary correctness, zero-value/omitempty behavior, and whether the new aggregate batch metrics or text output can mislead users about non-batched runs. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit 7b26009 ("Cover mid-stream push failures in bootstrap") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new raw receive-pack hook and bootstrap integration tests meaningfully exercise started-stream push cancellation/disconnect, and whether the hook could make the in-memory server harness brittle or misleading. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review the current worktree changes for the PR comment cleanup. Focus only on: 1) whether any absolute local markdown links remain in README/docs/cmd help text, 2) whether changing git-sync-bench --json default to false has any obvious regressions or doc mismatches, 3) whether any tracked binary or generated artifact remains. Report findings only; if none, say no findings.

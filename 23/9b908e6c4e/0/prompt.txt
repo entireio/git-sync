@@ -1,0 +1,13 @@
+I rebased onto main and have conflicts, the repo moved to github.com/entireio/gitsync and the package name is now entire.io/entire/gitsync can you fix and finish the rebase
+
+---
+
+ok, let's do another change, I think in the docs folder there is a lot of verbosenes in the docs, and I think for now we should keep only architecture, protocol and testing
+
+---
+
+or what do you think about the benchmarking doc?
+
+---
+
+yes, do that please

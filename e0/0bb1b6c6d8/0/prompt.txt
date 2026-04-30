@@ -1,0 +1,189 @@
+it's making progress: 
+
+time=2026-04-13T21:18:11.012+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-13T21:18:11.012+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+source: Enumerating objects: 8853348, done.
+source: Enumerating objects: 1453051, done.
+source: Counting objects: 100% (24460/24460), done.
+source: Compressing objects: 100% (6522/6522), done.
+source: Enumerating objects: 528414, done.
+source: Counting objects: 100% (7969/7969), done.
+source: Compressing objects: 100% (1348/1348), done.
+source: Total 528414 (delta 7270), reused 6621 (delta 6621), pack-reused 520445 (from 1)
+source: Enumerating objects: 861304, done.
+source: Counting objects: 100% (23627/23627), done.
+source: Compressing objects: 100% (5107/5107), done.
+source: Enumerating objects: 692177, done.
+source: Counting objects: 100% (19204/19204), done.
+source: Compressing objects: 100% (3514/3514), done.
+source: Total 692177 (delta 17277), reused 15690 (delta 15690), pack-reused 672973 (from 1)
+source: Enumerating objects: 774636, done.
+source: Counting objects: 100% (16726/16726), done.
+source: Compressing objects: 100% (4879/4879), done.
+source: Total 774636 (delta 13785), reused 11847 (delta 11847), pack-reused 757910 (from 1)
+source: Enumerating objects: 714254, done.
+source: Counting objects: 100% (10018/10018), done.
+source: Compressing objects: 100% (1291/1291), done.
+source: Total 714254 (delta 9400), reused 8727 (delta 8727), pack-reused 704236 (from 1)
+source: Enumerating objects: 697358, done.
+source: Counting objects: 100% (18586/18586), done.
+source: Compressing objects: 100% (3262/3262), done.
+source: Total 697358 (delta 16838), reused 15324 (delta 15324), pack-reused 678772 (from 1)
+source: Enumerating objects: 704356, done.
+source: Counting objects: 100% (16976/16976), done.
+source: Compressing objects: 100% (2868/2868), done.
+source: Total 704356 (delta 15459), reused 14108 (delta 14108), pack-reused 687380 (from 1)
+source: Enumerating objects: 703362, done.
+source: Counting objects: 100% (16881/16881), done.
+source: Compressing objects: 100% (2943/2943), done.
+source: Total 703362 (delta 15314), reused 13938 (delta 13938), pack-reused 686481 (from 1)
+source: Enumerating objects: 702570, done.
+source: Counting objects: 100% (16867/16867), done.
+source: Compressing objects: 100% (2947/2947), done.
+source: Total 702570 (delta 15277), reused 13920 (delta 13920), pack-reused 685703 (from 1)
+source: Enumerating objects: 700854, done.
+source: Counting objects: 100% (16963/16963), done.
+source: Compressing objects: 100% (2976/2976), done.
+source: Total 700854 (delta 15352), reused 13987 (delta 13987), pack-reused 683891 (from 1)
+source: Enumerating objects: 702456, done.
+source: Counting objects: 100% (16972/16972), done.
+source: Compressing objects: 100% (2969/2969), done.
+source: Total 702456 (delta 15377), reused 14003 (delta 14003), pack-reused 685484 (from 1)
+source: Enumerating objects: 702386, done.
+source: Counting objects: 100% (17024/17024), done.
+source: Compressing objects: 100% (2962/2962), done.
+source: Total 702386 (delta 15429), reused 14062 (delta 14062), pack-reused 685362 (from 1)
+source: Enumerating objects: 701231, done.
+source: Counting objects: 100% (16985/16985), done.
+source: Compressing objects: 100% (2953/2953), done.
+source: Total 701231 (delta 15389), reused 14032 (delta 14032), pack-reused 684246 (from 1)
+source: Enumerating objects: 702150, done.
+source: Counting objects: 100% (16888/16888), done.
+source: Compressing objects: 100% (2970/2970), done.
+source: Total 702150 (delta 15290), reused 13918 (delta 13918), pack-reused 685262 (from 1)
+source: Enumerating objects: 701765, done.
+source: Counting objects: 100% (16677/16677), done.
+source: Compressing objects: 100% (2951/2951), done.
+source: Total 701765 (delta 15082), reused 13726 (delta 13726), pack-reused 685088 (from 1)
+time=2026-04-13T21:22:02.604+02:00 level=INFO msg="bootstrap batch planned checkpoint" branch=refs/heads/master checkpoint=a13ff0bb selected=1 chain_len=75767
+source: Enumerating objects: 2011027, done.
+source: Counting objects: 100% (204362/204362), done.
+source: Compressing objects: 100% (41832/41832), done.
+
+---
+
+I wonder if these could be bigger
+
+---
+
+what does pack-reused mean exactly where does this come from?
+
+---
+
+question, just investigation now: let's say we would want to use replicate (or sync) to not recreate the repo fully but instead create it but move every ref from the source repo into a prefixed ref. Like `refs/gh/` for example. Not sure yet if we keep or remove branches. But would this be an easy thing todo?
+
+---
+
+can you take a look at /tmp/linux-replicate.log
+
+time=2026-04-14T13:12:47.826+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=26 resume_hash=<zero>
+time=2026-04-14T13:12:47.826+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=26 from=<zero> to=a13ff0bb
+time=2026-04-14T13:12:47.826+02:00 level=INFO msg="bootstrap batch reusing prefetched probe pack" branch=refs/heads/master checkpoint=a13ff0bb bytes=268264725
+error: push bootstrap batch for refs/heads/master: target receive-pack: http 401: https://localhost:8080/git/test/git-sync-smoke-12/git-receive-pack Invalid or expired token
+exit status 1
+
+Also I never saw a line "target: "
+
+---
+
+hmm, can you help me understand what the bootstrap planing is doing exactly? Like it taking hours feels like a huge waste, like planing only makes sense if the planing isn't longer then the worst guessed plan? Or can we not just guess something?
+
+---
+
+let's do B
+
+---
+
+❯ time go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --batch-max-pack-bytes 1073741824 \
+    --max-pack-bytes 21474836480 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-3.log
+time=2026-04-14T14:01:22.228+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T14:01:22.229+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+time=2026-04-14T14:01:45.238+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=1
+time=2026-04-14T14:01:45.238+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+time=2026-04-14T14:02:10.275+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=1
+time=2026-04-14T14:02:10.275+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=1 resume_hash=<zero>
+time=2026-04-14T14:02:10.275+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=1 from=<zero> to=d60bc140
+source: Enumerating objects: 11429408, done.
+source: Counting objects: 100% (1444/1444), done.
+source: Compressing objects: 100% (609/609), done.
+error: push bootstrap batch for refs/heads/master: decode report-status: source pack exceeded max-pack-bytes limit (1073741824)
+exit status 1
+go run ./cmd/git-sync replicate -v --target-insecure-skip-tls-verify           45.32s user 6.00s system 52% cpu 1:38.44 total
+tee /tmp/linux-replicate-3.log  0.00s user 0.00s system 0% cpu 1:38.44 total
+
+---
+
+I think the target has a 2Gb limit
+
+---
+
+❯   time go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --batch-max-pack-bytes 209715200 \
+    --max-pack-bytes 21474836480 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-5.log
+time=2026-04-14T14:21:52.359+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T14:21:52.359+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+time=2026-04-14T14:22:15.827+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=3
+time=2026-04-14T14:22:15.827+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+time=2026-04-14T14:22:39.375+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=3
+time=2026-04-14T14:22:39.375+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=3 resume_hash=<zero>
+time=2026-04-14T14:22:39.375+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=3 from=<zero> to=9ca8e40c
+source: Enumerating objects: 874026, done.
+source: Counting objects: 100% (19112/19112), done.
+source: Compressing objects: 100% (4347/4347), done.
+source: Total 874026 (delta 16965), reused 14765 (delta 14765), pack-reused 854914 (from 1)
+target: Sending to replicas: 306.7 MiB, done.
+target: Storing objects: 874026/874026 (2 replicas), done.
+time=2026-04-14T14:23:34.444+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=1 batch_total=3
+time=2026-04-14T14:23:34.444+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=2 batch_total=3 from=9ca8e40c to=3eab887a
+source: Enumerating objects: 4031475, done.
+source: Counting objects: 100% (239935/239935), done.
+source: Compressing objects: 100% (45353/45353), done.
+source: Total 4031475 (delta 225695), reused 194581 (delta 194581), pack-reused 3791540 (from 1)
+target: Sending to replicas: 1382.0 MiB, done.
+target: Storing objects: 4031475/4031475 (2 replicas), done.
+time=2026-04-14T14:28:04.785+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=2 batch_total=3
+time=2026-04-14T14:28:04.785+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=3 from=3eab887a to=d60bc140
+source: Enumerating objects: 6523907, done.
+source: Counting objects: 100% (462345/462345), done.
+source: Compressing objects: 100% (132655/132655), done.
+error: push bootstrap batch for refs/heads/master: unpack error: push rejected: body exceeded size limit 2147483648 (trace_id=00000000000000000000000000000000)
+exit status 1
+go run ./cmd/git-sync replicate -v --target-insecure-skip-tls-verify           50.38s user 13.43s system 13% cpu 7:49.06 total
+tee /tmp/linux-replicate-5.log  0.00s user 0.01s system 0% cpu 7:49.06 total
+
+---
+
+but I thought we would just retry in that case with a smaller batch automatically?
+
+---
+
+stupid question: could we figure out while transfering from source to target that the packfile gets to big and then meanigful cut it?
+
+---
+
+oh we can do a HEAD check? then yeah we should totally do that
+
+---
+
+but just to be sure, we still try to guess meaningful sizes and then act on pack header, right? so it's still a waste on the source (having to build the pack file) but we still try to avoid it
+
+---
+
+do we have an architecture doc for replicate where we should add this? also sync should work in the same way right?

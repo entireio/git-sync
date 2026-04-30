@@ -1,0 +1,1 @@
+Review docs/rewrite-issue-list.md against the current rewrite branch. Check whether each done/partial/open annotation looks justified by the current code and tests. Focus on factual mismatches, overstated completion, or important omissions. Do not edit files. Return concise findings first, with file references where relevant.
