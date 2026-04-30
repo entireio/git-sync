@@ -1,5 +1,1 @@
-okay lets add an FAQ with this information to the readme..of course open a PR
-
----
-
 i feel like FAQ should be almost last..just right before Contributing
