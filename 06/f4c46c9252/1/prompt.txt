@@ -1,0 +1,33 @@
+# Files mentioned by the user:
+
+## image (2).png: /Users/rizel/Downloads/image (2).png
+
+## My request for Codex:
+can you add this image to the top of the repo please  then create a branch and make a commit
+
+---
+
+<image name=[Image #1]>
+
+---
+
+</image>
+
+---
+
+i want to add two images..one of running git sync..and another of running git plan ..where in repo should i add these
+
+---
+
+did you find the mentions in the readme where it makes the most sense
+
+---
+
+# Files mentioned by the user:
+
+## gitsync.mp4: /Users/rizel/Documents/work/entire-screen-recordings/gitsync.mp4
+
+## gitsyncplan.mp4: /Users/rizel/Documents/work/entire-screen-recordings/gitsyncplan.mp4
+
+## My request for Codex:
+the first one is  sync..the second one is plan
