@@ -4,13 +4,28 @@
   "strategy": "manual-commit",
   "branch": "codex/add-repo-header-image",
   "checkpoints_count": 0,
-  "files_touched": null,
+  "files_touched": [
+    "README.md"
+  ],
   "sessions": [
     {
       "metadata": "/3d/e473ae5c5b/0/metadata.json",
       "transcript": "/3d/e473ae5c5b/0/transcript.jsonl",
       "content_hash": "/3d/e473ae5c5b/0/transcript_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/3d/e473ae5c5b/1/metadata.json",
+      "transcript": "/3d/e473ae5c5b/1/transcript.jsonl",
+      "content_hash": "/3d/e473ae5c5b/1/transcript_hash.txt",
+      "prompt": "/3d/e473ae5c5b/1/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 18961,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 208256,
+    "output_tokens": 1306,
+    "api_call_count": 6
+  }
 }
