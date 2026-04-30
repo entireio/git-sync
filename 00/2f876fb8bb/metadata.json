@@ -2,17 +2,18 @@
   "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
   "checkpoint_id": "002f876fb8bb",
   "strategy": "manual-commit",
-  "branch": "soph/homebrew",
+  "branch": "soph/cover-image",
   "checkpoints_count": 0,
   "files_touched": [
-    "README.md"
+    "README.md",
+    "docs/images/gh-repo-cover.png"
   ],
   "sessions": [
     {
       "metadata": "/00/2f876fb8bb/0/metadata.json",
       "transcript": "/00/2f876fb8bb/0/transcript.jsonl",
       "content_hash": "/00/2f876fb8bb/0/transcript_hash.txt",
-      "prompt": "/00/2f876fb8bb/0/prompt.txt"
+      "prompt": ""
     },
     {
       "metadata": "/00/2f876fb8bb/1/metadata.json",
@@ -26,6 +27,6 @@
     "cache_creation_tokens": 330520,
     "cache_read_tokens": 5213100,
     "output_tokens": 35702,
-    "api_call_count": 72
+    "api_call_count": 71
   }
 }
