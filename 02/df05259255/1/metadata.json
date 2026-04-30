@@ -1,9 +1,11 @@
 {
   "cli_version": "dev",
   "checkpoint_id": "02df05259255",
+  "session_id": "4908d37d-7580-4b96-8fbd-ed1d7851ffba",
   "strategy": "manual-commit",
+  "created_at": "2026-04-30T10:29:47.548390643Z",
   "branch": "naming",
-  "checkpoints_count": 2,
+  "checkpoints_count": 1,
   "files_touched": [
     ".golangci.yaml",
     "CONTRIBUTING.md",
@@ -46,25 +48,51 @@
     "unstable/client.go",
     "unstable/client_test.go"
   ],
-  "sessions": [
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "b864b740fe90",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 16803,
+    "cache_read_tokens": 220424,
+    "output_tokens": 2601,
+    "api_call_count": 8
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-30T10:29:47.545268649Z",
+    "agent_lines": 82,
+    "agent_removed": 82,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 82,
+    "total_lines_changed": 164,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
     {
-      "metadata": "/02/df05259255/0/metadata.json",
-      "transcript": "/02/df05259255/0/full.jsonl",
-      "content_hash": "/02/df05259255/0/content_hash.txt",
-      "prompt": "/02/df05259255/0/prompt.txt"
+      "checkpoint_number": 1,
+      "user_lines_added": 13,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 13
+      }
     },
     {
-      "metadata": "/02/df05259255/1/metadata.json",
-      "transcript": "/02/df05259255/1/full.jsonl",
-      "content_hash": "/02/df05259255/1/content_hash.txt",
-      "prompt": "/02/df05259255/1/prompt.txt"
+      "checkpoint_number": 2,
+      "user_lines_added": 15,
+      "user_lines_removed": 0,
+      "agent_lines_added": 82,
+      "agent_lines_removed": 82,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 15
+      }
     }
-  ],
-  "token_usage": {
-    "input_tokens": 252,
-    "cache_creation_tokens": 430501,
-    "cache_read_tokens": 24460802,
-    "output_tokens": 80832,
-    "api_call_count": 187
-  }
+  ]
 }

@@ -1,0 +1,1 @@
+Find any references to entire.io/entire/git-sync and replace it with entire.io/entire/git-sync
