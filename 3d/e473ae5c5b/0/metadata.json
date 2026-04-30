@@ -1,0 +1,18 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "3de473ae5c5b",
+  "session_id": "019ddaf2-047a-7a63-839e-79f4476f3b44",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-30T15:26:29.18452Z",
+  "branch": "codex/add-repo-header-image",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "832092757458",
+  "checkpoint_transcript_start": 129,
+  "transcript_lines_at_start": 129,
+  "session_metrics": {
+    "turn_count": 34
+  }
+}
