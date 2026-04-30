@@ -30,6 +30,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/revlist"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/go-git/go-git/v6/x/plugin"
+	"github.com/go-git/go-git/v6/x/plugin/config"
 )
 
 const (
@@ -1206,6 +1208,99 @@ func TestRun_IntegrationResyncFetchesLessFromSource(t *testing.T) {
 	}
 }
 
+// TestRun_IntegrationIncrementalPushFailureRecoversOnRetry covers the
+// failure-and-retry contract for the incremental relay path. When the
+// receive-pack rejects the push (here, a one-shot "ng" status), the run
+// must surface an error and leave the target unchanged — receive-pack
+// only commits refs that the server itself reports as ok. A retry against
+// the same source/target must then drive the incremental relay to
+// completion, leaving the target at the new source head.
+func TestRun_IntegrationIncrementalPushFailureRecoversOnRetry(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}
+
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	preRetryHead, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("target head after seed: %v", err)
+	}
+
+	// Advance source so the next sync produces a fast-forward update plan,
+	// the only branch shape that takes the incremental relay path.
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	sourceHead, err := sourceRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+
+	var pushAttempts int
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		pushAttempts++
+		if pushAttempts > 1 {
+			return nil
+		}
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ng simulated incremental push failure",
+			})
+		}
+		return report
+	}
+
+	if _, err := Run(context.Background(), cfg); err == nil {
+		t.Fatal("expected first incremental sync to fail under injected push rejection")
+	}
+
+	afterFail, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("target head after failed sync: %v", err)
+	}
+	if afterFail.Hash() != preRetryHead.Hash() {
+		t.Fatalf("target advanced despite rejected push: pre=%s post=%s", preRetryHead.Hash(), afterFail.Hash())
+	}
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("retry after incremental failure: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay on retry, got %+v", result)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected exactly one pushed ref on retry, got %+v", result)
+	}
+	if pushAttempts != 2 {
+		t.Fatalf("expected exactly two receive-pack attempts (fail + retry), got %d", pushAttempts)
+	}
+
+	finalHead, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("target head after retry: %v", err)
+	}
+	if finalHead.Hash() != sourceHead.Hash() {
+		t.Fatalf("target head not at source after retry: target=%s source=%s", finalHead.Hash(), sourceHead.Hash())
+	}
+}
+
 func TestRun_IntegrationBranchMappingAndStats(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
@@ -1565,6 +1660,344 @@ func TestRun_IntegrationTagsPruneAndForce(t *testing.T) {
 	}
 
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+// TestRun_IntegrationPrunePreservesUnrelatedTargetBranchUnderFilter is the
+// end-to-end counterpart to TestBuildPlansPrunePreservesUnrelatedBranchesUnderFilter
+// in internal/planner. Once a user filters source refs with --branch or --map,
+// --prune must only prune within that scope; branches that exist solely on the
+// target are out of scope and must survive.
+func TestRun_IntegrationPrunePreservesUnrelatedTargetBranchUnderFilter(t *testing.T) {
+	const orphanBranch = "release"
+
+	tests := []struct {
+		name     string
+		cfg      func(sourceURL, targetURL string) Config
+		wantRefs []plumbing.ReferenceName
+	}{
+		{
+			name: "branch filter --branch main --prune",
+			cfg: func(sourceURL, targetURL string) Config {
+				return Config{
+					Source:   Endpoint{URL: sourceURL},
+					Target:   Endpoint{URL: targetURL},
+					Branches: []string{testBranch},
+					Prune:    true,
+				}
+			},
+			wantRefs: []plumbing.ReferenceName{
+				plumbing.NewBranchReferenceName(testBranch),
+				plumbing.NewBranchReferenceName(orphanBranch),
+			},
+		},
+		{
+			name: "rename mapping --map main:stable --prune",
+			cfg: func(sourceURL, targetURL string) Config {
+				return Config{
+					Source:   Endpoint{URL: sourceURL},
+					Target:   Endpoint{URL: targetURL},
+					Mappings: []RefMapping{{Source: testBranch, Target: "stable"}},
+					Prune:    true,
+				}
+			},
+			wantRefs: []plumbing.ReferenceName{
+				plumbing.NewBranchReferenceName("stable"),
+				plumbing.NewBranchReferenceName(orphanBranch),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceRepo, sourceFS := newSourceRepo(t)
+			makeCommits(t, sourceRepo, sourceFS, 2)
+			targetRepo, _ := newSourceRepo(t)
+
+			sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+			targetServer := newSmartHTTPRepoServer(t, targetRepo)
+			targetServer.receivePackThinCap = true
+			defer sourceServer.Close()
+			defer targetServer.Close()
+
+			if _, err := Run(context.Background(), Config{
+				Source: Endpoint{URL: sourceServer.RepoURL()},
+				Target: Endpoint{URL: targetServer.RepoURL()},
+			}); err != nil {
+				t.Fatalf("seed sync: %v", err)
+			}
+
+			targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+			if err != nil {
+				t.Fatalf("target head after seed: %v", err)
+			}
+			orphanRef := plumbing.NewBranchReferenceName(orphanBranch)
+			if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanRef, targetHead.Hash())); err != nil {
+				t.Fatalf("seed orphan branch: %v", err)
+			}
+
+			if _, err := Run(context.Background(), tt.cfg(sourceServer.RepoURL(), targetServer.RepoURL())); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			for _, ref := range tt.wantRefs {
+				if _, err := targetRepo.Reference(ref, true); err != nil {
+					t.Fatalf("expected ref %s on target after filtered prune, got err=%v", ref, err)
+				}
+			}
+
+			orphanAfter, err := targetRepo.Reference(orphanRef, true)
+			if err != nil {
+				t.Fatalf("orphan branch missing after filtered prune: %v", err)
+			}
+			if orphanAfter.Hash() != targetHead.Hash() {
+				t.Fatalf("orphan branch hash changed: pre=%s post=%s", targetHead.Hash(), orphanAfter.Hash())
+			}
+		})
+	}
+}
+
+func TestRun_IntegrationTagsPruneDeletesTargetLocalTag(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, targetFS := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync failed: %v", err)
+	}
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	sourceTag := plumbing.NewTagReferenceName("v1")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(sourceTag, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+
+	makeCommits(t, targetRepo, targetFS, 1)
+	targetOnlyHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target-only head: %v", err)
+	}
+	targetLocalTag := plumbing.NewTagReferenceName("prod-rollback")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(targetLocalTag, targetOnlyHead.Hash())); err != nil {
+		t.Fatalf("set target-local tag: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(testBranch), sourceHead.Hash())); err != nil {
+		t.Fatalf("reset target branch after target-local tag setup: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		IncludeTags: true,
+		Prune:       true,
+	})
+	if err != nil {
+		t.Fatalf("tag prune sync failed: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(sourceTag, true); err != nil {
+		t.Fatalf("expected source tag on target: %v", err)
+	}
+	if _, err := targetRepo.Reference(targetLocalTag, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected target-local tag to be pruned, got %v", err)
+	}
+}
+
+// TestRun_IntegrationSyncPruneDeletesOrphanedBranch fills the gap between the
+// existing tag-prune coverage (TestRun_IntegrationTagsPruneAndForce) and the
+// replicate-mode branch-prune coverage (TestRun_IntegrationReplicatePruneDeletesOrphanedManagedRef):
+// neither exercises sync-mode branch prune end-to-end. Without a filter,
+// --prune must delete orphan target branches while leaving in-scope refs alone.
+func TestRun_IntegrationSyncPruneDeletesOrphanedBranch(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head after seed: %v", err)
+	}
+	orphanRef := plumbing.NewBranchReferenceName("release")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanRef, targetHead.Hash())); err != nil {
+		t.Fatalf("seed orphan branch: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Prune:  true,
+	})
+	if err != nil {
+		t.Fatalf("sync --prune: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref, got %+v", result)
+	}
+
+	if _, err := targetRepo.Reference(orphanRef, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected orphan branch pruned, got err=%v", err)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+// TestRun_IntegrationSyncPrunePreservesTargetTagWithoutIncludeTags pins the
+// scope of --prune in sync mode: tags are only in scope when the user also
+// passes --tags (IncludeTags). A tag that the target gained on its own —
+// e.g. a release marker pushed after a previous sync — must survive a
+// branch-only --prune run.
+func TestRun_IntegrationSyncPrunePreservesTargetTagWithoutIncludeTags(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	targetHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("target head after seed: %v", err)
+	}
+	targetTag := plumbing.NewTagReferenceName("deployed")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(targetTag, targetHead.Hash())); err != nil {
+		t.Fatalf("seed target-only tag: %v", err)
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+		Prune:  true,
+	})
+	if err != nil {
+		t.Fatalf("sync --prune: %v", err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("expected no deletes when --tags is unset, got %+v", result)
+	}
+
+	tagAfter, err := targetRepo.Reference(targetTag, true)
+	if err != nil {
+		t.Fatalf("target-only tag missing after sync --prune: %v", err)
+	}
+	if tagAfter.Hash() != targetHead.Hash() {
+		t.Fatalf("target-only tag hash changed: pre=%s post=%s", targetHead.Hash(), tagAfter.Hash())
+	}
+}
+
+// TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync simulates a
+// race: the target gains a brand-new tag after git-sync has snapshotted its
+// refs but before the receive-pack push lands. Even with --tags --prune, the
+// new tag must survive — the prune set is built from the planning snapshot
+// only, and the receive-pack protocol only acts on refs that appear in the
+// command list. The injection point is the receive-pack hook on the test
+// server: by the time it fires, target ref discovery is already complete and
+// git-sync's plans are fixed.
+func TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("source head: %v", err)
+	}
+	staleTag := plumbing.NewTagReferenceName("stale")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(staleTag, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source stale tag: %v", err)
+	}
+
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	if _, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		IncludeTags: true,
+	}); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	// Drop the tag from source so the next sync produces a delete plan for it.
+	if err := sourceRepo.Storer.RemoveReference(staleTag); err != nil {
+		t.Fatalf("remove source stale tag: %v", err)
+	}
+
+	raceTag := plumbing.NewTagReferenceName("deployed")
+	var once sync.Once
+	targetServer.receivePackHook = func(_ *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		// Fires after target ref discovery and after the planner has fixed
+		// the delete set, but before the test server applies the commands.
+		// This is the race window: the new tag is invisible to the snapshot
+		// the planner already used, so it must not appear in any command.
+		once.Do(func() {
+			if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(raceTag, sourceHead.Hash())); err != nil {
+				t.Fatalf("inject race tag: %v", err)
+			}
+		})
+		return nil
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:      Endpoint{URL: sourceServer.RepoURL()},
+		Target:      Endpoint{URL: targetServer.RepoURL()},
+		IncludeTags: true,
+		Prune:       true,
+	})
+	if err != nil {
+		t.Fatalf("sync --prune --tags: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected exactly one deleted ref (stale), got %+v", result)
+	}
+
+	if _, err := targetRepo.Reference(staleTag, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected stale tag pruned, got err=%v", err)
+	}
+	tagAfter, err := targetRepo.Reference(raceTag, true)
+	if err != nil {
+		t.Fatalf("race-created tag missing after sync: %v", err)
+	}
+	if tagAfter.Hash() != sourceHead.Hash() {
+		t.Fatalf("race-created tag hash changed: pre=%s post=%s", sourceHead.Hash(), tagAfter.Hash())
+	}
 }
 
 func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
@@ -2722,4 +3155,16 @@ func decodeV2TestCommandRequest(body []byte) (v2TestCommandRequest, error) {
 			return req, fmt.Errorf("unexpected packet type %v", kind)
 		}
 	}
+}
+
+func TestMain(m *testing.M) {
+	// Ensures empty config files for system/global so that test execution
+	// is not affected by environmental settings (e.g. commit.gpgSign=true).
+	if err := plugin.Register(plugin.ConfigLoader(), func() plugin.ConfigSource {
+		return config.NewEmpty()
+	}); err != nil {
+		panic("register go-git empty config loader: " + err.Error())
+	}
+
+	m.Run()
 }

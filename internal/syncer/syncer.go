@@ -381,6 +381,11 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if cfg.Mode == modeReplicate && cfg.Force {
 		return nil, errors.New("replicate does not support --force; use sync instead")
 	}
+	if needTarget {
+		if err := validation.ValidateEndpoints(cfg.Source.URL, cfg.Target.URL); err != nil {
+			return nil, fmt.Errorf("validate endpoints: %w", err)
+		}
+	}
 
 	s := &syncSession{
 		cfg:             cfg,
