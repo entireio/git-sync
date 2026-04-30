@@ -1,0 +1,5 @@
+can you review the faq changes in this branch, can you look at them as an engineer being familiar with general usage of git and how repositories work
+
+---
+
+ok, let's remove atomic from the README.md and then maybe remove the faq item?
