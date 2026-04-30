@@ -1,0 +1,20 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "c14891f1b44a",
+  "strategy": "manual-commit",
+  "branch": "codex/add-repo-header-image",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md",
+    "assets/git-sync-plan.gif",
+    "assets/git-sync-run.gif"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c1/4891f1b44a/0/metadata.json",
+      "transcript": "/c1/4891f1b44a/0/full.jsonl",
+      "content_hash": "/c1/4891f1b44a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
