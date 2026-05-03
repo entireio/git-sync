@@ -1038,7 +1038,11 @@ func TestCanIncrementalRelayMixed(t *testing.T) {
 	}
 }
 
-func TestCanIncrementalRelayRejectsNoThin(t *testing.T) {
+func TestCanIncrementalRelayToleratesNoThin(t *testing.T) {
+	// Incremental relay tolerates "no-thin" targets because gitproto.FetchPack
+	// never requests the thin-pack capability, so the relayed pack is always
+	// self-contained and safe for no-thin receive-pack servers — same logic
+	// as SupportsReplicateRelay.
 	plans := []BranchPlan{{
 		Branch:     "main",
 		SourceRef:  "refs/heads/main",
@@ -1050,19 +1054,19 @@ func TestCanIncrementalRelayRejectsNoThin(t *testing.T) {
 	}}
 
 	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true})
-	if ok {
-		t.Fatal("expected CanIncrementalRelay=false when target advertises no-thin")
+	if !ok {
+		t.Fatalf("expected CanIncrementalRelay=true for no-thin target, got reason=%s", reason)
 	}
-	if reason != "incremental-target-no-thin" {
+	if reason != "fast-forward-branch-or-tag-create" {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }
 
-func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
+func TestCanIncrementalRelayAcceptsBranchCreate(t *testing.T) {
 	plans := []BranchPlan{{
-		Branch:     "main",
-		SourceRef:  "refs/heads/main",
-		TargetRef:  "refs/heads/main",
+		Branch:     "feature",
+		SourceRef:  "refs/heads/feature",
+		TargetRef:  "refs/heads/feature",
 		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
 		TargetHash: plumbing.ZeroHash,
 		Kind:       RefKindBranch,
@@ -1070,10 +1074,63 @@ func TestCanIncrementalRelayRejectsBranchCreate(t *testing.T) {
 	}}
 
 	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true})
-	if ok {
-		t.Fatal("expected CanIncrementalRelay=false for branch create")
+	if !ok {
+		t.Fatalf("expected CanIncrementalRelay=true for branch create, got reason=%s", reason)
 	}
-	if reason != "incremental-branch-action-not-update" {
+	if reason != "fast-forward-branch-or-tag-create" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanIncrementalRelayRejectsBranchCreateWithNonZeroTarget(t *testing.T) {
+	// A "Create" plan with a non-zero TargetHash is incoherent — surface it
+	// rather than silently relay against the wrong have.
+	plans := []BranchPlan{{
+		Branch:     "feature",
+		SourceRef:  "refs/heads/feature",
+		TargetRef:  "refs/heads/feature",
+		SourceHash: plumbing.NewHash("1111111111111111111111111111111111111111"),
+		TargetHash: plumbing.NewHash("2222222222222222222222222222222222222222"),
+		Kind:       RefKindBranch,
+		Action:     ActionCreate,
+	}}
+
+	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true})
+	if ok {
+		t.Fatal("expected CanIncrementalRelay=false for create plan with non-zero target hash")
+	}
+	if reason != "incremental-branch-create-target-not-empty" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestCanIncrementalRelayMixedCreateAndUpdate(t *testing.T) {
+	plans := []BranchPlan{
+		{
+			Branch:     "main",
+			SourceRef:  "refs/heads/main",
+			TargetRef:  "refs/heads/main",
+			SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			TargetHash: plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+			Kind:       RefKindBranch,
+			Action:     ActionUpdate,
+		},
+		{
+			Branch:     "feature",
+			SourceRef:  "refs/heads/feature",
+			TargetRef:  "refs/heads/feature",
+			SourceHash: plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc"),
+			TargetHash: plumbing.ZeroHash,
+			Kind:       RefKindBranch,
+			Action:     ActionCreate,
+		},
+	}
+
+	ok, reason := CanIncrementalRelay(false, false, false, plans, RelayTargetPolicy{CapabilitiesKnown: true})
+	if !ok {
+		t.Fatalf("expected CanIncrementalRelay=true for mixed create+update, got reason=%s", reason)
+	}
+	if reason != "fast-forward-branch-or-tag-create" {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }
@@ -1234,6 +1291,126 @@ func TestObjectsToPushEmpty(t *testing.T) {
 	}
 	if hashes != nil {
 		t.Fatalf("expected nil for empty wants slice, got %d objects", len(hashes))
+	}
+}
+
+// TestObjectsToPushTransitiveMissing simulates the materialized-fallback
+// failure where a fetch with target-refs as haves prunes the source pack:
+// objects reachable from a have aren't in the local store, but they aren't
+// part of the literal haveSet either. The walker must treat such missing
+// objects as implicitly have'd by the target rather than failing.
+//
+// Without the fix this returns:
+//
+//	load object <blob>: object not found
+func TestObjectsToPushTransitiveMissing(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+
+	// Blob that "exists in the target" but is not in our local store —
+	// the source server pruned it because it's reachable from a have.
+	prunedBlob := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+	// Tree referencing the pruned blob. The tree itself is in our store
+	// (the source sent it because it's new since the have).
+	tree := &object.Tree{
+		Entries: []object.TreeEntry{
+			{Name: "kept.txt", Mode: 0o100644, Hash: prunedBlob},
+		},
+	}
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := tree.Encode(treeObj); err != nil {
+		t.Fatalf("encode tree: %v", err)
+	}
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		t.Fatalf("store tree: %v", err)
+	}
+
+	// Have commit (target ref). Not in our store either — the server
+	// stopped its walk here, so we never receive the commit object.
+	haveCommit := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	// Want commit: present in our store, parent is haveCommit, tree
+	// references the pruned blob.
+	now := time.Now().UTC()
+	wantCommit := &object.Commit{
+		Author:       object.Signature{Name: "test", Email: "test@example.com", When: now},
+		Committer:    object.Signature{Name: "test", Email: "test@example.com", When: now},
+		Message:      "want",
+		TreeHash:     treeHash,
+		ParentHashes: []plumbing.Hash{haveCommit},
+	}
+	wantObj := repo.Storer.NewEncodedObject()
+	if err := wantCommit.Encode(wantObj); err != nil {
+		t.Fatalf("encode want commit: %v", err)
+	}
+	wantHash, err := repo.Storer.SetEncodedObject(wantObj)
+	if err != nil {
+		t.Fatalf("store want commit: %v", err)
+	}
+
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		plumbing.NewBranchReferenceName("main"): haveCommit,
+	}
+	hashes, err := ObjectsToPush(repo.Storer, []plumbing.Hash{wantHash}, targetRefs)
+	if err != nil {
+		t.Fatalf("ObjectsToPush: %v", err)
+	}
+
+	// Pack must contain the want commit and its tree, but not the pruned
+	// blob (the target already has it) or the have commit (boundary).
+	want := map[plumbing.Hash]bool{wantHash: false, treeHash: false}
+	for _, h := range hashes {
+		if h == prunedBlob {
+			t.Errorf("pack includes pruned blob %s; should be excluded", h)
+		}
+		if h == haveCommit {
+			t.Errorf("pack includes have commit %s; should be excluded", h)
+		}
+		if _, ok := want[h]; ok {
+			want[h] = true
+		}
+	}
+	for h, found := range want {
+		if !found {
+			t.Errorf("pack missing required object %s", h)
+		}
+	}
+}
+
+// TestObjectsToPushMissingWantImplicitlyHaved covers the case where the
+// source server pruned a top-level want because it's reachable from a
+// target have under a different ref name (e.g. source branch X is at a
+// commit that already lies in target's main history). The walker must
+// treat the want as implicitly have'd: the target's receive-pack accepts
+// the ref update because it already has the object.
+//
+// Without this tolerance the materialized fallback fails with
+// "load want <hash>: object not found" even though the push would succeed.
+func TestObjectsToPushMissingWantImplicitlyHaved(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	// Source's "1072-..." branch tip — server pruned it because target's
+	// main (a have) already reaches this commit. Not in our store.
+	prunedWant := plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc")
+	// Target's main, the have that caused the prune.
+	targetMain := plumbing.NewHash("dddddddddddddddddddddddddddddddddddddddd")
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		plumbing.NewBranchReferenceName("main"): targetMain,
+	}
+	hashes, err := ObjectsToPush(repo.Storer, []plumbing.Hash{prunedWant}, targetRefs)
+	if err != nil {
+		t.Fatalf("ObjectsToPush: %v", err)
+	}
+	for _, h := range hashes {
+		if h == prunedWant {
+			t.Errorf("pack includes pruned want %s; should be excluded", h)
+		}
 	}
 }
 

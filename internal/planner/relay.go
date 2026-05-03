@@ -53,7 +53,20 @@ func CanBootstrapRelay(
 }
 
 // CanIncrementalRelay checks whether all plans are eligible for the incremental
-// relay fast-path (fast-forward branch updates + new tag creates).
+// relay fast-path. Eligible plan shapes:
+//   - Branch fast-forward update (TargetHash is parent of SourceHash).
+//   - Branch create (target has no such ref yet). The relay still passes
+//     all target refs as haves, so the source pack covers only objects
+//     target doesn't already have via some existing ref. The receive-pack
+//     accepts the create command because any pruned objects are reachable
+//     from those existing refs.
+//   - New tag create.
+//
+// Incremental tolerates targets that advertise "no-thin" for the same reason
+// as replicate (see SupportsReplicateRelay): gitproto.FetchPack never requests
+// the "thin-pack" capability, so the relayed pack is always self-contained.
+// If gitproto.FetchPack ever begins requesting thin-pack, this function must
+// gain a matching fallback when target.NoThin is set.
 func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target RelayTargetPolicy) (bool, string) {
 	if force || prune || dryRun {
 		return false, "incremental-disabled-by-force-prune-or-dry-run"
@@ -64,9 +77,6 @@ func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target R
 	if !target.CapabilitiesKnown {
 		return false, "incremental-missing-target-capabilities"
 	}
-	if target.NoThin {
-		return false, "incremental-target-no-thin"
-	}
 
 	for _, plan := range plans {
 		switch plan.Kind {
@@ -74,11 +84,17 @@ func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target R
 			if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
 				return false, "incremental-non-branch-mapping"
 			}
-			if plan.Action != ActionUpdate {
-				return false, "incremental-branch-action-not-update"
-			}
-			if plan.TargetHash.IsZero() {
-				return false, "incremental-branch-target-missing"
+			switch plan.Action {
+			case ActionUpdate:
+				if plan.TargetHash.IsZero() {
+					return false, "incremental-branch-target-missing"
+				}
+			case ActionCreate:
+				if !plan.TargetHash.IsZero() {
+					return false, "incremental-branch-create-target-not-empty"
+				}
+			default:
+				return false, "incremental-branch-action-not-update-or-create"
 			}
 		case RefKindTag:
 			if !plan.SourceRef.IsTag() || !plan.TargetRef.IsTag() {

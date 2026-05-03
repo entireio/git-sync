@@ -16,6 +16,21 @@ import (
 
 const maxHTTPErrorBody = 64 * 1024
 
+// diagnosticHeaders carry trace/correlation IDs that operators of upstream
+// services use to look up the failing request server-side. Surfaced in
+// httpError so a 500 with an opaque body (e.g. "Internal Server Error") still
+// gives the user something actionable to share when reporting the failure.
+var diagnosticHeaders = []string{
+	"Cf-Ray",
+	"X-Request-Id",
+	"Request-Id",
+	"X-Trace-Id",
+	"X-Amz-Request-Id",
+	"X-Github-Request-Id",
+	"Server",
+	"Content-Type",
+}
+
 // httpError checks an HTTP response status and returns an error for non-2xx responses.
 func httpError(res *http.Response) error {
 	if res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices {
@@ -29,8 +44,17 @@ func httpError(res *http.Response) error {
 			if len(data) > maxHTTPErrorBody {
 				data = append(data[:maxHTTPErrorBody], []byte("...")...)
 			}
-			reason = string(data)
+			reason = strings.TrimSpace(string(data))
 		}
+	}
+	var diag []string
+	for _, h := range diagnosticHeaders {
+		if v := res.Header.Get(h); v != "" {
+			diag = append(diag, h+"="+v)
+		}
+	}
+	if len(diag) > 0 {
+		return fmt.Errorf("http %d: %s [%s] %s", res.StatusCode, res.Request.URL.Redacted(), strings.Join(diag, ", "), reason)
 	}
 	return fmt.Errorf("http %d: %s %s", res.StatusCode, res.Request.URL.Redacted(), reason)
 }
