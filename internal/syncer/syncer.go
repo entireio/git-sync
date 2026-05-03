@@ -524,20 +524,31 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 
 	// Normal sync: allocate in-memory repo. The source closure is fetched
 	// lazily — only when planning needs ancestry data (FF detection on a
-	// divergent branch) or the materialized fallback will run (force, prune,
-	// or any divergent ref). Pure skip/create plans take incremental relay
-	// without ever decoding source objects locally, so the upfront fetch is
-	// a wasted full-pack round trip.
+	// divergent branch) or when the materialized fallback ends up running.
+	// Pure skip/create plans that take incremental relay never decode
+	// source objects locally, so the upfront fetch would be a wasted
+	// full-pack round trip.
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
 	gpDesired := convert.DesiredRefs(desiredRefs)
-	if needsLocalSourceClosure(s.cfg, desiredRefs, targetRefMap) {
+	closureFetched := false
+	fetchClosure := func() error {
+		if closureFetched {
+			return nil
+		}
 		if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
 			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
-				return Result{}, fmt.Errorf("fetch to store: %w", err)
+				return fmt.Errorf("fetch to store: %w", err)
 			}
+		}
+		closureFetched = true
+		return nil
+	}
+	if needsLocalSourceClosure(s.cfg, desiredRefs, targetRefMap) {
+		if err := fetchClosure(); err != nil {
+			return Result{}, err
 		}
 	}
 
@@ -583,7 +594,14 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 			result.RelayMode = incResult.RelayMode
 			result.RelayReason = incResult.RelayReason
 		} else if len(pushPlans) > 0 {
-			// Materialized fallback
+			// Materialized fallback. needsLocalSourceClosure may have skipped
+			// the upfront fetch when relay looked eligible from the plan
+			// shape alone, but CanIncrementalRelay can still reject (e.g.
+			// when target capabilities are unknown). Fetch on demand so
+			// materialized doesn't run against an empty store.
+			if err := fetchClosure(); err != nil {
+				return result, err
+			}
 			if err := s.executeMaterialized(ctx, repo.Storer, desiredRefs, pushPlans); err != nil {
 				return result, err
 			}
