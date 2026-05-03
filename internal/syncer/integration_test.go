@@ -233,6 +233,103 @@ func TestRun_IntegrationIncrementalRelayCreatesNewBranchWithExistingTarget(t *te
 	}
 }
 
+// TestRun_IntegrationSkipsLocalFetchOnRelayOnlySync verifies the
+// double-fetch optimization: when every desired ref is a skip or a create
+// (no FF check needed, no force, no prune), the upfront FetchToStore that
+// populates the in-memory store is skipped entirely. The incremental relay
+// still does its own FetchPack to stream to target, so we end up with one
+// source upload-pack call instead of two.
+func TestRun_IntegrationSkipsLocalFetchOnRelayOnlySync(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+
+	// Source adds a new branch reachable from master (which target already
+	// has). All plans are skip (master) or create (release) — no FF check
+	// is needed and incremental relay handles the push directly.
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	releaseRef := plumbing.NewBranchReferenceName("release")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(releaseRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay, got mode=%q reason=%q relay=%v", result.RelayMode, result.RelayReason, result.Relay)
+	}
+
+	// Wants accumulated across upload-pack fetch POSTs. Pre-fix flow did
+	// two fetches: FetchToStore (1 want — master and release dedupe to
+	// the same hash) plus the relay's FetchPack (1 want for the release
+	// plan), totalling 2. Post-fix only the relay fetches, totalling 1 —
+	// anything ≥ 2 means the upfront FetchToStore wasn't skipped.
+	if got := sourceServer.Wants(serviceUploadPack, metricPack); got != 1 {
+		t.Fatalf("expected 1 want total (single relay fetch), got %d — likely indicates the upfront FetchToStore was not skipped", got)
+	}
+}
+
+// TestRun_IntegrationKeepsLocalFetchWhenAncestryNeeded ensures the fetch is
+// still performed for a fast-forward update where BuildPlans calls
+// ReachesCommit on the local store. Skipping it would crash the planner.
+func TestRun_IntegrationKeepsLocalFetchWhenAncestryNeeded(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}
+
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	// Advance source so the resync plans an FF update.
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay, got mode=%q reason=%q", result.RelayMode, result.RelayReason)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 ref pushed, got %+v", result)
+	}
+}
+
 // TestRun_IntegrationIncrementalRelayCreatesNewBranchOnNoThinTarget covers the
 // no-thin variant of the above: the relayed pack is always self-contained
 // (gitproto.FetchPack never sets thin-pack), so a no-thin receive-pack

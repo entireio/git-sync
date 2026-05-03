@@ -336,6 +336,40 @@ func planConfig(cfg Config) planner.PlanConfig {
 	}
 }
 
+// needsLocalSourceClosure reports whether the sync must populate the
+// in-memory store with the full source closure before running. The fetch
+// is required when:
+//   - Force or prune is set: incremental relay is disabled, so the
+//     materialized fallback will run and needs the closure.
+//   - Any desired ref already exists on target at a different hash: a
+//     branch fast-forward check will need ancestry data, or a tag retarget
+//     will route to materialized.
+//
+// When all desired refs are either skips (target hash matches source) or
+// creates (target hash is zero), incremental relay handles the push without
+// the closure — the upfront fetch would just be wasted bandwidth, since
+// relay does its own FetchPack on the source.
+func needsLocalSourceClosure(
+	cfg Config,
+	desired map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) bool {
+	if cfg.Force || cfg.Prune {
+		return true
+	}
+	for targetRef, want := range desired {
+		targetHash := targetRefs[targetRef]
+		if targetHash.IsZero() {
+			continue
+		}
+		if targetHash == want.SourceHash {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // --- Session setup (issue #12) ---
 
 // syncSession holds the shared state for a sync operation, reducing
@@ -488,15 +522,22 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason)
 	}
 
-	// Normal sync: allocate in-memory repo and fetch objects
+	// Normal sync: allocate in-memory repo. The source closure is fetched
+	// lazily — only when planning needs ancestry data (FF detection on a
+	// divergent branch) or the materialized fallback will run (force, prune,
+	// or any divergent ref). Pure skip/create plans take incremental relay
+	// without ever decoding source objects locally, so the upfront fetch is
+	// a wasted full-pack round trip.
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
 	gpDesired := convert.DesiredRefs(desiredRefs)
-	if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
-		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return Result{}, fmt.Errorf("fetch to store: %w", err)
+	if needsLocalSourceClosure(s.cfg, desiredRefs, targetRefMap) {
+		if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
+			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+				return Result{}, fmt.Errorf("fetch to store: %w", err)
+			}
 		}
 	}
 
