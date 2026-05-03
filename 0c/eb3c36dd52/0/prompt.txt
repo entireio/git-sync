@@ -1,0 +1,185 @@
+git-sync sync --tags https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+error: sync: sync: bootstrap execute: push target refs: target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/git-receive-pack Internal Server Error
+
+can we output more details from the 500 assuming it might have more information
+
+---
+
+how can I easily test the sync locally with https://github.com/entireio/cli.git to validate it's working
+
+---
+
+[test:entire-local-smoke] $ GITSYNC_E2E_ENTIRE=1 go test ./internal/syncer -run TestRun_EntireLocalPublicRepoSmoke -timeout 30m -v
+=== RUN   TestRun_EntireLocalPublicRepoSmoke
+    entire_local_smoke_test.go:97: ensure Entire repo exists: create repo with entiredb: exit status 1
+        Usage:
+          entiredb repo create <repository name> [flags]how can I easily test the sync locally with https://github.com/entireio/cli.git to validate it's working
+
+---
+
+❯ go run cmd/git-sync/main.go sync --tags https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+error: sync: sync: materialized execute: compute objects to push: compute objects to push: load object 0fccf698a76114c97d95ef66241f82d127a3a203: object not found
+exit status 1
+
+---
+
+yeah I'm curious more now about the real bug
+
+---
+
+can you resume, I think this disconnected
+
+---
+
+❯ go run cmd/git-sync/main.go sync --tags https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+error: sync: sync: materialized execute: compute objects to push: compute objects to push: load want 0fccf698a76114c97d95ef66241f82d127a3a203: object not found
+exit status 1can you resume, I think this disconnected
+
+---
+
+error: sync: sync: materialized execute: push target refs: target receive-pack: post RPC: Post "https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/git-receive-pack": round trip: http2: Transport: cannot retry err [stream error: stream ID 3; PROTOCOL_ERROR; received from peer] after Request.Body was written; define Request.GetBody to avoid this error
+exit status 1
+
+---
+
+error: sync: sync: materialized execute: push target refs: target receive-pack: post RPC: Post "https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/git-receive-pack": round trip: use of closed network connection
+exit status 1
+
+---
+
+❯ git ls-remote --refs $ARTIFACTS_REMOTE
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+REDACTED        refs/heads/main
+e72157d04022f74eb1af25d0a2ca9cd92933f715        refs/tags/v0.3.0
+e72157d04022f74eb1af25d0a2ca9cd92933f715        refs/tags/v0.3.1
+c05553be1fcc4dbfea993b35d246e1e1015cb1d6        refs/tags/v0.3.10
+01e95ba044f04d07dee855adbf548acdc2d0caa0        refs/tags/v0.3.11
+bc58b21e88fceca73bd05a2f41e8b95bacbae229        refs/tags/v0.3.12
+6e349234cc12c757e1d2ef9f9fe43ba7a0d56847        refs/tags/v0.3.13
+ce1c563ead096c7b34f18d15ba4cdba92a31e2d3        refs/tags/v0.3.2
+c080f3eeded4a8b84b6b040dd6a2ea780240920c        refs/tags/v0.3.3
+504ba49277a1bed1defdb812370d3d7bf23359f5        refs/tags/v0.3.4
+9450c8a11db6de502c4118f99efb34e6e908b095        refs/tags/v0.3.5
+3cc27f94ac40bdcceb3f94c171f812f4b1c95c11        refs/tags/v0.3.6
+7d83d898fb853104b3d5a3f6ec9fd6921d052ff9        refs/tags/v0.3.7
+38e815162c8ca25f28da7eaf88e75df53895c867        refs/tags/v0.3.8
+f70f2b9cf42a3f5b02046340dff2d0f92f375877        refs/tags/v0.3.9
+2a9998e55094e8caae2864cfdde9693240c19163        refs/tags/v0.4.2
+599435651c16f5b0fd921ead525040bdff996163        refs/tags/v0.4.3
+2f0ad9abc811e6e137f86ef0520008910151a35b        refs/tags/v0.4.4
+a92c0d06d2182f08f0c035d812a53a4770f5b4b1        refs/tags/v0.4.5
+48fe29daea7ed738fe3c277c9b53d7f393629ed2        refs/tags/v0.4.6
+80695ef9e2aaa8060db586d734cd34a6980d6b6b        refs/tags/v0.4.7
+81ddee25ff72a5c0d9362e0222aa37c431c75ae4        refs/tags/v0.4.8
+14b1c4407d7d92fb0f655d88356385a084e4a129        refs/tags/v0.4.9
+0fa529511e3365e8bd9399394160fa970862970a        refs/tags/v0.5.0
+d46fdc24214794be804fb9417022669f1129a2ca        refs/tags/v0.5.1
+5affe17399f3d7a00d3ff67e18b60843fdff027d        refs/tags/v0.5.2
+f2ddf9f7964bbd50b14c81b7b6ec4952fbb2735e        refs/tags/v0.5.3
+746a74cd0ff44ead68ad6ef44f261190879989f4        refs/tags/v0.5.4
+bf7bee9a3b6207266c2a615d341a5bfbd42574d5        refs/tags/v0.5.4-nightly.202604091732.bf7bee9a
+7b0903ab658f59e919babf6df202e83237bf7fcb        refs/tags/v0.5.4-nightly.202604100645.7b0903ab
+90bb1c503f8fdaaecc49c181e1c68a2f63bdb441        refs/tags/v0.5.5
+746a74cd0ff44ead68ad6ef44f261190879989f4        refs/tags/v0.5.5-nightly.202604101410.746a74cd0
+ceb098827f57caadd06745c2df98f41a10400e99        refs/tags/v0.5.5-nightly.202604110629.ceb09882
+3c6b56a7ddeb2bf96ca7507ccb726de5d02a883f        refs/tags/v0.5.5-nightly.202604120639.3c6b56a7
+c9fedb4b8904501fd108bb4f0fcbaf051ac16cb8        refs/tags/v0.5.6
+a4fc0020fe57fd384bb8f15802b547cc1d4e4446        refs/tags/v0.5.6-nightly.202604140645.a4fc0020
+0fe261c893aa0744ca40c062dee5988719034821        refs/tags/v0.5.6-nightly.202604150645.0fe261c8
+5bc861555eed812c1e4055d1049105b3e57404c1        refs/tags/v0.5.6-nightly.202604160646.5bc86155
+96867cdc4c39dc92474683c22832200cc5aad96b        refs/tags/v0.5.6-nightly.202604170646.96867cdc
+957f073fffc490fe1bcf060a9aa0c4f424b472f8        refs/tags/v0.5.6-nightly.202604180633.957f073f
+fcda1cf7a7b1bc041e1353ac7542f78125cd8732        refs/tags/v0.5.6-nightly.202604190642.fcda1cf7
+ef25b3c9c8ef2506c723e2c15a8e9d5889115a80        refs/tags/v0.5.6-nightly.202604210647.ef25b3c9
+cbf5d9b396015f0701446a8d84a860c2e258555b        refs/tags/v0.5.6-nightly.202604220646.cbf5d9b3
+17fa870ef703b6341a0a719ec27d394c425debce        refs/tags/v0.5.6-nightly.202604230647.17fa870e
+48e32b28ca664009bc1e09bd5916c0f3fab1e4c6        refs/tags/v0.5.6-nightly.202604240648.48e32b28
+f53b923abed413c17f0b4a3d5fb90f54392487ea        refs/tags/v0.5.7-nightly.202604250638.f53b923a
+51ccd66273a1eb75c6510ec1a3fa0b773547433a        refs/tags/v0.5.7-nightly.202604280703.51ccd662
+a01814a95799b9007a01850d7181af24b717c260        refs/tags/v0.5.7-nightly.202604290658.a01814a9
+6368942b783604e647e8bad4e64bda3d70609940        refs/tags/v0.5.7-nightly.202604300701.6368942b
+da8fc8dd3c8a0a523798a23533322184c7537ad5        refs/tags/v0.5.7-nightly.202605010703.da8fc8dd
+REDACTED        refs/tags/v0.5.7-nightly.202605020647.589aba5b
+
+---
+
+a + b worked
+
+❯ GODEBUG=http2client=0 go run cmd/git-sync/main.go sync --branch main https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+SKIP refs/heads/main - 589aba5b already current
+summary: pushed=0 deleted=0 skipped=1 blocked=0 mode=sync protocol=v2 relay=false relay-mode= relay-reason=incremental-no-plans batching=false batch-count=0 planned-batches=0
+
+git-sync on  main [!] via 🐹 v1.26.2 took 3s
+❯ GODEBUG=http2client=0 go run cmd/git-sync/main.go sync \
+    --branch 1072-intermittent-stop-hook-timeout-after-30s-on-windows-with-concurrent-codexclaude-sessions \
+    https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+CREATE refs/heads/1072-intermittent-stop-hook-timeout-after-30s-on-windows-with-concurrent-codexclaude-sessions - create refs/heads/1072-intermittent-stop-hook-timeout-after-30s-on-windows-with-concurrent-codexclaude-sessions at 0fccf698
+summary: pushed=1 deleted=0 skipped=0 blocked=0 mode=sync protocol=v2 relay=true relay-mode=bootstrap relay-reason=empty-target-managed-refs batching=false batch-count=0 planned-batches=0
+
+---
+
+I want the proper fix
+
+---
+
+any reason this isn't asking me for credentials anymore? 
+
+❯ GODEBUG=http2client=0 go run cmd/git-sync/main.go sync --tags \
+    https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+error: sync: sync: list target refs: http 403: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/info/refs?service=git-receive-pack [Cf-Ray=9f613eac387d3917-TXL, Server=cloudflare, Content-Type=text/plain;charset=UTF-8] Invalid or expired token
+exit status 1
+
+---
+
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+error: sync: sync: incremental execute: push target refs: target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/git-receive-pack [Cf-Ray=9f614186d8dfd81e-TXL, Server=cloudflare, Content-Type=text/plain; charset=UTF-8] Internal Server Error
+exit status 1
+
+---
+
+❯ GODEBUG=http2client=0 go run cmd/git-sync/main.go sync -v --tags \
+    https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+source: Enumerating objects: 17837, done.
+source: Counting objects: 100% (3547/3547), done.
+source: Compressing objects: 100% (1719/1719), done.
+source: Total 17837 (delta 3004), reused 1841 (delta 1819), pack-reused 14290 (from 2)
+source: Enumerating objects: 17837, done.
+source: Counting objects: 100% (3531/3531), done.
+source: Compressing objects: 100% (1718/1718), done.
+source: Total 17837 (delta 2989), reused 1826 (delta 1804), pack-reused 14306 (from 2)
+error: sync: sync: incremental execute: push target refs: target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/git-receive-pack [Cf-Ray=9f6145de4e3b236c-TXL, Server=cloudflare, Content-Type=text/plain; charset=UTF-8] Internal Server Error
+exit status 1
+
+git-sync on  main [!
+
+---
+
+❯ GODEBUG=http2client=0 go run cmd/git-sync/main.go sync -v --tags \
+    --target-max-pack-bytes 10485760 \
+    https://github.com/entireio/cli.git $ARTIFACTS_REMOTE
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+source: Enumerating objects: 17837, done.
+source: Counting objects: 100% (3510/3510), done.
+source: Compressing objects: 100% (1717/1717), done.
+source: Total 17837 (delta 2963), reused 1806 (delta 1784), pack-reused 14327 (from 2)
+source: Enumerating objects: 17837, done.
+source: Counting objects: 100% (3531/3531), done.
+source: Compressing objects: 100% (1718/1718), done.
+source: Total 17837 (delta 2989), reused 1826 (delta 1804), pack-reused 14306 (from 2)
+error: sync: sync: incremental execute: push target refs: target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git/git-receive-pack [Cf-Ray=9f616a23aafbdd58-TXL, Server=cloudflare, Content-Type=text/plain; charset=UTF-8] Internal Server Error
+exit status 1
+
+---
+
+but we are still mostly guessing that this is the issue or the fix is worth is no matter what?
