@@ -1057,7 +1057,7 @@ func TestCanIncrementalRelayToleratesNoThin(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected CanIncrementalRelay=true for no-thin target, got reason=%s", reason)
 	}
-	if reason != "fast-forward-branch-or-tag-create" {
+	if reason != reasonIncrementalEligible {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }
@@ -1077,7 +1077,7 @@ func TestCanIncrementalRelayAcceptsBranchCreate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected CanIncrementalRelay=true for branch create, got reason=%s", reason)
 	}
-	if reason != "fast-forward-branch-or-tag-create" {
+	if reason != reasonIncrementalEligible {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }
@@ -1130,7 +1130,7 @@ func TestCanIncrementalRelayMixedCreateAndUpdate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected CanIncrementalRelay=true for mixed create+update, got reason=%s", reason)
 	}
-	if reason != "fast-forward-branch-or-tag-create" {
+	if reason != reasonIncrementalEligible {
 		t.Fatalf("unexpected reason: %s", reason)
 	}
 }
@@ -1210,7 +1210,7 @@ func TestRelayFallbackReason(t *testing.T) {
 	}}
 
 	target := RelayTargetPolicy{CapabilitiesKnown: true}
-	if got := RelayFallbackReason(false, false, false, tagCreate, target); got != "fast-forward-branch-or-tag-create" {
+	if got := RelayFallbackReason(false, false, false, tagCreate, target); got != reasonIncrementalEligible {
 		t.Fatalf("expected fast-forward-branch-or-tag-create, got %s", got)
 	}
 

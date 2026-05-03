@@ -52,6 +52,10 @@ func CanBootstrapRelay(
 	return true, "empty-target-managed-refs"
 }
 
+// reasonIncrementalEligible is returned when all plans satisfy the incremental
+// relay eligibility rules — branch FF updates, branch creates, or tag creates.
+const reasonIncrementalEligible = "fast-forward-branch-or-tag-create"
+
 // CanIncrementalRelay checks whether all plans are eligible for the incremental
 // relay fast-path. Eligible plan shapes:
 //   - Branch fast-forward update (TargetHash is parent of SourceHash).
@@ -93,7 +97,7 @@ func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target R
 				if !plan.TargetHash.IsZero() {
 					return false, "incremental-branch-create-target-not-empty"
 				}
-			default:
+			case ActionDelete, ActionSkip, ActionBlock:
 				return false, "incremental-branch-action-not-update-or-create"
 			}
 		case RefKindTag:
@@ -107,7 +111,7 @@ func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target R
 			return false, "incremental-unsupported-ref-kind"
 		}
 	}
-	return true, "fast-forward-branch-or-tag-create"
+	return true, reasonIncrementalEligible
 }
 
 // CanFullTagCreateRelay checks whether all plans are tag creates, eligible for
