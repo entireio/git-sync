@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -72,6 +74,7 @@ type Config struct {
 	Verbose                bool
 	ShowStats              bool
 	MeasureMemory          bool
+	Progress               bool
 	Mode                   string
 	Force                  bool
 	Prune                  bool
@@ -79,6 +82,10 @@ type Config struct {
 	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 	ProtocolMode           string
+
+	// progressOut overrides the writer used by the live progress ticker.
+	// Defaults to os.Stderr when nil. Exposed for tests.
+	progressOut io.Writer
 }
 
 // Re-export types from planner for CLI compatibility.
@@ -277,7 +284,38 @@ func statsLines(s Stats) []string {
 			item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
 		))
 	}
+	if line := throughputLine(s); line != "" {
+		lines = append(lines, line)
+	}
 	return lines
+}
+
+// throughputLine renders a one-line per-side throughput summary using
+// the wall-clock window the stats collector observed. Returns "" when
+// no side bytes were recorded so the line stays out of the way for
+// metadata-only operations like probe.
+func throughputLine(s Stats) string {
+	if len(s.Sides) == 0 || s.ElapsedNanos <= 0 {
+		return ""
+	}
+	sides := make([]SideBytes, 0, len(s.Sides))
+	for _, side := range s.Sides {
+		if side.Bytes <= 0 {
+			continue
+		}
+		sides = append(sides, side)
+	}
+	if len(sides) == 0 {
+		return ""
+	}
+	sort.Slice(sides, func(i, j int) bool { return sides[i].Label < sides[j].Label })
+	dur := time.Duration(s.ElapsedNanos)
+	parts := make([]string, 0, len(sides))
+	for _, side := range sides {
+		parts = append(parts, fmt.Sprintf("%s=%s @ %s",
+			side.Label, formatBytes(side.Bytes), formatRate(side.Bytes, dur)))
+	}
+	return "throughput: " + strings.Join(parts, " · ")
 }
 
 func measurementLine(m Measurement) []string {
@@ -383,6 +421,16 @@ type syncSession struct {
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	target          *targetSession
 	measurementDone func() Measurement
+	progress        *progressReporter
+}
+
+// finish releases any resources owned by the session — currently the live
+// progress ticker. Idempotent and safe to call from defer in callers that
+// also produce results in the happy path.
+func (s *syncSession) finish() {
+	if s.progress != nil {
+		s.progress.terminate()
+	}
 }
 
 type targetSession struct {
@@ -430,6 +478,19 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		s.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		}))
+	}
+	if cfg.Progress {
+		out := cfg.progressOut
+		if out == nil {
+			out = os.Stderr
+		}
+		// Render only when the destination is a real terminal. Pipes,
+		// log files, and CI captures get nothing rather than a flood
+		// of '\r'-prefixed control sequences.
+		if out != os.Stderr || stderrIsTTY() {
+			s.progress = newProgressReporter(out, s.stats, 0)
+			go s.progress.run()
+		}
 	}
 
 	s.sourceConn, err = newConn(cfg.Source, "source", s.stats, cfg.HTTPClient)
@@ -485,6 +546,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	defer s.finish()
 	if s.cfg.Mode == modeReplicate {
 		return s.runReplicate(ctx)
 	}
@@ -762,6 +824,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	defer s.finish()
 
 	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
 	if err != nil {
@@ -787,6 +850,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{}, err
 	}
+	defer s.finish()
 	return s.newProbeResult(), nil
 }
 
@@ -800,6 +864,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	if err != nil {
 		return FetchResult{}, err
 	}
+	defer s.finish()
 
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
