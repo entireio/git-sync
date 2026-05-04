@@ -1,0 +1,100 @@
+ok, looks good, next thing: 
+
+time=2026-05-04T20:19:04.242+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1 estimated_bytes=48514500 target_limit_bytes=536870912
+time=2026-05-04T20:20:39.240+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1 estimated_bytes=48514500 target_limit_bytes=536870912 will_subdivide=true error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6982f7a94fd2af-FRA, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+time=2026-05-04T20:20:39.240+02:00 level=INFO msg="bootstrap batch subdividing after target size rejection" branch=refs/heads/entire/checkpoints/v1 old_remaining=1 new_remaining=2 error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6982f7a94fd2af-FRA, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+target rejected pack — splitting 1 → 2 packs
+
+So it gives us this after first try. And if I let it run it gets until 32 parts and then the size is enough. I wonder now: If I do a mirror push with the git cli, can I somehow also turn on verbose or monitoring to figure out how it does the handshakes? it would otherwise run in the same size limit issues, right?
+
+---
+
+that is to much tracing: 
+
+20:36:30.460389 http.c:878              => Send data: ....D$......7..`"..<.....N,7h...Df.....4<..........q.TQ4.|F.
+20:36:30.460390 http.c:878              => Send data: ..N........RU.@..\.gx.psx .|..T...<..,C:Q..%.$...0.S..@..?~.
+20:36:30.460391 http.c:878              => Send data: #+..(.....A..}F.46R....V.....6.+b.....=..!,.H.....`5.b..a..6
+20:36:30.460391 http.c:878              => Send data: 0......n..j.l...eC/..}.&.\.-.C.8?{.oJZf.~.V.0.."........NQ5.
+20:36:30.460392 http.c:878              => Send data: .%...LT>..UsB*.......1.).0..x...X...O8.:.r..6.!c.Af.....krS.
+20:36:30.460393 http.c:878              => Send data: .@.....6XE...O.eT..... v.~.B...6C..X..D`q.... ?......m......
+20:36:30.460394 http.c:878              => Send data: ...O..1~Q.......X....*.,)-<....e..p.w..Y......&...c;S......r
+20:36:30.460395 http.c:878              => Send data: Ua.ju..~...P`....Y.....w..E..tq...L.uX.7....,..)..l.l{..[...
+20:36:30.460396 http.c:878              => Send data: ..#...s'Mf[^..l.....f}........b)....-...........O...?A+.|..@
+
+---
+
+20:37:05.989210 http.c:890              == Info: Connection #0 to host 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net left intact
+20:37:05.989320 http.c:890              == Info: Found bundle for host: 0x101a53230 [can multiplex]
+20:37:05.989346 http.c:890              == Info: Re-using existing connection with host 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net
+20:37:05.989373 http.c:890              == Info: Server auth using Basic with user 'x'
+20:37:05.989469 http.c:890              == Info: [HTTP/2] [7] OPENED stream for https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack
+20:37:05.989487 http.c:890              == Info: [HTTP/2] [7] [:method: POST]
+20:37:05.989494 http.c:890              == Info: [HTTP/2] [7] [:scheme: https]
+20:37:05.989502 http.c:890              == Info: [HTTP/2] [7] [:authority: 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net]
+20:37:05.989509 http.c:890              == Info: [HTTP/2] [7] [:path: /git/soph/test-repo-bench1.git/git-receive-pack]
+20:37:05.989516 http.c:890              == Info: [HTTP/2] [7] [authorization: Basic <redacted>]
+20:37:05.989523 http.c:890              == Info: [HTTP/2] [7] [user-agent: git/2.52.0]
+20:37:05.989529 http.c:890              == Info: [HTTP/2] [7] [accept-encoding: deflate, gzip]
+20:37:05.989535 http.c:890              == Info: [HTTP/2] [7] [content-type: application/x-git-receive-pack-request]
+20:37:05.989542 http.c:890              == Info: [HTTP/2] [7] [accept: application/x-git-receive-pack-result]
+20:37:05.989548 http.c:890              == Info: [HTTP/2] [7] [accept-language: en-GB, *;q=0.9]
+20:37:05.990540 http.c:837              => Send header, 0000000409 bytes (0x00000199)
+20:37:05.990563 http.c:849              => Send header: POST /git/soph/test-repo-bench1.git/git-receive-pack HTTP/2
+20:37:05.990570 http.c:849              => Send header: Host: 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net
+20:37:05.990576 http.c:849              => Send header: Authorization: Basic <redacted>
+20:37:05.990581 http.c:849              => Send header: User-Agent: git/2.52.0
+20:37:05.990586 http.c:849              => Send header: Accept-Encoding: deflate, gzip
+20:37:05.990592 http.c:849              => Send header: Content-Type: application/x-git-receive-pack-request
+20:37:05.990597 http.c:849              => Send header: Accept: application/x-git-receive-pack-result
+20:37:05.990603 http.c:849              => Send header: Accept-Language: en-GB, *;q=0.9
+20:37:05.990607 http.c:849              => Send header:
+20:38:37.689437 http.c:837              <= Recv header, 0000000013 bytes (0x0000000d)
+20:38:37.689488 http.c:849              <= Recv header: HTTP/2 413
+20:38:37.689519 http.c:837              <= Recv header, 0000000037 bytes (0x00000025)
+20:38:37.689528 http.c:849              <= Recv header: date: Mon, 04 May 2026 18:38:37 GMT
+20:38:37.689544 http.c:837              <= Recv header, 0000000040 bytes (0x00000028)
+20:38:37.689551 http.c:849              <= Recv header: content-type: text/html; charset=UTF-8
+20:38:37.689569 http.c:837              <= Recv header, 0000000021 bytes (0x00000015)
+20:38:37.689578 http.c:849              <= Recv header: content-length: 167
+20:38:37.689593 http.c:837              <= Recv header, 0000000099 bytes (0x00000063)
+20:38:37.689601 http.c:849              <= Recv header: cache-control: private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0
+20:38:37.689614 http.c:837              <= Recv header, 0000000030 bytes (0x0000001e)
+20:38:37.689620 http.c:849              <= Recv header: referrer-policy: same-origin
+20:38:37.689630 http.c:837              <= Recv header, 0000000040 bytes (0x00000028)
+20:38:37.689636 http.c:849              <= Recv header: expires: Thu, 01 Jan 1970 00:00:01 GMT
+20:38:37.689646 http.c:837              <= Recv header, 0000000029 bytes (0x0000001d)
+20:38:37.689652 http.c:849              <= Recv header: x-frame-options: SAMEORIGIN
+20:38:37.689660 http.c:837              <= Recv header, 0000000020 bytes (0x00000014)
+20:38:37.689666 http.c:849              <= Recv header: server: cloudflare
+20:38:37.689674 http.c:837              <= Recv header, 0000000030 bytes (0x0000001e)
+20:38:37.689680 http.c:849              <= Recv header: cf-ray: 9f699d60989cd2af-FRA
+20:38:37.689688 http.c:837              <= Recv header, 0000000002 bytes (0x00000002)
+20:38:37.689694 http.c:849              <= Recv header:
+20:38:37.689744 http.c:890              == Info: HTTP error before end of send, stop sending
+20:38:37.689767 http.c:890              == Info: abort upload after having sent 524576868 bytes
+20:38:37.690059 http.c:890              == Info: Connection #0 to host 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net left intact
+error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413
+send-pack: unexpected disconnect while reading sideband packet
+Writing objects: 100% (64686/64686), 960.23 MiB | 10.31 MiB/s, done.
+Total 64686 (delta 34487), reused 63908 (delta 33711), pack-reused 0 (from 0)
+fatal: the remote end hung up unexpectedly
+Everything up-to-date
+
+---
+
+not sure I understand this part now, shouldn't it be more then one now: 
+
+time=2026-05-04T20:42:36.452+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1 estimated_bytes=48514500 target_limit_bytes=524288000
+github.com → 78.0 MB @ 3.49 MB/s  │  76.5 MB @ 3.42 MB/s → 8b04592ed74a5cc…cloudflare.net  (pack 1/1)
+
+---
+
+it was cli-checkpoints for a while now, sorry, and I saw the dance for this one
+
+---
+
+it was cli-checkpoints for a while now, sorry, and I saw the dance for this one, the git push --mirror was also for that repo
+
+---
+
+let's do 1, can we do 1 in a separate PR easily? then I would suggest we push the progress changes, then do the other change in a new branch (I'll open a PR) and we rebase the progress on top of it for now
