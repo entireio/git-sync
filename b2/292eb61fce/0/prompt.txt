@@ -1,0 +1,13 @@
+but could we not make it so it's updating in a single line? source: Compressing objects:  89% (263/295)
+source: Compressing objects:  90% (266/295)
+source: Compressing objects:  91% (269/295)
+source: Compressing objects:  92% (272/295)
+source: Compressing objects:  93% (275/295)
+source: Compressing objects:  94% (278/295)
+source: Compressing objects:  95% (281/295)
+source: Compressing objects:  96% (284/295)
+source: Compressing objects:  97% (287/295)
+source: Compressing objects:  98% (290/295)
+source: Compressing objects:  99% (293/295)
+source: Compressing objects: 100% (295/295)
+source: Compressing objects: 100% (295/295), done.
