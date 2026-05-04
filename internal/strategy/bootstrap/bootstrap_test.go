@@ -272,7 +272,7 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		body = append(body, []byte("packdata")...)
 		r := io.NopCloser(bytes.NewReader(body))
 		subdivided := false
-		got, err := checkPackSizeAndSubdivide(r, 1_000_000, func() bool {
+		got, count, err := checkPackSizeAndSubdivide(r, 1_000_000, estimatedBytesPerObject, func() bool {
 			subdivided = true
 			return true
 		})
@@ -284,6 +284,9 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		}
 		if subdivided {
 			t.Fatal("should not subdivide small pack")
+		}
+		if count != 100 {
+			t.Errorf("expected objectCount=100, got %d", count)
 		}
 		// Verify the PACK header was prepended back
 		out, err2 := io.ReadAll(got)
@@ -299,7 +302,7 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		header := makePackHeader(5_000_000) // 5M * 750 = 3.75 GiB estimated
 		r := io.NopCloser(bytes.NewReader(header))
 		subdivided := false
-		got, err := checkPackSizeAndSubdivide(r, 2_000_000_000, func() bool {
+		got, count, err := checkPackSizeAndSubdivide(r, 2_000_000_000, estimatedBytesPerObject, func() bool {
 			subdivided = true
 			return true
 		})
@@ -312,11 +315,54 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		if !subdivided {
 			t.Fatal("expected subdivide for large pack")
 		}
+		if count != 5_000_000 {
+			t.Errorf("expected objectCount=5_000_000 even on subdivide path, got %d", count)
+		}
+	})
+
+	t.Run("calibrated bytesPerObject catches blob-heavy pack the default would miss", func(t *testing.T) {
+		// 50,000 objects at the static 750-byte estimate is ~36 MB —
+		// would slip past a 500 MB limit. With a calibrated 12 KiB/object
+		// it's ~600 MB and must trigger subdivide. Mirrors the real
+		// Cloudflare-shaped repo where the static heuristic is 10–20×
+		// too low.
+		header := makePackHeader(50_000)
+		r := io.NopCloser(bytes.NewReader(header))
+		subdivided := false
+		_, _, err := checkPackSizeAndSubdivide(r, 500*1024*1024, 12*1024, func() bool {
+			subdivided = true
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !subdivided {
+			t.Fatal("calibrated estimate should have triggered subdivide")
+		}
+	})
+
+	t.Run("zero or negative bytesPerObject falls back to default", func(t *testing.T) {
+		// 5M objects × default 750 bytes = 3.75 GB, exceeds 2 GB → subdivide.
+		// Confirms the function rejects an invalid calibrated value
+		// instead of multiplying by 0 and skipping subdivision.
+		header := makePackHeader(5_000_000)
+		r := io.NopCloser(bytes.NewReader(header))
+		subdivided := false
+		_, _, err := checkPackSizeAndSubdivide(r, 2_000_000_000, 0, func() bool {
+			subdivided = true
+			return true
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !subdivided {
+			t.Fatal("invalid bytesPerObject must fall back to the default and still subdivide")
+		}
 	})
 
 	t.Run("non-PACK data proceeds without subdivide", func(t *testing.T) {
 		r := io.NopCloser(bytes.NewReader([]byte("not a pack file at all")))
-		got, err := checkPackSizeAndSubdivide(r, 100, func() bool {
+		got, count, err := checkPackSizeAndSubdivide(r, 100, estimatedBytesPerObject, func() bool {
 			t.Fatal("should not subdivide non-pack data")
 			return true
 		})
@@ -326,7 +372,61 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil reader for non-pack data")
 		}
+		if count != 0 {
+			t.Errorf("non-PACK data should report 0 objectCount, got %d", count)
+		}
 	})
+}
+
+func TestCalibrateBytesPerObject(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		sentBytes   int64
+		objectCount int64
+		current     int64
+		want        int64 // 0 means "no improvement"
+	}{
+		{
+			name: "no signal returns 0",
+		},
+		{
+			// Cloudflare scenario: 528 MiB sent across 64,696 objects.
+			// 2 × 528*1024*1024 / 64696 = 17,115 bytes/object — well
+			// above the 750 default.
+			name:        "cloudflare-like calibration ratchets up the default",
+			sentBytes:   528 * 1024 * 1024,
+			objectCount: 64_696,
+			current:     750,
+			want:        17_115,
+		},
+		{
+			// Calibration must not regress: a smaller sub-pack giving a
+			// lower observed lower-bound shouldn't lower the cumulative
+			// estimate — the heaviest observation wins.
+			name:        "smaller observation does not lower the estimate",
+			sentBytes:   100 * 1024 * 1024,
+			objectCount: 100_000,
+			current:     17_115,
+			want:        0, // observed (~2097) < current
+		},
+		{
+			name:        "negative sent bytes returns 0",
+			sentBytes:   -1,
+			objectCount: 100,
+			want:        0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := calibrateBytesPerObject(c.sentBytes, c.objectCount, c.current)
+			if got != c.want {
+				t.Errorf("calibrateBytesPerObject(%d, %d, %d) = %d, want %d",
+					c.sentBytes, c.objectCount, c.current, got, c.want)
+			}
+		})
+	}
 }
 
 func TestSubdivideCheckpoints(t *testing.T) {
@@ -394,6 +494,161 @@ func TestSubdivideCheckpoints(t *testing.T) {
 			t.Fatalf("got[3] = %s, want chain[9]", got[3])
 		}
 	})
+}
+
+func TestObservedSubdivisionFactor(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		sentBytes int64
+		limit     int64
+		want      int
+	}{
+		{
+			name: "no signal falls back to halving",
+			want: 2,
+		},
+		{
+			// Sent comfortably under the limit (server announced limit
+			// without cutting mid-stream) — 2× safety is enough.
+			name:      "sent well below limit uses conservative 2x multiplier",
+			sentBytes: 100, limit: 1000, want: 2,
+		},
+		{
+			// At/over the limit (server cut mid-stream) — switch to 4×.
+			// 1000×4/1000 = 4.
+			name:      "sent at limit assumed capped, uses 4x multiplier",
+			sentBytes: 1000, limit: 1000, want: 4,
+		},
+		{
+			// Cloudflare-shaped scenario: ~524 MiB sent before 413 against
+			// a 500 MiB cap. Treat as capped → 4× multiplier:
+			// ceil(524*4/500) = 5. One round jumps 1 → 8 instead of 1 → 4.
+			name:      "cloudflare-like 524 MiB rejected at 500 MiB → 5 packs",
+			sentBytes: 524 * 1024 * 1024,
+			limit:     500 * 1024 * 1024,
+			want:      5,
+		},
+		{
+			// 8 GiB pack against a 256 MiB cap → factor 128 (4×32 due to
+			// the at-cap multiplier). Ensures one informed jump covers
+			// even pathologically oversized packs.
+			name:      "much larger pack triggers correspondingly large factor",
+			sentBytes: 8 * 1024 * 1024 * 1024,
+			limit:     256 * 1024 * 1024,
+			want:      128,
+		},
+		{
+			// Just under the 90% threshold — keeps the conservative 2×
+			// multiplier. 800/1000 = 0.8, threshold 0.9.
+			name:      "sent at 80% of limit stays on 2x multiplier",
+			sentBytes: 800, limit: 1000, want: 2,
+		},
+		{
+			// Right at 90% — switches to the aggressive multiplier.
+			// 900*10 == 1000*9, so condition is met.
+			name:      "sent at exactly 90% switches to 4x",
+			sentBytes: 900, limit: 1000, want: 4,
+		},
+		{
+			name:      "negative sent bytes falls back",
+			sentBytes: -1, limit: 100, want: 2,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := observedSubdivisionFactor(c.sentBytes, c.limit)
+			if got != c.want {
+				t.Errorf("observedSubdivisionFactor(%d, %d) = %d, want %d",
+					c.sentBytes, c.limit, got, c.want)
+			}
+		})
+	}
+}
+
+func TestSubdivideToFactorReachesTarget(t *testing.T) {
+	t.Parallel()
+	makeHashes := func(n int) []plumbing.Hash {
+		hashes := make([]plumbing.Hash, n)
+		for i := range hashes {
+			hashes[i] = plumbing.NewHash(fmt.Sprintf("%040d", i))
+		}
+		return hashes
+	}
+	chain := makeHashes(64)
+
+	// Starting from one checkpoint, asking for a factor of 4 should split
+	// twice (1 → 2 → 4) so the inner loop processes 4 sub-packs in a row
+	// instead of dancing through 1 → 2 → 4 across three rejections.
+	got := subdivideToFactor(chain, plumbing.ZeroHash, []plumbing.Hash{chain[63]}, 4)
+	if len(got) < 4 {
+		t.Errorf("expected at least 4 checkpoints for factor 4, got %d: %v", len(got), got)
+	}
+}
+
+// TestSubdivideToFactorAlwaysProgresses guards the regression where a
+// repeated 413 with sent_bytes ≈ limit produces factor=2 every round —
+// the second rejection sees 2 remaining ≥ factor 2 and would skip
+// subdivision entirely if the function bailed out on len(remaining) ≥
+// targetCount, turning a recoverable retry into a hard failure.
+func TestSubdivideToFactorAlwaysProgresses(t *testing.T) {
+	t.Parallel()
+	makeHashes := func(n int) []plumbing.Hash {
+		hashes := make([]plumbing.Hash, n)
+		for i := range hashes {
+			hashes[i] = plumbing.NewHash(fmt.Sprintf("%040d", i))
+		}
+		return hashes
+	}
+	chain := makeHashes(64)
+
+	// Mirrors the live scenario: after a 1 → 2 split, the second 413
+	// arrives with factor=2 again. The function must still subdivide
+	// (2 → 4) so the inner loop has new checkpoints to retry against.
+	already := []plumbing.Hash{chain[31], chain[63]}
+	got := subdivideToFactor(chain, plumbing.ZeroHash, already, 2)
+	if len(got) <= len(already) {
+		t.Errorf("must subdivide at least once even when factor ≤ remaining; got %d, want > %d",
+			len(got), len(already))
+	}
+}
+
+// TestSubdivideToFactorReturnsInputWhenChainExhausted verifies that
+// subdivideToFactor stops when every remaining gap is already 1 commit
+// — the only legitimate case for returning the input unchanged.
+func TestSubdivideToFactorReturnsInputWhenChainExhausted(t *testing.T) {
+	t.Parallel()
+	makeHashes := func(n int) []plumbing.Hash {
+		hashes := make([]plumbing.Hash, n)
+		for i := range hashes {
+			hashes[i] = plumbing.NewHash(fmt.Sprintf("%040d", i))
+		}
+		return hashes
+	}
+	chain := makeHashes(3)
+	// Each consecutive commit is its own checkpoint — no further split possible.
+	already := []plumbing.Hash{chain[0], chain[1], chain[2]}
+	got := subdivideToFactor(chain, plumbing.ZeroHash, already, 16)
+	if len(got) != len(already) {
+		t.Errorf("with all gaps == 1 commit, subdivision must return input unchanged; got %d", len(got))
+	}
+}
+
+func TestPackReadCounterTracksBytes(t *testing.T) {
+	t.Parallel()
+	body := []byte("a packfile worth of bytes")
+	c := &packReadCounter{ReadCloser: io.NopCloser(bytes.NewReader(body))}
+	out, err := io.ReadAll(c)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(out) != string(body) {
+		t.Errorf("counter must not alter content: got %q", out)
+	}
+	if c.n != int64(len(body)) {
+		t.Errorf("counter.n = %d, want %d", c.n, len(body))
+	}
 }
 
 func TestOrderTrunkFirstPutsHEADBranchFirst(t *testing.T) {
