@@ -205,6 +205,43 @@ func TestProgressReporterFinalFrameOmitsPhase(t *testing.T) {
 	}
 }
 
+// TestNotifyAfterRenderClearsTheFrame asserts that bytes written to
+// notify after a render include a clear-line escape before the message,
+// so the slog/sideband line doesn't end up concatenated with the live
+// progress frame on the user's terminal.
+func TestNotifyAfterRenderClearsTheFrame(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.setSideDisplay("target", "example.test")
+	stats.side("source").bytes.Store(2 * 1024 * 1024)
+	stats.side("target").bytes.Store(1024 * 1024)
+	stats.setPhase("pack 1/4")
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+	p.render(false)
+	frameEnd := buf.Len()
+
+	p.notify("level=INFO msg=\"bootstrap subdividing\"")
+
+	tail := buf.String()[frameEnd:]
+	// notify must emit a clear-line escape before the message so the
+	// previous frame is wiped from the row, plus a trailing newline so
+	// subsequent renders draw on a fresh row.
+	if !strings.Contains(tail, "\x1b[2K") {
+		t.Errorf("notify should clear the line via ANSI 2K, got %q", tail)
+	}
+	if !strings.HasSuffix(tail, "\n") {
+		t.Errorf("notify should terminate with newline, got %q", tail)
+	}
+	clearIdx := strings.Index(tail, "\x1b[2K")
+	msgIdx := strings.Index(tail, "level=INFO")
+	if clearIdx < 0 || msgIdx < 0 || clearIdx > msgIdx {
+		t.Errorf("clear must precede the message in %q", tail)
+	}
+}
+
 func TestSessionStderrRoutesMultilineThroughNotify(t *testing.T) {
 	t.Parallel()
 	stats := newStats(true)

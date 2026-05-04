@@ -57,6 +57,13 @@ func (p *progressReporter) run() {
 	}
 }
 
+// clearLine is the ANSI escape sequence that erases the entire current
+// terminal line and parks the cursor at column 0. Used in place of a
+// run of N spaces because tracked byte length doesn't match display
+// width when the progress line contains multi-byte UTF-8 (→, │, …);
+// overshooting with spaces can wrap and leave residue on the next row.
+const clearLine = "\r\x1b[2K"
+
 // notify writes a one-time message above the live progress line. The
 // current frame is cleared first so the message lands on a clean row,
 // and lastLen is reset so the next tick redraws the progress below.
@@ -66,7 +73,7 @@ func (p *progressReporter) notify(msg string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.lastLen > 0 {
-		fmt.Fprint(p.out, "\r"+strings.Repeat(" ", p.lastLen)+"\r")
+		fmt.Fprint(p.out, clearLine)
 	}
 	fmt.Fprintln(p.out, msg)
 	p.lastLen = 0
@@ -117,11 +124,7 @@ func (p *progressReporter) render(final bool) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	pad := 0
-	if p.lastLen > len(line) {
-		pad = p.lastLen - len(line)
-	}
-	fmt.Fprint(p.out, "\r"+line+strings.Repeat(" ", pad))
+	fmt.Fprint(p.out, clearLine+line)
 	p.lastLen = len(line)
 }
 
