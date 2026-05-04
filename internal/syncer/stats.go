@@ -31,10 +31,19 @@ type ServiceStats struct {
 // Display carries the hostname extracted from the endpoint URL so live
 // renderers can show "github.com → … → host" without re-parsing the URL.
 // Empty when the endpoint URL was not http(s) or failed to parse.
+//
+// ActiveNanos and IdleNanos let renderers freeze the per-side rate once
+// a transfer finishes: ActiveNanos spans from stats start to the most
+// recent byte read, so dividing Bytes by ActiveNanos yields the rate
+// during active streaming rather than a value that decays as wall clock
+// keeps advancing past the last byte. IdleNanos is the gap between the
+// last byte and the snapshot, used to mark a side as "done".
 type SideBytes struct {
-	Label   string `json:"label"`
-	Bytes   int64  `json:"bytes"`
-	Display string `json:"display,omitempty"`
+	Label       string `json:"label"`
+	Bytes       int64  `json:"bytes"`
+	Display     string `json:"display,omitempty"`
+	ActiveNanos int64  `json:"activeNanos,omitempty"`
+	IdleNanos   int64  `json:"idleNanos,omitempty"`
 }
 
 // Stats holds the collected transfer statistics.
@@ -50,12 +59,18 @@ type Stats struct {
 // the collector mutex, so a progress reader can sample at high
 // frequency without contending with active transfers.
 //
+// lastByteAt is the unix-nanos timestamp of the most recent non-empty
+// Read. It is used to freeze the displayed rate once a transfer
+// finishes — without it, rate = bytes / (now − start) keeps shrinking
+// as wall clock advances past the actual end of the transfer.
+//
 // display is set once during session setup (via setSideDisplay) and
 // then read by the live progress reporter; it does not need a lock
 // because writes happen-before any reader goroutine starts.
 type sideCounter struct {
-	bytes   atomic.Int64
-	display string
+	bytes      atomic.Int64
+	lastByteAt atomic.Int64
+	display    string
 }
 
 // statsCollector is a concurrency-safe stats collector.
@@ -133,15 +148,34 @@ func (s *statsCollector) setSideDisplay(label, display string) {
 }
 
 // liveSides returns a snapshot of per-side byte totals for live rendering.
+// ActiveNanos and IdleNanos are computed against time.Now() at snapshot
+// time so callers do not need to know the collector's start instant.
 func (s *statsCollector) liveSides() []SideBytes {
 	s.sidesMu.RLock()
 	defer s.sidesMu.RUnlock()
+	startNanos := s.startedAt.UnixNano()
+	nowNanos := time.Now().UnixNano()
 	out := make([]SideBytes, 0, len(s.sides))
 	for label, sc := range s.sides {
+		bytes := sc.bytes.Load()
+		lastByte := sc.lastByteAt.Load()
+		var activeNanos, idleNanos int64
+		if lastByte > 0 {
+			activeNanos = lastByte - startNanos
+			if activeNanos < 0 {
+				activeNanos = 0
+			}
+			idleNanos = nowNanos - lastByte
+			if idleNanos < 0 {
+				idleNanos = 0
+			}
+		}
 		out = append(out, SideBytes{
-			Label:   label,
-			Bytes:   sc.bytes.Load(),
-			Display: sc.display,
+			Label:       label,
+			Bytes:       bytes,
+			Display:     sc.display,
+			ActiveNanos: activeNanos,
+			IdleNanos:   idleNanos,
 		})
 	}
 	return out
@@ -222,6 +256,7 @@ func (c *countingReadCloser) Read(p []byte) (int, error) {
 		c.n += int64(n)
 		if c.side != nil {
 			c.side.bytes.Add(int64(n))
+			c.side.lastByteAt.Store(time.Now().UnixNano())
 		}
 	}
 	return n, err //nolint:wrapcheck // Read must preserve io.EOF for io.Reader contract

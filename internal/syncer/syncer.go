@@ -313,7 +313,7 @@ func throughputLine(s Stats) string {
 	dur := time.Duration(s.ElapsedNanos)
 	parts := make([]string, 0, len(sides))
 	for _, side := range sides {
-		parts = append(parts, formatSide(side, dur))
+		parts = append(parts, formatSide(side, dur, true))
 	}
 	return "throughput: " + strings.Join(parts, sideSeparator)
 }

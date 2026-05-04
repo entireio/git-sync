@@ -131,6 +131,59 @@ func TestThroughputLineEmptyWhenNoBytes(t *testing.T) {
 	}
 }
 
+// TestFormatSideFreezesRateAtLastByte verifies that once a side has
+// gone idle, the displayed rate uses the active window (start → last
+// byte) rather than the still-advancing wall clock — so a 4 MiB
+// transfer that took 1s reads as 4 MB/s even when sampled 9 seconds
+// later, and the side is annotated with a done marker.
+func TestFormatSideFreezesRateAtLastByte(t *testing.T) {
+	t.Parallel()
+	side := SideBytes{
+		Label:       "source",
+		Display:     "github.com",
+		Bytes:       4 << 20, // 4 MiB
+		ActiveNanos: time.Second.Nanoseconds(),
+		IdleNanos:   (idleThreshold + time.Second).Nanoseconds(),
+	}
+	got := formatSide(side, 10*time.Second, false)
+	if !strings.Contains(got, "4.00 MB/s") {
+		t.Errorf("idle side should freeze rate at active-window value: %q", got)
+	}
+	if !strings.HasSuffix(got, doneMark) {
+		t.Errorf("idle side should be marked done: %q", got)
+	}
+}
+
+func TestFormatSideActiveSideHasNoDoneMark(t *testing.T) {
+	t.Parallel()
+	side := SideBytes{
+		Label:       "target",
+		Display:     "example.test",
+		Bytes:       2 << 20,
+		ActiveNanos: time.Second.Nanoseconds(),
+		IdleNanos:   (100 * time.Millisecond).Nanoseconds(),
+	}
+	got := formatSide(side, time.Second, false)
+	if strings.Contains(got, doneMark) {
+		t.Errorf("active side should not carry done marker: %q", got)
+	}
+}
+
+func TestFormatSideForceDoneAlwaysMarks(t *testing.T) {
+	t.Parallel()
+	side := SideBytes{
+		Label:       "source",
+		Display:     "github.com",
+		Bytes:       1024,
+		ActiveNanos: time.Second.Nanoseconds(),
+		IdleNanos:   0,
+	}
+	got := formatSide(side, time.Second, true)
+	if !strings.HasSuffix(got, doneMark) {
+		t.Errorf("forceDone should mark the side regardless of idle gap: %q", got)
+	}
+}
+
 func TestTruncateHost(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

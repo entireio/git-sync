@@ -86,7 +86,7 @@ func (p *progressReporter) render(final bool) {
 		if i > 0 {
 			b.WriteString(sideSeparator)
 		}
-		b.WriteString(formatSide(side, elapsed))
+		b.WriteString(formatSide(side, elapsed, final))
 	}
 	line := b.String()
 
@@ -103,20 +103,39 @@ func (p *progressReporter) render(final bool) {
 const (
 	sideSeparator    = "  │  "
 	flowArrow        = " → "
+	doneMark         = " ✓"
 	maxHostnameWidth = 30
+	idleThreshold    = 750 * time.Millisecond
 )
 
 // formatSide renders a single side as host + bytes + rate, with a flow
 // arrow positioned to indicate direction: source on the left of its
 // counter, target on the right of its counter. Sides with neither label
 // fall back to "name: bytes @ rate".
-func formatSide(side SideBytes, dur time.Duration) string {
+//
+// The displayed rate is computed against the side's active window
+// (start → last byte) when known, so once a transfer ends the number
+// freezes at the actual transfer rate instead of decaying as the wall
+// clock keeps ticking. forceDone (set on the final render) and a
+// per-side idle gap >idleThreshold append a "✓" marker.
+func formatSide(side SideBytes, fallbackDur time.Duration, forceDone bool) string {
 	name := side.Display
 	if name == "" {
 		name = side.Label
 	}
 	name = truncateHost(name, maxHostnameWidth)
-	rate := formatBytes(side.Bytes) + " @ " + formatRate(side.Bytes, dur)
+
+	rateDur := fallbackDur
+	if side.ActiveNanos > 0 {
+		rateDur = time.Duration(side.ActiveNanos)
+	}
+	rate := formatBytes(side.Bytes) + " @ " + formatRate(side.Bytes, rateDur)
+
+	done := side.Bytes > 0 && (forceDone || time.Duration(side.IdleNanos) >= idleThreshold)
+	if done {
+		rate += doneMark
+	}
+
 	switch side.Label {
 	case "source":
 		return name + flowArrow + rate

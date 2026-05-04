@@ -53,9 +53,11 @@ type ServiceStats struct {
 }
 
 type SideBytes struct {
-	Label   string `json:"label"`
-	Bytes   int64  `json:"bytes"`
-	Display string `json:"display,omitempty"`
+	Label       string `json:"label"`
+	Bytes       int64  `json:"bytes"`
+	Display     string `json:"display,omitempty"`
+	ActiveNanos int64  `json:"activeNanos,omitempty"`
+	IdleNanos   int64  `json:"idleNanos,omitempty"`
 }
 
 type Stats struct {
@@ -199,9 +201,11 @@ func FromStats(stats syncer.Stats) Stats {
 		out.Sides = make([]SideBytes, 0, len(stats.Sides))
 		for _, side := range stats.Sides {
 			out.Sides = append(out.Sides, SideBytes{
-				Label:   side.Label,
-				Bytes:   side.Bytes,
-				Display: side.Display,
+				Label:       side.Label,
+				Bytes:       side.Bytes,
+				Display:     side.Display,
+				ActiveNanos: side.ActiveNanos,
+				IdleNanos:   side.IdleNanos,
 			})
 		}
 	}
