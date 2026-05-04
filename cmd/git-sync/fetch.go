@@ -72,6 +72,7 @@ func newFetchCmd() *cobra.Command {
 	addProtocolFlag(cmd, &protocolVal)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
+	cmd.Flags().BoolVar(&req.Options.Progress, "progress", false, "show live per-side throughput on stderr (TTY only)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
 	cmd.Flags().StringArrayVar(&haveRefs, "have-ref", nil, "source ref name to advertise as have; short names map to branches")
 	cmd.Flags().StringArrayVar(&haveHashesRaw, "have", nil, "explicit object hash to advertise as have")

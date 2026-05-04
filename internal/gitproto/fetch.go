@@ -136,7 +136,7 @@ func (s *RefService) FetchCommitGraph(
 	}
 	defer ioutil.CheckClose(reader, &err)
 	// Commit-graph fetches are short and not user-facing; skip progress.
-	return storeV2FetchPack(store, reader, false)
+	return storeV2FetchPack(store, reader, false, nil)
 }
 
 // Capabilities returns the sorted capability list for display.
@@ -194,7 +194,7 @@ func fetchToStoreV2(
 		return err
 	}
 	defer ioutil.CheckClose(reader, &err)
-	return storeV2FetchPack(store, reader, verbose)
+	return storeV2FetchPack(store, reader, verbose, conn.ProgressOut)
 }
 
 func fetchPackV2(
@@ -240,7 +240,7 @@ func fetchPackV2(
 	if err != nil {
 		return nil, err
 	}
-	packStream, err := openV2PackStream(reader, verbose)
+	packStream, err := openV2PackStream(reader, verbose, conn.ProgressOut)
 	if err != nil {
 		_ = reader.Close()
 		return nil, err
@@ -248,7 +248,7 @@ func fetchPackV2(
 	return packStream, nil
 }
 
-func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
+func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool, progressOut io.Writer) error {
 	reader := NewPacketReader(r)
 	expectPackfile := false
 	for {
@@ -278,7 +278,7 @@ func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 			switch line {
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
-				demux.Progress = progressSink(verbose, "source: ")
+				demux.Progress = progressSink(verbose, "source: ", progressOut)
 				if err := packfile.UpdateObjectStorage(store, demux); err != nil {
 					return fmt.Errorf("update object storage: %w", err)
 				}
@@ -301,7 +301,7 @@ func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool) error {
 	}
 }
 
-func openV2PackStream(body io.ReadCloser, verbose bool) (io.ReadCloser, error) {
+func openV2PackStream(body io.ReadCloser, verbose bool, progressOut io.Writer) (io.ReadCloser, error) {
 	reader := NewPacketReader(body)
 	for {
 		kind, payload, err := reader.ReadPacket()
@@ -324,7 +324,7 @@ func openV2PackStream(body io.ReadCloser, verbose bool) (io.ReadCloser, error) {
 			switch line {
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
-				demux.Progress = progressSink(verbose, "source: ")
+				demux.Progress = progressSink(verbose, "source: ", progressOut)
 				return &wrappedRC{
 					Reader: demux,
 					Closer: body,
@@ -464,7 +464,7 @@ func fetchToStoreV1(
 	if drainErr := drainTrailingNAKs(buffered); drainErr != nil {
 		return fmt.Errorf("drain server response: %w", drainErr)
 	}
-	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: "))
+	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressOut))
 	if err := packfile.UpdateObjectStorage(store, sbReader); err != nil {
 		return fmt.Errorf("update object storage: %w", err)
 	}
@@ -499,7 +499,7 @@ func fetchPackV1(
 		return nil, fmt.Errorf("drain server response: %w", drainErr)
 	}
 	return &wrappedRC{
-		Reader: buildSidebandReader(caps, buffered, progressSink(verbose, "source: ")),
+		Reader: buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressOut)),
 		Closer: reader,
 	}, nil
 }
