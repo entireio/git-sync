@@ -1,0 +1,9 @@
+one question: I have a network stats tool on my mac, it instantly says 44MB/s up/down each, but the git-sync out put slowly moves up from 13 to 27 but never gets past that
+
+---
+
+how much work is 2?
+
+---
+
+let's do 2

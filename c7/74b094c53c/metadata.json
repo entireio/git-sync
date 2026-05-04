@@ -1,0 +1,27 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "c774b094c53c",
+  "strategy": "manual-commit",
+  "branch": "soph/progress-indicators",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/syncer/progress.go",
+    "internal/syncer/progress_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c7/74b094c53c/0/metadata.json",
+      "transcript": "/c7/74b094c53c/0/transcript.jsonl",
+      "content_hash": "/c7/74b094c53c/0/transcript_hash.txt",
+      "prompt": "/c7/74b094c53c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 28459,
+    "cache_read_tokens": 14154708,
+    "output_tokens": 22767,
+    "api_call_count": 23
+  }
+}
