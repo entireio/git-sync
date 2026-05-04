@@ -1,0 +1,12 @@
+any idea why this is happening: ❯ go run ./cmd/git-sync sync --branch entire/checkpoints/v1 --progress https://github.com/entireio/cli.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+github.com → 14.2 KB @ 26.7 KB/s ✓  │  4.01 KB @ 606 B/s ✓ → 8b04592ed74a5cc…cloudflare.net
+error: sync: sync: no source refs matched
+exit status 1
+
+---
+
+github.com → 1.63 GB @ 5.17 MB/s  │  1.63 GB @ 5.16 MB/s → 8b04592ed74a5cc…cloudflare.net  (pack 1/4)
+
+this went from without to 1/2 and now 1/4 maybe we can add a log line above, that we hit the pack size limit, and have to split?
