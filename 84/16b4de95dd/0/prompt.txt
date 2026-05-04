@@ -1,0 +1,64 @@
+this is from a run before (will test the new layout next):
+
+❯ go run ./cmd/git-sync sync --branch main --tags --progress https://github.com/entireio/cli.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+source: 11.3 MB @ 367 KB/s · target: 11.3 MB @ 366 KB/s
+CREATE refs/heads/main - create refs/heads/main at 0ec0d032
+CREATE refs/tags/v0.3.0 - create refs/tags/v0.3.0 at e72157d0
+CREATE refs/tags/v0.3.1 - create refs/tags/v0.3.1 at e72157d0
+CREATE refs/tags/v0.3.10 - create refs/tags/v0.3.10 at c05553be
+CREATE refs/tags/v0.3.11 - create refs/tags/v0.3.11 at 01e95ba0
+CREATE refs/tags/v0.3.12 - create refs/tags/v0.3.12 at bc58b21e
+CREATE refs/tags/v0.3.13 - create refs/tags/v0.3.13 at 6e349234
+CREATE refs/tags/v0.3.2 - create refs/tags/v0.3.2 at ce1c563e
+CREATE refs/tags/v0.3.3 - create refs/tags/v0.3.3 at c080f3ee
+CREATE refs/tags/v0.3.4 - create refs/tags/v0.3.4 at 504ba492
+CREATE refs/tags/v0.3.5 - create refs/tags/v0.3.5 at 9450c8a1
+CREATE refs/tags/v0.3.6 - create refs/tags/v0.3.6 at 3cc27f94
+CREATE refs/tags/v0.3.7 - create refs/tags/v0.3.7 at 7d83d898
+CREATE refs/tags/v0.3.8 - create refs/tags/v0.3.8 at 38e81516
+CREATE refs/tags/v0.3.9 - create refs/tags/v0.3.9 at f70f2b9c
+CREATE refs/tags/v0.4.2 - create refs/tags/v0.4.2 at 2a9998e5
+CREATE refs/tags/v0.4.3 - create refs/tags/v0.4.3 at 59943565
+CREATE refs/tags/v0.4.4 - create refs/tags/v0.4.4 at 2f0ad9ab
+CREATE refs/tags/v0.4.5 - create refs/tags/v0.4.5 at a92c0d06
+CREATE refs/tags/v0.4.6 - create refs/tags/v0.4.6 at 48fe29da
+CREATE refs/tags/v0.4.7 - create refs/tags/v0.4.7 at 80695ef9
+CREATE refs/tags/v0.4.8 - create refs/tags/v0.4.8 at 81ddee25
+CREATE refs/tags/v0.4.9 - create refs/tags/v0.4.9 at 14b1c440
+CREATE refs/tags/v0.5.0 - create refs/tags/v0.5.0 at 0fa52951
+CREATE refs/tags/v0.5.1 - create refs/tags/v0.5.1 at d46fdc24
+CREATE refs/tags/v0.5.2 - create refs/tags/v0.5.2 at 5affe173
+CREATE refs/tags/v0.5.3 - create refs/tags/v0.5.3 at f2ddf9f7
+CREATE refs/tags/v0.5.4 - create refs/tags/v0.5.4 at 746a74cd
+CREATE refs/tags/v0.5.4-nightly.202604091732.bf7bee9a - create refs/tags/v0.5.4-nightly.202604091732.bf7bee9a at bf7bee9a
+CREATE refs/tags/v0.5.4-nightly.202604100645.7b0903ab - create refs/tags/v0.5.4-nightly.202604100645.7b0903ab at 7b0903ab
+CREATE refs/tags/v0.5.5 - create refs/tags/v0.5.5 at 90bb1c50
+CREATE refs/tags/v0.5.5-nightly.202604101410.746a74cd0 - create refs/tags/v0.5.5-nightly.202604101410.746a74cd0 at 746a74cd
+CREATE refs/tags/v0.5.5-nightly.202604110629.ceb09882 - create refs/tags/v0.5.5-nightly.202604110629.ceb09882 at ceb09882
+CREATE refs/tags/v0.5.5-nightly.202604120639.3c6b56a7 - create refs/tags/v0.5.5-nightly.202604120639.3c6b56a7 at 3c6b56a7
+CREATE refs/tags/v0.5.6 - create refs/tags/v0.5.6 at c9fedb4b
+CREATE refs/tags/v0.5.6-nightly.202604140645.a4fc0020 - create refs/tags/v0.5.6-nightly.202604140645.a4fc0020 at a4fc0020
+CREATE refs/tags/v0.5.6-nightly.202604150645.0fe261c8 - create refs/tags/v0.5.6-nightly.202604150645.0fe261c8 at 0fe261c8
+CREATE refs/tags/v0.5.6-nightly.202604160646.5bc86155 - create refs/tags/v0.5.6-nightly.202604160646.5bc86155 at 5bc86155
+CREATE refs/tags/v0.5.6-nightly.202604170646.96867cdc - create refs/tags/v0.5.6-nightly.202604170646.96867cdc at 96867cdc
+CREATE refs/tags/v0.5.6-nightly.202604180633.957f073f - create refs/tags/v0.5.6-nightly.202604180633.957f073f at 957f073f
+CREATE refs/tags/v0.5.6-nightly.202604190642.fcda1cf7 - create refs/tags/v0.5.6-nightly.202604190642.fcda1cf7 at fcda1cf7
+CREATE refs/tags/v0.5.6-nightly.202604210647.ef25b3c9 - create refs/tags/v0.5.6-nightly.202604210647.ef25b3c9 at ef25b3c9
+CREATE refs/tags/v0.5.6-nightly.202604220646.cbf5d9b3 - create refs/tags/v0.5.6-nightly.202604220646.cbf5d9b3 at cbf5d9b3
+CREATE refs/tags/v0.5.6-nightly.202604230647.17fa870e - create refs/tags/v0.5.6-nightly.202604230647.17fa870e at 17fa870e
+CREATE refs/tags/v0.5.6-nightly.202604240648.48e32b28 - create refs/tags/v0.5.6-nightly.202604240648.48e32b28 at 48e32b28
+CREATE refs/tags/v0.5.7-nightly.202604250638.f53b923a - create refs/tags/v0.5.7-nightly.202604250638.f53b923a at f53b923a
+CREATE refs/tags/v0.5.7-nightly.202604280703.51ccd662 - create refs/tags/v0.5.7-nightly.202604280703.51ccd662 at 51ccd662
+CREATE refs/tags/v0.5.7-nightly.202604290658.a01814a9 - create refs/tags/v0.5.7-nightly.202604290658.a01814a9 at a01814a9
+CREATE refs/tags/v0.5.7-nightly.202604300701.6368942b - create refs/tags/v0.5.7-nightly.202604300701.6368942b at 6368942b
+CREATE refs/tags/v0.5.7-nightly.202605010703.da8fc8dd - create refs/tags/v0.5.7-nightly.202605010703.da8fc8dd at da8fc8dd
+CREATE refs/tags/v0.5.7-nightly.202605020647.589aba5b - create refs/tags/v0.5.7-nightly.202605020647.589aba5b at 589aba5b
+CREATE refs/tags/v0.6.0 - create refs/tags/v0.6.0 at 0ec0d032
+summary: pushed=52 deleted=0 skipped=0 blocked=0 mode=sync protocol=v2 relay=true relay-mode=bootstrap relay-reason=empty-target-managed-refs batching=false batch-count=0 planned-batches=0
+
+But a few things:
+
+1. once the transfer was done I think processing happened but that meant the transfer speed started dropping since it was still calculated, we basically knew it's done, right? Can we show it differently?
+2. let's say I use a bigger repo that needs a packfile split, can we surface which packfile we are currently sending?
