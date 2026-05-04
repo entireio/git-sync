@@ -1,0 +1,7 @@
+[lint:go] golangci-lint has version 2.11.4 built with go1.26.1 from 8f3b0c7e on 2026-03-22T17:35:14Z
+[lint:shellcheck] Finished in 239.4ms
+[lint:go] cmd/git-sync/main.go:45:9: error returned from external package is unwrapped: sig: func (*github.com/spf13/cobra.Command).ExecuteContext(ctx context.Context) error (wrapcheck)
+[lint:go]       return err
+[lint:go]              ^
+[lint:go] 1 issues:
+[lint:go] * wrapcheck: 1
