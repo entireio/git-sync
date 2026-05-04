@@ -1,0 +1,27 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "d76bd640e293",
+  "strategy": "manual-commit",
+  "branch": "soph/move-to-cobra",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/main.go",
+    "go.mod",
+    "go.sum"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d7/6bd640e293/0/metadata.json",
+      "transcript": "/d7/6bd640e293/0/transcript.jsonl",
+      "content_hash": "/d7/6bd640e293/0/transcript_hash.txt",
+      "prompt": "/d7/6bd640e293/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 114938,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 590336,
+    "output_tokens": 7062,
+    "api_call_count": 22
+  }
+}
