@@ -445,6 +445,18 @@ func (s *syncSession) finish() {
 	}
 }
 
+// notice surfaces a one-line human-readable event during a sync. When
+// the live progress ticker is active it prints above the current frame;
+// otherwise it falls back to plain stderr so the message is still seen
+// when --progress is off or the destination is not a TTY.
+func (s *syncSession) notice(msg string) {
+	if s.progress != nil {
+		s.progress.notify(msg)
+		return
+	}
+	fmt.Fprintln(os.Stderr, msg)
+}
+
 type targetSession struct {
 	conn     *gitproto.Conn
 	adv      *packp.AdvRefs
@@ -929,7 +941,8 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
-		OnPhase: s.stats.setPhase,
+		OnPhase:  s.stats.setPhase,
+		OnNotice: s.notice,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)

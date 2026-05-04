@@ -57,6 +57,21 @@ func (p *progressReporter) run() {
 	}
 }
 
+// notify writes a one-time message above the live progress line. The
+// current frame is cleared first so the message lands on a clean row,
+// and lastLen is reset so the next tick redraws the progress below.
+// Safe to call from any goroutine, including while the ticker is
+// running.
+func (p *progressReporter) notify(msg string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastLen > 0 {
+		fmt.Fprint(p.out, "\r"+strings.Repeat(" ", p.lastLen)+"\r")
+	}
+	fmt.Fprintln(p.out, msg)
+	p.lastLen = 0
+}
+
 // terminate halts the ticker, draws one final frame so the printed line
 // reflects the closing byte counts, and emits a newline so subsequent
 // command output starts on a fresh row.

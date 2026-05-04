@@ -205,6 +205,45 @@ func TestProgressReporterFinalFrameOmitsPhase(t *testing.T) {
 	}
 }
 
+func TestProgressReporterNotifyClearsAndRedraws(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.side("source").bytes.Store(1024)
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+
+	// Draw a frame so the reporter has a non-zero lastLen to clear.
+	p.render(false)
+	beforeNotify := buf.Len()
+
+	p.notify("target rejected pack — splitting 1 → 4 packs")
+
+	out := buf.String()
+	if !strings.Contains(out, "splitting 1 → 4 packs") {
+		t.Errorf("notify output should contain the message: %q", out)
+	}
+	// Notify must clear the previously-drawn line so the message lands
+	// on its own row instead of overlapping the progress text.
+	tail := out[beforeNotify:]
+	if !strings.HasPrefix(tail, "\r") {
+		t.Errorf("notify should start by clearing the current line: %q", tail)
+	}
+	if !strings.HasSuffix(strings.TrimRight(tail, ""), "packs\n") {
+		t.Errorf("notify should end with a newline so progress redraws below: %q", tail)
+	}
+
+	// The next render should redraw the progress line because lastLen
+	// was reset.
+	p.render(false)
+	if !strings.HasSuffix(buf.String(), "github.com → 1.00 KB @ 0 B/s") &&
+		!strings.Contains(buf.String()[len(out):], "github.com") {
+		t.Errorf("next render after notify should redraw the progress line: %q",
+			buf.String()[len(out):])
+	}
+}
+
 func TestFormatSideForceDoneAlwaysMarks(t *testing.T) {
 	t.Parallel()
 	side := SideBytes{

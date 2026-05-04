@@ -66,6 +66,17 @@ type Params struct {
 	// Called from the goroutine driving Execute; implementations must not
 	// block.
 	OnPhase func(string)
+	// OnNotice, when non-nil, receives one-time human-readable messages
+	// about discrete events worth surfacing alongside progress (pack
+	// subdivision, switching to batched mode). Implementations should
+	// treat each call as one log line.
+	OnNotice func(string)
+}
+
+func (p Params) notice(msg string) {
+	if p.OnNotice != nil {
+		p.OnNotice(msg)
+	}
 }
 
 // Result holds the outcome of the bootstrap strategy.
@@ -150,6 +161,8 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		}
 		p.log("bootstrap retrying with batched mode after target rejection",
 			"target_max_pack_bytes", autoBatch)
+		p.notice(fmt.Sprintf("target rejected pack — switching to batched mode (limit %s)",
+			humanBytes(autoBatch)))
 		p.TargetMaxPack = autoBatch
 		return executeBatched(ctx, p, plans, result)
 	}
@@ -351,11 +364,14 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				packReader, packObjectCount, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, calibratedBytesPerObject, func() bool {
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
+						oldRemaining := len(batch.Checkpoints[idx:])
 						p.log("bootstrap batch subdividing before push (pack header estimate)",
 							"branch", batch.Plan.TargetRef.String(),
-							"old_remaining", len(batch.Checkpoints[idx:]),
+							"old_remaining", oldRemaining,
 							"new_remaining", len(expanded),
 							"calibrated_bytes_per_object", calibratedBytesPerObject)
+						p.notice(fmt.Sprintf("pack would exceed target limit — splitting %d → %d packs",
+							oldRemaining, len(expanded)))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						subdivided = true
 						return true
@@ -396,14 +412,17 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					factor := observedSubdivisionFactor(sentBytes, limit)
 					expanded := subdivideToFactor(batch.chain, current, batch.Checkpoints[idx:], factor)
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
+						oldRemaining := len(batch.Checkpoints[idx:])
 						p.log("bootstrap batch subdividing after target size rejection",
 							"branch", batch.Plan.TargetRef.String(),
-							"old_remaining", len(batch.Checkpoints[idx:]),
+							"old_remaining", oldRemaining,
 							"new_remaining", len(expanded),
 							"sent_bytes", sentBytes,
 							"limit_bytes", limit,
 							"factor", factor,
 							"error", pushErr.Error())
+						p.notice(fmt.Sprintf("target rejected pack — splitting %d → %d packs",
+							oldRemaining, len(expanded)))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						continue // retry at same idx with new (smaller) checkpoint
 					}
@@ -1042,6 +1061,30 @@ func autoTargetMaxPackBytes(p Params, err error) (int64, bool) {
 		return 0, false
 	}
 	return limit, true
+}
+
+// humanBytes renders a byte count in IEC-ish binary units. Local copy
+// because importing the syncer's formatter would invert the dependency
+// direction; the bootstrap package is meant to be standalone.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	value := float64(n) / float64(div)
+	suffix := []string{"KB", "MB", "GB", "TB", "PB"}[exp]
+	if value >= 100 {
+		return fmt.Sprintf("%.0f %s", value, suffix)
+	}
+	if value >= 10 {
+		return fmt.Sprintf("%.1f %s", value, suffix)
+	}
+	return fmt.Sprintf("%.2f %s", value, suffix)
 }
 
 func isTargetBodyLimitError(err error) bool {
