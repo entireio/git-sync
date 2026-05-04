@@ -233,6 +233,201 @@ func TestRun_IntegrationIncrementalRelayCreatesNewBranchWithExistingTarget(t *te
 	}
 }
 
+// TestRun_IntegrationSkipsLocalFetchOnRelayOnlySync verifies the
+// double-fetch optimization: when every desired ref is a skip or a create
+// (no FF check needed, no force, no prune), the upfront FetchToStore that
+// populates the in-memory store is skipped entirely. The incremental relay
+// still does its own FetchPack to stream to target, so we end up with one
+// source upload-pack call instead of two.
+func TestRun_IntegrationSkipsLocalFetchOnRelayOnlySync(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+
+	// Source adds a new branch reachable from master (which target already
+	// has). All plans are skip (master) or create (release) — no FF check
+	// is needed and incremental relay handles the push directly.
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	releaseRef := plumbing.NewBranchReferenceName("release")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(releaseRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay, got mode=%q reason=%q relay=%v", result.RelayMode, result.RelayReason, result.Relay)
+	}
+
+	// Wants accumulated across upload-pack fetch POSTs. Pre-fix flow did
+	// two fetches: FetchToStore (1 want — master and release dedupe to
+	// the same hash) plus the relay's FetchPack (1 want for the release
+	// plan), totalling 2. Post-fix only the relay fetches, totalling 1 —
+	// anything ≥ 2 means the upfront FetchToStore wasn't skipped.
+	if got := sourceServer.Wants(serviceUploadPack, metricPack); got != 1 {
+		t.Fatalf("expected 1 want total (single relay fetch), got %d — likely indicates the upfront FetchToStore was not skipped", got)
+	}
+}
+
+// TestRun_IntegrationKeepsLocalFetchWhenAncestryNeeded ensures the fetch is
+// still performed for a fast-forward update where BuildPlans calls
+// ReachesCommit on the local store. Skipping it would crash the planner.
+func TestRun_IntegrationKeepsLocalFetchWhenAncestryNeeded(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, _ := newSourceRepo(t)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}
+
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	// Advance source so the resync plans an FF update.
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay, got mode=%q reason=%q", result.RelayMode, result.RelayReason)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 ref pushed, got %+v", result)
+	}
+}
+
+// TestRunSyncLazyFetchOnRelayRejection forces the rare case where
+// needsLocalSourceClosure returns false (skip + create plans only) but
+// CanIncrementalRelay still rejects, so the materialized fallback is
+// reached without an upfront fetch. Triggering it from the network path
+// is essentially impossible — packp.AdvRefs always parses with non-nil
+// Capabilities, so RelayTargetPolicy.CapabilitiesKnown is always true in
+// practice — but we synthesize the policy directly by reaching into a
+// constructed syncSession. Without the lazy fetch, materialized runs
+// against an empty store and silently produces a pack that's missing
+// the new commit's objects; the target's receive-pack then rejects the
+// push with "missing necessary objects". This test exercises that path
+// and asserts the push still succeeds — only possible if fetchClosure
+// ran before executeMaterialized.
+func TestRunSyncLazyFetchOnRelayRejection(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	// Snapshot the baseline target state before source advances.
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+
+	// Add a new commit on source and point a fresh "release" branch at
+	// it, then reset master back to the baseline so master is a no-op
+	// skip and release is the only push plan. Target genuinely doesn't
+	// have the new commit, so the materialized push only succeeds if
+	// the lazy fetch ran first.
+	baselineHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve target master: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	releaseHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	releaseRef := plumbing.NewBranchReferenceName("release")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(releaseRef, releaseHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(testBranch), baselineHead.Hash())); err != nil {
+		t.Fatalf("reset source master: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	}
+	sess, err := newSession(context.Background(), cfg, true)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+
+	// Force the materialized fallback by claiming the target's
+	// capabilities are unknown to the planner. Plans (master skip +
+	// release create) keep needsLocalSourceClosure false, so without
+	// the lazy fetch the materialized branch would run on an empty store.
+	sess.target.policy.CapabilitiesKnown = false
+
+	result, err := sess.runSync(context.Background())
+	if err != nil {
+		t.Fatalf("runSync: %v", err)
+	}
+	if result.Relay {
+		t.Fatalf("expected materialized fallback (relay rejected by synthetic policy), got relay mode=%q", result.RelayMode)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 ref pushed via materialized fallback, got %d (lazy fetch likely did not fire)", result.Pushed)
+	}
+
+	gotRelease, err := targetRepo.Reference(releaseRef, true)
+	if err != nil {
+		t.Fatalf("resolve target release ref: %v", err)
+	}
+	if gotRelease.Hash() != releaseHead.Hash() {
+		t.Fatalf("target release hash = %s, want %s", gotRelease.Hash(), releaseHead.Hash())
+	}
+
+	// The ref-set assertion above can pass even when the materialized
+	// push delivered an empty pack — the storer happily records refs
+	// pointing at missing objects. The lazy fetch is what guarantees the
+	// commit and its closure actually land on target.
+	if _, err := targetRepo.CommitObject(releaseHead.Hash()); err != nil {
+		t.Fatalf("target missing release commit object %s: %v (lazy fetch likely did not fire before materialized)", releaseHead.Hash(), err)
+	}
+}
+
 // TestRun_IntegrationIncrementalRelayCreatesNewBranchOnNoThinTarget covers the
 // no-thin variant of the above: the relayed pack is always self-contained
 // (gitproto.FetchPack never sets thin-pack), so a no-thin receive-pack
