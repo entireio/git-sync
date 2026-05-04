@@ -137,13 +137,13 @@ func TestBuildSidebandReaderWithProgress(t *testing.T) {
 }
 
 func TestProgressWriter(t *testing.T) {
-	w := progressWriter(false)
+	w := progressWriter(false, nil)
 	if w != nil {
-		t.Error("progressWriter(false) should return nil")
+		t.Error("progressWriter(false, nil) should return nil")
 	}
-	w = progressWriter(true)
+	w = progressWriter(true, nil)
 	if w == nil {
-		t.Error("progressWriter(true) should return non-nil writer")
+		t.Error("progressWriter(true, nil) should return non-nil writer")
 	}
 }
 
@@ -813,7 +813,7 @@ func TestStoreV2FetchPackReturnsRemoteError(t *testing.T) {
 		t.Fatalf("write remote error: %v", err)
 	}
 
-	err := storeV2FetchPack(memory.NewStorage(), &wire, false)
+	err := storeV2FetchPack(memory.NewStorage(), &wire, false, nil)
 	if err == nil {
 		t.Fatal("expected remote error")
 	}
@@ -828,7 +828,7 @@ func TestOpenV2PackStreamReturnsRemoteError(t *testing.T) {
 		t.Fatalf("write remote error: %v", err)
 	}
 
-	_, err := openV2PackStream(io.NopCloser(&wire), false)
+	_, err := openV2PackStream(io.NopCloser(&wire), false, nil)
 	if err == nil {
 		t.Fatal("expected remote error")
 	}
@@ -849,7 +849,7 @@ func TestStoreV2FetchPackRejectsAcknowledgmentsWithoutReady(t *testing.T) {
 		t.Fatalf("write flush: %v", err)
 	}
 
-	err := storeV2FetchPack(memory.NewStorage(), &wire, false)
+	err := storeV2FetchPack(memory.NewStorage(), &wire, false, nil)
 	if err == nil {
 		t.Fatal("expected missing packfile error")
 	}
@@ -870,7 +870,7 @@ func TestOpenV2PackStreamRejectsAcknowledgmentsWithoutReady(t *testing.T) {
 		t.Fatalf("write flush: %v", err)
 	}
 
-	_, err := openV2PackStream(io.NopCloser(&wire), false)
+	_, err := openV2PackStream(io.NopCloser(&wire), false, nil)
 	if err == nil {
 		t.Fatal("expected missing packfile error")
 	}
@@ -894,7 +894,7 @@ func TestStoreV2FetchPackRejectsReadyWithoutPackfile(t *testing.T) {
 		t.Fatalf("write flush: %v", err)
 	}
 
-	err := storeV2FetchPack(memory.NewStorage(), &wire, false)
+	err := storeV2FetchPack(memory.NewStorage(), &wire, false, nil)
 	if err == nil {
 		t.Fatal("expected missing packfile error")
 	}

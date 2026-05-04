@@ -194,6 +194,40 @@ func truncateHost(host string, width int) string {
 	return host[:width-1] + "…"
 }
 
+// sessionStderr is an io.Writer that hands writes to the live progress
+// reporter when one is attached to the syncSession, so verbose slog
+// lines and server-side sideband progress ("Resolving deltas …") land
+// above the in-place ticker frame instead of clobbering it. Falls back
+// to os.Stderr when no reporter is active.
+//
+// Each Write may carry multiple lines or carriage-returned in-place
+// updates; both '\n' and '\r' are treated as line ends so the reporter
+// receives one notify per logical line.
+type sessionStderr struct{ s *syncSession }
+
+func (w sessionStderr) Write(b []byte) (int, error) {
+	if w.s == nil || w.s.progress == nil {
+		n, err := os.Stderr.Write(b)
+		if err != nil {
+			return n, fmt.Errorf("stderr write: %w", err)
+		}
+		return n, nil
+	}
+	s := string(b)
+	for s != "" {
+		i := strings.IndexAny(s, "\r\n")
+		if i < 0 {
+			w.s.progress.notify(s)
+			break
+		}
+		if i > 0 {
+			w.s.progress.notify(s[:i])
+		}
+		s = s[i+1:]
+	}
+	return len(b), nil
+}
+
 // stderrIsTTY reports whether stderr is attached to a terminal. The
 // progress ticker is suppressed otherwise because '\r' updates only make
 // sense on a TTY and would otherwise spam log files.

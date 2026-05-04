@@ -205,6 +205,34 @@ func TestProgressReporterFinalFrameOmitsPhase(t *testing.T) {
 	}
 }
 
+func TestSessionStderrRoutesMultilineThroughNotify(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.side("source").bytes.Store(1024)
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+	p.render(false) // give notify something to clear
+
+	sess := &syncSession{progress: p}
+	sink := sessionStderr{s: sess}
+
+	// Multi-line write (e.g. a slog line followed by a sideband line)
+	// must produce one notify per logical line — both '\n' and '\r' are
+	// treated as line ends so sideband '\r'-driven percentage updates
+	// don't clobber the live progress frame.
+	if _, err := sink.Write([]byte("first line\nsecond line\rthird line\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, want := range []string{"first line", "second line", "third line"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("output missing %q: %q", want, buf.String())
+		}
+	}
+}
+
 func TestProgressReporterNotifyClearsAndRedraws(t *testing.T) {
 	t.Parallel()
 	stats := newStats(true)
