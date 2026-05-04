@@ -224,6 +224,15 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	// master and nocache-cleanup share ~99% of history).
 	completedRefs := planner.CopyRefHashMap(p.TargetRefs)
 
+	// calibratedBytesPerObject tracks the per-object byte estimate
+	// updated from observed rejected pushes. Starts at the static
+	// default (which under-counts blob-heavy repos) and ratchets up as
+	// 413s reveal that the real bytes/object are much higher than 750.
+	// Used in checkPackSizeAndSubdivide so subsequent sub-pack fetches
+	// are pre-emptively split when the calibrated estimate exceeds
+	// p.TargetMaxPack — saving an entire ~limit-sized wasted upload.
+	calibratedBytesPerObject := int64(estimatedBytesPerObject)
+
 	for _, batch := range batches {
 		if batch.subsumed {
 			cmds := []gitproto.PushCommand{{
@@ -320,18 +329,21 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			packReader = closeOnce(packReader)
 
 			// Peek at the PACK header (12 bytes) to get the object count.
-			// If the estimated pack size exceeds the batch limit, subdivide
+			// If the estimated pack size (objectCount × calibrated
+			// bytesPerObject) exceeds the batch limit, subdivide
 			// immediately instead of pushing a pack the target will reject.
 			// This avoids wasting a multi-GiB transfer on a doomed push.
+			var packObjectCount int64
 			if p.TargetMaxPack > 0 && len(batch.chain) > 0 {
 				subdivided := false
-				packReader, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, func() bool {
+				packReader, packObjectCount, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, calibratedBytesPerObject, func() bool {
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						p.log("bootstrap batch subdividing before push (pack header estimate)",
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", len(batch.Checkpoints[idx:]),
-							"new_remaining", len(expanded))
+							"new_remaining", len(expanded),
+							"calibrated_bytes_per_object", calibratedBytesPerObject)
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						subdivided = true
 						return true
@@ -347,21 +359,44 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			}
 
 			cmds := convert.PlansToPushCommands(stagePlans)
-			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
+			counter := &packReadCounter{ReadCloser: packReader}
+			pushErr := p.TargetPusher.PushPack(ctx, cmds, counter)
+			sentBytes := counter.n
+			if pushErr != nil {
 				_ = packReader.Close()
-				if isTargetBodyLimitError(err) && len(batch.chain) > 0 {
-					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
+				if isTargetBodyLimitError(pushErr) && len(batch.chain) > 0 {
+					limit := p.TargetMaxPack
+					if parsed := targetBodyLimit(pushErr); parsed > 0 {
+						limit = parsed
+					}
+					// Calibrate before subdividing. The new value carries
+					// over to the next iteration's pre-flight check, so a
+					// blob-heavy repo's sub-packs get caught earlier.
+					if updated := calibrateBytesPerObject(sentBytes, packObjectCount, calibratedBytesPerObject); updated > 0 {
+						p.log("bootstrap batch calibrated bytes-per-object",
+							"branch", batch.Plan.TargetRef.String(),
+							"previous_bytes_per_object", calibratedBytesPerObject,
+							"observed_bytes_per_object", updated,
+							"sent_bytes", sentBytes,
+							"object_count", packObjectCount)
+						calibratedBytesPerObject = updated
+					}
+					factor := observedSubdivisionFactor(sentBytes, limit)
+					expanded := subdivideToFactor(batch.chain, current, batch.Checkpoints[idx:], factor)
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						p.log("bootstrap batch subdividing after target size rejection",
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", len(batch.Checkpoints[idx:]),
 							"new_remaining", len(expanded),
-							"error", err.Error())
+							"sent_bytes", sentBytes,
+							"limit_bytes", limit,
+							"factor", factor,
+							"error", pushErr.Error())
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						continue // retry at same idx with new (smaller) checkpoint
 					}
 				}
-				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, err)
+				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
 			}
 			_ = packReader.Close()
 			p.log("bootstrap batch checkpoint complete",
@@ -641,37 +676,76 @@ func estimateBatchCount(chainLen int64, batchMaxPack int64) int {
 // mature repos averaging 500–1000 bytes. 750 is a reasonable middle ground.
 const estimatedBytesPerObject = 750
 
-// checkPackSizeAndSubdivide reads the 12-byte PACK header to get the object
-// count, estimates total pack size, and if it exceeds batchLimit, closes the
-// reader and calls subdivide(). Returns (nil, nil) when subdivided (caller
-// should continue to retry), or (prepended reader, nil) to proceed with push.
+// checkPackSizeAndSubdivide reads the 12-byte PACK header, multiplies
+// the object count by bytesPerObject to estimate total pack size, and
+// subdivides via the callback when the estimate exceeds batchLimit.
+// Returns (nil, objectCount, nil) when subdivided (caller should retry
+// at the same idx), (prepended reader, objectCount, nil) to proceed
+// with push, or (prepended reader, 0, nil) when the header could not
+// be parsed.
+//
+// bytesPerObject lets the caller use a per-run calibrated value
+// instead of the static estimatedBytesPerObject default. Calibrating
+// after each rejection (using the bytes that flowed through
+// packReadCounter) catches blob-heavy repos where the static 750-byte
+// average is 10–20× too low — without calibration the pre-flight
+// would let oversized sub-packs through and the loop would only learn
+// after another wasted ~limit-sized upload.
 func checkPackSizeAndSubdivide(
 	r io.ReadCloser,
 	batchLimit int64,
+	bytesPerObject int64,
 	subdivide func() bool,
-) (io.ReadCloser, error) { //nolint:unparam // error return kept for future use
+) (io.ReadCloser, int64, error) { //nolint:unparam // error return kept for future use
+	if bytesPerObject <= 0 {
+		bytesPerObject = estimatedBytesPerObject
+	}
 	var header [12]byte
 	n, err := io.ReadFull(r, header[:])
 	if err != nil {
 		// Short pack or error — let the push handle it
 		prefixed := io.MultiReader(bytes.NewReader(header[:n]), r)
-		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil //nolint:nilerr // below threshold is not an error, we return the original reader
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, 0, nil //nolint:nilerr // below threshold is not an error, we return the original reader
 	}
 	if string(header[:4]) != "PACK" {
 		// Not a standard packfile — can't estimate, proceed
 		prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
-		return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+		return &wrappedMultiRC{Reader: prefixed, Closer: r}, 0, nil
 	}
 	objectCount := int64(header[8])<<24 | int64(header[9])<<16 | int64(header[10])<<8 | int64(header[11])
-	estimated := objectCount * estimatedBytesPerObject
+	estimated := objectCount * bytesPerObject
 
 	if estimated > batchLimit && subdivide() {
 		_ = r.Close()
-		return nil, nil //nolint:nilnil // nil reader signals no subdivision needed
+		return nil, objectCount, nil
 	}
 
 	prefixed := io.MultiReader(bytes.NewReader(header[:]), r)
-	return &wrappedMultiRC{Reader: prefixed, Closer: r}, nil
+	return &wrappedMultiRC{Reader: prefixed, Closer: r}, objectCount, nil
+}
+
+// calibrateBytesPerObject derives a per-object byte estimate from a
+// rejected push's transmitted-bytes lower bound. sentBytes is the
+// amount our request-body counter saw before the server cut us off,
+// which means the true pack size is at least sentBytes — likely more.
+// The 2× safety multiplier projects from observed lower bound to a
+// pessimistic upper bound, so future pre-flight estimates err on the
+// side of subdividing rather than over-shooting and re-paying for the
+// rejected upload.
+//
+// Returns 0 when calibration is not possible (no signal, or the new
+// value would not be an improvement over the current one) so the
+// caller can keep its existing value.
+func calibrateBytesPerObject(sentBytes, objectCount, current int64) int64 {
+	if sentBytes <= 0 || objectCount <= 0 {
+		return 0
+	}
+	const safetyMultiplier = 2
+	calibrated := safetyMultiplier * sentBytes / objectCount
+	if calibrated <= current {
+		return 0
+	}
+	return calibrated
 }
 
 type wrappedMultiRC struct {
@@ -695,6 +769,87 @@ func chainPosition(chain []plumbing.Hash, hash plumbing.Hash) int {
 		}
 	}
 	return -1
+}
+
+// packReadCounter wraps the pack stream handed to PushPack so the
+// bootstrap loop can learn how many bytes actually went up before a 413
+// from the target. Used to size the post-rejection subdivision based on
+// observed reality rather than blindly halving — for a repo whose pack
+// is 20× larger than the per-object heuristic predicted, halving five
+// times in a row (1 → 2 → 4 → 8 → 16 → 32) is the same number of source
+// re-fetches as one informed jump from 1 → 32.
+type packReadCounter struct {
+	io.ReadCloser
+
+	n int64
+}
+
+func (c *packReadCounter) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	c.n += int64(n)
+	return n, err //nolint:wrapcheck // Read must preserve io.EOF for io.Reader contract
+}
+
+// observedSubdivisionFactor estimates how many sub-packs a rejected
+// push should be split into based on bytes actually transmitted before
+// the server cut us off.
+//
+// The safety multiplier varies with how close sentBytes came to the
+// limit. When the rejection arrived within ~10% of the limit (the
+// common reverse-proxy case where the server cuts mid-stream at its
+// body cap), the true pack size is essentially unknown — it is at
+// least sentBytes but may be many times larger. A 4× multiplier in
+// that regime converges in one or two rounds instead of dancing
+// through 1 → 2 → 4 → 8 → … one round per rejection. When the
+// rejection arrived comfortably under the limit (a server with
+// stricter limits announcing the failure early), 2× is enough since
+// sentBytes is closer to the real pack size.
+func observedSubdivisionFactor(sentBytes, limit int64) int {
+	if sentBytes <= 0 || limit <= 0 {
+		return 2
+	}
+	safetyMultiplier := int64(2)
+	if sentBytes*10 >= limit*9 {
+		safetyMultiplier = 4
+	}
+	factor := int((sentBytes*safetyMultiplier + limit - 1) / limit)
+	if factor < 2 {
+		factor = 2
+	}
+	return factor
+}
+
+// subdivideToFactor halves the remaining checkpoint ranges at least
+// once and keeps going while the result is still under targetCount.
+// Returns the input unchanged only when no further split is possible
+// (every remaining gap is already 1 commit).
+//
+// The unconditional first round matters when targetCount <=
+// len(remaining): each surviving range may still produce a pack over
+// the target limit (factor is computed from one rejected attempt, but
+// a multi-piece batch can keep over-shooting if sent_bytes ≈ limit on
+// every retry, so factor stays at 2 indefinitely). Always subdividing
+// once guarantees post-rejection retries make forward progress instead
+// of returning the caller into a hard failure.
+func subdivideToFactor(
+	chain []plumbing.Hash,
+	current plumbing.Hash,
+	remaining []plumbing.Hash,
+	targetCount int,
+) []plumbing.Hash {
+	expanded := subdivideCheckpoints(chain, current, remaining)
+	if len(expanded) <= len(remaining) {
+		// Cannot split further — every gap is already 1 commit.
+		return remaining
+	}
+	for len(expanded) < targetCount {
+		next := subdivideCheckpoints(chain, current, expanded)
+		if len(next) <= len(expanded) {
+			break
+		}
+		expanded = next
+	}
+	return expanded
 }
 
 // subdivideCheckpoints splits each remaining checkpoint range in half using
