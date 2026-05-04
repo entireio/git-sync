@@ -407,6 +407,14 @@ func ReachesCommit(store storer.EncodedObjectStorer, startHash, targetHash plumb
 }
 
 // ObjectsToPush computes the set of objects that need to be sent to the target.
+//
+// A fetch with target refs as haves prunes the source pack server-side, so
+// objects reachable from a have are intentionally absent from the local
+// store. Both top-level wants and transitive references encountered during
+// the walk may be missing for this reason — they're treated as implicitly
+// have'd by the target and excluded from the push pack. The target's
+// receive-pack accepts ref updates referencing such objects because it
+// already has them under one of its existing refs.
 func ObjectsToPush(store storer.EncodedObjectStorer, wants []plumbing.Hash, targetRefs map[plumbing.ReferenceName]plumbing.Hash) ([]plumbing.Hash, error) {
 	haveSet := make(map[plumbing.Hash]struct{})
 	for _, h := range targetRefs {
@@ -455,6 +463,12 @@ func collectObjects(
 
 	obj, err := store.EncodedObject(plumbing.AnyObject, hash)
 	if err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			// Reachable from a target-ref have via the source server's
+			// pack-prune; the target already has it, so it stays out
+			// of the push.
+			return nil
+		}
 		return fmt.Errorf("load object %s: %w", hash, err)
 	}
 

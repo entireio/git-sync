@@ -155,10 +155,14 @@ func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
+	// Force=true disables incremental relay (and bootstrap), so the sync
+	// has to materialize the closure. With MaterializedMaxObjects=1 the
+	// limit fires and the test verifies the error message is clear.
 	_, err = Run(context.Background(), Config{
 		Source:                 Endpoint{URL: sourceServer.RepoURL()},
 		Target:                 Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode:           protocolModeAuto,
+		Force:                  true,
 		MaterializedMaxObjects: 1,
 	})
 	if err == nil {
@@ -166,6 +170,110 @@ func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "materialized push requires") {
 		t.Fatalf("expected materialized limit error, got %v", err)
+	}
+}
+
+// TestRun_IntegrationIncrementalRelayCreatesNewBranchWithExistingTarget verifies
+// that when target already has a managed ref (so bootstrap is ineligible) and
+// source adds a new branch, the sync takes the incremental relay path rather
+// than falling through to materialized. The relay uses target refs as haves,
+// so the source pack is minimal and self-contained.
+func TestRun_IntegrationIncrementalRelayCreatesNewBranchWithExistingTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+
+	// Add a new branch on source pointing at the same commit target already
+	// has via master. With the old planner this forced materialized and
+	// produced a thin push that some receive-pack servers reject; now it
+	// should relay with all target refs as haves.
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	releaseRef := plumbing.NewBranchReferenceName("release")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(releaseRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay, got mode=%q reason=%q relay=%v", result.RelayMode, result.RelayReason, result.Relay)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 ref pushed (release create), got %d", result.Pushed)
+	}
+
+	gotRelease, err := targetRepo.Reference(releaseRef, true)
+	if err != nil {
+		t.Fatalf("resolve target release ref: %v", err)
+	}
+	if gotRelease.Hash() != sourceHead.Hash() {
+		t.Fatalf("target release hash = %s, want %s", gotRelease.Hash(), sourceHead.Hash())
+	}
+}
+
+// TestRun_IntegrationIncrementalRelayCreatesNewBranchOnNoThinTarget covers the
+// no-thin variant of the above: the relayed pack is always self-contained
+// (gitproto.FetchPack never sets thin-pack), so a no-thin receive-pack
+// accepts it just fine.
+func TestRun_IntegrationIncrementalRelayCreatesNewBranchOnNoThinTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	releaseRef := plumbing.NewBranchReferenceName("release")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(releaseRef, sourceHead.Hash())); err != nil {
+		t.Fatalf("set source release branch: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackNoThin = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeIncremental {
+		t.Fatalf("expected incremental relay on no-thin target, got mode=%q reason=%q relay=%v", result.RelayMode, result.RelayReason, result.Relay)
 	}
 }
 
