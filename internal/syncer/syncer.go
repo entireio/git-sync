@@ -313,7 +313,10 @@ func throughputLine(s Stats) string {
 	dur := time.Duration(s.ElapsedNanos)
 	parts := make([]string, 0, len(sides))
 	for _, side := range sides {
-		parts = append(parts, formatSide(side, dur, true))
+		// End-of-run line uses the active-window average; passing 0
+		// for instant rate makes formatSide skip the sliding window
+		// and fall back to ActiveNanos-based formatting.
+		parts = append(parts, formatSide(side, dur, 0, true))
 	}
 	return "throughput: " + strings.Join(parts, sideSeparator)
 }

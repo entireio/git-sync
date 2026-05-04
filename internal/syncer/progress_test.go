@@ -148,7 +148,7 @@ func TestFormatSideFreezesRateAtLastByte(t *testing.T) {
 		ActiveNanos: time.Second.Nanoseconds(),
 		IdleNanos:   (idleThreshold + time.Second).Nanoseconds(),
 	}
-	got := formatSide(side, 10*time.Second, false)
+	got := formatSide(side, 10*time.Second, 0, false)
 	if !strings.Contains(got, "4.00 MB/s") {
 		t.Errorf("idle side should freeze rate at active-window value: %q", got)
 	}
@@ -166,7 +166,7 @@ func TestFormatSideActiveSideHasNoDoneMark(t *testing.T) {
 		ActiveNanos: time.Second.Nanoseconds(),
 		IdleNanos:   (100 * time.Millisecond).Nanoseconds(),
 	}
-	got := formatSide(side, time.Second, false)
+	got := formatSide(side, time.Second, 0, false)
 	if strings.Contains(got, doneMark) {
 		t.Errorf("active side should not carry done marker: %q", got)
 	}
@@ -397,9 +397,103 @@ func TestFormatSideForceDoneAlwaysMarks(t *testing.T) {
 		ActiveNanos: time.Second.Nanoseconds(),
 		IdleNanos:   0,
 	}
-	got := formatSide(side, time.Second, true)
+	got := formatSide(side, time.Second, 0, true)
 	if !strings.HasSuffix(got, doneMark) {
 		t.Errorf("forceDone should mark the side regardless of idle gap: %q", got)
+	}
+}
+
+// TestSampleRingComputesRateOverWindow walks the ring through a few
+// scenarios that exercise both the partial-fill path (early in a
+// transfer) and the saturated-ring path (steady state).
+func TestSampleRingComputesRateOverWindow(t *testing.T) {
+	t.Parallel()
+	r := &sampleRing{}
+	if got := r.instantRate(); got != 0 {
+		t.Errorf("empty ring should report 0, got %v", got)
+	}
+
+	base := time.Now()
+	r.push(sample{at: base, bytes: 0})
+	if got := r.instantRate(); got != 0 {
+		t.Errorf("single-sample ring should report 0, got %v", got)
+	}
+
+	// 1 MiB transferred in 1s → ~1 MiB/s.
+	r.push(sample{at: base.Add(time.Second), bytes: 1 << 20})
+	got := r.instantRate()
+	want := float64(1 << 20)
+	if got < want*0.99 || got > want*1.01 {
+		t.Errorf("expected ~%v B/s, got %v", want, got)
+	}
+
+	// Saturate the ring with a steady 10 MB/s and verify the rate
+	// reflects only the in-window samples (oldest is overwritten).
+	r2 := &sampleRing{}
+	for i := 0; i <= sampleCapacity*2; i++ {
+		r2.push(sample{
+			at:    base.Add(time.Duration(i) * time.Second),
+			bytes: int64(i) * 10 * (1 << 20),
+		})
+	}
+	got2 := r2.instantRate()
+	want2 := float64(10 * (1 << 20))
+	if got2 < want2*0.99 || got2 > want2*1.01 {
+		t.Errorf("steady-state expected ~%v B/s, got %v", want2, got2)
+	}
+}
+
+// TestSampleRingIdlePeriodReportsZero ensures that when bytes stop
+// flowing the ring eventually returns 0 — the formatter then falls
+// back to the active-window average for a stable post-transfer
+// headline.
+func TestSampleRingIdlePeriodReportsZero(t *testing.T) {
+	t.Parallel()
+	r := &sampleRing{}
+	base := time.Now()
+	for i := range sampleCapacity {
+		r.push(sample{at: base.Add(time.Duration(i) * 200 * time.Millisecond), bytes: 1024})
+	}
+	if got := r.instantRate(); got != 0 {
+		t.Errorf("flat byte count across ring should report 0, got %v", got)
+	}
+}
+
+func TestFormatSidePrefersInstantRateWhileActive(t *testing.T) {
+	t.Parallel()
+	side := SideBytes{
+		Label:       "source",
+		Display:     "github.com",
+		Bytes:       100 * (1 << 20),
+		ActiveNanos: (10 * time.Second).Nanoseconds(),
+		IdleNanos:   0, // active
+	}
+	// Active-window average = 10 MB/s. Sliding-window says 44 MB/s.
+	// The displayed rate should follow the sliding window.
+	got := formatSide(side, time.Second, float64(44*(1<<20)), false)
+	if !strings.Contains(got, "44.0 MB/s") {
+		t.Errorf("active side should show instant rate, got %q", got)
+	}
+}
+
+func TestFormatSideUsesAverageWhenDone(t *testing.T) {
+	t.Parallel()
+	side := SideBytes{
+		Label:       "source",
+		Display:     "github.com",
+		Bytes:       int64(2 * (1 << 20)),
+		ActiveNanos: time.Second.Nanoseconds(),
+		IdleNanos:   (idleThreshold + time.Second).Nanoseconds(),
+	}
+	// Even with a non-zero instant rate, an idle/done side must show
+	// the active-window average — otherwise the post-transfer headline
+	// would be a stale snapshot of pre-completion throughput.
+	got := formatSide(side, time.Second, float64(99*(1<<20)), false)
+	if !strings.Contains(got, "2.00 MB/s") {
+		t.Errorf("idle side should fall back to average rate, got %q", got)
+	}
+	if !strings.HasSuffix(got, doneMark) {
+		t.Errorf("idle side should still carry done marker: %q", got)
 	}
 }
 

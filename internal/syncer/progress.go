@@ -20,6 +20,12 @@ import (
 // cursor-up + erase-to-end-of-screen to overwrite the whole region in
 // place, so '\r'-terminated sideband updates from go-git read as a
 // single updating row instead of scrolling line by line.
+//
+// On every render we also push the current per-side byte total into a
+// short ring buffer (samples) so the displayed rate reflects recent
+// throughput rather than a session-wide average — the latter
+// undercounts the actual transfer rate because the divisor includes
+// auth and ref-listing time when no pack data is flowing.
 type progressReporter struct {
 	out      io.Writer
 	stats    *statsCollector
@@ -31,9 +37,10 @@ type progressReporter struct {
 	done     chan struct{}
 
 	mu        sync.Mutex
-	rowsDrawn int    // rows currently occupying the live region
-	lastLine  string // last progress line, kept so setTransient can redraw without re-sampling
-	transient string // current sideband-progress line, "" when none
+	rowsDrawn int                    // rows currently occupying the live region
+	lastLine  string                 // last progress line, kept so setTransient can redraw without re-sampling
+	transient string                 // current sideband-progress line, "" when none
+	samples   map[string]*sampleRing // per-side sliding window of recent (time, bytes) snapshots
 }
 
 func newProgressReporter(out io.Writer, stats *statsCollector, interval time.Duration) *progressReporter {
@@ -47,6 +54,7 @@ func newProgressReporter(out io.Writer, stats *statsCollector, interval time.Dur
 		start:    time.Now(),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
+		samples:  map[string]*sampleRing{},
 	}
 }
 
@@ -155,13 +163,29 @@ func (p *progressReporter) render(final bool) {
 	}
 	sort.Slice(sides, func(i, j int) bool { return sides[i].Label < sides[j].Label })
 	elapsed := time.Since(p.start)
+	now := time.Now()
+
+	p.mu.Lock()
+	// Sample first so the rate calculation below sees the latest data
+	// point. We hold p.mu so concurrent terminate/render cannot race
+	// the per-label ring buffers.
+	instant := make(map[string]float64, len(sides))
+	for _, side := range sides {
+		ring, ok := p.samples[side.Label]
+		if !ok {
+			ring = &sampleRing{}
+			p.samples[side.Label] = ring
+		}
+		ring.push(sample{at: now, bytes: side.Bytes})
+		instant[side.Label] = ring.instantRate()
+	}
 
 	var b strings.Builder
 	for i, side := range sides {
 		if i > 0 {
 			b.WriteString(sideSeparator)
 		}
-		b.WriteString(formatSide(side, elapsed, final))
+		b.WriteString(formatSide(side, elapsed, instant[side.Label], final))
 	}
 	// Surface the current activity label (e.g. "pack 3/8") on live
 	// frames only. The final frame is implicitly "done" — appending
@@ -175,7 +199,6 @@ func (p *progressReporter) render(final bool) {
 	}
 	line := b.String()
 
-	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.drawLocked(line)
 }
@@ -186,32 +209,98 @@ const (
 	doneMark         = " ✓"
 	maxHostnameWidth = 30
 	idleThreshold    = 750 * time.Millisecond
+
+	// sampleCapacity is how many recent (time, bytes) snapshots each
+	// side keeps for instant-rate computation. With the default 200ms
+	// render interval this gives a 2-second sliding window — long
+	// enough to smooth out per-pack burstiness, short enough to feel
+	// responsive (the ticker visually catches up to a new transfer
+	// rate inside the first second of streaming).
+	sampleCapacity = 10
 )
+
+// sample is one (time, cumulative bytes) snapshot taken at render time.
+type sample struct {
+	at    time.Time
+	bytes int64
+}
+
+// sampleRing is a fixed-size circular buffer of recent samples used to
+// derive an instantaneous transfer rate from differences between the
+// oldest and newest sample currently in the window.
+type sampleRing struct {
+	buf   [sampleCapacity]sample
+	head  int // next write index
+	count int // valid entries (capped at sampleCapacity)
+}
+
+func (r *sampleRing) push(s sample) {
+	r.buf[r.head] = s
+	r.head = (r.head + 1) % sampleCapacity
+	if r.count < sampleCapacity {
+		r.count++
+	}
+}
+
+// instantRate returns observed bytes/second over the samples currently
+// in the ring. Returns 0 when fewer than two samples exist, when the
+// elapsed time between oldest and newest is too small to be meaningful,
+// or when no bytes were transferred in the window (treat as idle so the
+// formatter falls back to the active-window average).
+func (r *sampleRing) instantRate() float64 {
+	if r.count < 2 {
+		return 0
+	}
+	newestIdx := (r.head - 1 + sampleCapacity) % sampleCapacity
+	oldestIdx := 0
+	if r.count == sampleCapacity {
+		oldestIdx = r.head // ring full — head currently sits on the oldest
+	}
+	newest := r.buf[newestIdx]
+	oldest := r.buf[oldestIdx]
+	dur := newest.at.Sub(oldest.at)
+	if dur < 50*time.Millisecond {
+		return 0
+	}
+	delta := newest.bytes - oldest.bytes
+	if delta <= 0 {
+		return 0
+	}
+	return float64(delta) / dur.Seconds()
+}
 
 // formatSide renders a single side as host + bytes + rate, with a flow
 // arrow positioned to indicate direction: source on the left of its
 // counter, target on the right of its counter. Sides with neither label
 // fall back to "name: bytes @ rate".
 //
-// The displayed rate is computed against the side's active window
-// (start → last byte) when known, so once a transfer ends the number
-// freezes at the actual transfer rate instead of decaying as the wall
-// clock keeps ticking. forceDone (set on the final render) and a
-// per-side idle gap >idleThreshold append a "✓" marker.
-func formatSide(side SideBytes, fallbackDur time.Duration, forceDone bool) string {
+// While bytes are flowing (instantBytesPerSec > 0 and the side has not
+// gone idle) the displayed rate uses the recent sliding-window number
+// so it tracks the actual wire throughput. Once the side goes idle (or
+// on the final render) we switch to the active-window average for a
+// stable post-transfer headline. forceDone and idle gaps >idleThreshold
+// append a "✓" marker.
+func formatSide(side SideBytes, fallbackDur time.Duration, instantBytesPerSec float64, forceDone bool) string {
 	name := side.Display
 	if name == "" {
 		name = side.Label
 	}
 	name = truncateHost(name, maxHostnameWidth)
 
-	rateDur := fallbackDur
-	if side.ActiveNanos > 0 {
-		rateDur = time.Duration(side.ActiveNanos)
-	}
-	rate := formatBytes(side.Bytes) + " @ " + formatRate(side.Bytes, rateDur)
-
 	done := side.Bytes > 0 && (forceDone || time.Duration(side.IdleNanos) >= idleThreshold)
+
+	var rateText string
+	if !done && instantBytesPerSec > 0 {
+		rateText = formatBytes(int64(instantBytesPerSec)) + "/s"
+	} else {
+		rateDur := fallbackDur
+		if side.ActiveNanos > 0 {
+			rateDur = time.Duration(side.ActiveNanos)
+		}
+		rateText = formatRate(side.Bytes, rateDur)
+	}
+
+	rate := formatBytes(side.Bytes) + " @ " + rateText
 	if done {
 		rate += doneMark
 	}
