@@ -499,7 +499,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		measurementDone: startMeasurement(cfg.MeasureMemory),
 	}
 	if cfg.Verbose {
-		s.logger = slog.New(slog.NewTextHandler(sessionStderr{s: s}, &slog.HandlerOptions{
+		s.logger = slog.New(slog.NewTextHandler(&sessionStderr{s: s}, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		}))
 	}
@@ -508,7 +508,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
-	s.sourceConn.ProgressOut = sessionStderr{s: s}
+	s.sourceConn.ProgressOut = &sessionStderr{s: s}
 
 	refPrefixes := planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags)
 	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
@@ -524,7 +524,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
-		targetConn.ProgressOut = sessionStderr{s: s}
+		targetConn.ProgressOut = &sessionStderr{s: s}
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)

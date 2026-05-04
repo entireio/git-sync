@@ -203,12 +203,17 @@ func truncateHost(host string, width int) string {
 // above the in-place ticker frame instead of clobbering it. Falls back
 // to os.Stderr when no reporter is active.
 //
-// Each Write may carry multiple lines or carriage-returned in-place
-// updates; both '\n' and '\r' are treated as line ends so the reporter
-// receives one notify per logical line.
-type sessionStderr struct{ s *syncSession }
+// Partial-line writes are buffered until a '\n' or '\r' terminator
+// arrives. This matters for prefixedLineWriter, which writes a logical
+// line in two calls — first the prefix ("source: "), then the content
+// with terminator — and would otherwise produce two separate notify
+// frames split mid-line. Use as a pointer (the buffer is stateful).
+type sessionStderr struct {
+	s   *syncSession
+	buf strings.Builder
+}
 
-func (w sessionStderr) Write(b []byte) (int, error) {
+func (w *sessionStderr) Write(b []byte) (int, error) {
 	if w.s == nil || w.s.progress == nil {
 		n, err := os.Stderr.Write(b)
 		if err != nil {
@@ -220,11 +225,14 @@ func (w sessionStderr) Write(b []byte) (int, error) {
 	for s != "" {
 		i := strings.IndexAny(s, "\r\n")
 		if i < 0 {
-			w.s.progress.notify(s)
+			w.buf.WriteString(s)
 			break
 		}
-		if i > 0 {
-			w.s.progress.notify(s[:i])
+		w.buf.WriteString(s[:i])
+		line := w.buf.String()
+		w.buf.Reset()
+		if line != "" {
+			w.s.progress.notify(line)
 		}
 		s = s[i+1:]
 	}

@@ -253,7 +253,7 @@ func TestSessionStderrRoutesMultilineThroughNotify(t *testing.T) {
 	p.render(false) // give notify something to clear
 
 	sess := &syncSession{progress: p}
-	sink := sessionStderr{s: sess}
+	sink := &sessionStderr{s: sess}
 
 	// Multi-line write (e.g. a slog line followed by a sideband line)
 	// must produce one notify per logical line — both '\n' and '\r' are
@@ -267,6 +267,42 @@ func TestSessionStderrRoutesMultilineThroughNotify(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("output missing %q: %q", want, buf.String())
 		}
+	}
+}
+
+// TestSessionStderrBuffersPartialLines covers the prefixedLineWriter
+// pattern in internal/gitproto: a logical line arrives in two writes —
+// first the "source: " prefix, then the content with terminator. The
+// buffered writer must combine them into one notify call instead of
+// emitting the prefix on its own row.
+func TestSessionStderrBuffersPartialLines(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.side("source").bytes.Store(1024)
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+	p.render(false)
+
+	sess := &syncSession{progress: p}
+	sink := &sessionStderr{s: sess}
+
+	if _, err := sink.Write([]byte("source: ")); err != nil {
+		t.Fatalf("prefix write: %v", err)
+	}
+	if _, err := sink.Write([]byte("Counting objects: 10%\r")); err != nil {
+		t.Fatalf("content write: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "source: Counting objects: 10%") {
+		t.Errorf("expected joined line 'source: Counting objects: 10%%', got %q", out)
+	}
+	// Reject the bug shape: prefix on its own line followed by content
+	// on a separate line.
+	if strings.Contains(out, "source: \n") || strings.Contains(out, "source:\n") {
+		t.Errorf("prefix should not be emitted as a standalone line: %q", out)
 	}
 }
 
