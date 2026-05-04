@@ -479,19 +479,6 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			Level: slog.LevelInfo,
 		}))
 	}
-	if cfg.Progress {
-		out := cfg.progressOut
-		if out == nil {
-			out = os.Stderr
-		}
-		// Render only when the destination is a real terminal. Pipes,
-		// log files, and CI captures get nothing rather than a flood
-		// of '\r'-prefixed control sequences.
-		if out != os.Stderr || stderrIsTTY() {
-			s.progress = newProgressReporter(out, s.stats, 0)
-			go s.progress.run()
-		}
-	}
 
 	s.sourceConn, err = newConn(cfg.Source, "source", s.stats, cfg.HTTPClient)
 	if err != nil {
@@ -532,6 +519,28 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 				NoThin:            targetFeatures.NoThin,
 			},
 			pusher: gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
+		}
+	}
+
+	// Start the live progress ticker only after auth resolution and the
+	// initial ref-listing round trips have completed. The auth path may
+	// shell out to `git credential fill`, which inherits our stderr and
+	// can prompt the user; an interactive prompt and a '\r'-redrawing
+	// ticker writing to the same tty would clobber each other. Deferring
+	// the ticker until newSession returns guarantees no concurrent writer
+	// is active when prompts happen and also avoids leaking a goroutine
+	// when newSession fails partway through setup.
+	if cfg.Progress {
+		out := cfg.progressOut
+		if out == nil {
+			out = os.Stderr
+		}
+		// Render only when the destination is a real terminal. Pipes,
+		// log files, and CI captures get nothing rather than a flood
+		// of '\r'-prefixed control sequences.
+		if out != os.Stderr || stderrIsTTY() {
+			s.progress = newProgressReporter(out, s.stats, 0)
+			go s.progress.run()
 		}
 	}
 
