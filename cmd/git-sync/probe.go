@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	gitsync "entire.io/entire/git-sync"
@@ -35,7 +36,7 @@ func newProbeCmd() *cobra.Command {
 				targetURL = args[1]
 			}
 			if req.Source.URL == "" {
-				return fmt.Errorf("probe requires a source repository URL")
+				return errors.New("probe requires a source repository URL")
 			}
 			if targetURL != "" {
 				req.Target = &gitsync.Endpoint{

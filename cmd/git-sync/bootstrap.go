@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	gitsync "entire.io/entire/git-sync"
@@ -51,7 +52,7 @@ func newBootstrapCmd() *cobra.Command {
 			}
 
 			if req.Source.URL == "" || req.Target.URL == "" {
-				return fmt.Errorf("bootstrap requires source and target repository URLs")
+				return errors.New("bootstrap requires source and target repository URLs")
 			}
 
 			result, err := unstable.New(unstable.Options{

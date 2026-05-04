@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,7 +35,7 @@ func newFetchCmd() *cobra.Command {
 				req.Source.URL = args[0]
 			}
 			if req.Source.URL == "" {
-				return fmt.Errorf("fetch requires a source repository URL")
+				return errors.New("fetch requires a source repository URL")
 			}
 			if branches != "" {
 				req.Scope.Branches = splitCSV(branches)

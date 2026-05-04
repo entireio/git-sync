@@ -42,6 +42,7 @@ func run(ctx context.Context, args []string) error {
 		showUsage(target, err)
 		return errSilent
 	}
+	//nolint:wrapcheck // cobra surfaces errors that are already user-facing (RunE-prefixed or cobra arg validation); main prints them with an "error:" prefix
 	return err
 }
 
