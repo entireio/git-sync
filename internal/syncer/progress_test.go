@@ -63,8 +63,11 @@ func TestProgressReporterRendersBothSides(t *testing.T) {
 	if !strings.Contains(out, "1.00 MB @ ") || !strings.Contains(out, "→ example.test") {
 		t.Errorf("output missing target host with arrow: %q", out)
 	}
-	if !strings.HasPrefix(out, "\r") {
-		t.Errorf("output should start with carriage return for in-place updates: %q", out)
+	// Every render starts at column 0 so it can never land mid-word; the
+	// first frame may be just '\r' + clear escape, subsequent ones
+	// preface with cursor-up movement when a transient row is showing.
+	if !strings.HasPrefix(out, "\r") && !strings.Contains(out[:min(8, len(out))], "\x1b[") {
+		t.Errorf("output should reposition cursor to column 0 before drawing: %q", out)
 	}
 	if !strings.Contains(out, "│") {
 		t.Errorf("output should use the vertical bar separator: %q", out)
@@ -226,16 +229,16 @@ func TestNotifyAfterRenderClearsTheFrame(t *testing.T) {
 	p.notify("level=INFO msg=\"bootstrap subdividing\"")
 
 	tail := buf.String()[frameEnd:]
-	// notify must emit a clear-line escape before the message so the
-	// previous frame is wiped from the row, plus a trailing newline so
-	// subsequent renders draw on a fresh row.
-	if !strings.Contains(tail, "\x1b[2K") {
-		t.Errorf("notify should clear the line via ANSI 2K, got %q", tail)
+	// notify must emit a clear-screen-from-cursor escape before the
+	// message so the previous live region (transient + ticker) is wiped,
+	// plus a trailing newline so subsequent renders draw on a fresh row.
+	if !strings.Contains(tail, clearDown) {
+		t.Errorf("notify should clear the region via ANSI J, got %q", tail)
 	}
 	if !strings.HasSuffix(tail, "\n") {
 		t.Errorf("notify should terminate with newline, got %q", tail)
 	}
-	clearIdx := strings.Index(tail, "\x1b[2K")
+	clearIdx := strings.Index(tail, clearDown)
 	msgIdx := strings.Index(tail, "level=INFO")
 	if clearIdx < 0 || msgIdx < 0 || clearIdx > msgIdx {
 		t.Errorf("clear must precede the message in %q", tail)
@@ -275,6 +278,46 @@ func TestSessionStderrRoutesMultilineThroughNotify(t *testing.T) {
 // first the "source: " prefix, then the content with terminator. The
 // buffered writer must combine them into one notify call instead of
 // emitting the prefix on its own row.
+// TestSessionStderrCRUpdatesTransient verifies that '\r'-terminated
+// sideband progress (git's "Compressing 89%\r" → "Compressing 90%\r"
+// pattern) goes to the transient row instead of scrolling the
+// scrollback. Subsequent updates should overwrite the transient slot
+// rather than each landing on a new row.
+func TestSessionStderrCRUpdatesTransient(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.side("source").bytes.Store(1024)
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+	p.render(false)
+
+	sess := &syncSession{progress: p}
+	sink := &sessionStderr{s: sess}
+
+	// Two consecutive in-place sideband updates plus one final \n line.
+	if _, err := sink.Write([]byte("source: Compressing 50%\r")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := sink.Write([]byte("source: Compressing 75%\r")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := sink.Write([]byte("source: Compressing 100%, done.\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if p.transient != "" {
+		t.Errorf("permanent line should clear transient, got %q", p.transient)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Compressing 50%") ||
+		!strings.Contains(out, "Compressing 75%") ||
+		!strings.Contains(out, "Compressing 100%, done.") {
+		t.Errorf("all three sideband states should be in the output stream:\n%s", out)
+	}
+}
+
 func TestSessionStderrBuffersPartialLines(t *testing.T) {
 	t.Parallel()
 	stats := newStats(true)

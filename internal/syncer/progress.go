@@ -12,8 +12,14 @@ import (
 
 // progressReporter renders live per-side throughput to a writer (typically
 // os.Stderr) by sampling the statsCollector's atomic byte counters on a
-// fixed interval. It is intentionally a one-line in-place renderer so it
-// stays out of the way of the final command output.
+// fixed interval.
+//
+// The visible region is at most two rows: an optional "transient" line
+// above (used for in-place sideband progress like "source: Compressing
+// objects: 89%") and the throughput ticker below. Each redraw uses
+// cursor-up + erase-to-end-of-screen to overwrite the whole region in
+// place, so '\r'-terminated sideband updates from go-git read as a
+// single updating row instead of scrolling line by line.
 type progressReporter struct {
 	out      io.Writer
 	stats    *statsCollector
@@ -24,8 +30,10 @@ type progressReporter struct {
 	stop     chan struct{}
 	done     chan struct{}
 
-	mu      sync.Mutex
-	lastLen int
+	mu        sync.Mutex
+	rowsDrawn int    // rows currently occupying the live region
+	lastLine  string // last progress line, kept so setTransient can redraw without re-sampling
+	transient string // current sideband-progress line, "" when none
 }
 
 func newProgressReporter(out io.Writer, stats *statsCollector, interval time.Duration) *progressReporter {
@@ -57,26 +65,71 @@ func (p *progressReporter) run() {
 	}
 }
 
-// clearLine is the ANSI escape sequence that erases the entire current
-// terminal line and parks the cursor at column 0. Used in place of a
-// run of N spaces because tracked byte length doesn't match display
-// width when the progress line contains multi-byte UTF-8 (→, │, …);
-// overshooting with spaces can wrap and leave residue on the next row.
-const clearLine = "\r\x1b[2K"
+// ANSI control sequences we use to redraw the live region in place.
+// J erases from the cursor to the end of the screen (covers both rows
+// when the transient is shown); %dA moves the cursor up that many
+// lines. Both are widely supported.
+const clearDown = "\x1b[J"
 
-// notify writes a one-time message above the live progress line. The
-// current frame is cleared first so the message lands on a clean row,
-// and lastLen is reset so the next tick redraws the progress below.
-// Safe to call from any goroutine, including while the ticker is
-// running.
+// cursorUpToTopLocked positions the cursor at column 0 of the top row
+// of the currently-drawn live region. Always emits '\r' so the first
+// render (rowsDrawn=0) still starts at column 0 instead of writing in
+// the middle of whatever line the cursor was last on. Caller must hold
+// p.mu.
+func (p *progressReporter) cursorUpToTopLocked() {
+	if p.rowsDrawn > 1 {
+		fmt.Fprintf(p.out, "\x1b[%dA", p.rowsDrawn-1)
+	}
+	fmt.Fprint(p.out, "\r")
+}
+
+// drawLocked rewrites the live region in place: cursor jumps to the top
+// row, erases everything below, then writes transient (if any) followed
+// by the throughput line. Cursor is left at the end of the throughput
+// row so subsequent ticker frames see rowsDrawn=region-height.
+func (p *progressReporter) drawLocked(line string) {
+	p.cursorUpToTopLocked()
+	fmt.Fprint(p.out, clearDown)
+
+	rows := 0
+	if p.transient != "" {
+		fmt.Fprintln(p.out, p.transient)
+		rows++
+	}
+	if line != "" {
+		fmt.Fprint(p.out, line)
+		rows++
+	}
+	p.rowsDrawn = rows
+	p.lastLine = line
+}
+
+// notify writes a one-time permanent message above the live region.
+// The region is cleared first so the message lands on a clean row,
+// rowsDrawn is reset so the next render redraws the ticker below, and
+// the transient slot is cleared — a permanent line typically marks a
+// state transition (sideband phase completion, slog event, subdivision
+// notice) where the previously-shown transient progress is no longer
+// the latest activity. Safe to call concurrently with the ticker.
 func (p *progressReporter) notify(msg string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.lastLen > 0 {
-		fmt.Fprint(p.out, clearLine)
-	}
+	p.cursorUpToTopLocked()
+	fmt.Fprint(p.out, clearDown)
 	fmt.Fprintln(p.out, msg)
-	p.lastLen = 0
+	p.rowsDrawn = 0
+	p.transient = ""
+}
+
+// setTransient updates the in-place sideband row above the ticker.
+// Pass "" to clear it. Triggers an immediate redraw so '\r'-driven
+// progress (Compressing/Counting/Resolving) feels responsive between
+// ticker intervals.
+func (p *progressReporter) setTransient(line string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.transient = line
+	p.drawLocked(p.lastLine)
 }
 
 // terminate halts the ticker, draws one final frame so the printed line
@@ -88,7 +141,7 @@ func (p *progressReporter) terminate() {
 		<-p.done
 		p.render(true)
 		p.mu.Lock()
-		if p.lastLen > 0 {
+		if p.rowsDrawn > 0 {
 			fmt.Fprintln(p.out)
 		}
 		p.mu.Unlock()
@@ -124,8 +177,7 @@ func (p *progressReporter) render(final bool) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	fmt.Fprint(p.out, clearLine+line)
-	p.lastLen = len(line)
+	p.drawLocked(line)
 }
 
 const (
@@ -231,8 +283,17 @@ func (w *sessionStderr) Write(b []byte) (int, error) {
 		w.buf.WriteString(s[:i])
 		line := w.buf.String()
 		w.buf.Reset()
+		// '\r' marks an in-place sideband update (git's
+		// "Compressing 89%\r" → "Compressing 90%\r" pattern); '\n'
+		// marks a permanent line that scrolls. Route accordingly so
+		// percentage updates rewrite a single transient row instead
+		// of filling the scrollback.
 		if line != "" {
-			w.s.progress.notify(line)
+			if s[i] == '\r' {
+				w.s.progress.setTransient(line)
+			} else {
+				w.s.progress.notify(line)
+			}
 		}
 		s = s[i+1:]
 	}
