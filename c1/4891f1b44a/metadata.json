@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.6",
+  "checkpoint_id": "c14891f1b44a",
+  "strategy": "manual-commit",
+  "branch": "codex/add-repo-header-image",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md",
+    "assets/git-sync-plan.gif",
+    "assets/git-sync-run.gif"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c1/4891f1b44a/0/metadata.json",
+      "transcript": "/c1/4891f1b44a/0/transcript.jsonl",
+      "content_hash": "/c1/4891f1b44a/0/transcript_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/c1/4891f1b44a/1/metadata.json",
+      "transcript": "/c1/4891f1b44a/1/transcript.jsonl",
+      "content_hash": "/c1/4891f1b44a/1/transcript_hash.txt",
+      "prompt": "/c1/4891f1b44a/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 55327,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1139712,
+    "output_tokens": 5933,
+    "api_call_count": 39
+  }
+}

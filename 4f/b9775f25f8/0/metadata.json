@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.6",
+  "checkpoint_id": "4fb9775f25f8",
+  "session_id": "019ddaf2-047a-7a63-839e-79f4476f3b44",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-30T15:07:25.94491Z",
+  "branch": "codex/add-repo-header-image",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md",
+    "assets/git-sync-header.png"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "832092757458",
+  "checkpoint_transcript_start": 129,
+  "session_metrics": {
+    "turn_count": 34
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-30T15:07:25.927796Z",
+    "agent_lines": 27,
+    "agent_removed": 15,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 27,
+    "total_lines_changed": 42,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

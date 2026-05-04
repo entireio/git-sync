@@ -1,0 +1,15 @@
+can you give me a short pr description?
+
+---
+
+checked out the first branch again, can you check these linting errors:
+
+[lint:go] internal/planner/relay.go:87:4: missing cases in switch of type planner.Action: planner.ActionDelete, planner.ActionSkip, planner.ActionBlock (exhaustive)
+[lint:go]                       switch plan.Action {
+[lint:go]                       ^
+[lint:go] internal/planner/planner_test.go:1060:15: string `fast-forward-branch-or-tag-create` has 5 occurrences, make it a constant (goconst)
+[lint:go]       if reason != "fast-forward-branch-or-tag-create" {
+[lint:go]                    ^
+[lint:go] 2 issues:
+[lint:go] * exhaustive: 1
+[lint:go] * goconst: 1

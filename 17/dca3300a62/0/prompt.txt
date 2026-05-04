@@ -1,0 +1,32 @@
+Test hash literal has 42 hex chars, not 40
+
+Low Severity
+
+The targetMain hash string contains 42 hex characters instead of the required 40 for a SHA-1 hash. plumbing.NewHash silently truncates via hex.DecodeString + copy into a [20]byte, so the extra two trailing d chars are dropped. Because every character is d, the resulting hash happens to equal the intended 40-char value, masking the typo. If this pattern were copied and modified with varying characters, the silent truncation would produce a wrong hash.
+
+---
+
+back to soph/prevent-double-fetch:
+
+Empty store fallback when relay rejects create plans
+
+Medium Severity
+
+needsLocalSourceClosure returns false when all desired refs are creates or skips, but the incremental relay can still reject all-create plans — for example, cross-kind ref mappings (branch-to-tag via Mappings) cause CanIncrementalRelay to return false ("incremental-non-tag-mapping"), and CanFullTagCreateRelay also rejects them. The materialized fallback then runs against an empty in-memory store, silently producing an insufficient pack that the target's receive-pack rejects. Before this change, FetchToStore always ran, so the fallback worked correctly.
+
+---
+
+what would the server flag be?
+
+---
+
+Add a small in-package unit test that constructs a syncSession with a synthetic RelayTargetPolicy{CapabilitiesKnown: false} and asserts the lazy fetch fires. That bypasses the
+  network entirely. ~40-60 lines of test boilerplate for one assertion.
+
+---
+
+[lint:go] internal/syncer/integration_test.go:383:2: SA4006: this value of sess is never used (staticcheck)
+[lint:go]       sess, err := newSession(context.Background(), cfg, true)
+[lint:go]       ^
+[lint:go] 1 issues:
+[lint:go] * staticcheck: 1
