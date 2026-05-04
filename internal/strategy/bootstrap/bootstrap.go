@@ -391,6 +391,14 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					continue // retry at same idx with new (smaller) checkpoint
 				}
 			}
+			p.log("bootstrap batch push attempting",
+				"branch", batch.Plan.TargetRef.String(),
+				"batch", idx+1,
+				"batch_total", len(batch.Checkpoints),
+				"estimated_bytes", packObjectCount*calibratedBytesPerObject,
+				"object_count", packObjectCount,
+				"target_limit_bytes", p.TargetMaxPack,
+				"calibrated_bytes_per_object", calibratedBytesPerObject)
 
 			cmds := convert.PlansToPushCommands(stagePlans)
 			counter := &packReadCounter{ReadCloser: packReader}
@@ -398,6 +406,16 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			sentBytes := counter.n
 			if pushErr != nil {
 				_ = packReader.Close()
+				p.log("bootstrap batch push failed",
+					"branch", batch.Plan.TargetRef.String(),
+					"batch", idx+1,
+					"batch_total", len(batch.Checkpoints),
+					"estimated_bytes", packObjectCount*calibratedBytesPerObject,
+					"target_limit_bytes", p.TargetMaxPack,
+					"sent_bytes", sentBytes,
+					"object_count", packObjectCount,
+					"will_subdivide", isTargetBodyLimitError(pushErr) && len(batch.chain) > 0,
+					"error", pushErr.Error())
 				if isTargetBodyLimitError(pushErr) && len(batch.chain) > 0 {
 					limit := p.TargetMaxPack
 					if parsed := targetBodyLimit(pushErr); parsed > 0 {
