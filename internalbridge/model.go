@@ -52,9 +52,16 @@ type ServiceStats struct {
 	Commands      int    `json:"commands"`
 }
 
+type SideBytes struct {
+	Label string `json:"label"`
+	Bytes int64  `json:"bytes"`
+}
+
 type Stats struct {
-	Enabled bool                     `json:"enabled"`
-	Items   map[string]*ServiceStats `json:"items"`
+	Enabled      bool                     `json:"enabled"`
+	Items        map[string]*ServiceStats `json:"items"`
+	Sides        []SideBytes              `json:"sides,omitempty"`
+	ElapsedNanos int64                    `json:"elapsedNanos,omitempty"`
 }
 
 type Measurement struct {
@@ -187,6 +194,13 @@ func FromStats(stats syncer.Stats) Stats {
 			Commands:      copyItem.Commands,
 		}
 	}
+	if len(stats.Sides) > 0 {
+		out.Sides = make([]SideBytes, 0, len(stats.Sides))
+		for _, side := range stats.Sides {
+			out.Sides = append(out.Sides, SideBytes{Label: side.Label, Bytes: side.Bytes})
+		}
+	}
+	out.ElapsedNanos = stats.ElapsedNanos
 	return out
 }
 
