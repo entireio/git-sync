@@ -81,6 +81,11 @@ type statsCollector struct {
 	items     map[string]*ServiceStats
 	sidesMu   sync.RWMutex
 	sides     map[string]*sideCounter
+	// phase carries an optional one-line activity label
+	// (e.g. "pack 3/8") that the live progress reporter renders next
+	// to the per-side counters. Updated atomically by strategies and
+	// read by the reporter goroutine without contention.
+	phase atomic.Pointer[string]
 }
 
 func newStats(enabled bool) *statsCollector {
@@ -132,6 +137,20 @@ func (s *statsCollector) side(label string) *sideCounter {
 	sc := &sideCounter{}
 	s.sides[label] = sc
 	return sc
+}
+
+// setPhase records a short activity label that the live progress
+// reporter will surface alongside per-side counters. Pass "" to clear.
+func (s *statsCollector) setPhase(p string) {
+	s.phase.Store(&p)
+}
+
+// getPhase returns the most recent phase label, or "" if none was set.
+func (s *statsCollector) getPhase() string {
+	if p := s.phase.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // setSideDisplay attaches a human-readable name (typically the URL

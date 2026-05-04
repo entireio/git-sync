@@ -60,6 +60,12 @@ type Params struct {
 	TargetMaxPack    int64
 	Verbose          bool
 	Logger           *slog.Logger
+	// OnPhase, when non-nil, is called with a short human-readable label
+	// describing the current bootstrap activity (e.g. "pack 3/8") so a
+	// live progress renderer can surface what is currently in flight.
+	// Called from the goroutine driving Execute; implementations must not
+	// block.
+	OnPhase func(string)
 }
 
 // Result holds the outcome of the bootstrap strategy.
@@ -131,6 +137,9 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	packReader = closeOnce(packReader)
 
 	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
+	if p.OnPhase != nil {
+		p.OnPhase("pushing pack")
+	}
 	cmds := convert.PlansToPushCommands(plans)
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
@@ -299,6 +308,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		idx := startIdx
 		for idx < len(batch.Checkpoints) {
 			checkpoint := batch.Checkpoints[idx]
+			if p.OnPhase != nil {
+				p.OnPhase(fmt.Sprintf("pack %d/%d", idx+1, len(batch.Checkpoints)))
+			}
 			p.log("bootstrap batch push checkpoint",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
@@ -430,6 +442,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	// Tag phase (issue #1)
 	if len(tagPlans) > 0 {
 		p.log("bootstrap batch pushing tags after branch batches", "tag_count", len(tagPlans))
+		if p.OnPhase != nil {
+			p.OnPhase("pushing tags")
+		}
 		tagTargetRefs := planner.CopyRefHashMap(p.TargetRefs)
 		for _, batch := range batches {
 			tagTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash

@@ -88,6 +88,16 @@ func (p *progressReporter) render(final bool) {
 		}
 		b.WriteString(formatSide(side, elapsed, final))
 	}
+	// Surface the current activity label (e.g. "pack 3/8") on live
+	// frames only. The final frame is implicitly "done" — appending
+	// the last in-progress phase there would read as still-running.
+	if !final {
+		if phase := p.stats.getPhase(); phase != "" {
+			b.WriteString("  (")
+			b.WriteString(phase)
+			b.WriteString(")")
+		}
+	}
 	line := b.String()
 
 	p.mu.Lock()

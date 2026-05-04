@@ -929,6 +929,7 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
+		OnPhase: s.stats.setPhase,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)

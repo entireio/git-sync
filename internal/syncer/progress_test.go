@@ -169,6 +169,42 @@ func TestFormatSideActiveSideHasNoDoneMark(t *testing.T) {
 	}
 }
 
+func TestProgressReporterRendersPhase(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.setSideDisplay("target", "example.test")
+	stats.side("source").bytes.Store(1024)
+	stats.side("target").bytes.Store(512)
+	stats.setPhase("pack 3/8")
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+	p.render(false)
+
+	if !strings.Contains(buf.String(), "(pack 3/8)") {
+		t.Errorf("live frame should include phase suffix: %q", buf.String())
+	}
+}
+
+func TestProgressReporterFinalFrameOmitsPhase(t *testing.T) {
+	t.Parallel()
+	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.setSideDisplay("target", "example.test")
+	stats.side("source").bytes.Store(1024)
+	stats.side("target").bytes.Store(512)
+	stats.setPhase("pack 3/8")
+
+	var buf bytes.Buffer
+	p := newProgressReporter(&buf, stats, 0)
+	p.render(true)
+
+	if strings.Contains(buf.String(), "pack 3/8") {
+		t.Errorf("final frame should drop the in-flight phase: %q", buf.String())
+	}
+}
+
 func TestFormatSideForceDoneAlwaysMarks(t *testing.T) {
 	t.Parallel()
 	side := SideBytes{
