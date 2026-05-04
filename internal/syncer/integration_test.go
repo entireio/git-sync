@@ -356,9 +356,15 @@ func TestRunSyncLazyFetchOnRelayRejection(t *testing.T) {
 		t.Fatalf("copy target baseline: %v", err)
 	}
 
-	// Add a new branch at a NEW commit on source — target genuinely
-	// doesn't have these objects, so the push will only succeed if the
-	// materialized fallback fetched the closure first.
+	// Add a new commit on source and point a fresh "release" branch at
+	// it, then reset master back to the baseline so master is a no-op
+	// skip and release is the only push plan. Target genuinely doesn't
+	// have the new commit, so the materialized push only succeeds if
+	// the lazy fetch ran first.
+	baselineHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve target master: %v", err)
+	}
 	makeCommits(t, sourceRepo, sourceFS, 1)
 	releaseHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
 	if err != nil {
@@ -367,6 +373,9 @@ func TestRunSyncLazyFetchOnRelayRejection(t *testing.T) {
 	releaseRef := plumbing.NewBranchReferenceName("release")
 	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(releaseRef, releaseHead.Hash())); err != nil {
 		t.Fatalf("set source release branch: %v", err)
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(testBranch), baselineHead.Hash())); err != nil {
+		t.Fatalf("reset source master: %v", err)
 	}
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
@@ -386,23 +395,9 @@ func TestRunSyncLazyFetchOnRelayRejection(t *testing.T) {
 	}
 
 	// Force the materialized fallback by claiming the target's
-	// capabilities are unknown to the planner. The plans drive
-	// needsLocalSourceClosure to false (master is divergent — wait,
-	// makeCommits on source advanced master, so master IS divergent).
-	// Reset master on source back to the baseline so it's a no-op skip.
-	baselineHead, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
-	if err != nil {
-		t.Fatalf("resolve target master: %v", err)
-	}
-	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(testBranch), baselineHead.Hash())); err != nil {
-		t.Fatalf("reset source master: %v", err)
-	}
-
-	// Re-do session creation now that source ref state is final.
-	sess, err = newSession(context.Background(), cfg, true)
-	if err != nil {
-		t.Fatalf("newSession (retry): %v", err)
-	}
+	// capabilities are unknown to the planner. Plans (master skip +
+	// release create) keep needsLocalSourceClosure false, so without
+	// the lazy fetch the materialized branch would run on an empty store.
 	sess.target.policy.CapabilitiesKnown = false
 
 	result, err := sess.runSync(context.Background())
