@@ -361,17 +361,23 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			var packObjectCount int64
 			if p.TargetMaxPack > 0 && len(batch.chain) > 0 {
 				subdivided := false
-				packReader, packObjectCount, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, calibratedBytesPerObject, func() bool {
+				packReader, packObjectCount, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, calibratedBytesPerObject, func(estimated int64) bool {
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						oldRemaining := len(batch.Checkpoints[idx:])
+						newCount := len(expanded)
+						perPack := estimated / int64(newCount)
 						p.log("bootstrap batch subdividing before push (pack header estimate)",
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", oldRemaining,
-							"new_remaining", len(expanded),
+							"new_remaining", newCount,
+							"estimated_bytes", estimated,
 							"calibrated_bytes_per_object", calibratedBytesPerObject)
-						p.notice(fmt.Sprintf("pack would exceed target limit — splitting %d → %d packs",
-							oldRemaining, len(expanded)))
+						p.notice(fmt.Sprintf(
+							"estimated pack ~%s exceeds target limit %s — splitting %d → %d packs (~%s each)",
+							humanBytes(estimated), humanBytes(p.TargetMaxPack),
+							oldRemaining, newCount, humanBytes(perPack),
+						))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						subdivided = true
 						return true
@@ -413,16 +419,21 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					expanded := subdivideToFactor(batch.chain, current, batch.Checkpoints[idx:], factor)
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						oldRemaining := len(batch.Checkpoints[idx:])
+						newCount := len(expanded)
 						p.log("bootstrap batch subdividing after target size rejection",
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", oldRemaining,
-							"new_remaining", len(expanded),
+							"new_remaining", newCount,
 							"sent_bytes", sentBytes,
 							"limit_bytes", limit,
 							"factor", factor,
 							"error", pushErr.Error())
-						p.notice(fmt.Sprintf("target rejected pack — splitting %d → %d packs",
-							oldRemaining, len(expanded)))
+						limitText := ""
+						if limit > 0 {
+							limitText = fmt.Sprintf(" (target limit %s)", humanBytes(limit))
+						}
+						p.notice(fmt.Sprintf("target rejected pack%s — splitting %d → %d packs",
+							limitText, oldRemaining, newCount))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						continue // retry at same idx with new (smaller) checkpoint
 					}
@@ -724,12 +735,14 @@ const estimatedBytesPerObject = 750
 // packReadCounter) catches blob-heavy repos where the static 750-byte
 // average is 10–20× too low — without calibration the pre-flight
 // would let oversized sub-packs through and the loop would only learn
-// after another wasted ~limit-sized upload.
+// after another wasted ~limit-sized upload. The subdivide callback
+// receives the estimated total bytes so user-facing messages can
+// quote the projected size that triggered the split.
 func checkPackSizeAndSubdivide(
 	r io.ReadCloser,
 	batchLimit int64,
 	bytesPerObject int64,
-	subdivide func() bool,
+	subdivide func(estimatedBytes int64) bool,
 ) (io.ReadCloser, int64, error) { //nolint:unparam // error return kept for future use
 	if bytesPerObject <= 0 {
 		bytesPerObject = estimatedBytesPerObject
@@ -749,7 +762,7 @@ func checkPackSizeAndSubdivide(
 	objectCount := int64(header[8])<<24 | int64(header[9])<<16 | int64(header[10])<<8 | int64(header[11])
 	estimated := objectCount * bytesPerObject
 
-	if estimated > batchLimit && subdivide() {
+	if estimated > batchLimit && subdivide(estimated) {
 		_ = r.Close()
 		return nil, objectCount, nil
 	}

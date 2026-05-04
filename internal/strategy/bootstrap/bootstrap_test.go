@@ -272,7 +272,7 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		body = append(body, []byte("packdata")...)
 		r := io.NopCloser(bytes.NewReader(body))
 		subdivided := false
-		got, count, err := checkPackSizeAndSubdivide(r, 1_000_000, estimatedBytesPerObject, func() bool {
+		got, count, err := checkPackSizeAndSubdivide(r, 1_000_000, estimatedBytesPerObject, func(int64) bool {
 			subdivided = true
 			return true
 		})
@@ -302,8 +302,11 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		header := makePackHeader(5_000_000) // 5M * 750 = 3.75 GiB estimated
 		r := io.NopCloser(bytes.NewReader(header))
 		subdivided := false
-		got, count, err := checkPackSizeAndSubdivide(r, 2_000_000_000, estimatedBytesPerObject, func() bool {
+		got, count, err := checkPackSizeAndSubdivide(r, 2_000_000_000, estimatedBytesPerObject, func(estimated int64) bool {
 			subdivided = true
+			if estimated <= 0 {
+				t.Fatalf("subdivide should receive a positive estimate, got %d", estimated)
+			}
 			return true
 		})
 		if err != nil {
@@ -329,7 +332,7 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		header := makePackHeader(50_000)
 		r := io.NopCloser(bytes.NewReader(header))
 		subdivided := false
-		_, _, err := checkPackSizeAndSubdivide(r, 500*1024*1024, 12*1024, func() bool {
+		_, _, err := checkPackSizeAndSubdivide(r, 500*1024*1024, 12*1024, func(int64) bool {
 			subdivided = true
 			return true
 		})
@@ -348,7 +351,7 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 		header := makePackHeader(5_000_000)
 		r := io.NopCloser(bytes.NewReader(header))
 		subdivided := false
-		_, _, err := checkPackSizeAndSubdivide(r, 2_000_000_000, 0, func() bool {
+		_, _, err := checkPackSizeAndSubdivide(r, 2_000_000_000, 0, func(int64) bool {
 			subdivided = true
 			return true
 		})
@@ -362,7 +365,7 @@ func TestCheckPackSizeAndSubdivide(t *testing.T) {
 
 	t.Run("non-PACK data proceeds without subdivide", func(t *testing.T) {
 		r := io.NopCloser(bytes.NewReader([]byte("not a pack file at all")))
-		got, count, err := checkPackSizeAndSubdivide(r, 100, estimatedBytesPerObject, func() bool {
+		got, count, err := checkPackSizeAndSubdivide(r, 100, estimatedBytesPerObject, func(int64) bool {
 			t.Fatal("should not subdivide non-pack data")
 			return true
 		})
