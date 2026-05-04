@@ -47,6 +47,8 @@ func TestFormatRate(t *testing.T) {
 func TestProgressReporterRendersBothSides(t *testing.T) {
 	t.Parallel()
 	stats := newStats(true)
+	stats.setSideDisplay("source", "github.com")
+	stats.setSideDisplay("target", "example.test")
 	stats.side("source").bytes.Store(2 * 1024 * 1024)
 	stats.side("target").bytes.Store(1024 * 1024)
 
@@ -55,17 +57,22 @@ func TestProgressReporterRendersBothSides(t *testing.T) {
 	p.render(true)
 
 	out := buf.String()
-	if !strings.Contains(out, "source: 2.00 MB") {
-		t.Errorf("output missing source bytes: %q", out)
+	if !strings.Contains(out, "github.com → 2.00 MB") {
+		t.Errorf("output missing source host with arrow: %q", out)
 	}
-	if !strings.Contains(out, "target: 1.00 MB") {
-		t.Errorf("output missing target bytes: %q", out)
+	if !strings.Contains(out, "1.00 MB @ ") || !strings.Contains(out, "→ example.test") {
+		t.Errorf("output missing target host with arrow: %q", out)
 	}
 	if !strings.HasPrefix(out, "\r") {
 		t.Errorf("output should start with carriage return for in-place updates: %q", out)
 	}
-	if !strings.Contains(out, "·") {
-		t.Errorf("output should separate sides with a middle dot: %q", out)
+	if !strings.Contains(out, "│") {
+		t.Errorf("output should use the vertical bar separator: %q", out)
+	}
+	// Source must precede target so the arrows describe the data path
+	// left-to-right (source on the left, target on the right).
+	if strings.Index(out, "github.com") > strings.Index(out, "example.test") {
+		t.Errorf("source should appear before target: %q", out)
 	}
 }
 
@@ -91,22 +98,28 @@ func TestThroughputLineFormatsBothSides(t *testing.T) {
 		Items:        map[string]*ServiceStats{},
 		ElapsedNanos: time.Second.Nanoseconds(),
 		Sides: []SideBytes{
-			{Label: "target", Bytes: 1 << 20},
-			{Label: "source", Bytes: 4 << 20},
+			{Label: "target", Bytes: 1 << 20, Display: "example.test"},
+			{Label: "source", Bytes: 4 << 20, Display: "github.com"},
 		},
 	}
 	line := throughputLine(stats)
 	if !strings.HasPrefix(line, "throughput: ") {
 		t.Fatalf("line should start with 'throughput: ', got %q", line)
 	}
-	// Sides must be ordered alphabetically so output is stable across runs.
-	sourceIdx := strings.Index(line, "source=")
-	targetIdx := strings.Index(line, "target=")
+	// Source host must precede target host so the line reads left-to-right.
+	sourceIdx := strings.Index(line, "github.com")
+	targetIdx := strings.Index(line, "example.test")
 	if sourceIdx < 0 || targetIdx < 0 || sourceIdx > targetIdx {
-		t.Errorf("expected source before target in %q", line)
+		t.Errorf("expected source host before target host in %q", line)
 	}
-	if !strings.Contains(line, "4.00 MB") || !strings.Contains(line, "4.00 MB/s") {
-		t.Errorf("source 4 MiB / 1s should render as 4.00 MB and 4.00 MB/s, got %q", line)
+	if !strings.Contains(line, "github.com → 4.00 MB") {
+		t.Errorf("source side should render as 'github.com → 4.00 MB ...': %q", line)
+	}
+	if !strings.Contains(line, "→ example.test") {
+		t.Errorf("target side should end in '→ example.test': %q", line)
+	}
+	if !strings.Contains(line, "│") {
+		t.Errorf("expected vertical-bar separator between sides: %q", line)
 	}
 }
 
@@ -115,5 +128,37 @@ func TestThroughputLineEmptyWhenNoBytes(t *testing.T) {
 	stats := Stats{Enabled: true, ElapsedNanos: time.Second.Nanoseconds()}
 	if got := throughputLine(stats); got != "" {
 		t.Errorf("expected empty line with no sides, got %q", got)
+	}
+}
+
+func TestTruncateHost(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		host string
+		max  int
+		want string
+	}{
+		{"github.com", 30, "github.com"},
+		{"a.b.c.d.example.com", 30, "a.b.c.d.example.com"},
+		{
+			"8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net",
+			30,
+			"8b04592ed74a5cc…cloudflare.net",
+		},
+		// When the apex itself doesn't fit, we fall back to right-truncation.
+		{"averylongdomain.example.com", 10, "averylong…"},
+		{"single", 4, "sin…"},
+		{"", 30, ""},
+		{"x", 0, "x"},
+	}
+	for _, c := range cases {
+		got := truncateHost(c.host, c.max)
+		if got != c.want {
+			t.Errorf("truncateHost(%q, %d) = %q, want %q", c.host, c.max, got, c.want)
+		}
+		if c.max > 0 && len([]rune(got)) > c.max {
+			t.Errorf("truncateHost(%q, %d) = %q exceeded max width %d",
+				c.host, c.max, got, c.max)
+		}
 	}
 }

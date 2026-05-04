@@ -27,9 +27,14 @@ type ServiceStats struct {
 // ("source" or "target"). Source is dominated by upload-pack response
 // bytes (download), target is dominated by receive-pack request bytes
 // (upload), so this is a useful "data moved on this side" number for both.
+//
+// Display carries the hostname extracted from the endpoint URL so live
+// renderers can show "github.com → … → host" without re-parsing the URL.
+// Empty when the endpoint URL was not http(s) or failed to parse.
 type SideBytes struct {
-	Label string `json:"label"`
-	Bytes int64  `json:"bytes"`
+	Label   string `json:"label"`
+	Bytes   int64  `json:"bytes"`
+	Display string `json:"display,omitempty"`
 }
 
 // Stats holds the collected transfer statistics.
@@ -44,8 +49,13 @@ type Stats struct {
 // Updated from the request and response body wrappers without holding
 // the collector mutex, so a progress reader can sample at high
 // frequency without contending with active transfers.
+//
+// display is set once during session setup (via setSideDisplay) and
+// then read by the live progress reporter; it does not need a lock
+// because writes happen-before any reader goroutine starts.
 type sideCounter struct {
-	bytes atomic.Int64
+	bytes   atomic.Int64
+	display string
 }
 
 // statsCollector is a concurrency-safe stats collector.
@@ -109,13 +119,30 @@ func (s *statsCollector) side(label string) *sideCounter {
 	return sc
 }
 
+// setSideDisplay attaches a human-readable name (typically the URL
+// hostname) to a side. Called once during session setup so the live
+// renderer can print "github.com → ..." instead of "source: ...".
+func (s *statsCollector) setSideDisplay(label, display string) {
+	if display == "" {
+		return
+	}
+	sc := s.side(label)
+	s.sidesMu.Lock()
+	sc.display = display
+	s.sidesMu.Unlock()
+}
+
 // liveSides returns a snapshot of per-side byte totals for live rendering.
 func (s *statsCollector) liveSides() []SideBytes {
 	s.sidesMu.RLock()
 	defer s.sidesMu.RUnlock()
 	out := make([]SideBytes, 0, len(s.sides))
 	for label, sc := range s.sides {
-		out = append(out, SideBytes{Label: label, Bytes: sc.bytes.Load()})
+		out = append(out, SideBytes{
+			Label:   label,
+			Bytes:   sc.bytes.Load(),
+			Display: sc.display,
+		})
 	}
 	return out
 }

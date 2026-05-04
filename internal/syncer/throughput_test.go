@@ -62,13 +62,25 @@ func TestBootstrap_ThroughputLineAndProgressTicker(t *testing.T) {
 		t.Errorf("expected non-zero elapsed nanos, got %d", result.Stats.ElapsedNanos)
 	}
 
+	// Per-side displays should reflect the test server hostnames.
+	displays := map[string]string{}
+	for _, side := range result.Stats.Sides {
+		displays[side.Label] = side.Display
+	}
+	if displays["source"] == "" || displays["target"] == "" {
+		t.Errorf("expected non-empty display for both sides, got %+v", result.Stats.Sides)
+	}
+
 	// Human-formatted output should include the new throughput line.
 	out := strings.Join(result.Lines(), "\n")
 	if !strings.Contains(out, "throughput: ") {
 		t.Errorf("missing throughput line in output:\n%s", out)
 	}
-	if !strings.Contains(out, "source=") || !strings.Contains(out, "target=") {
-		t.Errorf("throughput line should mention both sides:\n%s", out)
+	if !strings.Contains(out, displays["source"]) || !strings.Contains(out, displays["target"]) {
+		t.Errorf("throughput line should mention both hostnames:\n%s", out)
+	}
+	if !strings.Contains(out, "→") || !strings.Contains(out, "│") {
+		t.Errorf("throughput line should use arrow + vertical bar separator:\n%s", out)
 	}
 
 	// Progress writer should have received at least one frame. The bootstrap
@@ -82,11 +94,13 @@ func TestBootstrap_ThroughputLineAndProgressTicker(t *testing.T) {
 	if progressBuf.Len() == 0 {
 		t.Errorf("expected progress reporter to write at least one frame")
 	}
-	if !bytes.Contains(progressBuf.Bytes(), []byte("source:")) {
-		t.Errorf("progress output should mention source: %q", progressBuf.String())
+	if !bytes.Contains(progressBuf.Bytes(), []byte(displays["source"])) {
+		t.Errorf("progress output should mention source host %q: %q",
+			displays["source"], progressBuf.String())
 	}
-	if !bytes.Contains(progressBuf.Bytes(), []byte("target:")) {
-		t.Errorf("progress output should mention target: %q", progressBuf.String())
+	if !bytes.Contains(progressBuf.Bytes(), []byte(displays["target"])) {
+		t.Errorf("progress output should mention target host %q: %q",
+			displays["target"], progressBuf.String())
 	}
 
 	// Print samples for human inspection when running with -v.

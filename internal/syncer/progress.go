@@ -84,10 +84,9 @@ func (p *progressReporter) render(final bool) {
 	var b strings.Builder
 	for i, side := range sides {
 		if i > 0 {
-			b.WriteString(" · ")
+			b.WriteString(sideSeparator)
 		}
-		fmt.Fprintf(&b, "%s: %s @ %s",
-			side.Label, formatBytes(side.Bytes), formatRate(side.Bytes, elapsed))
+		b.WriteString(formatSide(side, elapsed))
 	}
 	line := b.String()
 
@@ -99,6 +98,56 @@ func (p *progressReporter) render(final bool) {
 	}
 	fmt.Fprint(p.out, "\r"+line+strings.Repeat(" ", pad))
 	p.lastLen = len(line)
+}
+
+const (
+	sideSeparator    = "  │  "
+	flowArrow        = " → "
+	maxHostnameWidth = 30
+)
+
+// formatSide renders a single side as host + bytes + rate, with a flow
+// arrow positioned to indicate direction: source on the left of its
+// counter, target on the right of its counter. Sides with neither label
+// fall back to "name: bytes @ rate".
+func formatSide(side SideBytes, dur time.Duration) string {
+	name := side.Display
+	if name == "" {
+		name = side.Label
+	}
+	name = truncateHost(name, maxHostnameWidth)
+	rate := formatBytes(side.Bytes) + " @ " + formatRate(side.Bytes, dur)
+	switch side.Label {
+	case "source":
+		return name + flowArrow + rate
+	case "target":
+		return rate + flowArrow + name
+	default:
+		return name + ": " + rate
+	}
+}
+
+// truncateHost shortens long hostnames while keeping the apex domain
+// visible. Returns the original string if it already fits within width,
+// otherwise preserves the trailing two dotted labels (e.g. "cloudflare.net")
+// and spends the remaining budget on a prefix from the leading subdomain.
+// Falls back to right-truncation when the apex alone doesn't fit.
+func truncateHost(host string, width int) string {
+	if width <= 0 || len(host) <= width {
+		return host
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) >= 2 {
+		apex := labels[len(labels)-2] + "." + labels[len(labels)-1]
+		if len(apex)+2 <= width { // room for at least one prefix char + ellipsis
+			prefixBudget := width - 1 - len(apex)
+			return host[:prefixBudget] + "…" + apex
+		}
+	}
+	if width <= 1 {
+		return "…"
+	}
+	return host[:width-1] + "…"
 }
 
 // stderrIsTTY reports whether stderr is attached to a terminal. The

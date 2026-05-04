@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -312,10 +313,9 @@ func throughputLine(s Stats) string {
 	dur := time.Duration(s.ElapsedNanos)
 	parts := make([]string, 0, len(sides))
 	for _, side := range sides {
-		parts = append(parts, fmt.Sprintf("%s=%s @ %s",
-			side.Label, formatBytes(side.Bytes), formatRate(side.Bytes, dur)))
+		parts = append(parts, formatSide(side, dur))
 	}
-	return "throughput: " + strings.Join(parts, " · ")
+	return "throughput: " + strings.Join(parts, sideSeparator)
 }
 
 func measurementLine(m Measurement) []string {
@@ -345,10 +345,22 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	if err != nil {
 		return nil, fmt.Errorf("resolve auth: %w", err)
 	}
+	stats.setSideDisplay(label, hostnameFromURL(raw.URL))
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
 	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
 	return conn, nil
+}
+
+// hostnameFromURL returns the host portion of an endpoint URL, used to
+// label sides in progress and throughput output. Returns "" for malformed
+// URLs so callers can fall back to the internal label.
+func hostnameFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func instrumentHTTPClient(base *http.Client, skipTLS bool, label string, stats *statsCollector) *http.Client {
