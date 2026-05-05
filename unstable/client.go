@@ -38,6 +38,7 @@ type AdvancedOptions struct {
 	CollectStats           bool  `json:"collectStats"`
 	MeasureMemory          bool  `json:"measureMemory"`
 	Verbose                bool  `json:"verbose"`
+	Progress               bool  `json:"progress"`
 	MaxPackBytes           int64 `json:"maxPackBytes"`
 	TargetMaxPackBytes     int64 `json:"targetMaxPackBytes"`
 	MaterializedMaxObjects int   `json:"materializedMaxObjects"`
@@ -169,6 +170,7 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		IncludeTags:   req.IncludeTags,
 		ShowStats:     req.Options.CollectStats,
 		MeasureMemory: req.Options.MeasureMemory,
+		Progress:      req.Options.Progress,
 		ProtocolMode:  protocolString(req.Protocol),
 		Verbose:       req.Options.Verbose,
 	}
@@ -205,6 +207,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		DryRun:                 req.DryRun,
 		ShowStats:              req.Options.CollectStats,
 		MeasureMemory:          req.Options.MeasureMemory,
+		Progress:               req.Options.Progress,
 		Mode:                   operationModeString(req.Policy.Mode),
 		Force:                  req.Policy.Force,
 		Prune:                  req.Policy.Prune,
@@ -234,6 +237,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		IncludeTags:        req.IncludeTags,
 		ShowStats:          req.Options.CollectStats,
 		MeasureMemory:      req.Options.MeasureMemory,
+		Progress:           req.Options.Progress,
 		MaxPackBytes:       req.Options.MaxPackBytes,
 		TargetMaxPackBytes: req.Options.TargetMaxPackBytes,
 		ProtocolMode:       protocolString(req.Protocol),
@@ -253,6 +257,7 @@ func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer
 		IncludeTags:   req.IncludeTags,
 		ShowStats:     req.Options.CollectStats,
 		MeasureMemory: req.Options.MeasureMemory,
+		Progress:      req.Options.Progress,
 		ProtocolMode:  protocolString(req.Protocol),
 		Verbose:       req.Options.Verbose,
 	}, nil

@@ -86,6 +86,14 @@ type Conn struct {
 	// contains the repo path. Off by default to preserve behaviour for
 	// callers that rely on Endpoint being stable.
 	FollowInfoRefsRedirect bool
+
+	// ProgressOut is the destination for verbose sideband progress
+	// messages ("Enumerating objects: ...", "Resolving deltas: ..."
+	// streamed by upload-pack and receive-pack). Nil falls back to
+	// os.Stderr. Callers driving a live progress ticker can plug in a
+	// coordinated writer here so server-side progress lines don't
+	// clobber the in-place ticker frame.
+	ProgressOut io.Writer
 }
 
 // NewConn creates a new connection to the given endpoint.

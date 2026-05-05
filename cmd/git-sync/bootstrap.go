@@ -76,6 +76,7 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&req.IncludeTags, "tags", false, "mirror tags")
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
+	cmd.Flags().BoolVar(&req.Options.Progress, "progress", false, "show live per-side throughput on stderr (TTY only)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
 	cmd.Flags().Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
 	cmd.Flags().Int64Var(&req.Options.TargetMaxPackBytes, "target-max-pack-bytes", 0, "target receive-pack body size limit; batches are planned and auto-subdivided to fit")

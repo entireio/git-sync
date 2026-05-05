@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -72,6 +75,7 @@ type Config struct {
 	Verbose                bool
 	ShowStats              bool
 	MeasureMemory          bool
+	Progress               bool
 	Mode                   string
 	Force                  bool
 	Prune                  bool
@@ -79,6 +83,10 @@ type Config struct {
 	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 	ProtocolMode           string
+
+	// progressOut overrides the writer used by the live progress ticker.
+	// Defaults to os.Stderr when nil. Exposed for tests.
+	progressOut io.Writer
 }
 
 // Re-export types from planner for CLI compatibility.
@@ -277,7 +285,40 @@ func statsLines(s Stats) []string {
 			item.Name, item.Requests, item.RequestBytes, item.ResponseBytes, item.Wants, item.Haves, item.Commands,
 		))
 	}
+	if line := throughputLine(s); line != "" {
+		lines = append(lines, line)
+	}
 	return lines
+}
+
+// throughputLine renders a one-line per-side throughput summary using
+// the wall-clock window the stats collector observed. Returns "" when
+// no side bytes were recorded so the line stays out of the way for
+// metadata-only operations like probe.
+func throughputLine(s Stats) string {
+	if len(s.Sides) == 0 || s.ElapsedNanos <= 0 {
+		return ""
+	}
+	sides := make([]SideBytes, 0, len(s.Sides))
+	for _, side := range s.Sides {
+		if side.Bytes <= 0 {
+			continue
+		}
+		sides = append(sides, side)
+	}
+	if len(sides) == 0 {
+		return ""
+	}
+	sort.Slice(sides, func(i, j int) bool { return sides[i].Label < sides[j].Label })
+	dur := time.Duration(s.ElapsedNanos)
+	parts := make([]string, 0, len(sides))
+	for _, side := range sides {
+		// End-of-run line uses the active-window average; passing 0
+		// for instant rate makes formatSide skip the sliding window
+		// and fall back to ActiveNanos-based formatting.
+		parts = append(parts, formatSide(side, dur, 0, true))
+	}
+	return "throughput: " + strings.Join(parts, sideSeparator)
 }
 
 func measurementLine(m Measurement) []string {
@@ -307,10 +348,22 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	if err != nil {
 		return nil, fmt.Errorf("resolve auth: %w", err)
 	}
+	stats.setSideDisplay(label, hostnameFromURL(raw.URL))
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
 	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
 	return conn, nil
+}
+
+// hostnameFromURL returns the host portion of an endpoint URL, used to
+// label sides in progress and throughput output. Returns "" for malformed
+// URLs so callers can fall back to the internal label.
+func hostnameFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func instrumentHTTPClient(base *http.Client, skipTLS bool, label string, stats *statsCollector) *http.Client {
@@ -383,6 +436,28 @@ type syncSession struct {
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	target          *targetSession
 	measurementDone func() Measurement
+	progress        *progressReporter
+}
+
+// finish releases any resources owned by the session — currently the live
+// progress ticker. Idempotent and safe to call from defer in callers that
+// also produce results in the happy path.
+func (s *syncSession) finish() {
+	if s.progress != nil {
+		s.progress.terminate()
+	}
+}
+
+// notice surfaces a one-line human-readable event during a sync. When
+// the live progress ticker is active it prints above the current frame;
+// otherwise it falls back to plain stderr so the message is still seen
+// when --progress is off or the destination is not a TTY.
+func (s *syncSession) notice(msg string) {
+	if s.progress != nil {
+		s.progress.notify(msg)
+		return
+	}
+	fmt.Fprintln(os.Stderr, msg)
 }
 
 type targetSession struct {
@@ -427,7 +502,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		measurementDone: startMeasurement(cfg.MeasureMemory),
 	}
 	if cfg.Verbose {
-		s.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		s.logger = slog.New(slog.NewTextHandler(&sessionStderr{s: s}, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		}))
 	}
@@ -436,6 +511,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
+	s.sourceConn.ProgressOut = &sessionStderr{s: s}
 
 	refPrefixes := planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags)
 	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
@@ -451,6 +527,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
+		targetConn.ProgressOut = &sessionStderr{s: s}
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
@@ -474,6 +551,28 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}
 	}
 
+	// Start the live progress ticker only after auth resolution and the
+	// initial ref-listing round trips have completed. The auth path may
+	// shell out to `git credential fill`, which inherits our stderr and
+	// can prompt the user; an interactive prompt and a '\r'-redrawing
+	// ticker writing to the same tty would clobber each other. Deferring
+	// the ticker until newSession returns guarantees no concurrent writer
+	// is active when prompts happen and also avoids leaking a goroutine
+	// when newSession fails partway through setup.
+	if cfg.Progress {
+		out := cfg.progressOut
+		if out == nil {
+			out = os.Stderr
+		}
+		// Render only when the destination is a real terminal. Pipes,
+		// log files, and CI captures get nothing rather than a flood
+		// of '\r'-prefixed control sequences.
+		if out != os.Stderr || stderrIsTTY() {
+			s.progress = newProgressReporter(out, s.stats, 0)
+			go s.progress.run()
+		}
+	}
+
 	return s, nil
 }
 
@@ -485,6 +584,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	defer s.finish()
 	if s.cfg.Mode == modeReplicate {
 		return s.runReplicate(ctx)
 	}
@@ -762,6 +862,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	defer s.finish()
 
 	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
 	if err != nil {
@@ -787,6 +888,7 @@ func Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{}, err
 	}
+	defer s.finish()
 	return s.newProbeResult(), nil
 }
 
@@ -800,6 +902,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	if err != nil {
 		return FetchResult{}, err
 	}
+	defer s.finish()
 
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
@@ -843,6 +946,8 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
+		OnPhase:  s.stats.setPhase,
+		OnNotice: s.notice,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)

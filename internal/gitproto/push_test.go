@@ -71,10 +71,10 @@ func TestPrefixedLineWriter(t *testing.T) {
 }
 
 func TestProgressSinkNilWhenNotVerbose(t *testing.T) {
-	if got := progressSink(false, "anything: "); got != nil {
+	if got := progressSink(false, "anything: ", nil); got != nil {
 		t.Fatalf("progressSink(false) = %T, want nil", got)
 	}
-	if got := progressSink(true, "source: "); got == nil {
+	if got := progressSink(true, "source: ", nil); got == nil {
 		t.Fatal("progressSink(true) returned nil, want non-nil writer")
 	}
 }
@@ -86,7 +86,7 @@ func TestOpenV2PackStreamCloseClosesBody(t *testing.T) {
 		)),
 	}
 
-	rc, err := openV2PackStream(body, false)
+	rc, err := openV2PackStream(body, false, nil)
 	if err != nil {
 		t.Fatalf("openV2PackStream: %v", err)
 	}

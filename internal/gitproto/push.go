@@ -125,11 +125,11 @@ func sendReceivePack(
 	switch {
 	case req.Capabilities.Supports(capability.Sideband64k):
 		dem := sideband.NewDemuxer(sideband.Sideband64k, reader)
-		dem.Progress = progressSink(verbose, "target: ")
+		dem.Progress = progressSink(verbose, "target: ", conn.ProgressOut)
 		respReader = dem
 	case req.Capabilities.Supports(capability.Sideband):
 		dem := sideband.NewDemuxer(sideband.Sideband, reader)
-		dem.Progress = progressSink(verbose, "target: ")
+		dem.Progress = progressSink(verbose, "target: ", conn.ProgressOut)
 		respReader = dem
 	}
 
@@ -233,21 +233,29 @@ func PushCommands(
 	return sendReceivePack(ctx, conn, req, nil, verbose)
 }
 
-func progressWriter(verbose bool) io.Writer {
+func progressWriter(verbose bool, dest io.Writer) io.Writer {
 	if !verbose {
 		return nil
 	}
-	return os.Stderr
+	if dest == nil {
+		dest = os.Stderr
+	}
+	return dest
 }
 
 // progressSink returns a line-prefixing io.Writer suitable for
 // sideband.Demuxer.Progress. When verbose is false it returns nil so the
-// demuxer discards progress frames without allocating.
-func progressSink(verbose bool, prefix string) io.Writer {
+// demuxer discards progress frames without allocating. Passing a non-nil
+// dest routes the prefixed lines through that writer instead of os.Stderr,
+// which lets a live progress reporter coordinate output.
+func progressSink(verbose bool, prefix string, dest io.Writer) io.Writer {
 	if !verbose {
 		return nil
 	}
-	return &prefixedLineWriter{w: os.Stderr, prefix: prefix, atLineStart: true}
+	if dest == nil {
+		dest = os.Stderr
+	}
+	return &prefixedLineWriter{w: dest, prefix: prefix, atLineStart: true}
 }
 
 // prefixedLineWriter prepends a fixed prefix to each line of input written
