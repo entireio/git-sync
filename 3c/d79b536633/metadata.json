@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "3cd79b536633",
+  "strategy": "manual-commit",
+  "branch": "soph/streaming-pack-parse",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3c/d79b536633/0/metadata.json",
+      "transcript": "/3c/d79b536633/0/full.jsonl",
+      "content_hash": "/3c/d79b536633/0/content_hash.txt",
+      "prompt": "/3c/d79b536633/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 41786,
+    "cache_read_tokens": 12580811,
+    "output_tokens": 27069,
+    "api_call_count": 15
+  }
+}
