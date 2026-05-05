@@ -126,13 +126,13 @@ func fakeReceivePackServer(t *testing.T, reportErr string) *httptest.Server {
 	}))
 }
 
-func connForServer(t *testing.T, srv *httptest.Server) *Conn {
+func connForServer(t *testing.T, srv *httptest.Server) *HTTPConn {
 	t.Helper()
 	ep, err := transport.ParseURL(srv.URL + "/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	return NewConn(ep, "test", nil, srv.Client().Transport)
+	return NewHTTPConn(ep, "test", nil, srv.Client().Transport)
 }
 
 func TestPushPackClosesPackOnSuccess(t *testing.T) {
@@ -190,7 +190,7 @@ func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "target", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "target", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -326,7 +326,7 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 	// Use a nil-transport conn -- we should never reach the network.
 	ep, err := transport.ParseURL("https://example.com/repo.git")
 	require.NoError(t, err)
-	conn := &Conn{Endpoint: ep, HTTP: &http.Client{}}
+	conn := &HTTPConn{EndpointURL: ep, HTTP: &http.Client{}}
 
 	err = PushPack(context.Background(), conn, adv, []PushCommand{
 		{Name: "refs/heads/old", Delete: true},

@@ -363,7 +363,7 @@ func TestFetchPackV1ContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -412,7 +412,7 @@ func TestFetchPackV2ContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -464,7 +464,7 @@ func TestFetchToStoreV2ContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -515,7 +515,7 @@ func TestFetchToStoreV2ClosesBodyOnDecodeError(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString(FormatPktLine("bogus\n") + "0000"))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -553,7 +553,7 @@ func TestFetchToStoreV2ContextCanceledMidStream(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		body := &blockingPacketBody{
 			ctx:         req.Context(),
 			startedRead: startedRead,
@@ -610,7 +610,7 @@ func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("not-a-valid-server-response"))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -645,7 +645,7 @@ func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		data: []byte("0008NAK\nPACK"),
 		err:  io.ErrUnexpectedEOF,
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -687,7 +687,7 @@ func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("0008NAK\nzzzz"))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -734,7 +734,7 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewReader(payload))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -777,7 +777,7 @@ func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("0000"))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -913,7 +913,7 @@ func TestFetchPackV2ManyHavesSendsDoneAndReadsPack(t *testing.T) {
 	}
 
 	seenRequest := false
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		seenRequest = true
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
@@ -1000,7 +1000,7 @@ func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		data: wire.Bytes(),
 		err:  io.ErrUnexpectedEOF,
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -1046,7 +1046,7 @@ func TestFetchPackV2ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString(FormatPktLine("packfile\n") + "zzzz"))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,
@@ -1089,7 +1089,7 @@ func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	body := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString(FormatPktLine("packfile\n") + "zzzz"))}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    req,

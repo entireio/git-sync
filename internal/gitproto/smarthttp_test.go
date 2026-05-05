@@ -21,12 +21,12 @@ func TestNewConn(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	auth := &transporthttp.BasicAuth{Username: "user", Password: "pass"}
-	conn := NewConn(ep, "test-label", auth, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test-label", auth, http.DefaultTransport)
 
 	if conn.Label != "test-label" {
 		t.Errorf("Label = %q, want %q", conn.Label, "test-label")
 	}
-	if conn.Endpoint != ep {
+	if conn.EndpointURL != ep {
 		t.Error("Endpoint mismatch")
 	}
 	if conn.Auth != auth {
@@ -43,7 +43,7 @@ func TestNewConnStripsTrailingEndpointSlash(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	var gotURLs []string
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		gotURLs = append(gotURLs, req.URL.String())
 		res := &http.Response{
 			StatusCode: http.StatusOK,
@@ -58,10 +58,10 @@ func TestNewConnStripsTrailingEndpointSlash(t *testing.T) {
 		return res, nil
 	}))
 
-	if got, want := conn.Endpoint.Path, "/repo.git"; got != want {
+	if got, want := conn.EndpointURL.Path, "/repo.git"; got != want {
 		t.Fatalf("Endpoint.Path = %q, want %q", got, want)
 	}
-	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+	if _, err := conn.RequestInfoRefs(t.Context(), transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack test"); err != nil {
@@ -141,7 +141,7 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -151,7 +151,7 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := RequestInfoRefs(ctx, conn, "git-upload-pack", "version=2")
+		_, err := conn.RequestInfoRefs(ctx, "git-upload-pack", "version=2")
 		done <- err
 	}()
 
@@ -211,7 +211,7 @@ func TestRequestInfoRefsRequiresAdvertisementContentType(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse endpoint: %v", err)
 			}
-			conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 				res := &http.Response{
 					StatusCode: http.StatusOK,
 					Request:    req,
@@ -224,7 +224,8 @@ func TestRequestInfoRefsRequiresAdvertisementContentType(t *testing.T) {
 				return res, nil
 			}))
 
-			body, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, "")
+			body, err := conn.RequestInfoRefs(t.Context(), transport.UploadPackService, "")
+
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected content type error")
@@ -250,7 +251,7 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -307,16 +308,16 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
 	conn.FollowInfoRefsRedirect = true
 
-	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+	if _, err := conn.RequestInfoRefs(t.Context(), transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
 	nodeURL := strings.TrimPrefix(node.URL, "http://")
-	if conn.Endpoint.Host != nodeURL {
-		t.Errorf("Endpoint.Host = %q, want %q (endpoint should follow the 307)", conn.Endpoint.Host, nodeURL)
+	if conn.EndpointURL.Host != nodeURL {
+		t.Errorf("Endpoint.Host = %q, want %q (endpoint should follow the 307)", conn.EndpointURL.Host, nodeURL)
 	}
 }
 
@@ -360,10 +361,10 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
 	conn.FollowInfoRefsRedirect = true
 
-	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+	if _, err := conn.RequestInfoRefs(t.Context(), transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
@@ -407,15 +408,15 @@ func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	entryHost := ep.Host
-	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
 	// FollowInfoRefsRedirect intentionally not set.
 
-	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+	if _, err := conn.RequestInfoRefs(t.Context(), transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
-	if conn.Endpoint.Host != entryHost {
-		t.Errorf("Endpoint.Host = %q, want %q (endpoint should be unchanged by default)", conn.Endpoint.Host, entryHost)
+	if conn.EndpointURL.Host != entryHost {
+		t.Errorf("Endpoint.Host = %q, want %q (endpoint should be unchanged by default)", conn.EndpointURL.Host, entryHost)
 	}
 }
 

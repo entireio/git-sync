@@ -333,7 +333,7 @@ func measurementLine(m Measurement) []string {
 
 // --- Session setup ---
 
-func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.Conn, error) {
+func newHTTPConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.HTTPConn, error) {
 	ep, err := transport.ParseURL(raw.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
@@ -350,7 +350,7 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	}
 	stats.setSideDisplay(label, hostnameFromURL(raw.URL))
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
-	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
+	conn := gitproto.NewHTTPConnWithClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
 	return conn, nil
 }
@@ -431,7 +431,7 @@ type syncSession struct {
 	cfg             Config
 	stats           *statsCollector
 	logger          *slog.Logger
-	sourceConn      *gitproto.Conn
+	sourceConn      gitproto.Conn
 	sourceService   *gitproto.RefService
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	target          *targetSession
@@ -440,11 +440,17 @@ type syncSession struct {
 }
 
 // finish releases any resources owned by the session — currently the live
-// progress ticker. Idempotent and safe to call from defer in callers that
-// also produce results in the happy path.
+// progress ticker and remote transport connections. Idempotent and safe to
+// call from defer in callers that also produce results in the happy path.
 func (s *syncSession) finish() {
 	if s.progress != nil {
 		s.progress.terminate()
+	}
+	if s.sourceConn != nil {
+		s.sourceConn.Close()
+	}
+	if s.target != nil && s.target.conn != nil {
+		s.target.conn.Close()
 	}
 }
 
@@ -461,12 +467,28 @@ func (s *syncSession) notice(msg string) {
 }
 
 type targetSession struct {
-	conn     *gitproto.Conn
+	conn     gitproto.Conn
 	adv      *packp.AdvRefs
 	refMap   map[plumbing.ReferenceName]plumbing.Hash
 	features gitproto.TargetFeatures
 	policy   planner.RelayTargetPolicy
 	pusher   gitproto.Pusher
+}
+
+func assignNewConn(conn *gitproto.Conn, ep Endpoint, label string, stats *statsCollector, httpClient *http.Client) error {
+	// ParseURL normalizes SCP-like URLs ([user@]host:path) to ssh:// scheme
+	url, err := transport.ParseURL(ep.URL)
+	if err != nil {
+		return fmt.Errorf("parse endpoint: %w", err)
+	}
+
+	if url.Scheme == "ssh" {
+		*conn = gitproto.NewSSHConn(url, label)
+		return nil
+	}
+
+	*conn, err = newHTTPConn(ep, label, stats, httpClient)
+	return err
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -507,11 +529,11 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}))
 	}
 
-	s.sourceConn, err = newConn(cfg.Source, "source", s.stats, cfg.HTTPClient)
+	err = assignNewConn(&s.sourceConn, cfg.Source, "source", s.stats, cfg.HTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
-	s.sourceConn.ProgressOut = &sessionStderr{s: s}
+	s.sourceConn.SetProgressWriter(&sessionStderr{s: s})
 
 	refPrefixes := planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags)
 	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
@@ -523,11 +545,12 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
 
 	if needTarget {
-		targetConn, err := newConn(cfg.Target, "target", s.stats, cfg.HTTPClient)
+		var targetConn gitproto.Conn
+		err = assignNewConn(&targetConn, cfg.Target, "target", s.stats, cfg.HTTPClient)
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
-		targetConn.ProgressOut = &sessionStderr{s: s}
+		targetConn.SetProgressWriter(&sessionStderr{s: s})
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)

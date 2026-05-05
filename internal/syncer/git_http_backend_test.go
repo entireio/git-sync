@@ -515,7 +515,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	}
 
 	stats := newStats(false)
-	sourceConn, err := newConn(cfg.Source, "source", stats, nil)
+	sourceConn, err := newHTTPConn(cfg.Source, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 	}
 
 	stats := newStats(false)
-	sourceConn, err := newConn(cfg.Source, "source", stats, nil)
+	sourceConn, err := newHTTPConn(cfg.Source, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}

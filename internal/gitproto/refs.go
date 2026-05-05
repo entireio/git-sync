@@ -34,7 +34,7 @@ type RefService struct {
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
 // Returns the list of refs and a RefService for subsequent operations.
-func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
+func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
 		adv, refs, err := listSourceRefsV1(ctx, conn)
@@ -44,9 +44,9 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
 
 	case "auto", "v2":
-		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, "version=2")
+		data, err := conn.RequestInfoRefs(ctx, transport.UploadPackService, "version=2")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("request info refs: %w", err)
 		}
 		if caps, err := DecodeV2Capabilities(bytes.NewReader(data)); err == nil {
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
@@ -78,10 +78,10 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 }
 
 // AdvertisedRefsV1 fetches and decodes v1 advertised refs for the given service.
-func AdvertisedRefsV1(ctx context.Context, conn *Conn, service string) (*packp.AdvRefs, error) {
-	data, err := RequestInfoRefs(ctx, conn, service, "")
+func AdvertisedRefsV1(ctx context.Context, conn Conn, service string) (*packp.AdvRefs, error) {
+	data, err := conn.RequestInfoRefs(ctx, service, "")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("request info refs: %w", err)
 	}
 	return decodeV1AdvRefs(data)
 }
@@ -129,7 +129,7 @@ func AdvRefsCaps(adv *packp.AdvRefs) []string {
 	return items
 }
 
-func listSourceRefsV1(ctx context.Context, conn *Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
+func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
 	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackService)
 	if err != nil {
 		return nil, nil, err
@@ -141,7 +141,7 @@ func listSourceRefsV1(ctx context.Context, conn *Conn) (*packp.AdvRefs, []*plumb
 	return adv, refs, nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn *Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
+func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
 	// Always include "HEAD" so the server returns the symref-target attribute
 	// for HEAD. Without this, callers that pass only "refs/heads/" or
 	// "refs/tags/" prefixes filter HEAD out of the response and lose the

@@ -729,7 +729,7 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) error {
 				graphFetches++
 				if ref.SourceRef != mainRef {
 					t.Errorf("unexpected commit-graph fetch for %s; subsumed branch should have been skipped", ref.SourceRef)
@@ -737,7 +737,7 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 				writeLinearCommitChain(t, store, 3)
 				return nil
 			},
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				packFetches++
 				if _, ok := desired[featureRef]; ok {
 					t.Errorf("unexpected pack fetch including feature ref: %+v", desired)
@@ -792,13 +792,13 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 }
 
 type fakeBootstrapSource struct {
-	fetchPack        func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-	fetchCommitGraph func(context.Context, storer.Storer, *gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) error
+	fetchPack        func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchCommitGraph func(context.Context, storer.Storer, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) error
 }
 
 func (f fakeBootstrapSource) FetchPack(
 	ctx context.Context,
-	conn *gitproto.Conn,
+	conn gitproto.Conn,
 	desired map[plumbing.ReferenceName]gitproto.DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) (io.ReadCloser, error) {
@@ -808,7 +808,7 @@ func (f fakeBootstrapSource) FetchPack(
 func (f fakeBootstrapSource) FetchCommitGraph(
 	ctx context.Context,
 	store storer.Storer,
-	conn *gitproto.Conn,
+	conn gitproto.Conn,
 	ref gitproto.DesiredRef,
 	haves []plumbing.Hash,
 ) error {
@@ -878,7 +878,7 @@ func TestExecuteOneShotUsesTargetPusher(t *testing.T) {
 
 	result, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				gotDesired = desired
 				if targetRefs != nil {
 					t.Fatalf("expected nil target refs during one-shot bootstrap fetch, got %v", targetRefs)
@@ -924,7 +924,7 @@ func TestExecuteOneShotClosesPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -958,7 +958,7 @@ func TestExecuteOneShotClosesPackWhenPusherDoesNot(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -991,11 +991,11 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -1031,11 +1031,11 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ *gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
+			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
 				writeLinearCommitChain(t, store, 1)
 				return nil
 			},
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -1082,7 +1082,7 @@ func TestExecuteRequiresTargetPusherBeforeFetch(t *testing.T) {
 			calledFetch := false
 			_, err := Execute(context.Background(), Params{
 				SourceService: fakeBootstrapSource{
-					fetchPack: func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+					fetchPack: func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 						calledFetch = true
 						return io.NopCloser(bytes.NewReader(nil)), nil
 					},
@@ -1126,12 +1126,12 @@ func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
 	}
 
 	_, err = Execute(context.Background(), Params{
-		SourceConn: &gitproto.Conn{
-			Endpoint: ep,
-			HTTP:     server.Client(),
+		SourceConn: &gitproto.HTTPConn{
+			EndpointURL: ep,
+			HTTP:        server.Client(),
 		},
 		SourceService: fakeBootstrapSource{
-			fetchPack: func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				t.Fatal("unexpected fetch")
 				return nil, nil //nolint:nilnil // test fake returns nil to signal no data
 			},

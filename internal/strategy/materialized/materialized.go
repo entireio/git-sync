@@ -20,9 +20,9 @@ import (
 // Params holds the inputs for a materialized push.
 type Params struct {
 	Store         storer.Storer
-	SourceConn    *gitproto.Conn
+	SourceConn    gitproto.Conn
 	SourceService interface {
-		FetchToStore(ctx context.Context, store storer.Storer, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) error
+		FetchToStore(ctx context.Context, store storer.Storer, sess gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) error
 	}
 	TargetPusher interface {
 		PushObjects(ctx context.Context, cmds []gitproto.PushCommand, store storer.Storer, hashes []plumbing.Hash) error

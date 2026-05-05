@@ -10,7 +10,7 @@ import (
 
 func TestGitHubOwnerRepo(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", stats, nil)
+	conn, err := newHTTPConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestGitHubOwnerRepo(t *testing.T) {
 
 func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", stats, nil)
+	conn, err := newHTTPConn(Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestProbeWithoutTargetIgnoresEndpointEqualityCheck(t *testing.T) {
 func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 	stats := newStats(false)
 
-	off, err := newConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
+	off, err := newHTTPConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (off): %v", err)
 	}
@@ -110,7 +110,7 @@ func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 		t.Error("FollowInfoRefsRedirect should default to false")
 	}
 
-	on, err := newConn(Endpoint{URL: "https://node.example/repo.git", FollowInfoRefsRedirect: true}, "target", stats, nil)
+	on, err := newHTTPConn(Endpoint{URL: "https://node.example/repo.git", FollowInfoRefsRedirect: true}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (on): %v", err)
 	}

@@ -49,7 +49,7 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 
 func TestNewConnSkipTLSVerify(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{
+	conn, err := newHTTPConn(Endpoint{
 		URL:           "https://example.com/repo.git",
 		SkipTLSVerify: true,
 	}, "source", stats, nil)
@@ -74,7 +74,7 @@ func TestNewConnUsesProvidedHTTPClient(t *testing.T) {
 	baseTransport := http.DefaultTransport
 	baseClient := &http.Client{Transport: baseTransport}
 
-	conn, err := newConn(Endpoint{URL: "https://example.com/repo.git"}, "source", stats, baseClient)
+	conn, err := newHTTPConn(Endpoint{URL: "https://example.com/repo.git"}, "source", stats, baseClient)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
