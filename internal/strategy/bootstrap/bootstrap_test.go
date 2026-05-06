@@ -930,6 +930,89 @@ func TestOrderTrunkFirstHEADNotInDesired(t *testing.T) {
 	}
 }
 
+func TestBuildCheckpointHaves(t *testing.T) {
+	t.Parallel()
+	tempRef := plumbing.ReferenceName("refs/gitsync/bootstrap/heads/trunk")
+	completedTrunk := plumbing.NewHash("1111111111111111111111111111111111111111")
+	completedBranch := plumbing.ReferenceName("refs/heads/done")
+
+	t.Run("empty pushed list copies completed refs only", func(t *testing.T) {
+		t.Parallel()
+		completed := map[plumbing.ReferenceName]plumbing.Hash{completedBranch: completedTrunk}
+		got := buildCheckpointHaves(tempRef, nil, completed)
+		if len(got) != 1 || got[completedBranch] != completedTrunk {
+			t.Fatalf("expected only completed ref, got %#v", got)
+		}
+	})
+
+	t.Run("each pushed checkpoint contributes a have hash", func(t *testing.T) {
+		t.Parallel()
+		// Topo ordering scenario: a side-branch commit (sideTip) was
+		// pushed as its own checkpoint earlier. It is *not* an
+		// ancestor of trunkTip, so declaring only trunkTip would let
+		// the source resend sideTip's ancestry on the next merge fetch.
+		// Verify both are in the resulting haves so the source can
+		// prune.
+		sideTip := plumbing.NewHash("2222222222222222222222222222222222222222")
+		trunkTip := plumbing.NewHash("3333333333333333333333333333333333333333")
+		got := buildCheckpointHaves(tempRef, []plumbing.Hash{sideTip, trunkTip}, nil)
+
+		hashes := make(map[plumbing.Hash]bool, len(got))
+		for _, h := range got {
+			hashes[h] = true
+		}
+		if !hashes[sideTip] {
+			t.Errorf("side-branch checkpoint %s missing from haves: %#v", sideTip, got)
+		}
+		if !hashes[trunkTip] {
+			t.Errorf("trunk-tip checkpoint %s missing from haves: %#v", trunkTip, got)
+		}
+	})
+
+	t.Run("zero hashes are skipped", func(t *testing.T) {
+		t.Parallel()
+		realHash := plumbing.NewHash("4444444444444444444444444444444444444444")
+		got := buildCheckpointHaves(tempRef, []plumbing.Hash{plumbing.ZeroHash, realHash}, nil)
+		if len(got) != 1 {
+			t.Fatalf("zero hash should be skipped; got %#v", got)
+		}
+		for _, h := range got {
+			if h != realHash {
+				t.Fatalf("expected only %s, got %#v", realHash, got)
+			}
+		}
+	})
+
+	t.Run("synthetic ref names disambiguate duplicate hashes", func(t *testing.T) {
+		t.Parallel()
+		// The same hash can legitimately appear at multiple positions
+		// (no constraint enforces uniqueness in pushedCheckpoints).
+		// Synthetic per-position keys must not collapse them down to
+		// one entry — though for the wire it doesn't matter because
+		// the protocol layer dedupes hashes anyway.
+		dup := plumbing.NewHash("5555555555555555555555555555555555555555")
+		got := buildCheckpointHaves(tempRef, []plumbing.Hash{dup, dup}, nil)
+		if len(got) != 2 {
+			t.Fatalf("expected two distinct map entries for duplicate hash; got %#v", got)
+		}
+	})
+
+	t.Run("completed refs are not overwritten by checkpoints", func(t *testing.T) {
+		t.Parallel()
+		// Synthetic checkpoint ref names follow tempRef-have-N. They
+		// must not collide with caller-provided completedRefs keys,
+		// or a topo run would silently lose a completed branch tip.
+		completed := map[plumbing.ReferenceName]plumbing.Hash{
+			completedBranch: completedTrunk,
+		}
+		other := plumbing.NewHash("6666666666666666666666666666666666666666")
+		got := buildCheckpointHaves(tempRef, []plumbing.Hash{other}, completed)
+		if got[completedBranch] != completedTrunk {
+			t.Fatalf("completed ref %s lost: %#v", completedBranch, got)
+		}
+	})
+}
+
 func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 	mainRef := plumbing.NewBranchReferenceName("main")
 	featureRef := plumbing.NewBranchReferenceName("feature")

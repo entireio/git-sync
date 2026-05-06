@@ -334,6 +334,25 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			startIdx = 0
 		}
 
+		// Track every commit known to be in the target so the source
+		// can use them all as fetch haves. With topo ordering a merge's
+		// "delta" otherwise drags in the full ancestry of the non-first
+		// parent, even though we pushed those commits as their own
+		// checkpoints earlier in the chain (or in earlier runs).
+		//
+		// On resume, seed from the chain prefix at-or-before `current`:
+		// every prior topo iteration must have pushed those commits to
+		// advance the temp ref to its current position. Declaring just
+		// `current` is insufficient because in topo order the earlier
+		// chain entries aren't necessarily its ancestors — they can sit
+		// on side branches that only get merged later.
+		pushedCheckpoints := make([]plumbing.Hash, 0, len(batch.chain))
+		if !current.IsZero() && len(batch.chain) > 0 {
+			if idx := chainPosition(batch.chain, current); idx >= 0 {
+				pushedCheckpoints = append(pushedCheckpoints, batch.chain[:idx+1]...)
+			}
+		}
+
 		// Manual index loop: subdivide may insert checkpoints at the current
 		// index, so we must not auto-increment after a retry.
 		idx := startIdx
@@ -365,7 +384,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				})
 			}
 
-			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, current, completedRefs, fetchLimit)
+			packReader, err := packReaderForCheckpoint(ctx, p, batch, checkpoint, pushedCheckpoints, completedRefs, fetchLimit)
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
@@ -545,6 +564,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				"batch", idx+1,
 				"batch_total", len(batch.Checkpoints))
 			current = checkpoint
+			pushedCheckpoints = append(pushedCheckpoints, checkpoint)
 			result.BatchCount++
 			idx++
 		}
@@ -1145,23 +1165,44 @@ func evenCheckpoints(chain []plumbing.Hash, numBatches int) []plumbing.Hash {
 	return checkpoints
 }
 
+// buildCheckpointHaves merges every checkpoint already pushed in this
+// batch with the already-completed branch tips into a single haves
+// map for the next checkpoint fetch. Under topo ordering each
+// checkpoint covers a different region of the graph: the latest one
+// is on the chain's frontier, but earlier checkpoints capture side
+// branches that aren't ancestors of the latest. Declaring all of
+// them keeps merge commits' deltas to genuinely-new content instead
+// of re-sending side-branch ancestry we already pushed.
+//
+// Each pushed checkpoint gets a synthetic ref name so the map
+// deduplicates by position; the wire only carries the hash values.
+func buildCheckpointHaves(
+	tempRef plumbing.ReferenceName,
+	pushedCheckpoints []plumbing.Hash,
+	completedRefs map[plumbing.ReferenceName]plumbing.Hash,
+) map[plumbing.ReferenceName]plumbing.Hash {
+	haves := planner.CopyRefHashMap(completedRefs)
+	for i, h := range pushedCheckpoints {
+		if h.IsZero() {
+			continue
+		}
+		name := plumbing.ReferenceName(fmt.Sprintf("%s-have-%d", tempRef, i))
+		haves[name] = h
+	}
+	return haves
+}
+
 func packReaderForCheckpoint(
 	ctx context.Context,
 	p Params,
 	batch plannedBatch,
 	checkpoint plumbing.Hash,
-	current plumbing.Hash,
+	pushedCheckpoints []plumbing.Hash,
 	completedRefs map[plumbing.ReferenceName]plumbing.Hash,
 	batchLimit int64,
 ) (io.ReadCloser, error) {
 	desired := singleGP(batch.Plan.SourceRef, batch.TempRef, checkpoint)
-	// Merge the current checkpoint (within this branch) with any
-	// already-completed branch tips so the source can delta-compress
-	// against objects the target already has from previous branches.
-	haves := planner.CopyRefHashMap(completedRefs)
-	if !current.IsZero() {
-		haves[batch.TempRef] = current
-	}
+	haves := buildCheckpointHaves(batch.TempRef, pushedCheckpoints, completedRefs)
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, desired, haves)
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint pack: %w", err)
