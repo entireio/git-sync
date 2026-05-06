@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "7fc9b2bdce1b",
+  "strategy": "manual-commit",
+  "branch": "soph/multi-have",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7f/c9b2bdce1b/0/metadata.json",
+      "transcript": "/7f/c9b2bdce1b/0/transcript.jsonl",
+      "content_hash": "/7f/c9b2bdce1b/0/transcript_hash.txt",
+      "prompt": "/7f/c9b2bdce1b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1039,
+    "cache_creation_tokens": 6657540,
+    "cache_read_tokens": 327297163,
+    "output_tokens": 569754,
+    "api_call_count": 740
+  }
+}
