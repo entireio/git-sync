@@ -35,13 +35,14 @@ type Client struct {
 }
 
 type AdvancedOptions struct {
-	CollectStats           bool  `json:"collectStats"`
-	MeasureMemory          bool  `json:"measureMemory"`
-	Verbose                bool  `json:"verbose"`
-	Progress               bool  `json:"progress"`
-	MaxPackBytes           int64 `json:"maxPackBytes"`
-	TargetMaxPackBytes     int64 `json:"targetMaxPackBytes"`
-	MaterializedMaxObjects int   `json:"materializedMaxObjects"`
+	CollectStats           bool   `json:"collectStats"`
+	MeasureMemory          bool   `json:"measureMemory"`
+	Verbose                bool   `json:"verbose"`
+	Progress               bool   `json:"progress"`
+	MaxPackBytes           int64  `json:"maxPackBytes"`
+	TargetMaxPackBytes     int64  `json:"targetMaxPackBytes"`
+	MaterializedMaxObjects int    `json:"materializedMaxObjects"`
+	BootstrapStrategy      string `json:"bootstrapStrategy,omitempty"`
 }
 
 type ProbeRequest struct {
@@ -216,6 +217,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		MaterializedMaxObjects: maxObjects,
 		ProtocolMode:           protocolString(req.Policy.Protocol),
 		Verbose:                req.Options.Verbose,
+		BootstrapStrategy:      req.Options.BootstrapStrategy,
 	}, nil
 }
 
@@ -242,6 +244,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		TargetMaxPackBytes: req.Options.TargetMaxPackBytes,
 		ProtocolMode:       protocolString(req.Protocol),
 		Verbose:            req.Options.Verbose,
+		BootstrapStrategy:  req.Options.BootstrapStrategy,
 	}, nil
 }
 

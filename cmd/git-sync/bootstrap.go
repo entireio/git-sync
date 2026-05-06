@@ -80,6 +80,7 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
 	cmd.Flags().Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
 	cmd.Flags().Int64Var(&req.Options.TargetMaxPackBytes, "target-max-pack-bytes", 0, "target receive-pack body size limit; batches are planned and auto-subdivided to fit")
+	cmd.Flags().StringVar(&req.Options.BootstrapStrategy, "bootstrap-strategy", "", "checkpoint chain ordering: \"first-parent\" (default) or \"topo\". Use \"topo\" for merge-heavy repos where individual first-parent steps drag in unboundedly large side branches")
 	addProtocolFlag(cmd, &protocolVal)
 	cmd.Flags().BoolVarP(&req.Options.Verbose, "verbose", "v", false, "verbose logging")
 

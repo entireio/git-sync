@@ -60,6 +60,15 @@ type Params struct {
 	TargetMaxPack    int64
 	Verbose          bool
 	Logger           *slog.Logger
+	// Strategy selects the chain ordering for batched bootstrap. Empty
+	// or "first-parent" walks the first-parent backbone (default,
+	// matches historical behaviour). "topo" includes every reachable
+	// commit in topological order so sub-pack boundaries can land
+	// inside merge-pulled side branches — useful for repos like
+	// "checkpoint" branches where each first-parent step drags in a
+	// large second-parent ancestry that would otherwise have to be
+	// pushed in one indivisible pack.
+	Strategy string
 	// OnPhase, when non-nil, is called with a short human-readable label
 	// describing the current bootstrap activity (e.g. "pack 3/8") so a
 	// live progress renderer can surface what is currently in flight.
@@ -744,9 +753,22 @@ func planCheckpointsFromChain(
 	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef, trunkHaves); err != nil {
 		return nil, nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
 	}
-	chain, err := planner.FirstParentChainStoppingAt(graphStore, ref.SourceHash, trunkStopAt)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, err)
+	var chain []plumbing.Hash
+	switch p.Strategy {
+	case "", "first-parent":
+		c, walkErr := planner.FirstParentChainStoppingAt(graphStore, ref.SourceHash, trunkStopAt)
+		if walkErr != nil {
+			return nil, nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, walkErr)
+		}
+		chain = c
+	case "topo":
+		c, walkErr := planner.TopoChainStoppingAt(graphStore, ref.SourceHash, trunkStopAt)
+		if walkErr != nil {
+			return nil, nil, nil, fmt.Errorf("walk topo chain for %s: %w", ref.TargetRef, walkErr)
+		}
+		chain = c
+	default:
+		return nil, nil, nil, fmt.Errorf("unsupported bootstrap strategy %q (want \"first-parent\" or \"topo\")", p.Strategy)
 	}
 	// Collect all commit hashes in the fetched graph so callers can extend
 	// their stop set. We only need the keys — ~8 bytes per commit, so the

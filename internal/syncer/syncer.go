@@ -83,6 +83,7 @@ type Config struct {
 	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
 	ProtocolMode           string
+	BootstrapStrategy      string // "" | "first-parent" | "topo"
 
 	// progressOut overrides the writer used by the live progress ticker.
 	// Defaults to os.Stderr when nil. Exposed for tests.
@@ -946,6 +947,7 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
+		Strategy: s.cfg.BootstrapStrategy,
 		OnPhase:  s.stats.setPhase,
 		OnNotice: s.notice,
 	}, relayReason)

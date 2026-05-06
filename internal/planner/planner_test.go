@@ -801,6 +801,112 @@ func TestFirstParentChainStoppingAtTipInSet(t *testing.T) {
 	}
 }
 
+// TestTopoChainStoppingAtIncludesSideBranches builds a small merge
+// structure and verifies the topo walk emits every reachable commit
+// (not just first-parent), parents always before children. This is
+// the property that lets bootstrap place sub-pack boundaries inside
+// merge-pulled side branches instead of being limited to first-parent
+// granularity.
+func TestTopoChainStoppingAtIncludesSideBranches(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	// Topology:
+	//   root
+	//    |  \
+	//    A   B1 -> B2
+	//    |  /
+	//   merge          (first parent A, second parent B2)
+	root := seedCommit(t, repo, nil)
+	a := seedCommit(t, repo, []plumbing.Hash{root})
+	b1 := seedCommit(t, repo, []plumbing.Hash{root})
+	b2 := seedCommit(t, repo, []plumbing.Hash{b1})
+	merge := seedCommit(t, repo, []plumbing.Hash{a, b2})
+
+	chain, err := TopoChainStoppingAt(repo.Storer, merge, nil)
+	if err != nil {
+		t.Fatalf("TopoChainStoppingAt: %v", err)
+	}
+	want := map[plumbing.Hash]bool{root: true, a: true, b1: true, b2: true, merge: true}
+	if len(chain) != len(want) {
+		t.Fatalf("chain length = %d, want %d: %v", len(chain), len(want), chain)
+	}
+	pos := map[plumbing.Hash]int{}
+	for i, h := range chain {
+		if !want[h] {
+			t.Errorf("unexpected commit in chain: %s", h)
+		}
+		pos[h] = i
+	}
+	// Topological invariant: every parent appears before its child.
+	mustPrecede := []struct{ parent, child plumbing.Hash }{
+		{root, a}, {root, b1}, {b1, b2}, {a, merge}, {b2, merge},
+	}
+	for _, edge := range mustPrecede {
+		if pos[edge.parent] >= pos[edge.child] {
+			t.Errorf("parent %s at %d should precede child %s at %d",
+				edge.parent, pos[edge.parent], edge.child, pos[edge.child])
+		}
+	}
+}
+
+func TestTopoChainStoppingAtSkipsStopSet(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	a := seedCommit(t, repo, []plumbing.Hash{root})
+	b := seedCommit(t, repo, []plumbing.Hash{a})
+	tip := seedCommit(t, repo, []plumbing.Hash{b})
+
+	stopAt := map[plumbing.Hash]struct{}{root: {}, a: {}}
+	chain, err := TopoChainStoppingAt(repo.Storer, tip, stopAt)
+	if err != nil {
+		t.Fatalf("TopoChainStoppingAt: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("expected 2 commits past stop set, got %d: %v", len(chain), chain)
+	}
+	if chain[0] != b || chain[1] != tip {
+		t.Errorf("chain = %v, want [%s %s]", chain, b, tip)
+	}
+}
+
+// TestTopoChainStoppingAtDeterministic verifies repeated walks of the
+// same graph produce the same ordering. Required for resume — temp
+// refs point to a commit whose position must be findable in the
+// rebuilt chain on a subsequent run.
+func TestTopoChainStoppingAtDeterministic(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	a := seedCommit(t, repo, []plumbing.Hash{root})
+	b := seedCommit(t, repo, []plumbing.Hash{root})
+	c := seedCommit(t, repo, []plumbing.Hash{a, b})
+	d := seedCommit(t, repo, []plumbing.Hash{c})
+
+	first, err := TopoChainStoppingAt(repo.Storer, d, nil)
+	if err != nil {
+		t.Fatalf("first walk: %v", err)
+	}
+	second, err := TopoChainStoppingAt(repo.Storer, d, nil)
+	if err != nil {
+		t.Fatalf("second walk: %v", err)
+	}
+	if len(first) != len(second) {
+		t.Fatalf("chain lengths differ: %d vs %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Errorf("chain[%d] differs: %s vs %s", i, first[i], second[i])
+		}
+	}
+}
+
 func TestFirstParentChainStoppingAtNilBehaviourMatchesPlain(t *testing.T) {
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {

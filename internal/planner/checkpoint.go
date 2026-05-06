@@ -61,6 +61,126 @@ func FirstParentChainStoppingAt(store storer.EncodedObjectStorer, tip plumbing.H
 	return chain, nil
 }
 
+// TopoChainStoppingAt returns every commit reachable from tip
+// (excluding any in stopAt and their ancestors) in a deterministic
+// topological order: every commit's parents appear before the commit
+// itself in the result. Ties are broken by hash so the order is stable
+// across runs of the same source graph — important for resume, which
+// looks up a temp-ref commit's position in the rebuilt chain.
+//
+// Where FirstParentChainStoppingAt walks only the first-parent
+// backbone, this includes every merge-pulled side-branch commit too.
+// For repos where individual first-parent steps drag in unboundedly
+// large second-parent ancestries (the merge-heavy "checkpoint" pattern),
+// topo order lets the bootstrap place sub-pack boundaries inside those
+// side branches instead of being limited to first-parent granularity.
+func TopoChainStoppingAt(store storer.EncodedObjectStorer, tip plumbing.Hash, stopAt map[plumbing.Hash]struct{}) ([]plumbing.Hash, error) {
+	if _, stop := stopAt[tip]; stop {
+		return nil, nil
+	}
+
+	// BFS reachability collection. We need every commit and its parent
+	// list to compute in-degrees for the topological sort below.
+	type entry struct {
+		commit  *object.Commit
+		parents []plumbing.Hash
+	}
+	reachable := map[plumbing.Hash]entry{}
+	queue := []plumbing.Hash{tip}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		if _, ok := reachable[h]; ok {
+			continue
+		}
+		if _, stop := stopAt[h]; stop {
+			continue
+		}
+		commit, err := object.GetCommit(store, h)
+		if err != nil {
+			return nil, fmt.Errorf("load commit %s: %w", h, err)
+		}
+		reachable[h] = entry{commit: commit, parents: commit.ParentHashes}
+		for _, p := range commit.ParentHashes {
+			if _, stop := stopAt[p]; stop {
+				continue
+			}
+			if _, ok := reachable[p]; ok {
+				continue
+			}
+			queue = append(queue, p)
+		}
+	}
+
+	// Kahn's algorithm: emit commits whose every reachable parent has
+	// already been emitted. children[p] is the list of reachable
+	// commits that consider p a parent — so when we emit p, we can
+	// decrement each child's in-degree.
+	inDeg := make(map[plumbing.Hash]int, len(reachable))
+	children := make(map[plumbing.Hash][]plumbing.Hash, len(reachable))
+	for h, e := range reachable {
+		for _, p := range e.parents {
+			if _, ok := reachable[p]; !ok {
+				continue
+			}
+			inDeg[h]++
+			children[p] = append(children[p], h)
+		}
+	}
+
+	ready := make([]plumbing.Hash, 0)
+	for h := range reachable {
+		if inDeg[h] == 0 {
+			ready = append(ready, h)
+		}
+	}
+	sortHashes(ready)
+
+	chain := make([]plumbing.Hash, 0, len(reachable))
+	for len(ready) > 0 {
+		h := ready[0]
+		ready = ready[1:]
+		chain = append(chain, h)
+		for _, child := range children[h] {
+			inDeg[child]--
+			if inDeg[child] == 0 {
+				ready = appendSortedHash(ready, child)
+			}
+		}
+	}
+	if len(chain) != len(reachable) {
+		return nil, fmt.Errorf("cycle detected in commit graph (emitted %d of %d)",
+			len(chain), len(reachable))
+	}
+	return chain, nil
+}
+
+// sortHashes sorts a hash slice in lexicographic order. Used as the
+// tie-breaker in topological emission so the chain is deterministic
+// across runs even when several commits are simultaneously ready.
+func sortHashes(hs []plumbing.Hash) {
+	sort.Slice(hs, func(i, j int) bool {
+		return hashLess(hs[i], hs[j])
+	})
+}
+
+// appendSortedHash inserts h into an already-sorted slice while
+// preserving sort order. Cheaper than re-sorting after each append in
+// the topological-emission loop where we add one element at a time.
+func appendSortedHash(hs []plumbing.Hash, h plumbing.Hash) []plumbing.Hash {
+	idx := sort.Search(len(hs), func(i int) bool {
+		return !hashLess(hs[i], h)
+	})
+	hs = append(hs, plumbing.ZeroHash)
+	copy(hs[idx+1:], hs[idx:])
+	hs[idx] = h
+	return hs
+}
+
+func hashLess(a, b plumbing.Hash) bool {
+	return a.Compare(b.Bytes()) < 0
+}
+
 // FirstParentChainFromMap walks a first-parent map from tip back to root.
 // The map key is a commit hash, the value is its first parent hash.
 // A zero-value parent marks the root. Returns the chain in root-to-tip order.
