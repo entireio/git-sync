@@ -1,0 +1,50 @@
+{
+  "cli_version": "v0.6.1-nightly.202605060704.2754b404-dev-2754b4044",
+  "checkpoint_id": "06dc8e1ddad5",
+  "session_id": "3ee1ca7a-a436-44c1-906a-a912c6d33f96",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-06T20:01:53.88826Z",
+  "branch": "soph/topo-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/syncplan.go",
+    "cmd/git-sync/bootstrap.go"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "28ebe514a0f3",
+  "token_usage": {
+    "input_tokens": 1325,
+    "cache_creation_tokens": 7066608,
+    "cache_read_tokens": 364393917,
+    "output_tokens": 695879,
+    "api_call_count": 911
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-06T20:01:53.564415Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 20,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 20,
+    "total_lines_changed": 22,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 33,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 33
+      }
+    }
+  ]
+}
