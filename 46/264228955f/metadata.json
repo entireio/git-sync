@@ -3,11 +3,8 @@
   "checkpoint_id": "46264228955f",
   "strategy": "manual-commit",
   "branch": "soph/topo-bootstrap",
-  "checkpoints_count": 0,
-  "files_touched": [
-    "internal/strategy/bootstrap/bootstrap.go",
-    "internal/strategy/bootstrap/bootstrap_test.go"
-  ],
+  "checkpoints_count": 1,
+  "files_touched": null,
   "sessions": [
     {
       "metadata": "/46/264228955f/0/metadata.json",
@@ -17,10 +14,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 1256,
-    "cache_creation_tokens": 7012321,
-    "cache_read_tokens": 351570308,
-    "output_tokens": 663894,
-    "api_call_count": 867
+    "input_tokens": 1272,
+    "cache_creation_tokens": 7025160,
+    "cache_read_tokens": 355961481,
+    "output_tokens": 670915,
+    "api_call_count": 883
   }
 }
