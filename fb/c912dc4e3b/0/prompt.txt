@@ -1,0 +1,276 @@
+❯ go run ./cmd/git-sync sync --target-max-pack-bytes 10000000 --bootstrap-strategy=topo --verbose --branch entire/checkpoints/v1 --progress https://github.com/entireio/cli-checkpoints.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+time=2026-05-06T15:05:50.748+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=1
+time=2026-05-06T15:05:50.748+02:00 level=INFO msg="bootstrap batch trunk selected" source_head_target=refs/heads/entire/checkpoints/v1 trunk_target_ref=refs/heads/entire/checkpoints/v1
+time=2026-05-06T15:05:50.749+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/entire/checkpoints/v1 have_count=0 stop_at_count=0
+time=2026-05-06T15:05:51.087+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/entire/checkpoints/v1 chain_len=8475 estimated_batches=56
+time=2026-05-06T15:05:51.087+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/entire/checkpoints/v1 temp_ref=refs/gitsync/bootstrap/heads/entire/checkpoints/v1 planned_batches=56 resume_hash=941e69ae
+time=2026-05-06T15:05:51.087+02:00 level=INFO msg="bootstrap batch resuming from stale temp ref" branch=refs/heads/entire/checkpoints/v1 resume_hash=941e69ae remaining_commits=8459 new_batches=56
+time=2026-05-06T15:05:51.087+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=56 from=941e69ae to=9ca3c51e
+source: Enumerating objects: 641, done.
+source: Counting objects: 100% (175/175), done.
+source: Compressing objects: 100% (87/87), done.
+time=2026-05-06T15:05:51.475+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=56 estimated_bytes=480750 object_count=641 target_limit_bytes=10000000 calibrated_bytes_per_object=750
+source: Total 641 (delta 141), reused 88 (delta 88), pack-reused 466 (from 1)
+time=2026-05-06T15:05:57.246+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=56
+time=2026-05-06T15:05:57.246+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=56 from=9ca3c51e to=5f1dc391
+source: Enumerating objects: 100, done.
+source: Counting objects: 100% (24/24), done.
+source: Compressing objects: 100% (8/8), done.
+time=2026-05-06T15:05:57.651+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=56 estimated_bytes=75000 object_count=100 target_limit_bytes=10000000 calibrated_bytes_per_object=750
+source: Total 100 (delta 17), reused 16 (delta 16), pack-reused 76 (from 1)
+time=2026-05-06T15:05:58.449+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=56
+time=2026-05-06T15:05:58.449+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=56 from=5f1dc391 to=05fa8394
+source: Enumerating objects: 3244, done.
+source: Counting objects: 100% (736/736), done.
+source: Compressing objects: 100% (309/309), done.
+time=2026-05-06T15:06:14.475+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=56 estimated_bytes=2433000 object_count=3244 target_limit_bytes=10000000 calibrated_bytes_per_object=750
+source: Total 3244 (delta 534), reused 427 (delta 427), pack-reused 2508 (from 1)
+time=2026-05-06T15:06:37.045+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=56 estimated_bytes=2433000 target_limit_bytes=10000000 sent_bytes=83834245 object_count=3244 will_subdivide=false error="target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f78337888d4dbf8-FRA, Server=cloudflare, Content-Type=text/plain; charset=UTF-8] Internal Server Error"
+github.com → 90.1 MB @ 1.96 MB/s ✓  │  88.5 MB @ 1.67 MB/s ✓ → 8b04592ed74a5cc…cloudflare.net
+error: sync: sync: bootstrap execute: push bootstrap batch for refs/heads/entire/checkpoints/v1: target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f78337888d4dbf8-FRA, Server=cloudflare, Content-Type=text/plain; charset=UTF-8] Internal Server Error
+exit status 1
+
+---
+
+❯ go run ./cmd/git-sync sync --target-max-pack-bytes 10000000 --bootstrap-strategy=topo --verbose --branch entire/checkpoints/v1 --progress https://github.com/entireio/cli-checkpoints.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+time=2026-05-06T15:15:58.172+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=1
+time=2026-05-06T15:15:58.172+02:00 level=INFO msg="bootstrap batch trunk selected" source_head_target=refs/heads/entire/checkpoints/v1 trunk_target_ref=refs/heads/entire/checkpoints/v1
+time=2026-05-06T15:15:58.172+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/entire/checkpoints/v1 have_count=0 stop_at_count=0
+time=2026-05-06T15:15:58.541+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/entire/checkpoints/v1 chain_len=8475 estimated_batches=56
+time=2026-05-06T15:15:58.541+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/entire/checkpoints/v1 temp_ref=refs/gitsync/bootstrap/heads/entire/checkpoints/v1 planned_batches=56 resume_hash=5f1dc391
+time=2026-05-06T15:15:58.541+02:00 level=INFO msg="bootstrap batch resuming from stale temp ref" branch=refs/heads/entire/checkpoints/v1 resume_hash=5f1dc391 remaining_commits=8157 new_batches=54
+time=2026-05-06T15:15:58.541+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=54 from=5f1dc391 to=05fa8394
+source: Enumerating objects: 3244, done.
+source: Counting objects: 100% (736/736), done.
+source: Compressing objects: 100% (309/309), done.
+time=2026-05-06T15:16:13.508+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=54 estimated_bytes=2433000 object_count=3244 target_limit_bytes=10000000 calibrated_bytes_per_object=750
+time=2026-05-06T15:16:14.982+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=54 estimated_bytes=2433000 target_limit_bytes=10000000 sent_bytes=8388620 object_count=3244 objects_sent=407 total_objects_in_pack=3244 aborted_early=true will_subdivide=true error="target receive-pack: post RPC: Post \"https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack\": round trip: pack upload aborted early: projected to exceed target body limit"
+time=2026-05-06T15:16:14.982+02:00 level=INFO msg="bootstrap batch calibrated bytes-per-object" branch=refs/heads/entire/checkpoints/v1 previous_bytes_per_object=750 observed_bytes_per_object=41221 sent_bytes=8388620 calibration_denom=407 object_count=3244 objects_sent=407
+time=2026-05-06T15:16:14.982+02:00 level=INFO msg="bootstrap batch subdividing after target size rejection" branch=refs/heads/entire/checkpoints/v1 old_remaining=54 new_remaining=108 sent_bytes=8388620 sizing_bytes=66861629 limit_bytes=10000000 factor=27 aborted_early=true error="target receive-pack: post RPC: Post \"https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack\": round trip: pack upload aborted early: projected to exceed target body limit"
+projected to exceed target limit (target limit 9.54 MB) — splitting 54 → 108 packs
+time=2026-05-06T15:16:14.983+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=108 from=5f1dc391 to=60b18081
+source: Enumerating objects: 2428, done.
+source: Counting objects: 100% (716/716), done.
+source: Compressing objects: 100% (263/263), done.
+time=2026-05-06T15:16:24.743+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=108 new_remaining=216 estimated_bytes=100084588 calibrated_bytes_per_object=41221
+estimated pack ~95.4 MB exceeds target limit 9.54 MB — splitting 108 → 216 packs (~452 KB each)
+time=2026-05-06T15:16:24.743+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=216 from=5f1dc391 to=0d760ab3
+source: Enumerating objects: 2051, done.
+source: Counting objects: 100% (606/606), done.
+source: Compressing objects: 100% (222/222), done.
+time=2026-05-06T15:16:34.542+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=216 new_remaining=432 estimated_bytes=84544271 calibrated_bytes_per_object=41221
+estimated pack ~80.6 MB exceeds target limit 9.54 MB — splitting 216 → 432 packs (~191 KB each)
+time=2026-05-06T15:16:34.542+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=432 from=5f1dc391 to=b489c3db
+source: Enumerating objects: 1856, done.
+source: Counting objects: 100% (538/538), done.
+source: Compressing objects: 100% (191/191), done.
+time=2026-05-06T15:16:43.336+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=432 new_remaining=864 estimated_bytes=76506176 calibrated_bytes_per_object=41221
+estimated pack ~73.0 MB exceeds target limit 9.54 MB — splitting 432 → 864 packs (~86.5 KB each)
+time=2026-05-06T15:16:43.336+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=864 from=5f1dc391 to=87140486
+source: Enumerating objects: 71, done.
+source: Counting objects: 100% (33/33), done.
+source: Compressing objects: 100% (16/16), done.
+time=2026-05-06T15:16:43.619+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=864 estimated_bytes=2926691 object_count=71 target_limit_bytes=10000000 calibrated_bytes_per_object=41221
+source: Total 71 (delta 24), reused 17 (delta 17), pack-reused 38 (from 1)
+time=2026-05-06T15:16:47.588+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=864
+time=2026-05-06T15:16:47.588+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=864 from=87140486 to=b489c3db
+source: Enumerating objects: 1856, done.
+source: Counting objects: 100% (538/538), done.
+source: Compressing objects: 100% (191/191), done.
+time=2026-05-06T15:16:56.380+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=863 new_remaining=1726 estimated_bytes=76506176 calibrated_bytes_per_object=41221
+estimated pack ~73.0 MB exceeds target limit 9.54 MB — splitting 863 → 1726 packs (~43.3 KB each)
+time=2026-05-06T15:16:56.380+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=1727 from=87140486 to=824dae38
+source: Enumerating objects: 32, done.
+source: Counting objects: 100% (18/18), done.
+source: Compressing objects: 100% (12/12), done.
+time=2026-05-06T15:16:56.590+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=1727 estimated_bytes=1319072 object_count=32 target_limit_bytes=10000000 calibrated_bytes_per_object=41221
+source: Total 32 (delta 11), reused 6 (delta 6), pack-reused 14 (from 1)
+time=2026-05-06T15:16:57.262+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=2 batch_total=1727
+time=2026-05-06T15:16:57.262+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=1727 from=824dae38 to=b489c3db
+source: Enumerating objects: 1856, done.
+source: Counting objects: 100% (538/538), done.
+source: Compressing objects: 100% (191/191), done.
+time=2026-05-06T15:17:06.027+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=1725 new_remaining=3450 estimated_bytes=76506176 calibrated_bytes_per_object=41221
+estimated pack ~73.0 MB exceeds target limit 9.54 MB — splitting 1725 → 3450 packs (~21.7 KB each)
+time=2026-05-06T15:17:06.027+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=3452 from=824dae38 to=b2709d31
+source: Enumerating objects: 18, done.
+source: Counting objects: 100% (4/4), done.
+source: Compressing objects: 100% (3/3), done.
+time=2026-05-06T15:17:06.246+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=3452 estimated_bytes=741978 object_count=18 target_limit_bytes=10000000 calibrated_bytes_per_object=41221
+source: Total 18 (delta 2), reused 1 (delta 1), pack-reused 14 (from 1)
+time=2026-05-06T15:17:06.425+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=3 batch_total=3452
+time=2026-05-06T15:17:06.425+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=4 batch_total=3452 from=b2709d31 to=b489c3db
+source: Enumerating objects: 1856, done.
+source: Counting objects: 100% (538/538), done.
+source: Compressing objects: 100% (191/191), done.
+time=2026-05-06T15:17:14.913+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=3449 new_remaining=6898 estimated_bytes=76506176 calibrated_bytes_per_object=41221
+estimated pack ~73.0 MB exceeds target limit 9.54 MB — splitting 3449 → 6898 packs (~10.8 KB each)
+time=2026-05-06T15:17:14.913+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=4 batch_total=6901 from=b2709d31 to=746c37b0
+source: Enumerating objects: 7, done.
+source: Counting objects: 100% (4/4), done.
+source: Compressing objects: 100% (4/4), done.
+time=2026-05-06T15:17:15.363+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=4 batch_total=6901 estimated_bytes=288547 object_count=7 target_limit_bytes=10000000 calibrated_bytes_per_object=41221
+source: Total 7 (delta 0), reused 0 (delta 0), pack-reused 3 (from 1)
+time=2026-05-06T15:17:15.474+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=4 batch_total=6901
+time=2026-05-06T15:17:15.474+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=5 batch_total=6901 from=746c37b0 to=b489c3db
+source: Enumerating objects: 1856, done.
+source: Counting objects: 100% (538/538), done.
+source: Compressing objects: 100% (191/191), done.
+time=2026-05-06T15:17:24.060+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=6897 new_remaining=8141 estimated_bytes=76506176 calibrated_bytes_per_object=41221
+estimated pack ~73.0 MB exceeds target limit 9.54 MB — splitting 6897 → 8141 packs (~9.18 KB each)
+time=2026-05-06T15:17:24.060+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=5 batch_total=8145 from=746c37b0 to=fe84051a
+source: Enumerating objects: 1847, done.
+source: Counting objects: 100% (535/535), done.
+source: Compressing objects: 100% (198/198), done.
+time=2026-05-06T15:17:32.517+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=5 batch_total=8145 estimated_bytes=76135187 object_count=1847 target_limit_bytes=10000000 calibrated_bytes_per_object=41221
+time=2026-05-06T15:17:34.047+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=5 batch_total=8145 estimated_bytes=76135187 target_limit_bytes=10000000 sent_bytes=8388620 object_count=1847 objects_sent=248 total_objects_in_pack=1847 aborted_early=true will_subdivide=true error="target receive-pack: post RPC: Post \"https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack\": round trip: pack upload aborted early: projected to exceed target body limit"
+time=2026-05-06T15:17:34.047+02:00 level=INFO msg="bootstrap batch calibrated bytes-per-object" branch=refs/heads/entire/checkpoints/v1 previous_bytes_per_object=41221 observed_bytes_per_object=67650 sent_bytes=8388620 calibration_denom=248 object_count=1847 objects_sent=248
+github.com → 19.8 MB @ 194 KB/s ✓  │  18.0 MB @ 176 KB/s ✓ → 8b04592ed74a5cc…cloudflare.net
+error: sync: sync: bootstrap execute: push bootstrap batch for refs/heads/entire/checkpoints/v1: target receive-pack: post RPC: Post "https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack": round trip: pack upload aborted early: projected to exceed target body limit
+exit status 1
+
+---
+
+I'm trying to parse this: wasn't the idea with the topo strategy that we could walk merge commits and split them? Or did I get that wrong?
+
+---
+
+would it belong to the topo strategy?
+
+---
+
+I just have already: soph/streaming-pack-parse -> soph/topo-bootstrap so now do one more on top? but yeah fine with me
+
+---
+
+❯ go run ./cmd/git-sync sync --target-max-pack-bytes 19000000 --bootstrap-strategy=topo --verbose --branch entire/checkpoints/v1 --progress https://github.com/entireio/cli-checkpoints.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+time=2026-05-06T15:50:08.410+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=1
+time=2026-05-06T15:50:08.410+02:00 level=INFO msg="bootstrap batch trunk selected" source_head_target=refs/heads/entire/checkpoints/v1 trunk_target_ref=refs/heads/entire/checkpoints/v1
+time=2026-05-06T15:50:08.410+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/entire/checkpoints/v1 have_count=0 stop_at_count=0
+time=2026-05-06T15:50:08.730+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/entire/checkpoints/v1 chain_len=8478 estimated_batches=30
+time=2026-05-06T15:50:08.730+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/entire/checkpoints/v1 temp_ref=refs/gitsync/bootstrap/heads/entire/checkpoints/v1 planned_batches=30 resume_hash=746c37b0
+time=2026-05-06T15:50:08.730+02:00 level=INFO msg="bootstrap batch resuming from stale temp ref" branch=refs/heads/entire/checkpoints/v1 resume_hash=746c37b0 remaining_commits=8144 new_batches=29
+time=2026-05-06T15:50:08.730+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=29 from=746c37b0 to=000769e0
+source: Enumerating objects: 4517, done.
+source: Counting objects: 100% (1046/1046), done.
+source: Compressing objects: 100% (442/442), done.
+time=2026-05-06T15:50:33.260+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=29 estimated_bytes=3387750 object_count=4517 target_limit_bytes=19000000 calibrated_bytes_per_object=750
+time=2026-05-06T15:50:34.928+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=29 estimated_bytes=3387750 target_limit_bytes=19000000 sent_bytes=8388620 object_count=4517 objects_sent=521 total_objects_in_pack=4517 aborted_early=true will_subdivide=true error="target receive-pack: post RPC: Post \"https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack\": round trip: pack upload aborted early: projected to exceed target body limit"
+time=2026-05-06T15:50:34.928+02:00 level=INFO msg="bootstrap batch calibrated bytes-per-object" branch=refs/heads/entire/checkpoints/v1 previous_bytes_per_object=750 observed_bytes_per_object=32201 sent_bytes=8388620 calibration_denom=521 object_count=4517 objects_sent=521
+time=2026-05-06T15:50:34.928+02:00 level=INFO msg="bootstrap batch subdividing after target size rejection" branch=refs/heads/entire/checkpoints/v1 old_remaining=29 new_remaining=58 sent_bytes=8388620 sizing_bytes=72728208 limit_bytes=19000000 factor=16 aborted_early=true error="target receive-pack: post RPC: Post \"https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack\": round trip: pack upload aborted early: projected to exceed target body limit"
+projected to exceed target limit (target limit 18.1 MB) — splitting 29 → 58 packs
+time=2026-05-06T15:50:34.928+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=58 from=746c37b0 to=19d3253b
+source: Enumerating objects: 3299, done.
+source: Counting objects: 100% (753/753), done.
+source: Compressing objects: 100% (309/309), done.
+time=2026-05-06T15:50:50.412+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=58 new_remaining=116 estimated_bytes=106231099 calibrated_bytes_per_object=32201
+estimated pack ~101 MB exceeds target limit 18.1 MB — splitting 58 → 116 packs (~894 KB each)
+time=2026-05-06T15:50:50.412+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=116 from=746c37b0 to=1a600530
+source: Enumerating objects: 2543, done.
+source: Counting objects: 100% (750/750), done.
+source: Compressing objects: 100% (271/271), done.
+time=2026-05-06T15:51:00.224+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=116 new_remaining=232 estimated_bytes=81887143 calibrated_bytes_per_object=32201
+estimated pack ~78.1 MB exceeds target limit 18.1 MB — splitting 116 → 232 packs (~345 KB each)
+time=2026-05-06T15:51:00.224+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=232 from=746c37b0 to=989051a7
+source: Enumerating objects: 2185, done.
+source: Counting objects: 100% (656/656), done.
+source: Compressing objects: 100% (239/239), done.
+time=2026-05-06T15:51:09.858+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=232 new_remaining=464 estimated_bytes=70359185 calibrated_bytes_per_object=32201
+estimated pack ~67.1 MB exceeds target limit 18.1 MB — splitting 232 → 464 packs (~148 KB each)
+time=2026-05-06T15:51:09.858+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=464 from=746c37b0 to=cb4143b8
+source: Enumerating objects: 2009, done.
+source: Counting objects: 100% (594/594), done.
+source: Compressing objects: 100% (217/217), done.
+time=2026-05-06T15:51:19.629+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=464 new_remaining=928 estimated_bytes=64691809 calibrated_bytes_per_object=32201
+estimated pack ~61.7 MB exceeds target limit 18.1 MB — splitting 464 → 928 packs (~68.1 KB each)
+time=2026-05-06T15:51:19.629+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=928 from=746c37b0 to=c10a2ed0
+source: Enumerating objects: 1922, done.
+source: Counting objects: 100% (562/562), done.
+source: Compressing objects: 100% (203/203), done.
+time=2026-05-06T15:51:29.291+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=928 new_remaining=1856 estimated_bytes=61890322 calibrated_bytes_per_object=32201
+estimated pack ~59.0 MB exceeds target limit 18.1 MB — splitting 928 → 1856 packs (~32.6 KB each)
+time=2026-05-06T15:51:29.291+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1856 from=746c37b0 to=4323ced9
+source: Enumerating objects: 1878, done.
+source: Counting objects: 100% (548/548), done.
+source: Compressing objects: 100% (198/198), done.
+time=2026-05-06T15:51:38.326+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=1856 new_remaining=3712 estimated_bytes=60473478 calibrated_bytes_per_object=32201
+estimated pack ~57.7 MB exceeds target limit 18.1 MB — splitting 1856 → 3712 packs (~15.9 KB each)
+time=2026-05-06T15:51:38.326+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=3712 from=746c37b0 to=b489c3db
+source: Enumerating objects: 1856, done.
+source: Counting objects: 100% (538/538), done.
+source: Compressing objects: 100% (191/191), done.
+time=2026-05-06T15:51:47.769+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=3712 new_remaining=7424 estimated_bytes=59765056 calibrated_bytes_per_object=32201
+estimated pack ~57.0 MB exceeds target limit 18.1 MB — splitting 3712 → 7424 packs (~7.86 KB each)
+time=2026-05-06T15:51:47.769+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=7424 from=746c37b0 to=fe84051a
+source: Enumerating objects: 1847, done.
+source: Counting objects: 100% (535/535), done.
+source: Compressing objects: 100% (198/198), done.
+time=2026-05-06T15:51:56.453+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/entire/checkpoints/v1 old_remaining=7424 new_remaining=8144 estimated_bytes=59475247 calibrated_bytes_per_object=32201
+estimated pack ~56.7 MB exceeds target limit 18.1 MB — splitting 7424 → 8144 packs (~7.13 KB each)
+time=2026-05-06T15:51:56.453+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=8144 from=746c37b0 to=fe84051a
+source: Enumerating objects: 1847, done.
+source: Counting objects: 100% (535/535), done.
+source: Compressing objects: 100% (198/198), done.
+time=2026-05-06T15:52:05.424+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=8144 estimated_bytes=59475247 object_count=1847 target_limit_bytes=19000000 calibrated_bytes_per_object=32201
+time=2026-05-06T15:52:07.007+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=8144 estimated_bytes=59475247 target_limit_bytes=19000000 sent_bytes=8388620 object_count=1847 objects_sent=248 total_objects_in_pack=1847 aborted_early=true will_subdivide=true error="target receive-pack: post RPC: Post \"https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack\": round trip: pack upload aborted early: projected to exceed target body limit"
+time=2026-05-06T15:52:07.007+02:00 level=INFO msg="bootstrap batch calibrated bytes-per-object" branch=refs/heads/entire/checkpoints/v1 previous_bytes_per_object=32201 observed_bytes_per_object=67650 sent_bytes=8388620 calibration_denom=248 object_count=1847 objects_sent=248
+github.com → 17.8 MB @ 129 KB/s ✓  │  16.0 MB @ 115 KB/s ✓ → 8b04592ed74a5cc…cloudflare.net
+error: sync: sync: bootstrap execute: push bootstrap batch for refs/heads/entire/checkpoints/v1: target receive-pack: post RPC: Post "https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack": round trip: pack upload aborted early: projected to exceed target body limit
+exit status 1
+
+---
+
+ok, cool that works now!
+
+---
+
+time=2026-05-06T16:12:28.041+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=551 batch_total=7967 estimated_bytes=4516946 object_count=7 target_limit_bytes=19000000 calibrated_bytes_per_object=645278
+source: Total 7 (delta 0), reused 0 (delta 0), pack-reused 3 (from 1)
+time=2026-05-06T16:12:28.958+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=551 batch_total=7967
+time=2026-05-06T16:12:28.958+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=552 batch_total=7967 from=23581c57 to=3c71ddfb
+source: Enumerating objects: 2, done.
+source: Counting objects: 100% (1/1), done.
+source: Total 2 (delta 0), reused 0 (delta 0), pack-reused 1 (from 1)
+time=2026-05-06T16:12:29.151+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=552 batch_total=7967 estimated_bytes=1290556 object_count=2 target_limit_bytes=19000000 calibrated_bytes_per_object=645278
+time=2026-05-06T16:12:29.258+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=552 batch_total=7967
+time=2026-05-06T16:12:29.258+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=553 batch_total=7967 from=3c71ddfb to=f9a586ea
+source: Enumerating objects: 6, done.
+source: Counting objects: 100% (3/3), done.
+source: Compressing objects: 100% (3/3), done.
+time=2026-05-06T16:12:29.519+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=553 batch_total=7967 estimated_bytes=3871668 object_count=6 target_limit_bytes=19000000 calibrated_bytes_per_object=645278
+source: Total 6 (delta 0), reused 0 (delta 0), pack-reused 3 (from 1)
+time=2026-05-06T16:12:29.718+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=553 batch_total=7967
+time=2026-05-06T16:12:29.718+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=554 batch_total=7967 from=f9a586ea to=a01090b9
+source: Enumerating objects: 6, done.
+source: Counting objects: 100% (4/4), done.
+source: Compressing objects: 100% (4/4), done.
+time=2026-05-06T16:12:30.019+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=554 batch_total=7967 estimated_bytes=3871668 object_count=6 target_limit_bytes=19000000 calibrated_bytes_per_object=645278
+source: Total 6 (delta 0), reused 0 (delta 0), pack-reused 2 (from 1)
+time=2026-05-06T16:12:30.236+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/entire/checkpoints/v1 batch=554 batch_total=7967
+time=2026-05-06T16:12:30.236+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=555 batch_total=7967 from=a01090b9 to=46d3bb0d
+source: Enumerating objects: 6, done.
+source: Counting objects: 100% (3/3), done.
+source: Compressing objects: 100% (3/3), done.
+time=2026-05-06T16:12:30.429+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=555 batch_total=7967 estimated_bytes=3871668 object_count=6 target_limit_bytes=19000000 calibrated_bytes_per_object=645278
+source: Total 6 (delta 0), reused 0 (delta 0), pack-reused 3 (from 1)
+github.com → 273 MB @ 482 KB/s  │  253 MB @ 380 KB/s → 8b04592ed74a5cc…cloudflare.net  (pack 555/7967)^Csignal: interrupt
+
+---
+
+isn't 1 the we couldn't do so far?
+
+---
+
+hmm, I wonder in general: We basically have an issue with pretty large commits, I think that is the case here, because even with the multi have and split it goes down to 7967 splits, then once that large thing is done, it's stuck on tiny pack files. 
+
+I put the log of the last run (copy&paste it from the terminal output) into tmp/test.log I wonder if this is working correctly but also if we can bring it back up again easily
+
+---
+
+let's add it to multi-have
