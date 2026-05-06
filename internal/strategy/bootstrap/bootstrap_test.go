@@ -554,6 +554,24 @@ func TestShouldAbortPush(t *testing.T) {
 			objectsSent: 98, totalObjects: 100,
 			budget: cap500, want: false,
 		},
+		{
+			// Learned proxy budget below the projection-path floor:
+			// the simple "we already crossed the threshold" check
+			// must still fire, otherwise client-side abort never
+			// triggers and every retry pays for full server-side
+			// rejection.
+			name:      "small budget under floor, sent crosses threshold",
+			bytesSent: 5 * 1024 * 1024,
+			budget:    5 * 1024 * 1024, want: true,
+		},
+		{
+			// Same small budget but well under threshold (95% of 5
+			// MiB ≈ 4.75 MiB). The floor still sensibly suppresses
+			// projection-based aborts.
+			name:      "small budget under floor, sent under threshold",
+			bytesSent: 1 * 1024 * 1024,
+			budget:    5 * 1024 * 1024, want: false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -562,6 +580,59 @@ func TestShouldAbortPush(t *testing.T) {
 			if got != c.want {
 				t.Errorf("shouldAbortPush(%d, %d, %d, %d) = %v, want %v",
 					c.bytesSent, c.objectsSent, c.totalObjects, c.budget, got, c.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveObjectsSent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		objectsSent  int64
+		totalObjects int64
+		abortedEarly bool
+		want         int64
+	}{
+		{
+			// Header parsed, the abort floor (8 MiB) was exhausted by
+			// a single front-loaded large blob before it finished
+			// scanning. The bug: without effective=1, calibration
+			// divides sentBytes by the full pack count and projection
+			// stays at sentBytes — the factor calculation collapses
+			// back to ~2 every retry, recreating the slow 1→2→4→…
+			// convergence streaming-pack-parse is meant to remove.
+			name:        "front-loaded blob abort treats first object as observed",
+			objectsSent: 0, totalObjects: 100,
+			abortedEarly: true, want: 1,
+		},
+		{
+			name:        "no header parsed leaves zero",
+			objectsSent: 0, totalObjects: 0,
+			abortedEarly: true, want: 0,
+		},
+		{
+			// Server-side rejection (not self-aborted): we don't
+			// invent an observation, since sentBytes here is the
+			// server's actual cutoff rather than our floor. Falling
+			// back to packObjectCount is the right divisor.
+			name:        "header parsed but server-rejected, no synthetic observation",
+			objectsSent: 0, totalObjects: 100,
+			abortedEarly: false, want: 0,
+		},
+		{
+			name:        "actual observation passes through",
+			objectsSent: 12, totalObjects: 100,
+			abortedEarly: true, want: 12,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := effectiveObjectsSent(c.objectsSent, c.totalObjects, c.abortedEarly)
+			if got != c.want {
+				t.Errorf("effectiveObjectsSent(%d, %d, %v) = %d, want %d",
+					c.objectsSent, c.totalObjects, c.abortedEarly, got, c.want)
 			}
 		})
 	}

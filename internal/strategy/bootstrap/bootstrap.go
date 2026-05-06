@@ -461,9 +461,16 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					// average for the portion we actually observed —
 					// and for blob-front-loaded repos that's a pessimistic
 					// upper bound, which is what we want for pre-flight.
+					//
+					// When the header was parsed but no object completed
+					// (a single front-loaded large blob exhausted the
+					// abort floor), treat it as one observed object: we
+					// know that first object alone consumed sentBytes,
+					// which is the right pessimistic per-object input.
+					effObjectsSent := effectiveObjectsSent(objectsSent, totalObjects, abortedEarly)
 					calibrationDenom := packObjectCount
-					if objectsSent > 0 && objectsSent < calibrationDenom {
-						calibrationDenom = objectsSent
+					if effObjectsSent > 0 && effObjectsSent < calibrationDenom {
+						calibrationDenom = effObjectsSent
 					}
 					if updated := calibrateBytesPerObject(sentBytes, calibrationDenom, calibratedBytesPerObject); updated > 0 {
 						p.log("bootstrap batch calibrated bytes-per-object",
@@ -487,8 +494,8 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					// to the full pack size when we have the data, so
 					// factor reflects the real overshoot.
 					sizingBytes := sentBytes
-					if abortedEarly && objectsSent > 0 && totalObjects > 0 {
-						if projected := sentBytes * totalObjects / objectsSent; projected > sizingBytes {
+					if abortedEarly && totalObjects > 0 && effObjectsSent > 0 {
+						if projected := sentBytes * totalObjects / effObjectsSent; projected > sizingBytes {
 							sizingBytes = projected
 						}
 					}
@@ -923,14 +930,42 @@ const minBytesBeforeAbort = 8 * 1024 * 1024
 //     "we have a budget from a prior 413, just don't send past it
 //     again" case before the parser has anything to say.
 //
-// Returns false until bytesSent crosses minBytesBeforeAbort so the
-// pack header alone never triggers an abort.
+// effectiveObjectsSent returns the divisor used for post-failure
+// calibration and projection. When the upload self-aborted after
+// the pack header was parsed but before any object completed, the
+// observer reports objectsSent == 0 — yet the partially-observed
+// first object alone consumed sentBytes worth of upload, so a
+// pessimistic-but-bounded estimate treats it as one observation
+// instead of falling back to the full pack header count (which
+// would understate per-object size and produce a factor of 2,
+// recreating the slow 1→2→4→… convergence streaming-pack-parse is
+// trying to remove). Returns objectsSent as-is otherwise, which
+// may itself be zero when the header hasn't been parsed.
+func effectiveObjectsSent(objectsSent, totalObjects int64, abortedEarly bool) int64 {
+	if objectsSent == 0 && totalObjects > 0 && abortedEarly {
+		return 1
+	}
+	return objectsSent
+}
+
+// minBytesBeforeAbort gates only the projection path: the pack header
+// alone shouldn't be allowed to project a doomed upload off the noise
+// of the first KB. The absolute "we already crossed the budget"
+// trigger fires regardless of the floor — once the server (or a
+// learned proxy cutoff) said the cap is N and we've sent ≥ N, there
+// is nothing left to learn by sending more.
 func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64) bool {
-	if budget <= 0 || bytesSent < minBytesBeforeAbort {
+	if budget <= 0 {
 		return false
 	}
 	const safety = 95 // percent of budget at which we cut
 	threshold := budget * safety / 100
+	if bytesSent >= threshold {
+		return true
+	}
+	if bytesSent < minBytesBeforeAbort {
+		return false
+	}
 	if objectsSent > 0 && totalObjects > 0 {
 		// Guard against divide-by-zero and against late-stage spikes
 		// when objectsSent has caught up to totalObjects (projection
@@ -938,7 +973,7 @@ func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64) bool {
 		projected := bytesSent * totalObjects / objectsSent
 		return projected > threshold
 	}
-	return bytesSent > threshold
+	return false
 }
 
 // observedSubdivisionFactor estimates how many sub-packs a rejected
