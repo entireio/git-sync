@@ -1,28 +1,40 @@
 {
-  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "cli_version": "v0.6.1-nightly.202605060704.2754b404-dev-2754b4044",
   "checkpoint_id": "46264228955f",
   "session_id": "3ee1ca7a-a436-44c1-906a-a912c6d33f96",
   "strategy": "manual-commit",
-  "created_at": "2026-05-06T14:02:25.870971Z",
-  "branch": "soph/multi-have",
-  "checkpoints_count": 1,
-  "files_touched": [],
+  "created_at": "2026-05-06T19:36:47.677718Z",
+  "branch": "soph/topo-bootstrap",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
   "agent": "Claude Code",
-  "model": "claude-opus-4-7[1m]",
-  "turn_id": "19c9c440f0f7",
+  "model": "",
+  "turn_id": "2317a1a8a6f5",
   "token_usage": {
-    "input_tokens": 1051,
-    "cache_creation_tokens": 6675152,
-    "cache_read_tokens": 327968841,
-    "output_tokens": 580956,
-    "api_call_count": 747
+    "input_tokens": 1256,
+    "cache_creation_tokens": 7012321,
+    "cache_read_tokens": 351570308,
+    "output_tokens": 663894,
+    "api_call_count": 867
   },
-  "session_metrics": {
-    "turn_count": 2
+  "initial_attribution": {
+    "calculated_at": "2026-05-06T19:36:47.366132Z",
+    "agent_lines": 133,
+    "agent_removed": 9,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 133,
+    "total_lines_changed": 142,
+    "agent_percentage": 100,
+    "metric_version": 2
   },
   "prompt_attributions": [
     {
-      "checkpoint_number": 2,
+      "checkpoint_number": 1,
       "user_lines_added": 33,
       "user_lines_removed": 0,
       "agent_lines_added": 0,

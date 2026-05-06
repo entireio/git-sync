@@ -1,10 +1,13 @@
 {
-  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "cli_version": "v0.6.1-nightly.202605060704.2754b404-dev-2754b4044",
   "checkpoint_id": "46264228955f",
   "strategy": "manual-commit",
-  "branch": "soph/multi-have",
-  "checkpoints_count": 1,
-  "files_touched": null,
+  "branch": "soph/topo-bootstrap",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
   "sessions": [
     {
       "metadata": "/46/264228955f/0/metadata.json",
@@ -14,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 1051,
-    "cache_creation_tokens": 6675152,
-    "cache_read_tokens": 327968841,
-    "output_tokens": 580956,
-    "api_call_count": 747
+    "input_tokens": 1256,
+    "cache_creation_tokens": 7012321,
+    "cache_read_tokens": 351570308,
+    "output_tokens": 663894,
+    "api_call_count": 867
   }
 }
