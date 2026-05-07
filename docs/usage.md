@@ -37,6 +37,80 @@ git-sync sync \
   <target-url>
 ```
 
+### Bootstrap chain ordering
+
+Batched bootstrap walks a chain of source commits and places sub-pack
+boundaries (checkpoints) along it, so each push fits under
+`--target-max-pack-bytes`. Two orderings are available via
+`--bootstrap-strategy`:
+
+- `first-parent` (default) walks only the first-parent backbone.
+  Each step from one checkpoint to the next is the smallest unit the
+  planner can subdivide.
+- `topo` includes every reachable commit in topological order
+  (parents before children, hash-tie-broken for stable resume).
+
+The default is fine for most repos. `topo` is for the case where a
+single first-parent step pulls in a large side-branch ancestry and
+cannot be subdivided. Concrete example: assume the target's pack-body
+limit fits about two commits' worth of objects.
+
+```
+     root ── A ──────────────── M ── tip       (first-parent backbone)
+              \                /
+               S1 ─ S2 ─ S3 ─ S4              (side branch, merged at M)
+```
+
+Under `first-parent`, the planner only knows `root → A → M → tip`:
+
+```
+checkpoint 1:  root → A   pack {A}                  ✅ fits
+checkpoint 2:  A → M      pack {S1, S2, S3, S4, M}  ❌ 5 commits, too big
+checkpoint 3:  M → tip    pack {tip}                ✅ fits
+```
+
+The `A → M` step is one indivisible unit because no checkpoint can
+land on `S2` — `S2` isn't on the backbone. The bootstrap fails: the
+pack exceeds the limit and can't be split further.
+
+Under `topo`, every reachable commit is a candidate checkpoint:
+
+```
+chain:  root → A → S1 → S2 → S3 → S4 → M → tip
+
+checkpoint 1:  root → A    pack {A}        ✅
+checkpoint 2:  A → S2      pack {S1, S2}   ✅
+checkpoint 3:  S2 → S4     pack {S3, S4}   ✅
+checkpoint 4:  S4 → M      pack {M}        ✅ tiny — merge content already pushed
+checkpoint 5:  M → tip     pack {tip}      ✅
+```
+
+Trade-offs:
+
+- **Cost**: more source-side enumeration (chain length grows with
+  every reachable commit, not just the backbone). For a linear repo
+  the two strategies are identical; for a heavily-merged repo `topo`
+  walks every side-branch commit too.
+- **Server requirement**: under `topo`, successive checkpoints aren't
+  always in an ancestor-descendant relationship (topological order
+  can interleave parallel branches), so the internal
+  `refs/gitsync/bootstrap/heads/<branch>` temp ref may receive
+  non-fast-forward updates between checkpoints. The temp ref is
+  internal scaffolding — user-visible refs (`refs/heads`, `refs/tags`)
+  only get a single fast-forward update at cutover — but targets that
+  enforce `receive.denyNonFastforwards` across all refs (rather than
+  just `refs/heads`) will reject those temp-ref updates and fail the
+  bootstrap. Major hosts (GitHub, GitLab, Bitbucket, Cloudflare) do
+  not enable this by default.
+
+```bash
+git-sync sync \
+  --target-max-pack-bytes 100000000 \
+  --bootstrap-strategy topo \
+  <source-url> \
+  <target-url>
+```
+
 Add `--measure-memory` to any command to sample elapsed time and Go heap usage:
 
 ```bash
