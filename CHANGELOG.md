@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-05-07
+
+### Added
+
+- `--bootstrap-strategy=topo` for merge-heavy repos: walks every reachable commit in deterministic topological order so batched bootstrap can place sub-pack boundaries inside side-branch ancestry ([#41](https://github.com/entireio/git-sync/pull/41))
+- `--progress` for live per-side throughput across `sync`, `replicate`, `bootstrap`, and `fetch`, with rolling-window rate, hostname-aware labels, inline pack subdivision, and an end-of-run summary under `--stats` ([#37](https://github.com/entireio/git-sync/pull/37))
+- Per-subcommand `--help` after the CLI moved to cobra; bare `git-sync` lists subcommands on stdout instead of printing the full usage block as an error ([#35](https://github.com/entireio/git-sync/pull/35))
+- README cover image and embedded demo videos for `git-sync plan` and `git-sync sync` ([#30](https://github.com/entireio/git-sync/pull/30), [#31](https://github.com/entireio/git-sync/pull/31))
+
+### Changed
+
+- Batched bootstrap stream-parses the pack and aborts doomed pushes ~5% in instead of waiting for the body-limit rejection; subdivision converges in 1–2 rounds instead of 6+ on blob-heavy repos ([#40](https://github.com/entireio/git-sync/pull/40))
+- Post-rejection subdivision sizes splits from observed pack bytes (4× when the server cut us off mid-stream, 2× otherwise) and ratchets the bytes-per-object estimate up after each 413 ([#38](https://github.com/entireio/git-sync/pull/38))
+- Batched bootstrap recombines upcoming checkpoints when consecutive packs underuse the target limit, recovering pack granularity after heavy regions; already-pushed checkpoints are also passed as fetch `have`s on later rounds ([#42](https://github.com/entireio/git-sync/pull/42))
+- Relay-only syncs skip the upfront `FetchToStore`; the materialized fallback lazy-fetches the source closure only when force, prune, or divergent refs require it ([#34](https://github.com/entireio/git-sync/pull/34))
+
+### Fixed
+
+- Sync into targets that share reachability with the source: tolerate pruned objects in the materialized walker, accept branch creates and `no-thin` targets in incremental relay, and surface diagnostic headers (`Cf-Ray`, `Server`, `X-Request-Id`) on opaque 5xx ([#33](https://github.com/entireio/git-sync/pull/33))
+
 ## [0.4.2] - 2026-04-30
 
 First public release. `git-sync` mirrors refs from a source remote to a target
