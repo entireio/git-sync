@@ -1,0 +1,5 @@
+do we have integration tests?
+
+---
+
+yes, and can we think about a smoke test
