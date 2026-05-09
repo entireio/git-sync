@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "5e3f6446f73c",
+  "strategy": "manual-commit",
+  "branch": "soph/all-refs",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/5e/3f6446f73c/0/metadata.json",
+      "transcript": "/5e/3f6446f73c/0/transcript.jsonl",
+      "content_hash": "/5e/3f6446f73c/0/transcript_hash.txt",
+      "prompt": "/5e/3f6446f73c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 470,
+    "cache_creation_tokens": 508716,
+    "cache_read_tokens": 85388223,
+    "output_tokens": 196965,
+    "api_call_count": 386
+  }
+}
