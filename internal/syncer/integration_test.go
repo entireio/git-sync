@@ -3050,6 +3050,99 @@ func TestBootstrap_IntegrationAllRefsBatchedTailPhase(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// Batched bootstrap + AllRefs + BestEffort is the most complex
+// --all-refs path: large source pack forces TargetMaxPackBytes batching,
+// the tail phase pushes other-kind refs after checkpointed branch
+// batches, and the target ng's the notes ref. The OnRejection callback
+// must flow through *Pusher into bootstrap.Params.TargetPusher's
+// interface boundary and downgrade the rejected ref to a warning.
+func TestBootstrap_IntegrationAllRefsBatchedBestEffortDowngradesNg(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(notesRef, head.Hash())); err != nil {
+		t.Fatalf("set source notes ref: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Hook only fires on the tail-phase push (the request that contains
+	// the notes ref); branch-batch pushes pass through the real
+	// receive-pack handler so the target actually receives them.
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		hasNotes := false
+		for _, cmd := range req.Commands {
+			if cmd.Name == notesRef {
+				hasNotes = true
+				break
+			}
+		}
+		if !hasNotes {
+			return nil
+		}
+		report := packp.NewReportStatus()
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			status := "ok"
+			if cmd.Name == notesRef {
+				status = "deny updating a hidden ref"
+			}
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        status,
+			})
+		}
+		return report
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
+		AllRefs:            true,
+		BestEffort:         true,
+		TargetMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched all-refs best-effort sync failed: %v", err)
+	}
+	if !result.Batching {
+		t.Errorf("expected batched mode, got %+v", result)
+	}
+	if result.Warned != 1 {
+		t.Fatalf("expected Warned=1 (notes rejected), got %+v", result)
+	}
+	var foundWarn bool
+	for _, plan := range result.Plans {
+		if plan.TargetRef == notesRef {
+			if plan.Action != ActionWarn {
+				t.Errorf("expected notes Action=warn, got %s", plan.Action)
+			}
+			if !strings.Contains(plan.Reason, "deny updating a hidden ref") {
+				t.Errorf("expected ng reason in plan.Reason, got %q", plan.Reason)
+			}
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Fatal("notes ref missing from result.Plans")
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
 // Other-kind refs don't have FF semantics (a notes append is rarely an
 // ancestor of the previous notes tip), so PlanRef requires --force to
 // retarget them — same as tags. This pins the block reason and the

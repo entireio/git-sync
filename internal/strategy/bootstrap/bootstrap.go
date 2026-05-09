@@ -101,7 +101,10 @@ func (p Params) notice(msg string) {
 	}
 }
 
-// Result holds the outcome of the bootstrap strategy.
+// Result holds the outcome of the bootstrap strategy. Pushed is the count
+// of attempted ref creates; under BestEffort, callers that want a count
+// excluding rejected refs need to consult Pusher.OnRejection or apply the
+// same downgrade pass the syncer wrapper does.
 type Result struct {
 	Plans             []planner.BranchPlan
 	Pushed            int
@@ -670,7 +673,7 @@ func tailPhaseLabel(plans []planner.BranchPlan) string {
 	}
 	switch {
 	case hasTag && hasOther:
-		return "pushing tags and other refs"
+		return "pushing tail refs"
 	case hasOther:
 		return "pushing other refs"
 	default:
