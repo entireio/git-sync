@@ -2829,6 +2829,65 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// TestRun_IntegrationAllRefsMaterializedPathIntoExistingTarget covers the
+// non-bootstrap path: target already has the branch, source adds a custom-
+// namespace ref. CanIncrementalRelay rejects RefKindOther by design ("relay
+// unsupported for non-branch/non-tag kinds"), so the sync falls through to
+// the materialized executor — which is kind-agnostic on push but had not
+// been exercised end-to-end with AllRefs before this test.
+func TestRun_IntegrationAllRefsMaterializedPathIntoExistingTarget(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 3)
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(notesRef, head.Hash())); err != nil {
+		t.Fatalf("set source notes ref: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	// Pre-populate target with the branch so this is a non-bootstrap path.
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeV2,
+		AllRefs:      true,
+	})
+	if err != nil {
+		t.Fatalf("all-refs sync into existing target failed: %v", err)
+	}
+
+	// Branch is a skip (target already current); only the notes ref pushes.
+	if result.Pushed != 1 {
+		t.Fatalf("expected Pushed=1 (notes ref create), got %d (result: %+v)", result.Pushed, result)
+	}
+	if result.Relay {
+		t.Errorf("expected materialized path (Relay=false) for other-kind ref, got Relay=true mode=%q", result.RelayMode)
+	}
+	gotNotes, err := targetRepo.Reference(notesRef, true)
+	if err != nil {
+		t.Fatalf("expected refs/notes/commits on target: %v", err)
+	}
+	if gotNotes.Hash() != head.Hash() {
+		t.Fatalf("target notes hash = %s, want %s", gotNotes.Hash(), head.Hash())
+	}
+}
+
 // TestRun_IntegrationAllRefsBestEffortDowngradesNgToWarn verifies that with
 // BestEffort the per-ref ng status returned by the target receive-pack is
 // downgraded to ActionWarn instead of failing the whole sync — the mode that

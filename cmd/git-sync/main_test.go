@@ -254,6 +254,86 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 	}
 }
 
+// TestRun_Sync_AllRefsSmokeTest exercises the full CLI pipeline with
+// --all-refs: cobra flag parsing → unstable client → bridge → syncer →
+// receive-pack. Confirms a custom-namespace ref (refs/notes/commits) on
+// the source ends up on an empty target and shows up in the JSON output
+// with the right shape, so future refactors that break the wiring don't
+// pass tests until they reach the integration suite.
+func TestRun_Sync_AllRefsSmokeTest(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(notesRef, head.Hash())); err != nil {
+		t.Fatalf("set source notes ref: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"sync",
+			"--all-refs",
+			"--json",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run sync --all-refs: %v\noutput=%s", err, output)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode sync json: %v\noutput=%s", err, output)
+	}
+
+	plans, ok := result["plans"].([]any)
+	if !ok || len(plans) < 2 {
+		t.Fatalf("expected at least 2 plans (branch + notes), got %#v", result["plans"])
+	}
+	var foundNotesRef bool
+	for _, raw := range plans {
+		plan, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if plan["targetRef"] == "refs/notes/commits" {
+			if plan["kind"] != "other" {
+				t.Errorf("expected notes ref kind=other, got %#v", plan["kind"])
+			}
+			if plan["action"] != "create" {
+				t.Errorf("expected notes ref action=create, got %#v", plan["action"])
+			}
+			foundNotesRef = true
+		}
+	}
+	if !foundNotesRef {
+		t.Fatalf("refs/notes/commits not in plans output: %s", output)
+	}
+
+	gotNotes, err := targetRepo.Reference(notesRef, true)
+	if err != nil {
+		t.Fatalf("expected refs/notes/commits on target: %v", err)
+	}
+	if gotNotes.Hash() != head.Hash() {
+		t.Fatalf("target notes hash = %s, want %s", gotNotes.Hash(), head.Hash())
+	}
+}
+
 func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
 	err := run(context.Background(), []string{
 		modeReplicate,
