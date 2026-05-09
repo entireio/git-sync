@@ -1,0 +1,62 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "f8bbc26df8b3",
+  "session_id": "d0406407-d612-489d-b375-1372d062af82",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-09T19:37:41.379415Z",
+  "branch": "soph/all-refs",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync/bootstrap.go",
+    "cmd/git-sync/flags.go",
+    "cmd/git-sync/main_test.go",
+    "cmd/git-sync/syncplan.go",
+    "internal/gitproto/push.go",
+    "internal/planner/planner.go",
+    "internal/planner/types.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go",
+    "internal/validation/validation.go",
+    "types.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "4858ed58f6df",
+  "checkpoint_transcript_start": 291,
+  "transcript_lines_at_start": 291,
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 41734,
+    "cache_read_tokens": 14625464,
+    "output_tokens": 24346,
+    "api_call_count": 45
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-09T19:37:41.174742Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 99,
+    "human_removed": 89,
+    "total_committed": 0,
+    "total_lines_changed": 188,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 36,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 36
+      }
+    }
+  ]
+}
