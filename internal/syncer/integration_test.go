@@ -2780,9 +2780,6 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 	}
 }
 
-// TestRun_IntegrationAllRefsBootstrapsCustomNamespace verifies that AllRefs
-// expands the desired set to include refs outside refs/heads/ and refs/tags/
-// (here: refs/notes/) and that a bootstrap into an empty target mirrors them.
 func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -2829,12 +2826,8 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-// TestRun_IntegrationAllRefsMaterializedPathIntoExistingTarget covers the
-// non-bootstrap path: target already has the branch, source adds a custom-
-// namespace ref. CanIncrementalRelay rejects RefKindOther by design ("relay
-// unsupported for non-branch/non-tag kinds"), so the sync falls through to
-// the materialized executor — which is kind-agnostic on push but had not
-// been exercised end-to-end with AllRefs before this test.
+// AllRefs other-kind plans fail CanIncrementalRelay and fall through to the
+// materialized executor; this exercises that path end-to-end.
 func TestRun_IntegrationAllRefsMaterializedPathIntoExistingTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
@@ -2888,10 +2881,6 @@ func TestRun_IntegrationAllRefsMaterializedPathIntoExistingTarget(t *testing.T) 
 	}
 }
 
-// TestRun_IntegrationAllRefsBestEffortDowngradesNgToWarn verifies that with
-// BestEffort the per-ref ng status returned by the target receive-pack is
-// downgraded to ActionWarn instead of failing the whole sync — the mode that
-// makes AllRefs usable against hosts with hidden refs (GitHub refs/pull/*).
 func TestRun_IntegrationAllRefsBestEffortDowngradesNgToWarn(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -2963,12 +2952,8 @@ func TestRun_IntegrationAllRefsBestEffortDowngradesNgToWarn(t *testing.T) {
 	}
 }
 
-// TestRun_IntegrationAllRefsIncrementalRelayWithBranchOnlyPush verifies
-// that setting AllRefs does not regress the incremental relay path when
-// the actual push plan happens to be branch-only (e.g. source has a
-// notes ref but it's already current on target). The broader ref
-// discovery should still let CanIncrementalRelay accept a branch-only
-// pushPlans slice and take the relay fast path.
+// AllRefs scope must not disable relay when the resulting push plan is
+// branch-only (source notes ref already current on target).
 func TestRun_IntegrationAllRefsIncrementalRelayWithBranchOnlyPush(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -3017,10 +3002,8 @@ func TestRun_IntegrationAllRefsIncrementalRelayWithBranchOnlyPush(t *testing.T) 
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-// TestBootstrap_IntegrationAllRefsBatchedTailPhase verifies the batched
-// bootstrap path (target-max-pack-bytes set) routes other-kind refs
-// through the create-only tail phase alongside tags, exercising the
-// rename from tag-phase to tail-phase that this branch introduced.
+// Batched bootstrap routes other-kind refs through the same tail phase
+// that handles tags, after the checkpointed branch batches finish.
 func TestBootstrap_IntegrationAllRefsBatchedTailPhase(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeLargeCommits(t, sourceRepo, sourceFS, 5, 200_000)
@@ -3067,11 +3050,8 @@ func TestBootstrap_IntegrationAllRefsBatchedTailPhase(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-// TestRun_IntegrationAllRefsReplicateRejectsOtherKindIntoExistingTarget
-// pins the current limitation: replicate's relay-only push path requires
-// branch or tag refs, so AllRefs other-kind refs cannot replicate into a
-// non-empty target. Sync supports this via materialized fallback;
-// replicate fails fast with a clear error directing the user to sync.
+// Pins a v1 limitation: replicate is relay-only, so other-kind refs into a
+// non-empty target error out (sync handles it via materialized fallback).
 func TestRun_IntegrationAllRefsReplicateRejectsOtherKindIntoExistingTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -3113,9 +3093,6 @@ func TestRun_IntegrationAllRefsReplicateRejectsOtherKindIntoExistingTarget(t *te
 	}
 }
 
-// TestRun_IntegrationAllRefsRejectsCustomMappingWithoutAllRefs locks in the
-// validation gate: mapping a non-branch/non-tag ref errors when AllRefs is
-// not set, so the strict default flow stays loud about unsupported refs.
 func TestRun_IntegrationAllRefsRejectsCustomMappingWithoutAllRefs(t *testing.T) {
 	_, err := Run(context.Background(), Config{
 		Source:       Endpoint{URL: "https://example.invalid/source.git"},

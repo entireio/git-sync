@@ -10,11 +10,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-// RefKind distinguishes ref namespaces. Branch and tag refs have specific
-// semantics (fast-forward checks, retarget rules); RefKindOther covers any
-// other refs/* namespace (notes, pulls, replace, custom) the user opts into
-// via the AllRefs scope. Other refs follow the same fast-forward / force
-// semantics as branches but can live in arbitrary ref namespaces.
+// RefKind distinguishes ref namespaces: branch, tag, or other (notes/pulls/custom).
 type RefKind string
 
 const (
@@ -32,11 +28,8 @@ const (
 	ActionDelete Action = "delete"
 	ActionSkip   Action = "skip"
 	ActionBlock  Action = "block"
-	// ActionWarn is set after a push when the target rejected an
-	// individual ref update under best-effort policy. The push itself
-	// succeeded for other refs; this ref carries the server's reason in
-	// BranchPlan.Reason. Used so AllRefs syncs into hostile targets
-	// (e.g. GitHub refs/pull/* hidden refs) don't fail the whole run.
+	// ActionWarn is set when the target rejected an individual ref under
+	// best-effort policy; the server's reason is carried in BranchPlan.Reason.
 	ActionWarn Action = "warn"
 )
 

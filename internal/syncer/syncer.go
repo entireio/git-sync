@@ -385,9 +385,29 @@ func instrumentHTTPClient(base *http.Client, skipTLS bool, label string, stats *
 	return &clone
 }
 
-// applyRejections downgrades plans to ActionWarn when their target ref
-// appears in the session's collected rejections. Returns the number of
-// plans that were downgraded so callers can update Result counts.
+// finalizeCounts applies any best-effort rejections to both the push slice
+// and the result.Plans the caller will return, then tallies Pushed/Deleted
+// counters from the (now-classified) push plans.
+func (s *syncSession) finalizeCounts(pushPlans []BranchPlan, result *Result) {
+	if !s.cfg.DryRun {
+		if warned := s.applyRejections(pushPlans); warned > 0 {
+			s.applyRejections(result.Plans)
+			result.Warned += warned
+		}
+	}
+	for _, plan := range pushPlans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			result.Pushed++
+		case ActionDelete:
+			result.Deleted++
+		case ActionWarn, ActionSkip, ActionBlock:
+		}
+	}
+}
+
+// applyRejections downgrades plans whose ref was rejected by the target to
+// ActionWarn and returns the count.
 func (s *syncSession) applyRejections(plans []BranchPlan) int {
 	if len(s.rejections) == 0 {
 		return 0
@@ -468,10 +488,7 @@ type syncSession struct {
 	target          *targetSession
 	measurementDone func() Measurement
 	progress        *progressReporter
-	// rejections collects per-ref ng statuses reported by the target's
-	// receive-pack when BestEffort is set. The map is the closure backing
-	// the Pusher.OnRejection callback wired in newSession; consult it
-	// after a strategy returns to downgrade matching plans to ActionWarn.
+	// rejections is populated by Pusher.OnRejection when BestEffort is set.
 	rejections map[plumbing.ReferenceName]string
 }
 
@@ -750,25 +767,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		}
 	}
 
-	if !s.cfg.DryRun {
-		warned := s.applyRejections(pushPlans)
-		if warned > 0 {
-			s.applyRejections(result.Plans)
-			result.Warned += warned
-		}
-	}
-	for _, plan := range pushPlans {
-		switch plan.Action {
-		case ActionCreate, ActionUpdate:
-			result.Pushed++
-		case ActionDelete:
-			result.Deleted++
-		case ActionWarn:
-			// already counted via result.Warned
-		case ActionSkip, ActionBlock:
-			// not applicable in this context
-		}
-	}
+	s.finalizeCounts(pushPlans, &result)
 	result.Stats = stats.snapshot()
 	result.Measurement = measurementDone()
 	return result, nil
@@ -856,25 +855,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		result.RelayReason = repResult.RelayReason
 	}
 
-	if !s.cfg.DryRun {
-		warned := s.applyRejections(pushPlans)
-		if warned > 0 {
-			s.applyRejections(result.Plans)
-			result.Warned += warned
-		}
-	}
-	for _, plan := range pushPlans {
-		switch plan.Action {
-		case ActionCreate, ActionUpdate:
-			result.Pushed++
-		case ActionDelete:
-			result.Deleted++
-		case ActionWarn:
-			// already counted via result.Warned
-		case ActionSkip, ActionBlock:
-			// not applicable in this context
-		}
-	}
+	s.finalizeCounts(pushPlans, &result)
 	result.Stats = s.stats.snapshot()
 	result.Measurement = s.measurementDone()
 	return result, nil
@@ -1015,12 +996,8 @@ func bootstrapWithInputs(
 	}
 	plans := bResult.Plans
 	warned := s.applyRejections(plans)
-	pushed := bResult.Pushed - warned
-	if pushed < 0 {
-		pushed = 0
-	}
 	return Result{
-		Plans: plans, Pushed: pushed, Warned: warned, OperationMode: s.cfg.Mode,
+		Plans: plans, Pushed: bResult.Pushed - warned, Warned: warned, OperationMode: s.cfg.Mode,
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,

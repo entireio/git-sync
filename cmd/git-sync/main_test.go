@@ -254,12 +254,8 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 	}
 }
 
-// TestRun_Sync_AllRefsSmokeTest exercises the full CLI pipeline with
-// --all-refs: cobra flag parsing → unstable client → bridge → syncer →
-// receive-pack. Confirms a custom-namespace ref (refs/notes/commits) on
-// the source ends up on an empty target and shows up in the JSON output
-// with the right shape, so future refactors that break the wiring don't
-// pass tests until they reach the integration suite.
+// CLI smoke test for --all-refs: covers cobra flag parsing through the full
+// sync pipeline so wiring breaks fail at the cmd layer, not just integration.
 func TestRun_Sync_AllRefsSmokeTest(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)

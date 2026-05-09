@@ -225,22 +225,13 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		return result, errors.New("bootstrap batching requires protocol v2 source fetch filter support")
 	}
 
+	// Tags and other-kind refs are create-only and ride a single tail phase
+	// after the checkpointed branch batches; they reuse branch-tip haves.
 	planRefs := make([]planner.DesiredRef, 0, len(plans))
-	// Tags and other-kind refs (notes, pulls, custom namespaces) are pushed
-	// in a single create-only phase after the branch batches finish — they
-	// don't need checkpointing because they're create-only and reuse the
-	// branch-tip haves already on the target.
 	tailPlans := make([]planner.BranchPlan, 0, len(plans))
-	tailDesired := make(map[plumbing.ReferenceName]gitproto.DesiredRef)
 	for _, plan := range plans {
 		if plan.Kind == planner.RefKindTag || plan.Kind == planner.RefKindOther {
 			tailPlans = append(tailPlans, plan)
-			if d, ok := p.DesiredRefs[plan.TargetRef]; ok {
-				tailDesired[plan.TargetRef] = gitproto.DesiredRef{
-					SourceRef: d.SourceRef, TargetRef: d.TargetRef,
-					SourceHash: d.SourceHash, IsTag: plan.Kind == planner.RefKindTag,
-				}
-			}
 			continue
 		}
 		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
@@ -248,6 +239,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		}
 		planRefs = append(planRefs, p.DesiredRefs[plan.TargetRef])
 	}
+	tailDesired := convert.DesiredRefsForPlans(p.DesiredRefs, tailPlans)
 
 	var batches []plannedBatch
 	if len(planRefs) > 0 {

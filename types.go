@@ -78,27 +78,16 @@ type RefMapping struct {
 	Target string `json:"target"`
 }
 
-// RefScope constrains which refs a request manages.
-//
-// AllRefs broadens the scope to every refs/* on the source (notes, pulls,
-// replace, custom namespaces) in addition to whatever Branches and the
-// SyncPolicy.IncludeTags flag select. Mappings can also rename refs in any
-// namespace when AllRefs is set; otherwise only refs/heads/ and refs/tags/
-// mappings are accepted. AllRefs handles ref scope only — failure semantics
-// are governed separately by SyncPolicy.
+// RefScope constrains which refs a request manages. AllRefs broadens scope
+// to every refs/* on the source (notes, pulls, custom namespaces).
 type RefScope struct {
 	Branches []string     `json:"branches"`
 	Mappings []RefMapping `json:"mappings"`
 	AllRefs  bool         `json:"allRefs,omitempty"`
 }
 
-// SyncPolicy controls high-level sync behavior.
-//
-// BestEffort, when true, downgrades per-ref rejections from the target's
-// receive-pack to warnings instead of failing the whole sync. Useful for
-// AllRefs mirroring into hosts that refuse writes to specific namespaces
-// (e.g. GitHub's refs/pull/* hidden refs). Pack-level failures (transport
-// errors, unpack errors) remain fatal.
+// SyncPolicy controls high-level sync behavior. BestEffort downgrades per-ref
+// receive-pack rejections to warnings; pack-level failures remain fatal.
 type SyncPolicy struct {
 	Mode        OperationMode `json:"mode"`
 	IncludeTags bool          `json:"includeTags"`

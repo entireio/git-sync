@@ -116,19 +116,7 @@ func BuildPlans(
 	cfg PlanConfig,
 ) ([]BranchPlan, error) {
 	if cfg.Prune {
-		for targetRef := range targetRefs {
-			if _, ok := managed[targetRef]; ok {
-				continue
-			}
-			switch {
-			case targetRef.IsTag() && cfg.IncludeTags:
-				managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
-			case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
-				managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
-			case cfg.AllRefs && RefKindFromName(targetRef) == RefKindOther && len(cfg.Mappings) == 0:
-				managed[targetRef] = ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}
-			}
-		}
+		addPruneCandidates(managed, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -195,19 +183,7 @@ func BuildReplicationPlans(
 ) ([]BranchPlan, error) {
 	managed = copyManagedTargets(managed)
 	if cfg.Prune {
-		for targetRef := range targetRefs {
-			if _, ok := managed[targetRef]; ok {
-				continue
-			}
-			switch {
-			case targetRef.IsTag() && cfg.IncludeTags:
-				managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
-			case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
-				managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
-			case cfg.AllRefs && RefKindFromName(targetRef) == RefKindOther && len(cfg.Mappings) == 0:
-				managed[targetRef] = ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}
-			}
-		}
+		addPruneCandidates(managed, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -243,6 +219,27 @@ func BuildReplicationPlans(
 		return plans[i].TargetRef.String() < plans[j].TargetRef.String()
 	})
 	return plans, nil
+}
+
+// addPruneCandidates registers unmanaged target refs as deletion candidates
+// when they fall in a namespace the user is currently mirroring. The branch
+// guard `len(cfg.Mappings) == 0 && len(cfg.Branches) == 0` keeps a narrow
+// branch-filter or mapping run from pruning branches outside its scope; tags
+// and other-kind only enter scope when their respective opt-in flag is set.
+func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, targetRefs map[plumbing.ReferenceName]plumbing.Hash, cfg PlanConfig) {
+	for targetRef := range targetRefs {
+		if _, ok := managed[targetRef]; ok {
+			continue
+		}
+		switch {
+		case targetRef.IsTag() && cfg.IncludeTags:
+			managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
+		case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
+			managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
+		case cfg.AllRefs && RefKindFromName(targetRef) == RefKindOther && len(cfg.Mappings) == 0:
+			managed[targetRef] = ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}
+		}
+	}
 }
 
 func copyManagedTargets(input map[plumbing.ReferenceName]ManagedTarget) map[plumbing.ReferenceName]ManagedTarget {

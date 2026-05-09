@@ -43,9 +43,6 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Policy.Mode = gitsync.OperationMode(modeValue)
 			req.Policy.Protocol = gitsync.ProtocolMode(protocolVal)
-			if req.Scope.AllRefs {
-				req.Policy.BestEffort = true
-			}
 
 			if req.Source.URL == "" && len(args) > 0 {
 				req.Source.URL = args[0]
@@ -114,7 +111,7 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 	cmd.Flags().BoolVar(&req.Policy.IncludeTags, "tags", false, "mirror tags")
 	cmd.Flags().BoolVar(&req.Policy.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
 	cmd.Flags().BoolVar(&req.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
-	allRefsFlag(cmd, &req.Scope.AllRefs)
+	allRefsFlag(cmd, &req.Scope.AllRefs, &req.Policy.BestEffort)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	cmd.Flags().BoolVar(&req.Options.Progress, "progress", false, "show live per-side throughput on stderr (TTY only)")

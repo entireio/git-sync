@@ -26,12 +26,8 @@ type PushCommand struct {
 }
 
 // Pusher wraps target-side receive-pack state behind a smaller execution API.
-//
-// OnRejection, when non-nil, is invoked with each per-ref rejection reported
-// by the target's receive-pack instead of returning a fatal error. The pack
-// itself unpacking is still fatal; only individual ref ng statuses are
-// downgraded to callbacks. This is how best-effort all-refs mode keeps a
-// sync going past hidden-ref refusals (refs/pull/* on GitHub, etc.).
+// When OnRejection is non-nil, per-ref ng statuses invoke it instead of erroring;
+// pack-level unpack failure remains fatal.
 type Pusher struct {
 	Conn        *Conn
 	Adv         *packp.AdvRefs
@@ -104,10 +100,7 @@ func buildUpdateRequest(
 	return req, hasDelete, hasUpdates, nil
 }
 
-// sendReceivePack encodes and POSTs a receive-pack request, then decodes the
-// report. When onRejection is non-nil, per-ref ng statuses are reported via
-// the callback instead of erroring; the entire push only fails on transport
-// errors or unpack failure.
+// sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
 func sendReceivePack(
 	ctx context.Context,
 	conn *Conn,
@@ -155,9 +148,6 @@ func sendReceivePack(
 			}
 			return nil
 		}
-		// Best-effort: unpack failure is still fatal (the whole pack went
-		// nowhere), but per-ref ng statuses go to the callback so the
-		// caller can downgrade them to warnings.
 		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
 			return fmt.Errorf("report-status: unpack error: %s", report.UnpackStatus)
 		}

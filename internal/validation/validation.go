@@ -120,11 +120,8 @@ func ParseHaveRef(raw string) plumbing.ReferenceName {
 	return plumbing.NewBranchReferenceName(raw)
 }
 
-// NormalizeMapping validates and normalizes a single ref mapping.
-//
-// allowOther governs whether ref namespaces outside refs/heads/ and refs/tags/
-// (e.g. refs/notes/, refs/pull/) are accepted. When false, such mappings are
-// rejected so the strict branch/tag flow stays loud about unsupported refs.
+// NormalizeMapping validates a single mapping. allowOther accepts
+// refs/* outside refs/heads/ and refs/tags/.
 func NormalizeMapping(m RefMapping, allowOther bool) (NormalizedMapping, error) {
 	src := strings.TrimSpace(m.Source)
 	dst := strings.TrimSpace(m.Target)
@@ -140,13 +137,11 @@ func NormalizeMapping(m RefMapping, allowOther bool) (NormalizedMapping, error) 
 		targetRef := plumbing.ReferenceName(dst)
 		srcKind := refKind(sourceRef)
 		dstKind := refKind(targetRef)
-		if srcKind == kindOther || dstKind == kindOther {
-			if !allowOther {
-				if srcKind == kindOther {
-					return NormalizedMapping{}, fmt.Errorf("unsupported source ref kind: %s (set --all-refs to allow arbitrary refs/* namespaces)", src)
-				}
-				return NormalizedMapping{}, fmt.Errorf("unsupported target ref kind: %s (set --all-refs to allow arbitrary refs/* namespaces)", dst)
-			}
+		if !allowOther && srcKind == kindOther {
+			return NormalizedMapping{}, fmt.Errorf("unsupported source ref kind: %s (set --all-refs to allow arbitrary refs/* namespaces)", src)
+		}
+		if !allowOther && dstKind == kindOther {
+			return NormalizedMapping{}, fmt.Errorf("unsupported target ref kind: %s (set --all-refs to allow arbitrary refs/* namespaces)", dst)
 		}
 		if srcKind != dstKind {
 			return NormalizedMapping{}, fmt.Errorf("cross-kind mapping not allowed: %s (%s) -> %s (%s)", src, srcKind, dst, dstKind)
@@ -165,7 +160,6 @@ func NormalizeMapping(m RefMapping, allowOther bool) (NormalizedMapping, error) 
 }
 
 // ValidateMappings normalizes all mappings and rejects duplicate target refs.
-// See NormalizeMapping for the meaning of allowOther.
 func ValidateMappings(mappings []RefMapping, allowOther bool) ([]NormalizedMapping, error) {
 	if len(mappings) == 0 {
 		return nil, nil
