@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "82d903ebce8d",
+  "strategy": "manual-commit",
+  "branch": "soph/all-refs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/planner/planner.go",
+    "internal/planner/planner_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/82/d903ebce8d/0/metadata.json",
+      "transcript": "/82/d903ebce8d/0/full.jsonl",
+      "content_hash": "/82/d903ebce8d/0/content_hash.txt",
+      "prompt": "/82/d903ebce8d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 424,
+    "cache_creation_tokens": 1075497,
+    "cache_read_tokens": 64736380,
+    "output_tokens": 229763,
+    "api_call_count": 286
+  }
+}
