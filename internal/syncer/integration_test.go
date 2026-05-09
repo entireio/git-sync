@@ -3129,6 +3129,54 @@ func TestRun_IntegrationAllRefsSyncOtherKindUpdateRequiresForce(t *testing.T) {
 	}
 }
 
+// Sync's prune logic must extend to other-kind refs under AllRefs the same
+// way replicate's does (covered in TestRun_IntegrationReplicateAllRefsPrune-
+// SkipsBootstrapForStaleOtherRef). This pins the sync side: a stale notes
+// ref on target with no source counterpart gets deleted under
+// sync --all-refs --prune.
+func TestRun_IntegrationAllRefsSyncPruneDeletesStaleOtherRef(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("copy target baseline: %v", err)
+	}
+	staleHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	staleNotes := plumbing.ReferenceName("refs/notes/stale")
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(staleNotes, staleHead.Hash())); err != nil {
+		t.Fatalf("set stale notes ref on target: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		AllRefs:      true,
+		Prune:        true,
+	})
+	if err != nil {
+		t.Fatalf("sync --all-refs --prune failed: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected Deleted=1 (stale notes), got %+v", result)
+	}
+	if _, err := targetRepo.Reference(staleNotes, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Fatalf("expected %s pruned from target, got err=%v", staleNotes, err)
+	}
+}
+
 // Pure-prune replicate runs (no source-side updates) must actually delete
 // the orphaned ref. The runReplicate gate previously required at least one
 // relay plan, so delete-only scenarios silently no-op'd; this pins the

@@ -33,6 +33,7 @@ func BuildDesiredRefs(
 	sourceRefs map[plumbing.ReferenceName]plumbing.Hash,
 	cfg PlanConfig,
 ) (map[plumbing.ReferenceName]DesiredRef, map[plumbing.ReferenceName]ManagedTarget, error) {
+	cfg = normalizeAllRefs(cfg)
 	desired := make(map[plumbing.ReferenceName]DesiredRef)
 	managed := make(map[plumbing.ReferenceName]ManagedTarget)
 
@@ -109,6 +110,17 @@ func BuildDesiredRefs(
 	return desired, managed, nil
 }
 
+// normalizeAllRefs clears the Branches filter when AllRefs is set so that
+// "all refs" really covers all branches — otherwise the desired-set and
+// prune predicates would honor a per-namespace allowlist for branches
+// while ignoring it for tags and other-kind refs.
+func normalizeAllRefs(cfg PlanConfig) PlanConfig {
+	if cfg.AllRefs {
+		cfg.Branches = nil
+	}
+	return cfg
+}
+
 // BuildPlans generates the action plans for each managed ref.
 func BuildPlans(
 	store storer.EncodedObjectStorer,
@@ -117,6 +129,7 @@ func BuildPlans(
 	managed map[plumbing.ReferenceName]ManagedTarget,
 	cfg PlanConfig,
 ) ([]BranchPlan, error) {
+	cfg = normalizeAllRefs(cfg)
 	if cfg.Prune {
 		addPruneCandidates(managed, targetRefs, cfg)
 	}
@@ -183,6 +196,7 @@ func BuildReplicationPlans(
 	managed map[plumbing.ReferenceName]ManagedTarget,
 	cfg PlanConfig,
 ) ([]BranchPlan, error) {
+	cfg = normalizeAllRefs(cfg)
 	managed = copyManagedTargets(managed)
 	if cfg.Prune {
 		addPruneCandidates(managed, targetRefs, cfg)

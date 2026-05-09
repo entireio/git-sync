@@ -175,7 +175,10 @@ handling: when the target's `receive-pack` rejects an individual ref (e.g.
 GitHub refusing writes to `refs/pull/*` hidden refs), the rejected ref
 appears in the result with `action=warn` and the server's reason instead
 of failing the whole sync. Pack-level transport or unpack failures remain
-fatal.
+fatal, and so do source-side `upload-pack` failures — if the source server
+advertises a hidden ref but refuses to serve a `want` for its tip (Gerrit
+`refs/changes/*` is a common case), the fetch errors out with no per-ref
+warn granularity. BestEffort only covers target-side `receive-pack`.
 
 `replicate --all-refs` broadens the same scope but does NOT enable
 best-effort. Replicate's contract is "target refs match source"; downgrading

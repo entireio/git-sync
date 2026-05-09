@@ -427,6 +427,30 @@ func TestBuildDesiredRefsAllRefs(t *testing.T) {
 		}
 	})
 
+	t.Run("AllRefs overrides Branches filter", func(t *testing.T) {
+		// Without AllRefs, the Branches filter narrows scope. With AllRefs,
+		// "all refs" must mean every branch — otherwise scope is asymmetric
+		// (filtered branches but all tags + all other).
+		filtered := map[plumbing.ReferenceName]plumbing.Hash{
+			plumbing.NewBranchReferenceName("main"): hashBranch,
+			plumbing.NewBranchReferenceName("dev"):  hashBranch,
+			plumbing.NewTagReferenceName("v1.0"):    hashTag,
+		}
+		desired, _, err := BuildDesiredRefs(filtered, PlanConfig{
+			Branches: []string{"main"},
+			AllRefs:  true,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := desired[plumbing.NewBranchReferenceName("dev")]; !ok {
+			t.Error("expected dev branch in desired set despite Branches=[main] under AllRefs")
+		}
+		if _, ok := desired[plumbing.NewBranchReferenceName("main")]; !ok {
+			t.Error("expected main branch in desired set")
+		}
+	})
+
 	t.Run("Other-kind mapping rejected without AllRefs", func(t *testing.T) {
 		_, _, err := BuildDesiredRefs(sourceRefs, PlanConfig{
 			Mappings: []RefMapping{{Source: "refs/notes/commits", Target: "refs/notes/mirror"}},

@@ -519,7 +519,7 @@ type targetSession struct {
 	refMap   map[plumbing.ReferenceName]plumbing.Hash
 	features gitproto.TargetFeatures
 	policy   planner.RelayTargetPolicy
-	pusher   gitproto.Pusher
+	pusher   *gitproto.Pusher
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -879,10 +879,13 @@ func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceNa
 		if _, ok := desiredRefs[targetRef]; ok {
 			continue
 		}
+		// AllRefs overrides per-namespace allowlists: under "all refs" a
+		// stale branch matters even when a Branches filter is set.
+		branchScopeCovers := s.cfg.AllRefs || len(s.cfg.Branches) == 0
 		switch {
 		case targetRef.IsTag() && (s.cfg.IncludeTags || s.cfg.AllRefs):
 			return false
-		case targetRef.IsBranch() && len(s.cfg.Mappings) == 0 && len(s.cfg.Branches) == 0:
+		case targetRef.IsBranch() && len(s.cfg.Mappings) == 0 && branchScopeCovers:
 			return false
 		case s.cfg.AllRefs && planner.RefKindFromName(targetRef) == planner.RefKindOther && len(s.cfg.Mappings) == 0:
 			return false

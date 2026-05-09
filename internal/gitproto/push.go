@@ -28,6 +28,10 @@ type PushCommand struct {
 // Pusher wraps target-side receive-pack state behind a smaller execution API.
 // When OnRejection is non-nil, per-ref ng statuses invoke it instead of erroring;
 // pack-level unpack failure remains fatal.
+//
+// Returned by NewPusher as a pointer so callers can attach OnRejection after
+// construction without worrying about whether downstream strategies have
+// already captured a value copy.
 type Pusher struct {
 	Conn        *Conn
 	Adv         *packp.AdvRefs
@@ -36,22 +40,22 @@ type Pusher struct {
 }
 
 // NewPusher builds a target-side push executor.
-func NewPusher(conn *Conn, adv *packp.AdvRefs, verbose bool) Pusher {
-	return Pusher{Conn: conn, Adv: adv, Verbose: verbose}
+func NewPusher(conn *Conn, adv *packp.AdvRefs, verbose bool) *Pusher {
+	return &Pusher{Conn: conn, Adv: adv, Verbose: verbose}
 }
 
 // PushPack streams a pack to the target.
-func (p Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
+func (p *Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
 	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.Verbose, p.OnRejection)
 }
 
 // PushCommands sends ref-only updates without a pack.
-func (p Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
+func (p *Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
 	return PushCommands(ctx, p.Conn, p.Adv, commands, p.Verbose, p.OnRejection)
 }
 
 // PushObjects encodes and pushes locally materialized objects.
-func (p Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
+func (p *Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
 	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose, p.OnRejection)
 }
 
