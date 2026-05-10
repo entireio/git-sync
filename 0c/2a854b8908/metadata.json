@@ -5,12 +5,7 @@
   "branch": "soph/all-refs",
   "checkpoints_count": 1,
   "files_touched": [
-    "cmd/git-sync/main_test.go",
-    "internal/planner/planner.go",
-    "internal/planner/types.go",
-    "internal/strategy/bootstrap/bootstrap.go",
-    "internal/syncer/integration_test.go",
-    "internal/syncer/syncer.go"
+    "internal/planner/planner_test.go"
   ],
   "sessions": [
     {
@@ -21,10 +16,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 611,
-    "cache_creation_tokens": 627584,
-    "cache_read_tokens": 143574568,
-    "output_tokens": 265520,
-    "api_call_count": 508
+    "input_tokens": 624,
+    "cache_creation_tokens": 1064437,
+    "cache_read_tokens": 144571456,
+    "output_tokens": 267599,
+    "api_call_count": 512
   }
 }
