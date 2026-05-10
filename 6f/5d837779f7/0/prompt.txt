@@ -1,0 +1,42 @@
+ok, works thanks, next issue, it's still splitting:
+
+❯ go run ./cmd/git-sync sync --target-max-pack-bytes 524288000 --verbose --branch entire/checkpoints/v1 --progress https://github.com/entireio/cli-checkpoints.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+time=2026-05-04T22:13:47.067+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=1
+time=2026-05-04T22:13:47.067+02:00 level=INFO msg="bootstrap batch trunk selected" source_head_target=refs/heads/entire/checkpoints/v1 trunk_target_ref=refs/heads/entire/checkpoints/v1
+time=2026-05-04T22:13:47.067+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/entire/checkpoints/v1 have_count=0 stop_at_count=0
+time=2026-05-04T22:13:47.623+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/entire/checkpoints/v1 chain_len=2682 estimated_batches=1
+time=2026-05-04T22:13:47.623+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/entire/checkpoints/v1 temp_ref=refs/gitsync/bootstrap/heads/entire/checkpoints/v1 planned_batches=1 resume_hash=<zero>
+time=2026-05-04T22:13:47.623+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1 from=<zero> to=072f0f7a
+source: Enumerating objects: 64696, done.
+source: Counting objects: 100% (5308/5308), done.
+source: Compressing objects: 100% (238/238), done.
+time=2026-05-04T22:13:48.151+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1 estimated_bytes=48522000 target_limit_bytes=524288000
+time=2026-05-04T22:14:03.203+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=1 estimated_bytes=48522000 target_limit_bytes=524288000 sent_bytes=526909452 will_subdivide=true error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6a2b084d234f3e-TXL, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+time=2026-05-04T22:14:03.203+02:00 level=INFO msg="bootstrap batch subdividing after target size rejection" branch=refs/heads/entire/checkpoints/v1 old_remaining=1 new_remaining=4 sent_bytes=526909452 limit_bytes=524288000 factor=3 error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6a2b084d234f3e-TXL, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+target rejected pack (target limit 500 MB) — splitting 1 → 4 packs
+time=2026-05-04T22:14:03.203+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=4 from=<zero> to=c57d0306
+source: Enumerating objects: 48115, done.
+source: Counting objects: 100% (9281/9281), done.
+source: Compressing objects: 100% (911/911), done.
+time=2026-05-04T22:14:04.591+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=4 estimated_bytes=36086250 target_limit_bytes=524288000
+time=2026-05-04T22:14:20.837+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=4 estimated_bytes=36086250 target_limit_bytes=524288000 sent_bytes=527958028 will_subdivide=true error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6a2b6f08924f3e-TXL, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+time=2026-05-04T22:14:20.837+02:00 level=INFO msg="bootstrap batch subdividing after target size rejection" branch=refs/heads/entire/checkpoints/v1 old_remaining=4 new_remaining=8 sent_bytes=527958028 limit_bytes=524288000 factor=3 error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6a2b6f08924f3e-TXL, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+target rejected pack (target limit 500 MB) — splitting 4 → 8 packs
+time=2026-05-04T22:14:20.837+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=8 from=<zero> to=94ab79ab
+source: Enumerating objects: 45345, done.
+source: Counting objects: 100% (8615/8615), done.
+source: Compressing objects: 100% (877/877), done.
+time=2026-05-04T22:14:22.412+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=8 estimated_bytes=34008750 target_limit_bytes=524288000
+time=2026-05-04T22:14:34.208+02:00 level=INFO msg="bootstrap batch push failed" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=8 estimated_bytes=34008750 target_limit_bytes=524288000 sent_bytes=527958028 will_subdivide=true error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6a2bde68414f3e-TXL, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+time=2026-05-04T22:14:34.208+02:00 level=INFO msg="bootstrap batch subdividing after target size rejection" branch=refs/heads/entire/checkpoints/v1 old_remaining=8 new_remaining=16 sent_bytes=527958028 limit_bytes=524288000 factor=3 error="target receive-pack: http 413: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f6a2bde68414f3e-TXL, Server=cloudflare, Content-Type=text/html; charset=UTF-8] <html>\r\n<head><title>413 Payload Too Large</title></head>\r\n<body>\r\n<center><h1>413 Payload Too Large</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>"
+target rejected pack (target limit 500 MB) — splitting 8 → 16 packs
+time=2026-05-04T22:14:34.209+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=16 from=<zero> to=9e4e6195
+source: Enumerating objects: 40767, done.
+source: Counting objects: 100% (8835/8835), done.
+source: Compressing objects: 100% (734/734), done.
+time=2026-05-04T22:14:34.929+02:00 level=INFO msg="bootstrap batch push attempting" branch=refs/heads/entire/checkpoints/v1 batch=1 batch_total=16 estimated_bytes=30575250 target_limit_bytes=524288000
+github.com → 1.51 GB @ 20.0 MB/s  │  1.51 GB @ 20.0 MB/s → 8b04592ed74a5cc…cloudflare.net  (pack 1/16)
+
+---
+
+ok, let's do 1+2 on soph/smart-subdivisions

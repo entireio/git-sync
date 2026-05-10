@@ -1,0 +1,5 @@
+/changelog
+
+---
+
+can you take a look at ../cli/CHANGELOG.md we should keep it shorter if possible?

@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.6.1-nightly.202605060704.2754b404-dev-2754b4044",
+  "checkpoint_id": "49173870af1d",
+  "strategy": "manual-commit",
+  "branch": "soph/topo-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/49/173870af1d/0/metadata.json",
+      "transcript": "/49/173870af1d/0/transcript.jsonl",
+      "content_hash": "/49/173870af1d/0/transcript_hash.txt",
+      "prompt": "/49/173870af1d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1342,
+    "cache_creation_tokens": 7406825,
+    "cache_read_tokens": 368011346,
+    "output_tokens": 700251,
+    "api_call_count": 923
+  }
+}
