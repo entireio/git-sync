@@ -4097,13 +4097,14 @@ func isConnectionCloseError(err error) bool {
 }
 
 // lsRefsCoversHead returns true when prefixes is empty (matches everything)
-// or any prefix is a prefix of "HEAD".
+// or any prefix is "HEAD" itself (the only way ref-prefix syntax selects HEAD,
+// since "H", "HE" etc. aren't valid ref names a client would use).
 func lsRefsCoversHead(prefixes []string) bool {
 	if len(prefixes) == 0 {
 		return true
 	}
 	for _, p := range prefixes {
-		if strings.HasPrefix("HEAD", p) {
+		if p == "HEAD" {
 			return true
 		}
 	}

@@ -181,6 +181,9 @@ func (r Result) Lines() []string {
 	if r.Batching && len(r.TempRefs) > 0 {
 		lines = append(lines, "batching: temp-refs="+strings.Join(r.TempRefs, ","))
 	}
+	if r.SourceHEAD != "" {
+		lines = append(lines, "source-head: "+r.SourceHEAD.String())
+	}
 	return lines
 }
 
@@ -207,6 +210,9 @@ func (r ProbeResult) Lines() []string {
 	}
 	if len(r.RefPrefixes) > 0 {
 		lines = append(lines, "ref-prefixes: "+strings.Join(r.RefPrefixes, ", "))
+	}
+	if r.SourceHEAD != "" {
+		lines = append(lines, "source-head: "+r.SourceHEAD.String())
 	}
 	if len(r.Capabilities) > 0 {
 		lines = append(lines, "source-capabilities: "+strings.Join(r.Capabilities, ", "))
