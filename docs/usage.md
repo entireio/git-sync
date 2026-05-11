@@ -247,17 +247,19 @@ push-only auth that 401s on upload-pack, empty bare targets where HEAD's
 underlying ref doesn't yet exist — leave `targetHead` empty rather than
 failing the sync.
 
-The target's default branch is **not** automatically reconciled. git's
-`push --mirror` doesn't propagate HEAD either; the only portable wire-level
-mechanism is the newer `symref-update` receive-pack capability, which
-go-git's current alpha doesn't implement. So if you `git init --bare`
+The target's default branch is **not** automatically reconciled, and there's
+no plan for git-sync to do so. git's wire protocol has no command for
+updating a remote symref — `gitprotocol-pack.adoc` defines receive-pack
+commands as `create / delete / update` only, and `git push --mirror`
+doesn't propagate HEAD for the same reason. So if you `git init --bare`
 your target with a default branch that differs from the source's, the
-mirror's HEAD will dangle even after a successful sync.
+mirror's HEAD will dangle even after a successful sync, regardless of
+the client.
 
 Practical mitigations, in order of preference:
 
 1. **Match the default at init time.** `git init --bare --initial-branch=<source-default>` (or the equivalent on your host) avoids the problem entirely. `git-sync probe <source-url>`'s `sourceHead` field tells you what to pass.
-2. **Set HEAD manually post-sync.** On a self-hosted bare repo: `git symbolic-ref HEAD refs/heads/<source-default>`. On hosted providers (GitHub, GitLab, etc.), use the provider's API or web UI to set the default branch.
+2. **Set HEAD out-of-band post-sync.** On a self-hosted bare repo accessible over SSH: `git symbolic-ref HEAD refs/heads/<source-default>`. On hosted providers, use the provider's API (GitHub: `PATCH /repos/{owner}/{repo}` with `default_branch`; GitLab: `PUT /projects/:id` with `default_branch`) or web UI.
 3. **Compare the fields.** A wrapper script that runs `git-sync probe ...` and compares `sourceHead` against `targetHead` will catch mismatches before they bite.
 
 ## JSON Output
