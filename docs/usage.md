@@ -240,10 +240,12 @@ $ git-sync probe --target-url <target> --json | jq '{sourceHead,targetHead}'
 
 Target HEAD is read via a separate `upload-pack` info-refs round-trip
 against the target URL, since the `receive-pack` advertisement we use for
-push setup omits HEAD by protocol design. The round-trip runs concurrently
-with the existing target setup; failures (push-only auth that 401s on
-upload-pack, empty bare targets where HEAD's underlying ref doesn't yet
-exist) leave `targetHead` empty rather than failing the sync.
+push setup omits HEAD by protocol design. The round-trip runs after the
+receive-pack call (they share the target connection, which the redirect-
+following path mutates), so target setup costs one extra RTT. Failures —
+push-only auth that 401s on upload-pack, empty bare targets where HEAD's
+underlying ref doesn't yet exist — leave `targetHead` empty rather than
+failing the sync.
 
 The target's default branch is **not** automatically reconciled. git's
 `push --mirror` doesn't propagate HEAD either; the only portable wire-level
