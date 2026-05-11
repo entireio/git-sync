@@ -12,8 +12,8 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
@@ -396,28 +396,20 @@ func buildV1UploadPackBody(
 		return nil, nil, git.NoErrAlreadyUpToDate
 	}
 
-	req := packp.NewUploadRequest()
+	req := &packp.UploadRequest{}
 	req.Wants = wants
 	if !verbose && adv.Capabilities.Supports(capability.NoProgress) {
-		if err := req.Capabilities.Set(capability.NoProgress); err != nil {
-			return nil, nil, fmt.Errorf("set capability: %w", err)
-		}
+		req.Capabilities.Set(capability.NoProgress)
 	}
 	if includeTags && adv.Capabilities.Supports(capability.IncludeTag) {
-		if err := req.Capabilities.Set(capability.IncludeTag); err != nil {
-			return nil, nil, fmt.Errorf("set capability: %w", err)
-		}
+		req.Capabilities.Set(capability.IncludeTag)
 	}
 	// Prefer sideband64k over sideband (issue #4).
-	if sb := PreferredSideband(adv.Capabilities); sb != "" {
-		if err := req.Capabilities.Set(sb); err != nil {
-			return nil, nil, fmt.Errorf("set capability: %w", err)
-		}
+	if sb := PreferredSideband(&adv.Capabilities); sb != "" {
+		req.Capabilities.Set(sb)
 	}
 	if adv.Capabilities.Supports(capability.OFSDelta) {
-		if err := req.Capabilities.Set(capability.OFSDelta); err != nil {
-			return nil, nil, fmt.Errorf("set capability: %w", err)
-		}
+		req.Capabilities.Set(capability.OFSDelta)
 	}
 	// NOTE: we intentionally do not request capability.ThinPack. The relayed
 	// pack must stay self-contained because callers (e.g. replicate) forward
@@ -433,7 +425,7 @@ func buildV1UploadPackBody(
 	if err := uphav.Encode(&buf); err != nil {
 		return nil, nil, fmt.Errorf("encode upload-haves: %w", err)
 	}
-	return buf.Bytes(), req.Capabilities, nil
+	return buf.Bytes(), &req.Capabilities, nil
 }
 
 func fetchToStoreV1(

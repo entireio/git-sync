@@ -14,12 +14,11 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
-	"github.com/stretchr/testify/require"
 )
 
 const refsHeadsMain = "refs/heads/main"
@@ -44,8 +43,8 @@ func TestCapabilities(t *testing.T) {
 	}
 
 	// v1 protocol
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.OFSDelta))
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.OFSDelta)
 	rs = &RefService{Protocol: "v1", V1Adv: adv}
 	got = rs.Capabilities()
 	if len(got) == 0 {
@@ -102,23 +101,23 @@ func TestBuildSidebandReader(t *testing.T) {
 	reader := bytes.NewBufferString(data)
 
 	// No sideband support -- should return the original reader.
-	caps := capability.NewList()
+	caps := &capability.List{}
 	got := buildSidebandReader(caps, reader, nil)
 	if got != reader {
 		t.Error("expected original reader when no sideband capability")
 	}
 
 	// With Sideband64k -- should return a demuxer (different reader).
-	caps = capability.NewList()
-	require.NoError(t, caps.Set(capability.Sideband64k))
+	caps = &capability.List{}
+	caps.Set(capability.Sideband64k)
 	got = buildSidebandReader(caps, reader, nil)
 	if got == reader {
 		t.Error("expected wrapped reader when Sideband64k is set")
 	}
 
 	// With Sideband (not 64k) -- should return a demuxer.
-	caps = capability.NewList()
-	require.NoError(t, caps.Set(capability.Sideband))
+	caps = &capability.List{}
+	caps.Set(capability.Sideband)
 	got = buildSidebandReader(caps, reader, nil)
 	if got == reader {
 		t.Error("expected wrapped reader when Sideband is set")
@@ -127,8 +126,8 @@ func TestBuildSidebandReader(t *testing.T) {
 
 func TestBuildSidebandReaderWithProgress(t *testing.T) {
 	reader := bytes.NewBufferString("test")
-	caps := capability.NewList()
-	require.NoError(t, caps.Set(capability.Sideband64k))
+	caps := &capability.List{}
+	caps.Set(capability.Sideband64k)
 	var progress sideband.Progress = io.Discard
 	got := buildSidebandReader(caps, reader, progress)
 	if got == reader {
@@ -369,8 +368,8 @@ func TestFetchPackV1ContextCanceled(t *testing.T) {
 		return nil, req.Context().Err()
 	}))
 
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.Sideband64k)
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -618,7 +617,7 @@ func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 		}, nil
 	}))
 
-	adv := packp.NewAdvRefs()
+	adv := &packp.AdvRefs{}
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -653,7 +652,7 @@ func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		}, nil
 	}))
 
-	adv := packp.NewAdvRefs()
+	adv := &packp.AdvRefs{}
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -695,8 +694,8 @@ func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		}, nil
 	}))
 
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.Sideband64k)
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -742,8 +741,8 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 		}, nil
 	}))
 
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.Sideband64k)
 	desired := map[plumbing.ReferenceName]DesiredRef{
 		plumbing.NewBranchReferenceName("main"): {
 			SourceRef:  plumbing.NewBranchReferenceName("main"),
@@ -1120,7 +1119,7 @@ func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
 }
 
 func TestBuildV1UploadPackBodyEmptyWantSet(t *testing.T) {
-	adv := packp.NewAdvRefs()
+	adv := &packp.AdvRefs{}
 	_, _, err := buildV1UploadPackBody(adv, nil, nil, false, false)
 	if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		t.Fatalf("expected NoErrAlreadyUpToDate, got %v", err)

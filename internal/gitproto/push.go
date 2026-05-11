@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
@@ -65,16 +65,12 @@ func buildUpdateRequest(
 	commands []PushCommand,
 	verbose bool,
 ) (*packp.UpdateRequests, bool, bool, error) {
-	req := packp.NewUpdateRequests()
-	if sb := PreferredSideband(adv.Capabilities); sb != "" {
-		if err := req.Capabilities.Set(sb); err != nil {
-			return nil, false, false, fmt.Errorf("set capability: %w", err)
-		}
+	req := &packp.UpdateRequests{}
+	if sb := PreferredSideband(&adv.Capabilities); sb != "" {
+		req.Capabilities.Set(sb)
 	}
 	if adv.Capabilities.Supports(capability.ReportStatus) {
-		if err := req.Capabilities.Set(capability.ReportStatus); err != nil {
-			return nil, false, false, fmt.Errorf("set capability: %w", err)
-		}
+		req.Capabilities.Set(capability.ReportStatus)
 	}
 
 	hasDelete := false
@@ -95,9 +91,7 @@ func buildUpdateRequest(
 		if !adv.Capabilities.Supports(capability.DeleteRefs) {
 			return nil, false, false, errors.New("target does not support delete-refs")
 		}
-		if err := req.Capabilities.Set(capability.DeleteRefs); err != nil {
-			return nil, false, false, fmt.Errorf("set capability: %w", err)
-		}
+		req.Capabilities.Set(capability.DeleteRefs)
 	}
 
 	_ = verbose // progress handling is server-side in HTTP mode
@@ -142,7 +136,7 @@ func sendReceivePack(
 	}
 
 	if req.Capabilities.Supports(capability.ReportStatus) {
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}

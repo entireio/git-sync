@@ -41,7 +41,7 @@ func DenyRefsReport(req *packp.UpdateRequests, status string, deny ...plumbing.R
 	for _, r := range deny {
 		denySet[r] = true
 	}
-	report := packp.NewReportStatus()
+	report := &packp.ReportStatus{}
 	report.UnpackStatus = "ok"
 	for _, cmd := range req.Commands {
 		cmdStatus := "ok"

@@ -24,8 +24,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/revlist"
 	"github.com/go-git/go-git/v6/plumbing/transport"
@@ -1160,7 +1160,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 			return nil
 		}
 		failDeleteOnce = false
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		report.UnpackStatus = "ok"
 		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 			ReferenceName: cmd.Name,
@@ -1240,7 +1240,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 			return nil
 		}
 		failedAfterProgress = true
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		report.UnpackStatus = "ok"
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
@@ -1559,7 +1559,7 @@ func TestRun_IntegrationIncrementalPushFailureRecoversOnRetry(t *testing.T) {
 		if pushAttempts > 1 {
 			return nil
 		}
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		report.UnpackStatus = "ok"
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
@@ -3638,9 +3638,7 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 				caps.Delete(capability.Capability("no-thin"))
 			}
 			if s.receivePackNoThin {
-				if err := caps.Set(capability.Capability("no-thin")); err != nil {
-					s.tb.Fatalf("set no-thin capability: %v", err)
-				}
+				caps.Set(capability.Capability("no-thin"))
 			}
 		})
 		if err != nil {
@@ -3659,9 +3657,9 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 }
 
 func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List)) ([]byte, error) {
-	ar := packp.NewAdvRefs()
+	ar := &packp.AdvRefs{}
 	if err := ar.Decode(bytes.NewReader(data)); err == nil {
-		mutate(ar.Capabilities)
+		mutate(&ar.Capabilities)
 		var buf bytes.Buffer
 		if err := ar.Encode(&buf); err != nil {
 			return nil, err
@@ -3674,11 +3672,11 @@ func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List))
 	if err := smart.Decode(rd); err != nil {
 		return nil, err
 	}
-	ar = packp.NewAdvRefs()
+	ar = &packp.AdvRefs{}
 	if err := ar.Decode(rd); err != nil {
 		return nil, err
 	}
-	mutate(ar.Capabilities)
+	mutate(&ar.Capabilities)
 	var buf bytes.Buffer
 	if err := smart.Encode(&buf); err != nil {
 		return nil, err
@@ -3877,7 +3875,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	defer r.Body.Close()
 
 	if s.receivePackBodyLimit > 0 && int64(len(body)) > s.receivePackBodyLimit {
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		report.UnpackStatus = fmt.Sprintf("push rejected: body exceeded size limit %d (trace_id=00000000000000000000000000000000)", s.receivePackBodyLimit)
 
 		var buf bytes.Buffer
@@ -3899,7 +3897,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	// For no-PACK requests, handle manually since transport.ReceivePack
 	// expects a packfile when there are create/update commands.
 	if !hasPack {
-		req := packp.NewUpdateRequests()
+		req := &packp.UpdateRequests{}
 		if err := req.Decode(bytes.NewReader(body)); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -3907,18 +3905,18 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 		if s.commandHook != nil {
 			if report := s.commandHook(req); report != nil {
-				s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+				s.writeReceivePackReport(w, report, &req.Capabilities, len(body))
 				return
 			}
 		}
 		if s.receivePackHook != nil {
 			if report := s.receivePackHook(req, false); report != nil {
-				s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+				s.writeReceivePackReport(w, report, &req.Capabilities, len(body))
 				return
 			}
 		}
 
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		report.UnpackStatus = "ok"
 		for _, cmd := range req.Commands {
 			status := "ok"
@@ -3937,18 +3935,18 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 			})
 		}
 
-		s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+		s.writeReceivePackReport(w, report, &req.Capabilities, len(body))
 		return
 	}
 
 	if s.receivePackHook != nil {
-		req := packp.NewUpdateRequests()
+		req := &packp.UpdateRequests{}
 		if err := req.Decode(bytes.NewReader(body)); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if report := s.receivePackHook(req, true); report != nil {
-			s.writeReceivePackReport(w, report, req.Capabilities, len(body))
+			s.writeReceivePackReport(w, report, &req.Capabilities, len(body))
 			return
 		}
 	}

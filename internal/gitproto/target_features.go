@@ -1,8 +1,8 @@
 package gitproto
 
 import (
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 )
 
 // TargetFeatures summarizes the receive-pack capabilities relevant to strategy
@@ -20,7 +20,7 @@ type TargetFeatures struct {
 // TargetFeaturesFromAdvRefs derives the target-side feature summary from a
 // receive-pack advertisement.
 func TargetFeaturesFromAdvRefs(adv *packp.AdvRefs) TargetFeatures {
-	if adv == nil || adv.Capabilities == nil {
+	if adv == nil {
 		return TargetFeatures{}
 	}
 	return TargetFeatures{

@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
@@ -88,30 +88,17 @@ func AdvertisedRefsV1(ctx context.Context, conn *Conn, service string) (*packp.A
 
 // AdvRefsToSlice converts an AdvRefs to a slice of references.
 func AdvRefsToSlice(ar *packp.AdvRefs) ([]*plumbing.Reference, error) {
-	refs, err := ar.AllReferences()
-	if err != nil {
-		return nil, fmt.Errorf("all references: %w", err)
+	if ar == nil {
+		return nil, nil
 	}
-	iter, err := refs.IterReferences()
-	if err != nil {
-		return nil, fmt.Errorf("iter references: %w", err)
-	}
-	defer iter.Close()
-
-	var out []*plumbing.Reference
-	err = iter.ForEach(func(ref *plumbing.Reference) error {
-		out = append(out, ref)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("iterate references: %w", err)
-	}
+	out := make([]*plumbing.Reference, len(ar.References))
+	copy(out, ar.References)
 	return out, nil
 }
 
 // AdvRefsCaps returns the sorted capability list from an AdvRefs.
 func AdvRefsCaps(adv *packp.AdvRefs) []string {
-	if adv == nil || adv.Capabilities == nil {
+	if adv == nil || adv.Capabilities.IsEmpty() {
 		return nil
 	}
 	all := adv.Capabilities.All()
@@ -204,7 +191,7 @@ func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceN
 // headTargetFromAdv extracts the branch HEAD points to from v1 advertised
 // capabilities. Returns empty when HEAD is detached or no symref is advertised.
 func headTargetFromAdv(adv *packp.AdvRefs) plumbing.ReferenceName {
-	if adv == nil || adv.Capabilities == nil {
+	if adv == nil {
 		return ""
 	}
 	for _, value := range adv.Capabilities.Get(capability.SymRef) {
@@ -231,7 +218,7 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 		}
 	}
 
-	ar := packp.NewAdvRefs()
+	ar := &packp.AdvRefs{}
 	if err := ar.Decode(rd); err != nil {
 		if errors.Is(err, packp.ErrEmptyAdvRefs) {
 			return nil, transport.ErrEmptyRemoteRepository

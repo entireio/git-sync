@@ -8,10 +8,9 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRefHashMap(t *testing.T) {
@@ -49,19 +48,15 @@ func TestHeadTargetFromAdv(t *testing.T) {
 		t.Errorf("headTargetFromAdv(nil) = %q, want empty", got)
 	}
 
-	adv := packp.NewAdvRefs()
-	if err := adv.Capabilities.Add(capability.SymRef, "HEAD:refs/heads/main"); err != nil {
-		t.Fatalf("Capabilities.Add: %v", err)
-	}
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Add(capability.SymRef, "HEAD:refs/heads/main")
 	if got := headTargetFromAdv(adv); got.String() != "refs/heads/main" {
 		t.Errorf("headTargetFromAdv = %q, want refs/heads/main", got)
 	}
 
 	// Symref pointing at something other than HEAD is ignored.
-	adv = packp.NewAdvRefs()
-	if err := adv.Capabilities.Add(capability.SymRef, "refs/remotes/origin/HEAD:refs/heads/main"); err != nil {
-		t.Fatalf("Capabilities.Add: %v", err)
-	}
+	adv = &packp.AdvRefs{}
+	adv.Capabilities.Add(capability.SymRef, "refs/remotes/origin/HEAD:refs/heads/main")
 	if got := headTargetFromAdv(adv); got != "" {
 		t.Errorf("headTargetFromAdv ignored non-HEAD symref = %q, want empty", got)
 	}
@@ -73,18 +68,17 @@ func TestAdvRefsCaps(t *testing.T) {
 		t.Errorf("AdvRefsCaps(nil) = %v, want nil", got)
 	}
 
-	// AdvRefs with nil Capabilities should return nil.
+	// AdvRefs with empty Capabilities should return nil.
 	adv := &packp.AdvRefs{}
-	adv.Capabilities = nil
 	if got := AdvRefsCaps(adv); got != nil {
-		t.Errorf("AdvRefsCaps(nil caps) = %v, want nil", got)
+		t.Errorf("AdvRefsCaps(empty caps) = %v, want nil", got)
 	}
 
 	// AdvRefs with populated capabilities.
-	adv = packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.OFSDelta))
-	require.NoError(t, adv.Capabilities.Add(capability.Agent, "git/test-agent"))
-	require.NoError(t, adv.Capabilities.Set(capability.NoProgress))
+	adv = &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.OFSDelta)
+	adv.Capabilities.Add(capability.Agent, "git/test-agent")
+	adv.Capabilities.Set(capability.NoProgress)
 
 	items := AdvRefsCaps(adv)
 	if len(items) == 0 {
@@ -108,12 +102,12 @@ func TestAdvRefsCaps(t *testing.T) {
 }
 
 func TestAdvRefsToSlice(t *testing.T) {
-	adv := packp.NewAdvRefs()
+	adv := &packp.AdvRefs{}
 	hashA := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	hashB := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	adv.References = map[string]plumbing.Hash{
-		"refs/heads/main": hashA,
-		"refs/heads/dev":  hashB,
+	adv.References = []*plumbing.Reference{
+		plumbing.NewHashReference("refs/heads/main", hashA),
+		plumbing.NewHashReference("refs/heads/dev", hashB),
 	}
 
 	refs, err := AdvRefsToSlice(adv)

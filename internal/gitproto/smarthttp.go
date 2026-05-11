@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
 const maxHTTPErrorBody = 64 * 1024
