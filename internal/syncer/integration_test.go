@@ -1850,6 +1850,50 @@ func TestProbe_IntegrationTargetCapabilities(t *testing.T) {
 	}
 }
 
+// ProbeResult.TargetHEAD covers the same upload-pack round-trip the sync
+// session does; `git-sync probe --target-url X` should let users see the
+// target's default branch before mutating anything.
+func TestProbe_IntegrationSurfacesTargetHEAD(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	head, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve seeded head: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(featureRef, head.Hash())); err != nil {
+		t.Fatalf("set target feature ref: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, featureRef)); err != nil {
+		t.Fatalf("retarget target HEAD: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Probe(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got, want := result.TargetHEAD, featureRef; got != want {
+		t.Errorf("TargetHEAD = %q, want %q", got, want)
+	}
+}
+
 // ProbeResult.SourceHEAD lets `git-sync probe` show the source's default
 // branch without performing a sync. Same protocol limitation as the sync
 // path: target HEAD isn't exposed by receive-pack advertisements.
@@ -2841,6 +2885,53 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 		t.Fatalf("target notes hash = %s, want %s", gotNotes.Hash(), head)
 	}
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+// Result.TargetHEAD comes from a separate upload-pack info-refs round-trip
+// against the target URL (the receive-pack advertisement we already query
+// doesn't include HEAD by protocol design). The session does this lookup
+// alongside the existing target setup; failures are non-fatal.
+func TestRun_IntegrationSyncSurfacesTargetHEADInResult(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	// Seed target so its HEAD's underlying ref exists; otherwise the
+	// upload-pack advertisement skips HEAD entirely.
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	head, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve seeded head: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(featureRef, head.Hash())); err != nil {
+		t.Fatalf("set target feature ref: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, featureRef)); err != nil {
+		t.Fatalf("retarget target HEAD: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if got, want := result.TargetHEAD, featureRef; got != want {
+		t.Errorf("TargetHEAD = %q, want %q", got, want)
+	}
 }
 
 // Result.SourceHEAD carries the source's symref HEAD target, parsed from
