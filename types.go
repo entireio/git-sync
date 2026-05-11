@@ -78,28 +78,39 @@ type RefMapping struct {
 	Target string `json:"target"`
 }
 
-// RefScope constrains which refs a request manages.
+// RefScope constrains which refs a request manages. AllRefs broadens scope
+// to every refs/* on the source (branches, tags, notes, pulls, custom
+// namespaces) and implies SyncPolicy.IncludeTags. ExcludeRefPrefixes
+// subtracts namespaces from auto-discovery (useful for trimming
+// refs/pull/* when mirroring open-source GitHub repos under AllRefs);
+// explicit Mappings are not subject to it.
 type RefScope struct {
-	Branches []string     `json:"branches"`
-	Mappings []RefMapping `json:"mappings"`
+	Branches           []string     `json:"branches"`
+	Mappings           []RefMapping `json:"mappings"`
+	AllRefs            bool         `json:"allRefs,omitempty"`
+	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
 }
 
-// SyncPolicy controls high-level sync behavior.
+// SyncPolicy controls high-level sync behavior. BestEffort downgrades per-ref
+// receive-pack rejections to warnings; pack-level failures remain fatal.
 type SyncPolicy struct {
 	Mode        OperationMode `json:"mode"`
 	IncludeTags bool          `json:"includeTags"`
 	Force       bool          `json:"force"`
 	Prune       bool          `json:"prune"`
+	BestEffort  bool          `json:"bestEffort,omitempty"`
 	Protocol    ProtocolMode  `json:"protocol"`
 }
 
 // ProbeRequest inspects source refs and optional target capabilities.
 type ProbeRequest struct {
-	Source       Endpoint     `json:"source"`
-	Target       *Endpoint    `json:"target"`
-	IncludeTags  bool         `json:"includeTags"`
-	Protocol     ProtocolMode `json:"protocol"`
-	CollectStats bool         `json:"collectStats"`
+	Source             Endpoint     `json:"source"`
+	Target             *Endpoint    `json:"target"`
+	IncludeTags        bool         `json:"includeTags"`
+	AllRefs            bool         `json:"allRefs,omitempty"`
+	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
+	Protocol           ProtocolMode `json:"protocol"`
+	CollectStats       bool         `json:"collectStats"`
 }
 
 // PlanRequest computes ref actions without pushing.
@@ -125,6 +136,7 @@ type RefKind = internalbridge.RefKind
 const (
 	RefKindBranch RefKind = internalbridge.RefKindBranch
 	RefKindTag    RefKind = internalbridge.RefKindTag
+	RefKindOther  RefKind = internalbridge.RefKindOther
 )
 
 type Action = internalbridge.Action
@@ -135,6 +147,7 @@ const (
 	ActionDelete Action = internalbridge.ActionDelete
 	ActionSkip   Action = internalbridge.ActionSkip
 	ActionBlock  Action = internalbridge.ActionBlock
+	ActionWarn   Action = internalbridge.ActionWarn
 )
 
 type RefResult = internalbridge.RefResult

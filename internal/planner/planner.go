@@ -18,6 +18,16 @@ type PlanConfig struct {
 	IncludeTags bool
 	Force       bool
 	Prune       bool
+	// AllRefs broadens the desired set to every refs/* on the source
+	// (notes, pulls, replace, custom namespaces) in addition to whatever
+	// branches/tags the existing flags select. Mappings can rename refs
+	// in any namespace when AllRefs is set; otherwise only refs/heads/
+	// and refs/tags/ are accepted.
+	AllRefs bool
+	// ExcludeRefPrefixes subtracts namespaces from auto-discovery. A ref
+	// whose name starts with any of these prefixes is not pulled, pushed,
+	// or pruned. Explicit Mappings are not subject to this filter.
+	ExcludeRefPrefixes []string
 }
 
 // BuildDesiredRefs constructs the set of desired refs and managed targets from
@@ -27,6 +37,7 @@ func BuildDesiredRefs(
 	sourceRefs map[plumbing.ReferenceName]plumbing.Hash,
 	cfg PlanConfig,
 ) (map[plumbing.ReferenceName]DesiredRef, map[plumbing.ReferenceName]ManagedTarget, error) {
+	cfg = normalizeAllRefs(cfg)
 	desired := make(map[plumbing.ReferenceName]DesiredRef)
 	managed := make(map[plumbing.ReferenceName]ManagedTarget)
 
@@ -52,7 +63,7 @@ func BuildDesiredRefs(
 
 	if len(cfg.Mappings) > 0 {
 		// Validate all mappings up front (issue #2, #3)
-		normalized, err := validation.ValidateMappings(cfg.Mappings)
+		normalized, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate ref mappings: %w", err)
 		}
@@ -67,24 +78,50 @@ func BuildDesiredRefs(
 		selected := SelectBranches(branches, cfg.Branches)
 		for branch, hash := range selected {
 			refName := plumbing.NewBranchReferenceName(branch)
+			if IsRefExcluded(refName, cfg.ExcludeRefPrefixes) {
+				continue
+			}
 			if err := addManaged(refName, refName, RefKindBranch, hash); err != nil {
 				return nil, nil, err
 			}
 		}
 	}
 
-	if cfg.IncludeTags {
+	// AllRefs implies tag inclusion. Both passes (tag, other-kind) walk
+	// sourceRefs once: under AllRefs+IncludeTags this saves a redundant
+	// iteration on repos with thousands of refs/changes/* or refs/notes/*.
+	wantTags := cfg.IncludeTags || cfg.AllRefs
+	if wantTags || cfg.AllRefs {
 		for refName, hash := range sourceRefs {
-			if !refName.IsTag() {
+			kind := RefKindFromName(refName)
+			switch {
+			case kind == RefKindTag && wantTags:
+			case kind == RefKindOther && cfg.AllRefs:
+			default:
 				continue
 			}
-			if err := addManaged(refName, refName, RefKindTag, hash); err != nil {
+			if IsRefExcluded(refName, cfg.ExcludeRefPrefixes) {
+				continue
+			}
+			if _, ok := desired[refName]; ok {
+				continue
+			}
+			if err := addManaged(refName, refName, kind, hash); err != nil {
 				return nil, nil, err
 			}
 		}
 	}
 
 	return desired, managed, nil
+}
+
+// normalizeAllRefs zeros Branches under AllRefs so the desired-set and
+// prune predicates agree on scope.
+func normalizeAllRefs(cfg PlanConfig) PlanConfig {
+	if cfg.AllRefs {
+		cfg.Branches = nil
+	}
+	return cfg
 }
 
 // BuildPlans generates the action plans for each managed ref.
@@ -95,18 +132,9 @@ func BuildPlans(
 	managed map[plumbing.ReferenceName]ManagedTarget,
 	cfg PlanConfig,
 ) ([]BranchPlan, error) {
+	cfg = normalizeAllRefs(cfg)
 	if cfg.Prune {
-		for targetRef := range targetRefs {
-			if _, ok := managed[targetRef]; ok {
-				continue
-			}
-			switch {
-			case targetRef.IsTag() && cfg.IncludeTags:
-				managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
-			case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
-				managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
-			}
-		}
+		addPruneCandidates(managed, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -171,19 +199,10 @@ func BuildReplicationPlans(
 	managed map[plumbing.ReferenceName]ManagedTarget,
 	cfg PlanConfig,
 ) ([]BranchPlan, error) {
+	cfg = normalizeAllRefs(cfg)
 	managed = copyManagedTargets(managed)
 	if cfg.Prune {
-		for targetRef := range targetRefs {
-			if _, ok := managed[targetRef]; ok {
-				continue
-			}
-			switch {
-			case targetRef.IsTag() && cfg.IncludeTags:
-				managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
-			case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
-				managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
-			}
-		}
+		addPruneCandidates(managed, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -219,6 +238,27 @@ func BuildReplicationPlans(
 		return plans[i].TargetRef.String() < plans[j].TargetRef.String()
 	})
 	return plans, nil
+}
+
+// addPruneCandidates registers unmanaged target refs as deletion candidates
+// within the user's current scope. cfg is assumed normalized.
+func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, targetRefs map[plumbing.ReferenceName]plumbing.Hash, cfg PlanConfig) {
+	for targetRef := range targetRefs {
+		if _, ok := managed[targetRef]; ok {
+			continue
+		}
+		if IsRefExcluded(targetRef, cfg.ExcludeRefPrefixes) {
+			continue
+		}
+		switch {
+		case targetRef.IsTag() && (cfg.IncludeTags || cfg.AllRefs):
+			managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
+		case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
+			managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
+		case cfg.AllRefs && RefKindFromName(targetRef) == RefKindOther && len(cfg.Mappings) == 0:
+			managed[targetRef] = ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}
+		}
+	}
 }
 
 func copyManagedTargets(input map[plumbing.ReferenceName]ManagedTarget) map[plumbing.ReferenceName]ManagedTarget {
@@ -278,14 +318,19 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		return plan, nil
 	}
 
-	if want.Kind == RefKindTag {
+	// Tags and other-kind refs (notes, pulls, custom namespaces) don't
+	// generally form fast-forward chains — a notes append creates a new
+	// commit that isn't an ancestor of the previous notes tip. Treat
+	// them the same way: require --force to retarget rather than
+	// running an ancestry check that would always fail.
+	if want.Kind == RefKindTag || want.Kind == RefKindOther {
 		if force {
 			plan.Action = ActionUpdate
-			plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (force tag update)"
+			plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (force " + string(want.Kind) + " update)"
 			return plan, nil
 		}
 		plan.Action = ActionBlock
-		plan.Reason = ShortHash(targetHash) + " differs from " + ShortHash(want.SourceHash) + "; use --force to retarget tag"
+		plan.Reason = ShortHash(targetHash) + " differs from " + ShortHash(want.SourceHash) + "; use --force to update " + string(want.Kind) + " ref " + want.TargetRef.String()
 		return plan, nil
 	}
 
@@ -343,9 +388,7 @@ func PlanReplicationRef(want DesiredRef, targetHash plumbing.Hash, existsOnTarge
 	switch want.Kind {
 	case RefKindTag:
 		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (replicate tag overwrite)"
-	case RefKindBranch:
-		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (replicate overwrite)"
-	default:
+	case RefKindBranch, RefKindOther:
 		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash) + " (replicate overwrite)"
 	}
 	return plan

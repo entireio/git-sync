@@ -115,6 +115,36 @@ func TestValidateEndpoints(t *testing.T) {
 	}
 }
 
+func TestNormalizeMappingAllowOther(t *testing.T) {
+	tests := []struct {
+		name       string
+		mapping    RefMapping
+		allowOther bool
+		wantErr    bool
+	}{
+		{name: "notes ref blocked by default", mapping: RefMapping{Source: "refs/notes/commits", Target: "refs/notes/commits"}, wantErr: true},
+		{name: "notes ref allowed with allowOther", mapping: RefMapping{Source: "refs/notes/commits", Target: "refs/notes/commits"}, allowOther: true},
+		{name: "pull ref allowed with allowOther", mapping: RefMapping{Source: "refs/pull/1/head", Target: "refs/pull/1/head"}, allowOther: true},
+		{name: "cross-kind still blocked with allowOther", mapping: RefMapping{Source: "refs/heads/main", Target: "refs/notes/commits"}, allowOther: true, wantErr: true},
+		{name: "branch unchanged when allowOther", mapping: RefMapping{Source: "refs/heads/main", Target: "refs/heads/main"}, allowOther: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NormalizeMapping(tt.mapping, tt.allowOther)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("NormalizeMapping(%+v, %v) = nil, want error", tt.mapping, tt.allowOther)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NormalizeMapping(%+v, %v) = %v, want nil", tt.mapping, tt.allowOther, err)
+			}
+		})
+	}
+}
+
 func TestParseHaveRef(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -12,8 +12,49 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/storage/memory"
 )
+
+// SetRefAtBranch points an arbitrary ref (e.g. refs/notes/commits) at the
+// current tip of branch and returns the resolved hash. Used by --all-refs
+// integration tests to seed non-branch/non-tag refs.
+func SetRefAtBranch(tb testing.TB, repo *git.Repository, ref plumbing.ReferenceName, branch string) plumbing.Hash {
+	tb.Helper()
+
+	head, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		tb.Fatalf("resolve branch %q: %v", branch, err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(ref, head.Hash())); err != nil {
+		tb.Fatalf("set ref %s: %v", ref, err)
+	}
+	return head.Hash()
+}
+
+// DenyRefsReport synthesizes a receive-pack report that ng's the named refs
+// with the given status and oks every other ref in the request. With deny
+// empty, every ref in the request is rejected. Used by tests that simulate
+// hostile targets (GitHub-style hidden-ref refusals, etc.).
+func DenyRefsReport(req *packp.UpdateRequests, status string, deny ...plumbing.ReferenceName) *packp.ReportStatus {
+	denySet := make(map[plumbing.ReferenceName]bool, len(deny))
+	for _, r := range deny {
+		denySet[r] = true
+	}
+	report := packp.NewReportStatus()
+	report.UnpackStatus = "ok"
+	for _, cmd := range req.Commands {
+		cmdStatus := "ok"
+		if len(denySet) == 0 || denySet[cmd.Name] {
+			cmdStatus = status
+		}
+		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+			ReferenceName: cmd.Name,
+			Status:        cmdStatus,
+		})
+	}
+	return report
+}
 
 // NewMemoryRepo creates an in-memory repository with a memfs-backed worktree.
 func NewMemoryRepo(tb testing.TB) (*git.Repository, billy.Filesystem) {

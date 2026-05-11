@@ -101,7 +101,10 @@ func (p Params) notice(msg string) {
 	}
 }
 
-// Result holds the outcome of the bootstrap strategy.
+// Result holds the outcome of the bootstrap strategy. Pushed is the count
+// of attempted ref creates; under BestEffort, callers that want a count
+// excluding rejected refs need to consult Pusher.OnRejection or apply the
+// same downgrade pass the syncer wrapper does.
 type Result struct {
 	Plans             []planner.BranchPlan
 	Pushed            int
@@ -225,25 +228,21 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		return result, errors.New("bootstrap batching requires protocol v2 source fetch filter support")
 	}
 
+	// Tags and other-kind refs are create-only and ride a single tail phase
+	// after the checkpointed branch batches; they reuse branch-tip haves.
 	planRefs := make([]planner.DesiredRef, 0, len(plans))
-	tagPlans := make([]planner.BranchPlan, 0, len(plans))
-	tagDesired := make(map[plumbing.ReferenceName]gitproto.DesiredRef)
+	tailPlans := make([]planner.BranchPlan, 0, len(plans))
 	for _, plan := range plans {
-		if plan.Kind == planner.RefKindTag {
-			tagPlans = append(tagPlans, plan)
-			if d, ok := p.DesiredRefs[plan.TargetRef]; ok {
-				tagDesired[plan.TargetRef] = gitproto.DesiredRef{
-					SourceRef: d.SourceRef, TargetRef: d.TargetRef,
-					SourceHash: d.SourceHash, IsTag: true,
-				}
-			}
+		if plan.Kind == planner.RefKindTag || plan.Kind == planner.RefKindOther {
+			tailPlans = append(tailPlans, plan)
 			continue
 		}
 		if !plan.SourceRef.IsBranch() || !plan.TargetRef.IsBranch() {
-			return result, errors.New("bootstrap batching currently supports branch refs and create-only tags")
+			return result, errors.New("bootstrap batching currently supports branch refs, tags, and other-kind create-only refs")
 		}
 		planRefs = append(planRefs, p.DesiredRefs[plan.TargetRef])
 	}
+	tailDesired := convert.DesiredRefsForPlans(p.DesiredRefs, tailPlans)
 
 	var batches []plannedBatch
 	if len(planRefs) > 0 {
@@ -622,33 +621,33 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
 	}
 
-	// Tag phase (issue #1)
-	if len(tagPlans) > 0 {
-		p.log("bootstrap batch pushing tags after branch batches", "tag_count", len(tagPlans))
+	// Tail phase: tags and other-kind refs (issue #1)
+	if len(tailPlans) > 0 {
+		p.log("bootstrap batch pushing tail refs after branch batches", "tail_count", len(tailPlans))
 		if p.OnPhase != nil {
-			p.OnPhase("pushing tags")
+			p.OnPhase(tailPhaseLabel(tailPlans))
 		}
-		tagTargetRefs := planner.CopyRefHashMap(p.TargetRefs)
+		tailTargetRefs := planner.CopyRefHashMap(p.TargetRefs)
 		for _, batch := range batches {
-			tagTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
+			tailTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 		}
-		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, tagDesired, tagTargetRefs)
+		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, tailDesired, tailTargetRefs)
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
-				cmds := convert.PlansToPushCommands(tagPlans)
+				cmds := convert.PlansToPushCommands(tailPlans)
 				if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
-					return result, fmt.Errorf("create tag refs after bootstrap: %w", err)
+					return result, fmt.Errorf("create tail refs after bootstrap: %w", err)
 				}
 			} else {
-				return result, fmt.Errorf("fetch bootstrap tag pack: %w", err)
+				return result, fmt.Errorf("fetch bootstrap tail pack: %w", err)
 			}
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 			packReader = closeOnce(packReader)
-			cmds := convert.PlansToPushCommands(tagPlans)
+			cmds := convert.PlansToPushCommands(tailPlans)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
-				return result, fmt.Errorf("push bootstrap tags: %w", err)
+				return result, fmt.Errorf("push bootstrap tail refs: %w", err)
 			}
 			_ = packReader.Close()
 		}
@@ -658,6 +657,28 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	result.Batching = true
 	result.RelayMode = "bootstrap-batch"
 	return result, nil
+}
+
+// tailPhaseLabel returns a phase label matching what's in plans.
+func tailPhaseLabel(plans []planner.BranchPlan) string {
+	hasTag, hasOther := false, false
+	for _, plan := range plans {
+		switch plan.Kind {
+		case planner.RefKindTag:
+			hasTag = true
+		case planner.RefKindOther:
+			hasOther = true
+		case planner.RefKindBranch:
+		}
+	}
+	switch {
+	case hasTag && hasOther:
+		return "pushing tail refs"
+	case hasOther:
+		return "pushing other refs"
+	default:
+		return "pushing tags"
+	}
 }
 
 // --- Checkpoint planning ---

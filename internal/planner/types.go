@@ -10,12 +10,13 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-// RefKind distinguishes branch refs from tag refs.
+// RefKind distinguishes ref namespaces: branch, tag, or other (notes/pulls/custom).
 type RefKind string
 
 const (
 	RefKindBranch RefKind = "branch"
 	RefKindTag    RefKind = "tag"
+	RefKindOther  RefKind = "other"
 )
 
 // Action represents the planned operation on a ref.
@@ -27,6 +28,9 @@ const (
 	ActionDelete Action = "delete"
 	ActionSkip   Action = "skip"
 	ActionBlock  Action = "block"
+	// ActionWarn is set when the target rejected an individual ref under
+	// best-effort policy; the server's reason is carried in BranchPlan.Reason.
+	ActionWarn Action = "warn"
 )
 
 // RefMapping is a user-specified source:target mapping.
@@ -98,13 +102,37 @@ func ShortHash(hash plumbing.Hash) string {
 	return s
 }
 
+// IsRefExcluded reports whether name matches any of the exclude prefixes.
+// Empty prefixes are ignored. Used to subtract specific namespaces from
+// auto-discovery (e.g. refs/pull/* under --all-refs against GitHub).
+func IsRefExcluded(name plumbing.ReferenceName, excludePrefixes []string) bool {
+	if len(excludePrefixes) == 0 {
+		return false
+	}
+	s := name.String()
+	for _, p := range excludePrefixes {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // RefKindFromName infers the ref kind from a fully qualified ref name.
+// Returns RefKindOther for any refs/* outside refs/heads/ and refs/tags/,
+// and "" for names that don't start with refs/ at all.
 func RefKindFromName(name plumbing.ReferenceName) RefKind {
 	switch {
 	case name.IsBranch():
 		return RefKindBranch
 	case name.IsTag():
 		return RefKindTag
+	case strings.HasPrefix(name.String(), "refs/"):
+		return RefKindOther
 	default:
 		return ""
 	}
@@ -144,12 +172,15 @@ func SelectBranches(source map[string]plumbing.Hash, requested []string) map[str
 	return selected
 }
 
-// RefPrefixes computes the ref-prefix arguments for v2 ls-refs based on
-// the user's configuration.
-func RefPrefixes(mappings []RefMapping, includeTags bool) []string {
+// RefPrefixes computes the ref-prefix arguments for v2 ls-refs from cfg.
+// Under AllRefs the result collapses to a single "refs/" prefix.
+func RefPrefixes(cfg PlanConfig) []string {
+	if cfg.AllRefs {
+		return []string{"refs/"}
+	}
 	prefixSet := map[string]struct{}{}
-	if len(mappings) > 0 {
-		for _, m := range mappings {
+	if len(cfg.Mappings) > 0 {
+		for _, m := range cfg.Mappings {
 			src := strings.TrimSpace(m.Source)
 			switch {
 			case strings.HasPrefix(src, "refs/tags/"):
@@ -163,7 +194,7 @@ func RefPrefixes(mappings []RefMapping, includeTags bool) []string {
 	} else {
 		prefixSet["refs/heads/"] = struct{}{}
 	}
-	if includeTags {
+	if cfg.IncludeTags {
 		prefixSet["refs/tags/"] = struct{}{}
 	}
 	prefixes := make([]string, 0, len(prefixSet))

@@ -147,7 +147,7 @@ func TestPushPackClosesPackOnSuccess(t *testing.T) {
 	err := PushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-	}}, pack, false)
+	}}, pack, false, nil)
 	if err != nil {
 		t.Fatalf("PushPack returned error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 	err := PushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-	}}, pack, false)
+	}}, pack, false, nil)
 	if err == nil {
 		t.Fatal("expected PushPack to return an error")
 	}
@@ -206,7 +206,7 @@ func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
 		done <- PushPack(ctx, conn, adv, []PushCommand{{
 			Name: "refs/heads/main",
 			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		}}, pack, false)
+		}}, pack, false, nil)
 	}()
 
 	select {
@@ -258,7 +258,7 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 		done <- PushPack(context.Background(), conn, adv, []PushCommand{{
 			Name: "refs/heads/main",
 			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		}}, pack, false)
+		}}, pack, false, nil)
 	}()
 
 	select {
@@ -330,7 +330,7 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 
 	err = PushPack(context.Background(), conn, adv, []PushCommand{
 		{Name: "refs/heads/old", Delete: true},
-	}, pack, false)
+	}, pack, false, nil)
 	if err == nil {
 		t.Fatal("expected error for delete in pack push")
 	}

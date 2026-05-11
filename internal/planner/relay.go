@@ -97,7 +97,7 @@ func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target R
 				if !plan.TargetHash.IsZero() {
 					return false, "incremental-branch-create-target-not-empty"
 				}
-			case ActionDelete, ActionSkip, ActionBlock:
+			case ActionDelete, ActionSkip, ActionBlock, ActionWarn:
 				return false, "incremental-branch-action-not-update-or-create"
 			}
 		case RefKindTag:
@@ -107,7 +107,7 @@ func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target R
 			if plan.Action != ActionCreate {
 				return false, "incremental-tag-action-not-create"
 			}
-		default:
+		case RefKindOther:
 			return false, "incremental-unsupported-ref-kind"
 		}
 	}
@@ -161,6 +161,16 @@ func CanReplicateRelay(plans []BranchPlan) (bool, string) {
 			}
 			if plan.Action != ActionCreate && plan.Action != ActionUpdate {
 				return false, "replicate-tag-action-not-create-or-update"
+			}
+		case RefKindOther:
+			// Replicate's contract is overwrite, so the FF concern that keeps
+			// other-kind refs out of the sync incremental relay doesn't apply
+			// here — a notes/pull ref update is just another ref-update relay.
+			if RefKindFromName(plan.SourceRef) != RefKindOther || RefKindFromName(plan.TargetRef) != RefKindOther {
+				return false, "replicate-non-other-mapping"
+			}
+			if plan.Action != ActionCreate && plan.Action != ActionUpdate {
+				return false, "replicate-other-action-not-create-or-update"
 			}
 		default:
 			return false, "replicate-unsupported-ref-kind"

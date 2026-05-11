@@ -120,8 +120,9 @@ func ParseHaveRef(raw string) plumbing.ReferenceName {
 	return plumbing.NewBranchReferenceName(raw)
 }
 
-// NormalizeMapping validates and normalizes a single ref mapping.
-func NormalizeMapping(m RefMapping) (NormalizedMapping, error) {
+// NormalizeMapping validates a single mapping. allowOther accepts
+// refs/* outside refs/heads/ and refs/tags/.
+func NormalizeMapping(m RefMapping, allowOther bool) (NormalizedMapping, error) {
 	src := strings.TrimSpace(m.Source)
 	dst := strings.TrimSpace(m.Target)
 	if src == "" || dst == "" {
@@ -136,11 +137,11 @@ func NormalizeMapping(m RefMapping) (NormalizedMapping, error) {
 		targetRef := plumbing.ReferenceName(dst)
 		srcKind := refKind(sourceRef)
 		dstKind := refKind(targetRef)
-		if srcKind == "" {
-			return NormalizedMapping{}, fmt.Errorf("unsupported source ref kind: %s", src)
+		if !allowOther && srcKind == kindOther {
+			return NormalizedMapping{}, fmt.Errorf("unsupported source ref kind: %s (set --all-refs to allow arbitrary refs/* namespaces)", src)
 		}
-		if dstKind == "" {
-			return NormalizedMapping{}, fmt.Errorf("unsupported target ref kind: %s", dst)
+		if !allowOther && dstKind == kindOther {
+			return NormalizedMapping{}, fmt.Errorf("unsupported target ref kind: %s (set --all-refs to allow arbitrary refs/* namespaces)", dst)
 		}
 		if srcKind != dstKind {
 			return NormalizedMapping{}, fmt.Errorf("cross-kind mapping not allowed: %s (%s) -> %s (%s)", src, srcKind, dst, dstKind)
@@ -159,7 +160,7 @@ func NormalizeMapping(m RefMapping) (NormalizedMapping, error) {
 }
 
 // ValidateMappings normalizes all mappings and rejects duplicate target refs.
-func ValidateMappings(mappings []RefMapping) ([]NormalizedMapping, error) {
+func ValidateMappings(mappings []RefMapping, allowOther bool) ([]NormalizedMapping, error) {
 	if len(mappings) == 0 {
 		return nil, nil
 	}
@@ -168,7 +169,7 @@ func ValidateMappings(mappings []RefMapping) ([]NormalizedMapping, error) {
 	targetSeen := make(map[plumbing.ReferenceName]string, len(mappings))
 
 	for _, m := range mappings {
-		nm, err := NormalizeMapping(m)
+		nm, err := NormalizeMapping(m, allowOther)
 		if err != nil {
 			return nil, err
 		}
@@ -181,12 +182,20 @@ func ValidateMappings(mappings []RefMapping) ([]NormalizedMapping, error) {
 	return normalized, nil
 }
 
+const (
+	kindBranch = "branch"
+	kindTag    = "tag"
+	kindOther  = "other"
+)
+
 func refKind(name plumbing.ReferenceName) string {
 	switch {
 	case name.IsBranch():
-		return "branch"
+		return kindBranch
 	case name.IsTag():
-		return "tag"
+		return kindTag
+	case strings.HasPrefix(name.String(), "refs/"):
+		return kindOther
 	default:
 		return ""
 	}

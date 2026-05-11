@@ -66,7 +66,7 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected initial result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap" {
+	if !result.Relay || result.RelayMode != relayModeBootstrap {
 		t.Fatalf("expected initial empty-target sync to use bootstrap relay, got %+v", result)
 	}
 
@@ -271,7 +271,7 @@ func TestRun_GitHTTPBackendSyncMappedBranchFastForward(t *testing.T) {
 	if result.Pushed != 1 || result.Blocked != 0 {
 		t.Fatalf("unexpected initial mapped result: %+v", result)
 	}
-	if !result.Relay || result.RelayMode != "bootstrap" {
+	if !result.Relay || result.RelayMode != relayModeBootstrap {
 		t.Fatalf("expected initial mapped sync to use bootstrap relay, got %+v", result)
 	}
 
@@ -519,7 +519,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}
-	sourceRefs, sourceService, err := gitproto.ListSourceRefs(context.Background(), sourceConn, cfg.ProtocolMode, planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags))
+	sourceRefs, sourceService, err := gitproto.ListSourceRefs(context.Background(), sourceConn, cfg.ProtocolMode, planner.RefPrefixes(planConfig(cfg)))
 	if err != nil {
 		t.Fatalf("list source refs: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source transport: %v", err)
 	}
-	sourceRefs, sourceService, err := gitproto.ListSourceRefs(context.Background(), sourceConn, cfg.ProtocolMode, planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags))
+	sourceRefs, sourceService, err := gitproto.ListSourceRefs(context.Background(), sourceConn, cfg.ProtocolMode, planner.RefPrefixes(planConfig(cfg)))
 	if err != nil {
 		t.Fatalf("list source refs: %v", err)
 	}

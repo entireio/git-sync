@@ -46,6 +46,48 @@ func addProtocolFlag(cmd *cobra.Command, mode *protocolModeFlag) {
 	cmd.Flags().Var(mode, "protocol", "protocol mode: auto, v1, or v2")
 }
 
+const (
+	allRefsUsageBestEffort = "mirror every refs/* on the source (branches, tags, notes, pulls, custom namespaces) on a best-effort basis; per-ref server rejections become warnings rather than failing the sync"
+	allRefsUsageStrict     = "mirror every refs/* on the source (branches, tags, notes, pulls, custom namespaces); per-ref rejections fail the run, since replicate's contract is target == source"
+	allRefsUsageScopeOnly  = "include every refs/* on the source (notes, pulls, custom namespaces) — scope only, no failure-handling effect"
+)
+
+// excludeRefPrefixFlag registers --exclude-ref-prefix. Repeatable; each
+// prefix is matched as a string prefix against ref names (e.g.
+// "refs/pull/" trims GitHub PR refs under --all-refs).
+func excludeRefPrefixFlag(cmd *cobra.Command, prefixes *[]string) {
+	cmd.Flags().StringArrayVar(prefixes, "exclude-ref-prefix", nil,
+		"exclude refs whose names start with this prefix; repeatable. "+
+			"Subtracts from auto-discovery (branches/tags/--all-refs); explicit --map values are not subject to this filter")
+}
+
+// allRefsFlag registers --all-refs with the supplied usage string and
+// bundles its implications. Each pointer in implies is set to true when
+// --all-refs is set, via a PreRunE hook that fires after flag parsing.
+//
+// Not idempotent: calling twice on the same command stacks two PreRunE
+// hooks on the same flag pointer. Call once per command.
+func allRefsFlag(cmd *cobra.Command, usage string, allRefs *bool, implies ...*bool) {
+	cmd.Flags().BoolVar(allRefs, "all-refs", false, usage)
+	if len(implies) == 0 {
+		return
+	}
+	prev := cmd.PreRunE
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if *allRefs {
+			for _, p := range implies {
+				if p != nil {
+					*p = true
+				}
+			}
+		}
+		if prev != nil {
+			return prev(cmd, args)
+		}
+		return nil
+	}
+}
+
 func newProtocolFlag() protocolModeFlag {
 	return protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
 }

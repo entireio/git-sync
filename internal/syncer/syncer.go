@@ -70,6 +70,8 @@ type Config struct {
 	HTTPClient             *http.Client
 	Branches               []string
 	Mappings               []RefMapping
+	AllRefs                bool
+	ExcludeRefPrefixes     []string
 	IncludeTags            bool
 	DryRun                 bool
 	Verbose                bool
@@ -79,6 +81,7 @@ type Config struct {
 	Mode                   string
 	Force                  bool
 	Prune                  bool
+	BestEffort             bool
 	MaxPackBytes           int64
 	TargetMaxPackBytes     int64
 	MaterializedMaxObjects int
@@ -100,11 +103,13 @@ type (
 const (
 	RefKindBranch = planner.RefKindBranch
 	RefKindTag    = planner.RefKindTag
+	RefKindOther  = planner.RefKindOther
 	ActionCreate  = planner.ActionCreate
 	ActionUpdate  = planner.ActionUpdate
 	ActionDelete  = planner.ActionDelete
 	ActionSkip    = planner.ActionSkip
 	ActionBlock   = planner.ActionBlock
+	ActionWarn    = planner.ActionWarn
 )
 
 type RefInfo struct {
@@ -131,6 +136,7 @@ type Result struct {
 	Skipped            int          `json:"skipped"`
 	Blocked            int          `json:"blocked"`
 	Deleted            int          `json:"deleted"`
+	Warned             int          `json:"warned"`
 	DryRun             bool         `json:"dryRun"`
 	OperationMode      string       `json:"operationMode"`
 	Relay              bool         `json:"relay"`
@@ -152,8 +158,8 @@ func (r Result) Lines() []string {
 		lines = append(lines, planner.FormatPlanLine(plan))
 	}
 	summary := fmt.Sprintf(
-		"summary: pushed=%d deleted=%d skipped=%d blocked=%d mode=%s protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d planned-batches=%d",
-		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.OperationMode, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount, r.PlannedBatchCount,
+		"summary: pushed=%d deleted=%d skipped=%d blocked=%d warned=%d mode=%s protocol=%s relay=%t relay-mode=%s relay-reason=%s batching=%t batch-count=%d planned-batches=%d",
+		r.Pushed, r.Deleted, r.Skipped, r.Blocked, r.Warned, r.OperationMode, r.Protocol, r.Relay, r.RelayMode, r.RelayReason, r.Batching, r.BatchCount, r.PlannedBatchCount,
 	)
 	if r.DryRun {
 		summary += " dry-run=true"
@@ -380,13 +386,69 @@ func instrumentHTTPClient(base *http.Client, skipTLS bool, label string, stats *
 	return &clone
 }
 
+// finalizeCounts applies any best-effort rejections to both the push slice
+// and the result.Plans the caller will return, then tallies Pushed/Deleted
+// counters from the (now-classified) push plans.
+func (s *syncSession) finalizeCounts(pushPlans []BranchPlan, result *Result) {
+	if !s.cfg.DryRun {
+		if warned := s.applyRejections(pushPlans); warned > 0 {
+			s.applyRejections(result.Plans)
+			result.Warned += warned
+		}
+	}
+	pushed, deleted := tallyActions(pushPlans)
+	result.Pushed += pushed
+	result.Deleted += deleted
+}
+
+// tallyActions counts ref pushes and deletes from a classified plan slice.
+// ActionWarn/Skip/Block don't contribute; rejections are tracked separately
+// in Result.Warned via applyRejections.
+func tallyActions(plans []BranchPlan) (pushed, deleted int) {
+	for _, plan := range plans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate:
+			pushed++
+		case ActionDelete:
+			deleted++
+		case ActionWarn, ActionSkip, ActionBlock:
+		}
+	}
+	return pushed, deleted
+}
+
+// applyRejections downgrades plans whose ref was rejected by the target to
+// ActionWarn and returns the count.
+func (s *syncSession) applyRejections(plans []BranchPlan) int {
+	if len(s.rejections) == 0 {
+		return 0
+	}
+	warned := 0
+	for i := range plans {
+		status, ok := s.rejections[plans[i].TargetRef]
+		if !ok {
+			continue
+		}
+		plans[i].Action = ActionWarn
+		if status == "" {
+			plans[i].Reason = "target rejected ref update"
+		} else {
+			plans[i].Reason = "target rejected ref update: " + status
+		}
+		warned++
+	}
+	return warned
+}
+
 func planConfig(cfg Config) planner.PlanConfig {
 	return planner.PlanConfig{
-		Branches:    cfg.Branches,
-		Mappings:    cfg.Mappings,
-		IncludeTags: cfg.IncludeTags,
-		Force:       cfg.Force,
-		Prune:       cfg.Prune,
+		Branches:           cfg.Branches,
+		Mappings:           cfg.Mappings,
+		IncludeTags:        cfg.IncludeTags,
+		AllRefs:            cfg.AllRefs,
+		ExcludeRefPrefixes: cfg.ExcludeRefPrefixes,
+		Force:              cfg.Force,
+		Prune:              cfg.Prune,
 	}
 }
 
@@ -438,6 +500,8 @@ type syncSession struct {
 	target          *targetSession
 	measurementDone func() Measurement
 	progress        *progressReporter
+	// rejections records target ng statuses; nil unless BestEffort.
+	rejections map[plumbing.ReferenceName]string
 }
 
 // finish releases any resources owned by the session — currently the live
@@ -467,7 +531,7 @@ type targetSession struct {
 	refMap   map[plumbing.ReferenceName]plumbing.Hash
 	features gitproto.TargetFeatures
 	policy   planner.RelayTargetPolicy
-	pusher   gitproto.Pusher
+	pusher   *gitproto.Pusher
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -485,7 +549,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	default:
 		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
 	}
-	if _, err := validation.ValidateMappings(cfg.Mappings); err != nil {
+	if _, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs); err != nil {
 		return nil, fmt.Errorf("validate mappings: %w", err)
 	}
 	if cfg.Mode == modeReplicate && cfg.Force {
@@ -514,7 +578,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	}
 	s.sourceConn.ProgressOut = &sessionStderr{s: s}
 
-	refPrefixes := planner.RefPrefixes(cfg.Mappings, cfg.IncludeTags)
+	refPrefixes := planner.RefPrefixes(planConfig(cfg))
 	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
 	if err != nil {
 		return nil, fmt.Errorf("list source refs: %w", err)
@@ -549,6 +613,12 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 				NoThin:            targetFeatures.NoThin,
 			},
 			pusher: gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
+		}
+		if cfg.BestEffort {
+			s.rejections = make(map[plumbing.ReferenceName]string)
+			s.target.pusher.OnRejection = func(name plumbing.ReferenceName, status string) {
+				s.rejections[name] = status
+			}
 		}
 	}
 
@@ -676,6 +746,8 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 			result.Skipped++
 		case ActionBlock:
 			result.Blocked++
+		case ActionWarn:
+			// not produced by planning; only set after a push by applyRejections.
 		}
 	}
 
@@ -709,16 +781,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		}
 	}
 
-	for _, plan := range pushPlans {
-		switch plan.Action {
-		case ActionCreate, ActionUpdate:
-			result.Pushed++
-		case ActionDelete:
-			result.Deleted++
-		case ActionSkip, ActionBlock:
-			// not applicable in this context
-		}
-	}
+	s.finalizeCounts(pushPlans, &result)
 	result.Stats = stats.snapshot()
 	result.Measurement = measurementDone()
 	return result, nil
@@ -789,13 +852,17 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 			result.Skipped++
 		case ActionBlock:
 			result.Blocked++
+		case ActionWarn:
+			// not produced by planning; only set after a push by applyRejections.
 		}
 	}
 
-	if !s.cfg.DryRun && len(relayPlans) > 0 {
-		ok, reason := planner.CanReplicateRelay(relayPlans)
-		if !ok {
-			return result, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+	if !s.cfg.DryRun && len(pushPlans) > 0 {
+		if len(relayPlans) > 0 {
+			ok, reason := planner.CanReplicateRelay(relayPlans)
+			if !ok {
+				return result, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+			}
 		}
 		repResult, err := s.executeReplicate(ctx, desiredRefs, pushPlans)
 		if err != nil {
@@ -806,16 +873,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		result.RelayReason = repResult.RelayReason
 	}
 
-	for _, plan := range pushPlans {
-		switch plan.Action {
-		case ActionCreate, ActionUpdate:
-			result.Pushed++
-		case ActionDelete:
-			result.Deleted++
-		case ActionSkip, ActionBlock:
-			// not applicable in this context
-		}
-	}
+	s.finalizeCounts(pushPlans, &result)
 	result.Stats = s.stats.snapshot()
 	result.Measurement = s.measurementDone()
 	return result, nil
@@ -837,10 +895,18 @@ func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceNa
 		if _, ok := desiredRefs[targetRef]; ok {
 			continue
 		}
+		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes) {
+			continue
+		}
+		// AllRefs overrides per-namespace allowlists: under "all refs" a
+		// stale branch matters even when a Branches filter is set.
+		branchScopeCovers := s.cfg.AllRefs || len(s.cfg.Branches) == 0
 		switch {
-		case targetRef.IsTag() && s.cfg.IncludeTags:
+		case targetRef.IsTag() && (s.cfg.IncludeTags || s.cfg.AllRefs):
 			return false
-		case targetRef.IsBranch() && len(s.cfg.Mappings) == 0 && len(s.cfg.Branches) == 0:
+		case targetRef.IsBranch() && len(s.cfg.Mappings) == 0 && branchScopeCovers:
+			return false
+		case s.cfg.AllRefs && planner.RefKindFromName(targetRef) == planner.RefKindOther && len(s.cfg.Mappings) == 0:
 			return false
 		}
 	}
@@ -954,8 +1020,11 @@ func bootstrapWithInputs(
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)
 	}
+	plans := bResult.Plans
+	warned := s.applyRejections(plans)
+	pushed, _ := tallyActions(plans)
 	return Result{
-		Plans: bResult.Plans, Pushed: bResult.Pushed, OperationMode: s.cfg.Mode,
+		Plans: plans, Pushed: pushed, Warned: warned, OperationMode: s.cfg.Mode,
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
@@ -1045,6 +1114,9 @@ func (s *syncSession) buildHaveRefMap(haveRefs []string, haveHashes []plumbing.H
 func (s *syncSession) newProbeResult() ProbeResult {
 	refInfos := make([]RefInfo, 0, len(s.sourceRefMap))
 	for name, hash := range s.sourceRefMap {
+		if planner.IsRefExcluded(name, s.cfg.ExcludeRefPrefixes) {
+			continue
+		}
 		refInfos = append(refInfos, RefInfo{Name: name.String(), Hash: hash})
 	}
 	sort.Slice(refInfos, func(i, j int) bool { return refInfos[i].Name < refInfos[j].Name })
@@ -1053,7 +1125,7 @@ func (s *syncSession) newProbeResult() ProbeResult {
 		SourceURL:     s.cfg.Source.URL,
 		RequestedMode: s.cfg.ProtocolMode,
 		Protocol:      s.sourceService.Protocol,
-		RefPrefixes:   planner.RefPrefixes(s.cfg.Mappings, s.cfg.IncludeTags),
+		RefPrefixes:   planner.RefPrefixes(planConfig(s.cfg)),
 		Capabilities:  s.sourceService.Capabilities(),
 		Refs:          refInfos,
 		Stats:         s.stats.snapshot(),

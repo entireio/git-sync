@@ -26,30 +26,37 @@ type PushCommand struct {
 }
 
 // Pusher wraps target-side receive-pack state behind a smaller execution API.
+// When OnRejection is non-nil, per-ref ng statuses invoke it instead of erroring;
+// pack-level unpack failure remains fatal.
+//
+// Returned by NewPusher as a pointer so callers can attach OnRejection after
+// construction without worrying about whether downstream strategies have
+// already captured a value copy.
 type Pusher struct {
-	Conn    *Conn
-	Adv     *packp.AdvRefs
-	Verbose bool
+	Conn        *Conn
+	Adv         *packp.AdvRefs
+	Verbose     bool
+	OnRejection func(refName plumbing.ReferenceName, status string)
 }
 
 // NewPusher builds a target-side push executor.
-func NewPusher(conn *Conn, adv *packp.AdvRefs, verbose bool) Pusher {
-	return Pusher{Conn: conn, Adv: adv, Verbose: verbose}
+func NewPusher(conn *Conn, adv *packp.AdvRefs, verbose bool) *Pusher {
+	return &Pusher{Conn: conn, Adv: adv, Verbose: verbose}
 }
 
 // PushPack streams a pack to the target.
-func (p Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
-	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.Verbose)
+func (p *Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
+	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.Verbose, p.OnRejection)
 }
 
 // PushCommands sends ref-only updates without a pack.
-func (p Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
-	return PushCommands(ctx, p.Conn, p.Adv, commands, p.Verbose)
+func (p *Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
+	return PushCommands(ctx, p.Conn, p.Adv, commands, p.Verbose, p.OnRejection)
 }
 
 // PushObjects encodes and pushes locally materialized objects.
-func (p Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
-	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose)
+func (p *Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
+	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose, p.OnRejection)
 }
 
 // buildUpdateRequest builds the receive-pack update request.
@@ -104,6 +111,7 @@ func sendReceivePack(
 	req *packp.UpdateRequests,
 	packData io.Reader,
 	verbose bool,
+	onRejection func(plumbing.ReferenceName, string),
 ) error {
 	var header bytes.Buffer
 	if err := req.Encode(&header); err != nil {
@@ -138,8 +146,20 @@ func sendReceivePack(
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}
-		if err := report.Error(); err != nil {
-			return fmt.Errorf("report-status: %w", err)
+		if onRejection == nil {
+			if err := report.Error(); err != nil {
+				return fmt.Errorf("report-status: %w", err)
+			}
+			return nil
+		}
+		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
+			return fmt.Errorf("report-status: unpack error: %s", report.UnpackStatus)
+		}
+		for _, cs := range report.CommandStatuses {
+			if cs.Status == "" || cs.Status == "ok" {
+				continue
+			}
+			onRejection(cs.ReferenceName, cs.Status)
 		}
 	}
 	return nil
@@ -154,13 +174,14 @@ func PushObjects(
 	store storer.Storer,
 	hashes []plumbing.Hash,
 	verbose bool,
+	onRejection func(plumbing.ReferenceName, string),
 ) error {
 	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
 	if !hasUpdates {
-		return sendReceivePack(ctx, conn, req, nil, verbose)
+		return sendReceivePack(ctx, conn, req, nil, verbose, onRejection)
 	}
 
 	useRefDeltas := !adv.Capabilities.Supports(capability.OFSDelta)
@@ -176,7 +197,7 @@ func PushObjects(
 		done <- pw.Close()
 	}()
 
-	err = sendReceivePack(ctx, conn, req, pr, verbose)
+	err = sendReceivePack(ctx, conn, req, pr, verbose, onRejection)
 	_ = pr.Close()
 	encodeErr := <-done
 	if err != nil {
@@ -193,6 +214,7 @@ func PushPack(
 	commands []PushCommand,
 	pack io.ReadCloser,
 	verbose bool,
+	onRejection func(plumbing.ReferenceName, string),
 ) error {
 	for _, cmd := range commands {
 		if cmd.Delete {
@@ -207,7 +229,7 @@ func PushPack(
 		return err
 	}
 
-	err = sendReceivePack(ctx, conn, req, pack, verbose)
+	err = sendReceivePack(ctx, conn, req, pack, verbose, onRejection)
 	closeErr := pack.Close()
 	if err != nil {
 		return err
@@ -225,12 +247,13 @@ func PushCommands(
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	verbose bool,
+	onRejection func(plumbing.ReferenceName, string),
 ) error {
 	req, _, _, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
-	return sendReceivePack(ctx, conn, req, nil, verbose)
+	return sendReceivePack(ctx, conn, req, nil, verbose, onRejection)
 }
 
 func progressWriter(verbose bool, dest io.Writer) io.Writer {

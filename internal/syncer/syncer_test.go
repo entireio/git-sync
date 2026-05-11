@@ -5,8 +5,77 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v6/plumbing"
+
 	bstrap "entire.io/entire/git-sync/internal/strategy/bootstrap"
 )
+
+func TestApplyRejectionsDowngradesAndCarriesReason(t *testing.T) {
+	notes := plumbing.ReferenceName("refs/notes/commits")
+	main := plumbing.NewBranchReferenceName("main")
+	plans := []BranchPlan{
+		{TargetRef: main, Action: ActionUpdate, Reason: "abc -> def"},
+		{TargetRef: notes, Action: ActionCreate, Reason: "abc -> <new>"},
+	}
+	s := &syncSession{rejections: map[plumbing.ReferenceName]string{
+		notes: "deny updating a hidden ref",
+	}}
+	warned := s.applyRejections(plans)
+	if warned != 1 {
+		t.Fatalf("expected warned=1, got %d", warned)
+	}
+	if plans[0].Action != ActionUpdate {
+		t.Errorf("expected non-rejected ref to keep Action=%s, got %s", ActionUpdate, plans[0].Action)
+	}
+	if plans[1].Action != ActionWarn {
+		t.Errorf("expected rejected ref Action=%s, got %s", ActionWarn, plans[1].Action)
+	}
+	if !strings.Contains(plans[1].Reason, "deny updating a hidden ref") {
+		t.Errorf("expected server reason in plans[1].Reason, got %q", plans[1].Reason)
+	}
+}
+
+func TestApplyRejectionsEmptyMapIsNoOp(t *testing.T) {
+	plans := []BranchPlan{{TargetRef: plumbing.NewBranchReferenceName("main"), Action: ActionUpdate}}
+	s := &syncSession{}
+	if got := s.applyRejections(plans); got != 0 {
+		t.Fatalf("expected warned=0 with no rejections, got %d", got)
+	}
+	if plans[0].Action != ActionUpdate {
+		t.Errorf("expected plans untouched, got Action=%s", plans[0].Action)
+	}
+}
+
+func TestFinalizeCountsTalliesPushedAndDeleted(t *testing.T) {
+	notes := plumbing.ReferenceName("refs/notes/commits")
+	main := plumbing.NewBranchReferenceName("main")
+	stale := plumbing.NewBranchReferenceName("stale")
+	pushPlans := []BranchPlan{
+		{TargetRef: main, Action: ActionUpdate},
+		{TargetRef: stale, Action: ActionDelete},
+		{TargetRef: notes, Action: ActionCreate},
+	}
+	result := Result{Plans: append([]BranchPlan{}, pushPlans...)}
+	s := &syncSession{rejections: map[plumbing.ReferenceName]string{
+		notes: "deny updating a hidden ref",
+	}}
+	s.finalizeCounts(pushPlans, &result)
+
+	if result.Pushed != 1 {
+		t.Errorf("expected Pushed=1 (main only; notes downgraded), got %d", result.Pushed)
+	}
+	if result.Deleted != 1 {
+		t.Errorf("expected Deleted=1, got %d", result.Deleted)
+	}
+	if result.Warned != 1 {
+		t.Errorf("expected Warned=1, got %d", result.Warned)
+	}
+	for _, plan := range result.Plans {
+		if plan.TargetRef == notes && plan.Action != ActionWarn {
+			t.Errorf("expected result.Plans notes ref Action=%s, got %s", ActionWarn, plan.Action)
+		}
+	}
+}
 
 func TestGitHubOwnerRepo(t *testing.T) {
 	stats := newStats(false)

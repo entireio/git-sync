@@ -40,8 +40,10 @@ type EndpointAuth struct {
 }
 
 type RefScope struct {
-	Branches []string
-	Mappings []RefMapping
+	Branches           []string
+	Mappings           []RefMapping
+	AllRefs            bool
+	ExcludeRefPrefixes []string
 }
 
 type SyncPolicy struct {
@@ -49,16 +51,19 @@ type SyncPolicy struct {
 	IncludeTags bool
 	Force       bool
 	Prune       bool
+	BestEffort  bool
 	Protocol    ProtocolMode
 }
 
-func ProbeConfig(source Endpoint, sourceAuth EndpointAuth, target *Endpoint, targetAuth EndpointAuth, protocol ProtocolMode, includeTags, collectStats bool, httpClient *http.Client) Config {
+func ProbeConfig(source Endpoint, sourceAuth EndpointAuth, target *Endpoint, targetAuth EndpointAuth, protocol ProtocolMode, includeTags, allRefs, collectStats bool, excludeRefPrefixes []string, httpClient *http.Client) Config {
 	cfg := syncer.Config{
-		Source:       ToSyncerEndpoint(source, sourceAuth),
-		HTTPClient:   httpClient,
-		IncludeTags:  includeTags,
-		ShowStats:    collectStats,
-		ProtocolMode: protocolString(protocol),
+		Source:             ToSyncerEndpoint(source, sourceAuth),
+		HTTPClient:         httpClient,
+		IncludeTags:        includeTags,
+		AllRefs:            allRefs,
+		ExcludeRefPrefixes: append([]string(nil), excludeRefPrefixes...),
+		ShowStats:          collectStats,
+		ProtocolMode:       protocolString(protocol),
 	}
 	if target != nil {
 		cfg.Target = ToSyncerEndpoint(*target, targetAuth)
@@ -73,12 +78,15 @@ func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targe
 		HTTPClient:             httpClient,
 		Branches:               append([]string(nil), scope.Branches...),
 		Mappings:               ToValidationMappings(scope.Mappings),
+		AllRefs:                scope.AllRefs,
+		ExcludeRefPrefixes:     append([]string(nil), scope.ExcludeRefPrefixes...),
 		IncludeTags:            policy.IncludeTags,
 		DryRun:                 dryRun,
 		ShowStats:              collectStats,
 		Mode:                   operationModeString(policy.Mode),
 		Force:                  policy.Force,
 		Prune:                  policy.Prune,
+		BestEffort:             policy.BestEffort,
 		ProtocolMode:           protocolString(policy.Protocol),
 		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
 	}}

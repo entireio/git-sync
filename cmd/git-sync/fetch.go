@@ -69,6 +69,8 @@ func newFetchCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&branches, "branch", "", "comma-separated branch list; default is all source branches")
 	cmd.Flags().BoolVar(&req.IncludeTags, "tags", false, "include tags in the fetch request")
+	cmd.Flags().BoolVar(&req.Scope.AllRefs, "all-refs", false, "include every refs/* on the source (branches, tags, notes, pulls, custom namespaces) in the fetch request")
+	excludeRefPrefixFlag(cmd, &req.Scope.ExcludeRefPrefixes)
 	addProtocolFlag(cmd, &protocolVal)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")

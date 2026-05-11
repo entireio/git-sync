@@ -53,10 +53,9 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 			updatePlans = append(updatePlans, plan)
 		case planner.ActionDelete:
 			deletePlans = append(deletePlans, plan)
-		case planner.ActionSkip, planner.ActionBlock:
-			// not applicable
-		default:
-			return Result{}, fmt.Errorf("replicate strategy does not support %s actions", plan.Action)
+		case planner.ActionSkip, planner.ActionBlock, planner.ActionWarn:
+			// not applicable: replicate runs before any rejection downgrade,
+			// and skip/block plans never reach the executor.
 		}
 	}
 

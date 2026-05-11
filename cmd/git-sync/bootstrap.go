@@ -74,6 +74,8 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branches, "branch", "", "comma-separated branch list; default is all source branches")
 	cmd.Flags().StringArrayVar(&mappings, "map", nil, "ref mapping in src:dst form; short names map branches, full refs map exact refs")
 	cmd.Flags().BoolVar(&req.IncludeTags, "tags", false, "mirror tags")
+	allRefsFlag(cmd, allRefsUsageBestEffort, &req.Scope.AllRefs, &req.BestEffort)
+	excludeRefPrefixFlag(cmd, &req.Scope.ExcludeRefPrefixes)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	cmd.Flags().BoolVar(&req.Options.Progress, "progress", false, "show live per-side throughput on stderr (TTY only)")

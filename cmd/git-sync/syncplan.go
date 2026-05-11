@@ -111,6 +111,19 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 	cmd.Flags().BoolVar(&req.Policy.IncludeTags, "tags", false, "mirror tags")
 	cmd.Flags().BoolVar(&req.Policy.Force, "force", false, "allow non-fast-forward branch updates and retarget tags")
 	cmd.Flags().BoolVar(&req.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
+	// Tag inclusion is now handled at the library level (AllRefs implies
+	// it in BuildDesiredRefs). Replicate keeps strict failure semantics —
+	// its contract is "target refs match source," so BestEffort is not
+	// bundled there; sync/plan get it for the best-effort UX.
+	var implies []*bool
+	usage := allRefsUsageBestEffort
+	if defaultMode == gitsync.ModeReplicate {
+		usage = allRefsUsageStrict
+	} else {
+		implies = append(implies, &req.Policy.BestEffort)
+	}
+	allRefsFlag(cmd, usage, &req.Scope.AllRefs, implies...)
+	excludeRefPrefixFlag(cmd, &req.Scope.ExcludeRefPrefixes)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	cmd.Flags().BoolVar(&req.Options.Progress, "progress", false, "show live per-side throughput on stderr (TTY only)")

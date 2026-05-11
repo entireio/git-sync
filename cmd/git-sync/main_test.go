@@ -14,14 +14,17 @@ import (
 	"testing"
 	"time"
 
+	"entire.io/entire/git-sync/internal/syncertest"
 	"entire.io/entire/git-sync/unstable"
 	billy "github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/memfs"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
 )
@@ -254,6 +257,303 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 	}
 }
 
+// Smoke test: cobra flag parsing through the full sync pipeline.
+func TestRun_Sync_AllRefsSmokeTest(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	head := syncertest.SetRefAtBranch(t, sourceRepo, notesRef, testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"sync",
+			"--all-refs",
+			"--json",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run sync --all-refs: %v\noutput=%s", err, output)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode sync json: %v\noutput=%s", err, output)
+	}
+
+	plans, ok := result["plans"].([]any)
+	if !ok || len(plans) < 2 {
+		t.Fatalf("expected at least 2 plans (branch + notes), got %#v", result["plans"])
+	}
+	var foundNotesRef bool
+	for _, raw := range plans {
+		plan, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if plan["targetRef"] == "refs/notes/commits" {
+			if plan["kind"] != "other" {
+				t.Errorf("expected notes ref kind=other, got %#v", plan["kind"])
+			}
+			if plan["action"] != "create" {
+				t.Errorf("expected notes ref action=create, got %#v", plan["action"])
+			}
+			foundNotesRef = true
+		}
+	}
+	if !foundNotesRef {
+		t.Fatalf("refs/notes/commits not in plans output: %s", output)
+	}
+
+	gotNotes, err := targetRepo.Reference(notesRef, true)
+	if err != nil {
+		t.Fatalf("expected refs/notes/commits on target: %v", err)
+	}
+	if gotNotes.Hash() != head {
+		t.Fatalf("target notes hash = %s, want %s", gotNotes.Hash(), head)
+	}
+}
+
+// probe --exclude-ref-prefix must filter the returned ref list — otherwise
+// the CLI knob is wired but ineffective for previewing scoped state.
+func TestRun_Probe_ExcludeRefPrefixFiltersReturnedRefs(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	syncertest.SetRefAtBranch(t, sourceRepo, notesRef, testBranch)
+	pullRef := plumbing.ReferenceName("refs/pull/1/head")
+	syncertest.SetRefAtBranch(t, sourceRepo, pullRef, testBranch)
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	defer sourceServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"probe",
+			"--all-refs",
+			"--exclude-ref-prefix", "refs/pull/",
+			"--json",
+			sourceServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run probe: %v\noutput=%s", err, output)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode probe json: %v\noutput=%s", err, output)
+	}
+	refs, ok := result["refs"].([]any)
+	if !ok {
+		t.Fatalf("expected refs array, got %#v", result["refs"])
+	}
+	var sawNotes bool
+	for _, raw := range refs {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, ok := entry["name"].(string)
+		if !ok {
+			continue
+		}
+		if name == string(pullRef) {
+			t.Fatalf("expected %s excluded from probe output, but it appeared", pullRef)
+		}
+		if name == string(notesRef) {
+			sawNotes = true
+		}
+	}
+	if !sawNotes {
+		t.Fatalf("expected %s in probe output", notesRef)
+	}
+}
+
+// CLI smoke test for --exclude-ref-prefix under --all-refs: refs/pull/* on
+// the source is trimmed, refs/notes/commits is kept.
+func TestRun_Sync_ExcludeRefPrefixTrimsPullRefs(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	syncertest.SetRefAtBranch(t, sourceRepo, notesRef, testBranch)
+	pullRef := plumbing.ReferenceName("refs/pull/1/head")
+	syncertest.SetRefAtBranch(t, sourceRepo, pullRef, testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	err = run(context.Background(), []string{
+		"sync",
+		"--all-refs",
+		"--exclude-ref-prefix", "refs/pull/",
+		"--json",
+		sourceServer.RepoURL(),
+		targetServer.RepoURL(),
+	})
+	if err != nil {
+		t.Fatalf("run sync --all-refs --exclude-ref-prefix: %v", err)
+	}
+
+	if _, err := targetRepo.Reference(notesRef, true); err != nil {
+		t.Errorf("expected refs/notes/commits on target, got err=%v", err)
+	}
+	if _, err := targetRepo.Reference(pullRef, true); err == nil {
+		t.Errorf("expected refs/pull/1/head NOT on target")
+	}
+}
+
+func TestRun_Fetch_AllRefsCoversTagsAndOtherKind(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	head, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+	tagRef := plumbing.NewTagReferenceName("v1")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(tagRef, head.Hash())); err != nil {
+		t.Fatalf("set source tag: %v", err)
+	}
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(notesRef, head.Hash())); err != nil {
+		t.Fatalf("set source notes ref: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	defer sourceServer.Close()
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"fetch",
+			"--all-refs",
+			"--json",
+			sourceServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("run fetch --all-refs: %v\noutput=%s", err, output)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode fetch json: %v\noutput=%s", err, output)
+	}
+	wants, ok := result["wants"].([]any)
+	if !ok {
+		t.Fatalf("expected wants in result, got %#v", result)
+	}
+	seen := make(map[string]bool)
+	for _, raw := range wants {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := entry["name"].(string); ok && name != "" {
+			seen[name] = true
+		}
+	}
+	for _, want := range []string{string(tagRef), string(notesRef)} {
+		if !seen[want] {
+			t.Errorf("expected %s in fetch wants, got %v", want, seen)
+		}
+	}
+}
+
+// replicate's --all-refs must not bundle BestEffort the way sync's does.
+func TestRun_Replicate_AllRefsKeepsStrictFailureOnNg(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	targetServer.receivePackHook = func(req *packp.UpdateRequests) *packp.ReportStatus {
+		return syncertest.DenyRefsReport(req, "deny updating a hidden ref")
+	}
+
+	err = run(context.Background(), []string{
+		modeReplicate,
+		"--all-refs",
+		"--json",
+		sourceServer.RepoURL(),
+		targetServer.RepoURL(),
+	})
+	if err == nil {
+		t.Fatal("expected replicate --all-refs to error on per-ref ng")
+	}
+}
+
+// Mirror of the replicate test: same target rejection, warning + exit 0
+// for sync, so the CLI binding really differs by mode.
+func TestRun_Sync_AllRefsWarnsOnNg(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	targetServer.receivePackHook = func(req *packp.UpdateRequests) *packp.ReportStatus {
+		return syncertest.DenyRefsReport(req, "deny updating a hidden ref")
+	}
+
+	output, err := captureStdout(func() error {
+		return run(context.Background(), []string{
+			"sync",
+			"--all-refs",
+			"--json",
+			sourceServer.RepoURL(),
+			targetServer.RepoURL(),
+		})
+	})
+	if err != nil {
+		t.Fatalf("expected sync --all-refs to succeed with warning, got: %v\noutput=%s", err, output)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode sync json: %v\noutput=%s", err, output)
+	}
+	if got, ok := result["warned"].(float64); !ok || got == 0 {
+		t.Fatalf("expected warned > 0 in result, got %#v", result["warned"])
+	}
+}
+
 func TestRun_Replicate_SubcommandRejectsForce(t *testing.T) {
 	err := run(context.Background(), []string{
 		modeReplicate,
@@ -393,6 +693,11 @@ type smartHTTPRepoServer struct {
 	repo     *git.Repository
 	repoPath string
 
+	// receivePackHook synthesizes the receive-pack response when set,
+	// bypassing the embedded ReceivePack handler. Used to simulate
+	// per-ref ng statuses from hostile targets.
+	receivePackHook func(*packp.UpdateRequests) *packp.ReportStatus
+
 	mu           sync.Mutex
 	receivePacks int
 	thinCapable  bool
@@ -523,6 +828,50 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	s.mu.Lock()
 	s.receivePacks++
 	s.mu.Unlock()
+
+	if s.receivePackHook != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req := packp.NewUpdateRequests()
+		if err := req.Decode(bytes.NewReader(body)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		report := s.receivePackHook(req)
+		// Wrap the report in sideband framing when negotiated, mirroring
+		// what transport.ReceivePack writes; the client's demuxer otherwise
+		// fails on raw report-status pkt-lines.
+		var buf bytes.Buffer
+		var writer io.Writer = &buf
+		useSideband := false
+		// Mirrors the syncer test server's sideband-wrap: no-progress
+		// turns off the wrapping even if a sideband cap is advertised.
+		if !req.Capabilities.Supports(capability.NoProgress) {
+			switch {
+			case req.Capabilities.Supports(capability.Sideband64k):
+				writer = sideband.NewMuxer(sideband.Sideband64k, &buf)
+				useSideband = true
+			case req.Capabilities.Supports(capability.Sideband):
+				writer = sideband.NewMuxer(sideband.Sideband, &buf)
+				useSideband = true
+			}
+		}
+		if err := report.Encode(nopWriteCloser{writer}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if useSideband {
+			_ = pktline.WriteFlush(&buf)
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		if _, err := w.Write(buf.Bytes()); err != nil {
+			s.t.Fatalf("write receive-pack hook response: %v", err)
+		}
+		return
+	}
 
 	var buf bytes.Buffer
 	wc := nopWriteCloser{&buf}

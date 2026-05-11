@@ -65,6 +65,8 @@ func newProbeCmd() *cobra.Command {
 	addTargetAuth(cmd, &targetAuth)
 
 	cmd.Flags().BoolVar(&req.IncludeTags, "tags", false, "include tag ref prefixes in probe")
+	cmd.Flags().BoolVar(&req.AllRefs, "all-refs", false, "advertise all refs/* prefixes (branches, tags, notes, pulls, custom namespaces) in the probe")
+	excludeRefPrefixFlag(cmd, &req.ExcludeRefPrefixes)
 	addProtocolFlag(cmd, &protocolVal)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")

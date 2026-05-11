@@ -155,6 +155,64 @@ git-sync sync \
   <target-url>
 ```
 
+Mirror every ref namespace (notes, pulls, custom) on a best-effort basis:
+
+```bash
+git-sync sync \
+  --all-refs \
+  <source-url> \
+  <target-url>
+```
+
+`--all-refs` broadens the source ref discovery from `refs/heads/`+`refs/tags/`
+to every `refs/*` namespace (branches, tags, `refs/notes/*`, `refs/pull/*`,
+custom refs) and lets ref mappings target arbitrary namespaces. Tag
+inclusion is implied — `RefScope.AllRefs` covers tags at the library level,
+so `--tags` does not need to be combined with `--all-refs`.
+
+For `sync` and `bootstrap` the flag also turns on best-effort failure
+handling: when the target's `receive-pack` rejects an individual ref (e.g.
+GitHub refusing writes to `refs/pull/*` hidden refs), the rejected ref
+appears in the result with `action=warn` and the server's reason instead
+of failing the whole sync. Pack-level transport or unpack failures remain
+fatal, and so do source-side `upload-pack` failures — if the source server
+advertises a hidden ref but refuses to serve a `want` for its tip (Gerrit
+`refs/changes/*` is a common case), the fetch errors out with no per-ref
+warn granularity. BestEffort only covers target-side `receive-pack`.
+
+Trim noisy namespaces with `--exclude-ref-prefix` (repeatable). The
+common case is mirroring an open-source GitHub repo where `--all-refs`
+would otherwise pull every PR's fork commits via `refs/pull/*`:
+
+```bash
+git-sync sync \
+  --all-refs \
+  --exclude-ref-prefix refs/pull/ \
+  <source-url> \
+  <target-url>
+```
+
+`--exclude-ref-prefix` subtracts from auto-discovery (branches, tags, and
+`--all-refs` namespaces) and from prune scope, so excluded refs are left
+alone entirely: not pulled from source, not pushed to target, not pruned
+from target. Explicit `--map` entries are not subject to this filter.
+
+`replicate --all-refs` broadens the same scope but does NOT enable
+best-effort. Replicate's contract is "target refs match source"; downgrading
+rejected refs to warnings would let partial mirrors exit successfully,
+which contradicts the command. Use `sync --all-refs` if you want
+best-effort completeness against hostile targets.
+
+`sync --all-refs` blocks updates to non-branch refs (notes, pulls, custom
+namespaces) by default — those refs don't generally form fast-forward
+chains, so the same `--force` opt-in that retargets tags is required to
+update them. `replicate` doesn't run that check; its overwrite contract
+covers other-kind refs without `--force`.
+
+`SyncPolicy.BestEffort` is independent of scope and can be set without
+`AllRefs` if a library caller wants per-ref warn semantics on a narrower
+scope.
+
 Force source-side protocol v2:
 
 ```bash
@@ -172,7 +230,7 @@ The JSON interface is stable:
 
 - keys use `camelCase`
 - refs and hashes are serialized as strings, not raw byte arrays
-- top-level keys include `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `dryRun`, `protocol`, and `stats`, plus `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
+- top-level keys include `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `warned`, `dryRun`, `protocol`, and `stats`, plus `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
 - each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
 
 ## Auth
