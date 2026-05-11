@@ -1850,31 +1850,11 @@ func TestProbe_IntegrationTargetCapabilities(t *testing.T) {
 	}
 }
 
-// ProbeResult.TargetHEAD covers the same upload-pack round-trip the sync
-// session does; `git-sync probe --target-url X` should let users see the
-// target's default branch before mutating anything.
+// Probe surfaces the target's HEAD symref via the upload-pack round-trip.
 func TestProbe_IntegrationSurfacesTargetHEAD(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
-
-	targetRepo, err := git.Init(memory.NewStorage())
-	if err != nil {
-		t.Fatalf("init target repo: %v", err)
-	}
-	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
-		t.Fatalf("seed target: %v", err)
-	}
-	featureRef := plumbing.NewBranchReferenceName("feature")
-	head, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
-	if err != nil {
-		t.Fatalf("resolve seeded head: %v", err)
-	}
-	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(featureRef, head.Hash())); err != nil {
-		t.Fatalf("set target feature ref: %v", err)
-	}
-	if err := targetRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, featureRef)); err != nil {
-		t.Fatalf("retarget target HEAD: %v", err)
-	}
+	targetRepo, featureRef := seedTargetWithFeatureHEAD(t, sourceRepo)
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
@@ -1894,9 +1874,7 @@ func TestProbe_IntegrationSurfacesTargetHEAD(t *testing.T) {
 	}
 }
 
-// ProbeResult.SourceHEAD lets `git-sync probe` show the source's default
-// branch without performing a sync. Same protocol limitation as the sync
-// path: target HEAD isn't exposed by receive-pack advertisements.
+// Probe surfaces the source's HEAD symref.
 func TestProbe_IntegrationSurfacesSourceHEAD(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
@@ -2887,34 +2865,11 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-// Result.TargetHEAD comes from a separate upload-pack info-refs round-trip
-// against the target URL (the receive-pack advertisement we already query
-// doesn't include HEAD by protocol design). The session does this lookup
-// alongside the existing target setup; failures are non-fatal.
+// Sync surfaces the target's HEAD symref alongside the source's.
 func TestRun_IntegrationSyncSurfacesTargetHEADInResult(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
-
-	// Seed target so its HEAD's underlying ref exists; otherwise the
-	// upload-pack advertisement skips HEAD entirely.
-	targetRepo, err := git.Init(memory.NewStorage())
-	if err != nil {
-		t.Fatalf("init target repo: %v", err)
-	}
-	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
-		t.Fatalf("seed target: %v", err)
-	}
-	featureRef := plumbing.NewBranchReferenceName("feature")
-	head, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
-	if err != nil {
-		t.Fatalf("resolve seeded head: %v", err)
-	}
-	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(featureRef, head.Hash())); err != nil {
-		t.Fatalf("set target feature ref: %v", err)
-	}
-	if err := targetRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, featureRef)); err != nil {
-		t.Fatalf("retarget target HEAD: %v", err)
-	}
+	targetRepo, featureRef := seedTargetWithFeatureHEAD(t, sourceRepo)
 
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
 	targetServer := newSmartHTTPRepoServer(t, targetRepo)
@@ -2934,12 +2889,8 @@ func TestRun_IntegrationSyncSurfacesTargetHEADInResult(t *testing.T) {
 	}
 }
 
-// Result.SourceHEAD carries the source's symref HEAD target, parsed from
-// the v2 ls-refs response (or v1 advertisement's symref capability), so
-// library callers can compare against the target's intended default
-// branch without out-of-band metadata. Target HEAD is not exposed: the
-// receive-pack advertisement we already query doesn't include HEAD, and
-// detecting it would need a separate upload-pack round-trip.
+// Sync surfaces the source's HEAD symref via the existing upload-pack
+// discovery — no extra round-trip needed for this side.
 func TestRun_IntegrationSyncSurfacesSourceHEADInResult(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
@@ -3578,6 +3529,34 @@ func makeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count 
 	syncertest.MakeCommits(t, repo, fs, count)
 }
 
+// seedTargetWithFeatureHEAD returns an in-memory target seeded from source's
+// testBranch with refs/heads/feature pointing at the same commit and HEAD
+// pointing at feature. Used by the HEAD-discovery tests: an empty target
+// has no advertised HEAD because HEAD's underlying ref doesn't exist yet,
+// so we need a target with at least one resolvable ref to observe it.
+func seedTargetWithFeatureHEAD(t *testing.T, sourceRepo *git.Repository) (*git.Repository, plumbing.ReferenceName) {
+	t.Helper()
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{plumbing.NewBranchReferenceName(testBranch)}); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	head, err := targetRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve seeded head: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(featureRef, head.Hash())); err != nil {
+		t.Fatalf("set target feature ref: %v", err)
+	}
+	if err := targetRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, featureRef)); err != nil {
+		t.Fatalf("retarget target HEAD: %v", err)
+	}
+	return targetRepo, featureRef
+}
+
 func makeLargeCommits(t *testing.T, repo *git.Repository, fs billy.Filesystem, count int, blobSize int) {
 	syncertest.MakeLargeCommits(t, repo, fs, count, blobSize)
 }
@@ -4187,9 +4166,7 @@ func isConnectionCloseError(err error) bool {
 		strings.Contains(msg, "connection reset by peer")
 }
 
-// lsRefsCoversHead returns true when prefixes is empty (matches everything)
-// or any prefix is "HEAD" itself (the only way ref-prefix syntax selects HEAD,
-// since "H", "HE" etc. aren't valid ref names a client would use).
+// lsRefsCoversHead reports whether prefixes would include HEAD in an ls-refs response.
 func lsRefsCoversHead(prefixes []string) bool {
 	if len(prefixes) == 0 {
 		return true

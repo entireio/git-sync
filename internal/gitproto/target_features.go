@@ -1,7 +1,6 @@
 package gitproto
 
 import (
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 )
@@ -16,10 +15,6 @@ type TargetFeatures struct {
 	ReportStatus bool `json:"reportStatus"`
 	Sideband     bool `json:"sideband"`
 	Sideband64k  bool `json:"sideband64k"`
-	// HeadTarget is the branch the target's HEAD symref points at, if the
-	// advertisement carried a symref=HEAD:<ref> capability. Empty when HEAD
-	// is detached or not advertised.
-	HeadTarget plumbing.ReferenceName `json:"headTarget,omitempty"`
 }
 
 // TargetFeaturesFromAdvRefs derives the target-side feature summary from a
@@ -36,6 +31,5 @@ func TargetFeaturesFromAdvRefs(adv *packp.AdvRefs) TargetFeatures {
 		ReportStatus: adv.Capabilities.Supports(capability.ReportStatus),
 		Sideband:     adv.Capabilities.Supports(capability.Sideband),
 		Sideband64k:  adv.Capabilities.Supports(capability.Sideband64k),
-		HeadTarget:   headTargetFromAdv(adv),
 	}
 }

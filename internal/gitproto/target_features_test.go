@@ -3,7 +3,6 @@ package gitproto
 import (
 	"testing"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
 	"github.com/stretchr/testify/require"
@@ -23,16 +22,6 @@ func TestTargetFeaturesFromAdvRefs(t *testing.T) {
 	}
 	if got.Sideband {
 		t.Fatalf("unexpected sideband feature: %+v", got)
-	}
-}
-
-func TestTargetFeaturesFromAdvRefsHeadTarget(t *testing.T) {
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.SymRef, "HEAD:refs/heads/main"))
-
-	got := TargetFeaturesFromAdvRefs(adv)
-	if got.HeadTarget != plumbing.ReferenceName("refs/heads/main") {
-		t.Fatalf("HeadTarget = %q, want refs/heads/main", got.HeadTarget)
 	}
 }
 

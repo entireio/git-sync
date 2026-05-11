@@ -130,13 +130,9 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 }
 
 // Result holds the outcome of a sync or bootstrap operation.
-//
-// SourceHEAD and TargetHEAD carry each side's symref HEAD target. Source
-// is parsed from the upload-pack advertisement we already make. Target
-// requires an additional upload-pack info-refs round-trip (the
-// receive-pack advertisement omits HEAD by protocol design); when that
-// fails — push-only auth, empty target where HEAD's underlying ref
-// doesn't exist — TargetHEAD is empty.
+// SourceHEAD/TargetHEAD carry each side's symref HEAD target when advertised;
+// TargetHEAD may be empty when upload-pack discovery fails or the target's HEAD
+// is detached / unborn.
 type Result struct {
 	Plans              []BranchPlan           `json:"plans"`
 	Pushed             int                    `json:"pushed"`
@@ -527,6 +523,18 @@ type syncSession struct {
 	rejections map[plumbing.ReferenceName]string
 }
 
+// heads returns the source and target symref HEAD targets, each possibly
+// empty if the corresponding side hasn't been set up or didn't advertise HEAD.
+func (s *syncSession) heads() (src, tgt plumbing.ReferenceName) {
+	if s.sourceService != nil {
+		src = s.sourceService.HeadTarget
+	}
+	if s.target != nil {
+		tgt = s.target.headTarget
+	}
+	return src, tgt
+}
+
 // finish releases any resources owned by the session — currently the live
 // progress ticker. Idempotent and safe to call from defer in callers that
 // also produce results in the happy path.
@@ -617,34 +625,24 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
 		targetConn.ProgressOut = &sessionStderr{s: s}
-
-		// Run upload-pack discovery concurrently with the receive-pack
-		// advertisement: receive-pack tells us capabilities and current
-		// refs (for push), upload-pack tells us HEAD's symref target
-		// (receive-pack omits HEAD by protocol design). Errors on the
-		// upload-pack side are non-fatal — push-only auth, for example,
-		// would 401 and we just leave headTarget empty.
-		headCh := make(chan plumbing.ReferenceName, 1)
-		go func() {
-			head, err := gitproto.DiscoverHEAD(ctx, targetConn)
-			if err != nil {
-				head = ""
-			}
-			headCh <- head
-		}()
-
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
-			<-headCh
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
 		targetRefSlice, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
-			<-headCh
 			return nil, fmt.Errorf("decode target refs: %w", err)
 		}
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
+		// Receive-pack adverts omit HEAD, so make a second upload-pack
+		// info-refs call. Run after the receive-pack call (not concurrent):
+		// both share targetConn, and RequestInfoRefs mutates conn.Endpoint
+		// under FollowInfoRefsRedirect. Failures are non-fatal.
+		targetHEAD, err := gitproto.DiscoverHEAD(ctx, targetConn)
+		if err != nil {
+			targetHEAD = ""
+		}
 		s.target = &targetSession{
 			conn:     targetConn,
 			adv:      targetAdv,
@@ -655,7 +653,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 				NoThin:            targetFeatures.NoThin,
 			},
 			pusher:     gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
-			headTarget: <-headCh,
+			headTarget: targetHEAD,
 		}
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
@@ -720,6 +718,8 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		return Result{}, errors.New("no source refs matched")
 	}
 
+	src, tgt := s.heads()
+
 	// Check for bootstrap opportunity (before allocating in-memory repo)
 	if ok, reason := planner.CanBootstrapRelay(s.cfg.Force, s.cfg.Prune, desiredRefs, targetRefMap); ok {
 		if s.cfg.DryRun {
@@ -731,7 +731,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 				Plans: plans, DryRun: true, RelayReason: reason,
 				OperationMode: modeSync, BootstrapSuggested: true, Stats: stats.snapshot(),
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
-				SourceHEAD: sourceService.HeadTarget, TargetHEAD: s.target.headTarget,
+				SourceHEAD: src, TargetHEAD: tgt,
 			}, nil
 		}
 		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason)
@@ -775,7 +775,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	result := Result{
 		Plans: plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: sourceService.Protocol,
 		Stats: stats.snapshot(), Measurement: measurementDone(),
-		SourceHEAD: sourceService.HeadTarget, TargetHEAD: s.target.headTarget,
+		SourceHEAD: src, TargetHEAD: tgt,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -845,6 +845,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		return Result{OperationMode: modeReplicate}, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
 	}
 
+	src, tgt := s.heads()
+
 	allAbsent := s.replicateCanBootstrap(desiredRefs)
 	if allAbsent {
 		if s.cfg.DryRun {
@@ -861,8 +863,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				Stats:              s.stats.snapshot(),
 				Measurement:        s.measurementDone(),
 				Protocol:           s.sourceService.Protocol,
-				SourceHEAD:         s.sourceService.HeadTarget,
-				TargetHEAD:         s.target.headTarget,
+				SourceHEAD:         src,
+				TargetHEAD:         tgt,
 			}, nil
 		}
 		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, "empty-target-managed-refs")
@@ -880,8 +882,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		Protocol:      s.sourceService.Protocol,
 		Stats:         s.stats.snapshot(),
 		Measurement:   s.measurementDone(),
-		SourceHEAD:    s.sourceService.HeadTarget,
-		TargetHEAD:    s.target.headTarget,
+		SourceHEAD:    src,
+		TargetHEAD:    tgt,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -1072,13 +1074,14 @@ func bootstrapWithInputs(
 	plans := bResult.Plans
 	warned := s.applyRejections(plans)
 	pushed, _ := tallyActions(plans)
+	src, tgt := s.heads()
 	return Result{
 		Plans: plans, Pushed: pushed, Warned: warned, OperationMode: s.cfg.Mode,
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
 		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
-		SourceHEAD: s.sourceService.HeadTarget, TargetHEAD: s.target.headTarget,
+		SourceHEAD: src, TargetHEAD: tgt,
 	}, nil
 }
 
@@ -1171,6 +1174,7 @@ func (s *syncSession) newProbeResult() ProbeResult {
 	}
 	sort.Slice(refInfos, func(i, j int) bool { return refInfos[i].Name < refInfos[j].Name })
 
+	src, tgt := s.heads()
 	result := ProbeResult{
 		SourceURL:     s.cfg.Source.URL,
 		RequestedMode: s.cfg.ProtocolMode,
@@ -1178,14 +1182,14 @@ func (s *syncSession) newProbeResult() ProbeResult {
 		RefPrefixes:   planner.RefPrefixes(planConfig(s.cfg)),
 		Capabilities:  s.sourceService.Capabilities(),
 		Refs:          refInfos,
-		SourceHEAD:    s.sourceService.HeadTarget,
+		SourceHEAD:    src,
+		TargetHEAD:    tgt,
 		Stats:         s.stats.snapshot(),
 		Measurement:   s.measurementDone(),
 	}
 	if s.target != nil {
 		result.TargetURL = s.cfg.Target.URL
 		result.TargetCaps = gitproto.AdvRefsCaps(s.target.adv)
-		result.TargetHEAD = s.target.headTarget
 		result.Stats = s.stats.snapshot()
 		result.Measurement = s.measurementDone()
 	}
