@@ -638,8 +638,18 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		// Receive-pack adverts omit HEAD, so make a second upload-pack
 		// info-refs call. Run after the receive-pack call (not concurrent):
 		// both share targetConn, and RequestInfoRefs mutates conn.Endpoint
-		// under FollowInfoRefsRedirect. Failures are non-fatal.
+		// under FollowInfoRefsRedirect. We also disable redirect-following
+		// for this single call — upload-pack and receive-pack on the same
+		// repo can redirect to different hosts (read replica vs push
+		// primary), and we don't want the discovery to clobber the
+		// receive-pack-resolved endpoint that Pusher already captured.
+		// http.Client still follows the redirect internally to read the
+		// advert; we just suppress the conn.Endpoint mutation. Failures
+		// are non-fatal.
+		prevFollow := targetConn.FollowInfoRefsRedirect
+		targetConn.FollowInfoRefsRedirect = false
 		targetHEAD, err := gitproto.DiscoverHEAD(ctx, targetConn)
+		targetConn.FollowInfoRefsRedirect = prevFollow
 		if err != nil {
 			targetHEAD = ""
 		}

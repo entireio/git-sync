@@ -2889,6 +2889,65 @@ func TestRun_IntegrationSyncSurfacesTargetHEADInResult(t *testing.T) {
 	}
 }
 
+// Regression: when target has FollowInfoRefsRedirect=true and the target's
+// upload-pack info-refs redirects to a different host (real-world read-
+// replica setup), the HEAD discovery must not clobber the receive-pack-
+// resolved endpoint that Pusher already captured. Before the fix, sync
+// would push to the upload-pack redirect host and the receive-pack POST
+// would 404.
+func TestRun_IntegrationSyncTargetFollowRedirectPreservesPushHost(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	targetRepo, _ := seedTargetWithFeatureHEAD(t, sourceRepo)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	defer sourceServer.Close()
+
+	// decoy serves upload-pack info-refs (same repo, so the advert is
+	// well-formed) but 404s POSTs. With the bug present, sync would push
+	// here and fail; with the fix, push lands on realTarget.
+	decoy := newSmartHTTPRepoServer(t, targetRepo)
+	defer decoy.Close()
+	decoy.receivePackRaw = func(w http.ResponseWriter, _ *http.Request) bool {
+		http.Error(w, "decoy refuses POSTs", http.StatusNotFound)
+		return true
+	}
+
+	realInner := newSmartHTTPRepoServer(t, targetRepo)
+	defer realInner.Close()
+
+	// realTarget wraps realInner: GETs for upload-pack info-refs redirect
+	// to decoy (simulating a server that routes reads to a replica);
+	// everything else delegates to realInner. The wrapper has its own
+	// Host (own httptest.Server) so the redirect destination differs.
+	realTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet &&
+			r.URL.Path == realInner.repoPath+"/info/refs" &&
+			r.URL.Query().Get("service") == serviceUploadPack {
+			http.Redirect(w, r, decoy.server.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+			return
+		}
+		realInner.handle(w, r)
+	}))
+	defer realTarget.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: realTarget.URL + realInner.repoPath, FollowInfoRefsRedirect: true},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if decoy.Count(serviceReceivePack, metricPack) > 0 {
+		t.Errorf("push leaked to decoy host: bug regression")
+	}
+	if realInner.Count(serviceReceivePack, metricPack) == 0 {
+		t.Errorf("expected push to land on real target after fix, got result=%+v", result)
+	}
+}
+
 // Sync surfaces the source's HEAD symref via the existing upload-pack
 // discovery — no extra round-trip needed for this side.
 func TestRun_IntegrationSyncSurfacesSourceHEADInResult(t *testing.T) {
