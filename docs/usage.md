@@ -224,31 +224,39 @@ git-sync sync \
 
 ## HEAD / Default Branch
 
-git-sync surfaces the source's symref HEAD target — the source's default
-branch — in the result's `execution.sourceHead` field (JSON) and as a
-`source-head: <ref>` line in human output. `probe` exposes the same field.
+git-sync surfaces both sides' symref HEAD targets in result output:
+
+- JSON: `execution.sourceHead` and `execution.targetHead` (sync / plan /
+  replicate / bootstrap); `sourceHead` / `targetHead` (probe).
+- Human: `source-head: <ref>` and `target-head: <ref>` lines.
 
 ```
-$ git-sync sync --json … | jq .execution.sourceHead
-"refs/heads/main"
+$ git-sync probe --target-url <target> --json | jq '{sourceHead,targetHead}'
+{
+  "sourceHead": "refs/heads/main",
+  "targetHead": "refs/heads/master"
+}
 ```
+
+Target HEAD is read via a separate `upload-pack` info-refs round-trip
+against the target URL, since the `receive-pack` advertisement we use for
+push setup omits HEAD by protocol design. The round-trip runs concurrently
+with the existing target setup; failures (push-only auth that 401s on
+upload-pack, empty bare targets where HEAD's underlying ref doesn't yet
+exist) leave `targetHead` empty rather than failing the sync.
 
 The target's default branch is **not** automatically reconciled. git's
-`push --mirror` doesn't propagate HEAD either; standard receive-pack has
-no portable mechanism for setting a remote symref's target (only newer
-git versions support a `symref-update` capability, and go-git's current
-alpha doesn't send it). The result: if you `git init --bare` your target
-with a default branch that differs from the source's, the mirror's HEAD
-will dangle even after a successful sync.
+`push --mirror` doesn't propagate HEAD either; the only portable wire-level
+mechanism is the newer `symref-update` receive-pack capability, which
+go-git's current alpha doesn't implement. So if you `git init --bare`
+your target with a default branch that differs from the source's, the
+mirror's HEAD will dangle even after a successful sync.
 
 Practical mitigations, in order of preference:
 
-1. **Match the default at init time.** `git init --bare --initial-branch=<source-default>` (or the equivalent on your host) avoids the problem entirely. Compare against `git-sync probe <source-url>`'s `sourceHead` to know what to pass.
+1. **Match the default at init time.** `git init --bare --initial-branch=<source-default>` (or the equivalent on your host) avoids the problem entirely. `git-sync probe <source-url>`'s `sourceHead` field tells you what to pass.
 2. **Set HEAD manually post-sync.** On a self-hosted bare repo: `git symbolic-ref HEAD refs/heads/<source-default>`. On hosted providers (GitHub, GitLab, etc.), use the provider's API or web UI to set the default branch.
-
-Detecting the mismatch automatically is tracked as a follow-up; doing so
-requires a separate `upload-pack` round-trip against the target since the
-`receive-pack` advertisement we already query doesn't include HEAD.
+3. **Compare the fields.** A wrapper script that runs `git-sync probe ...` and compares `sourceHead` against `targetHead` will catch mismatches before they bite.
 
 ## JSON Output
 
@@ -260,7 +268,7 @@ The JSON interface is stable:
 - refs and hashes are serialized as strings, not raw byte arrays
 - top-level keys include `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `warned`, `dryRun`, `protocol`, and `stats`, plus `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
 - each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
-- `execution.sourceHead` (sync/plan/replicate/bootstrap) and `sourceHead` (probe) carry the source's symref HEAD target when advertised
+- `execution.sourceHead` / `execution.targetHead` (sync/plan/replicate/bootstrap) and `sourceHead` / `targetHead` (probe) carry each side's symref HEAD target when advertised
 
 ## Auth
 
