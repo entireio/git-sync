@@ -1850,6 +1850,40 @@ func TestProbe_IntegrationTargetCapabilities(t *testing.T) {
 	}
 }
 
+// ProbeResult.SourceHEAD and TargetHEAD let `git-sync probe` preview the
+// default-branch mismatch without actually mutating the target.
+func TestProbe_IntegrationSurfacesBothHEADs(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage(), nil, git.WithDefaultBranch("refs/heads/main"))
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Probe(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	wantSource := plumbing.NewBranchReferenceName(testBranch)
+	if result.SourceHEAD != wantSource {
+		t.Errorf("SourceHEAD = %q, want %q", result.SourceHEAD, wantSource)
+	}
+	wantTarget := plumbing.ReferenceName("refs/heads/main")
+	if result.TargetHEAD != wantTarget {
+		t.Errorf("TargetHEAD = %q, want %q", result.TargetHEAD, wantTarget)
+	}
+}
+
 func TestFetch_IntegrationProtocolV2Source(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 4)
@@ -2819,6 +2853,75 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 		t.Fatalf("target notes hash = %s, want %s", gotNotes.Hash(), head)
 	}
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+// Result.SourceHEAD and Result.TargetHEAD capture each side's symref HEAD
+// target, so library callers can detect a default-branch mismatch without
+// scraping the notice stream. Bootstrap into an empty target whose bare-repo
+// HEAD default differs from the source's surfaces this case.
+func TestRun_IntegrationBootstrapSurfacesHEADInResult(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	// go-git Init defaults HEAD to refs/heads/master; pin target to
+	// refs/heads/main so the symrefs diverge.
+	targetRepo, err := git.Init(memory.NewStorage(), nil, git.WithDefaultBranch("refs/heads/main"))
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	wantSourceHEAD := plumbing.NewBranchReferenceName(testBranch)
+	if result.SourceHEAD != wantSourceHEAD {
+		t.Errorf("SourceHEAD = %q, want %q", result.SourceHEAD, wantSourceHEAD)
+	}
+	wantTargetHEAD := plumbing.ReferenceName("refs/heads/main")
+	if result.TargetHEAD != wantTargetHEAD {
+		t.Errorf("TargetHEAD = %q, want %q", result.TargetHEAD, wantTargetHEAD)
+	}
+}
+
+// When source HEAD and target HEAD match, the sync surfaces both fields
+// identically — no mismatch from the consumer's perspective.
+func TestRun_IntegrationBootstrapHEADMatch(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	// Both source and target default to refs/heads/master via go-git's
+	// plumbing.Master.
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.SourceHEAD != result.TargetHEAD {
+		t.Errorf("expected matching HEADs, got source=%q target=%q", result.SourceHEAD, result.TargetHEAD)
+	}
 }
 
 // --exclude-ref-prefix trims namespaces from --all-refs auto-discovery. The
