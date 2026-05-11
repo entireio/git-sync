@@ -201,6 +201,23 @@ func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceN
 	}
 }
 
+// DiscoverHEAD reads HEAD's symref target from an upload-pack info-refs
+// advertisement against conn. Used to find the target's default branch
+// since the receive-pack advertisement we already query doesn't include
+// HEAD (server-side `addReferences` passes addHead=false for forPush).
+//
+// Returns empty when HEAD is detached, the target advertisement omits it
+// (typical for empty bare repos where HEAD's underlying ref doesn't yet
+// exist), or any error occurs. Errors are returned for telemetry but
+// callers typically treat this as best-effort.
+func DiscoverHEAD(ctx context.Context, conn *Conn) (plumbing.ReferenceName, error) {
+	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackService)
+	if err != nil {
+		return "", fmt.Errorf("upload-pack info-refs: %w", err)
+	}
+	return headTargetFromAdv(adv), nil
+}
+
 // headTargetFromAdv extracts the branch HEAD points to from v1 advertised
 // capabilities. Returns empty when HEAD is detached or no symref is advertised.
 func headTargetFromAdv(adv *packp.AdvRefs) plumbing.ReferenceName {

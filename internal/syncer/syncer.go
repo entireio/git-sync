@@ -541,12 +541,13 @@ func (s *syncSession) notice(msg string) {
 }
 
 type targetSession struct {
-	conn     *gitproto.Conn
-	adv      *packp.AdvRefs
-	refMap   map[plumbing.ReferenceName]plumbing.Hash
-	features gitproto.TargetFeatures
-	policy   planner.RelayTargetPolicy
-	pusher   *gitproto.Pusher
+	conn       *gitproto.Conn
+	adv        *packp.AdvRefs
+	refMap     map[plumbing.ReferenceName]plumbing.Hash
+	features   gitproto.TargetFeatures
+	policy     planner.RelayTargetPolicy
+	pusher     *gitproto.Pusher
+	headTarget plumbing.ReferenceName
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -608,12 +609,30 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
 		targetConn.ProgressOut = &sessionStderr{s: s}
+
+		// Run upload-pack discovery concurrently with the receive-pack
+		// advertisement: receive-pack tells us capabilities and current
+		// refs (for push), upload-pack tells us HEAD's symref target
+		// (receive-pack omits HEAD by protocol design). Errors on the
+		// upload-pack side are non-fatal — push-only auth, for example,
+		// would 401 and we just leave headTarget empty.
+		headCh := make(chan plumbing.ReferenceName, 1)
+		go func() {
+			head, err := gitproto.DiscoverHEAD(ctx, targetConn)
+			if err != nil {
+				head = ""
+			}
+			headCh <- head
+		}()
+
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
+			<-headCh
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
 		targetRefSlice, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
+			<-headCh
 			return nil, fmt.Errorf("decode target refs: %w", err)
 		}
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
@@ -627,7 +646,8 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 				CapabilitiesKnown: targetFeatures.Known,
 				NoThin:            targetFeatures.NoThin,
 			},
-			pusher: gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
+			pusher:     gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
+			headTarget: <-headCh,
 		}
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
