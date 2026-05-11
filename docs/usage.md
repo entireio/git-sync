@@ -222,6 +222,34 @@ git-sync sync \
   <target-url>
 ```
 
+## HEAD / Default Branch
+
+git-sync surfaces the source's symref HEAD target — the source's default
+branch — in the result's `execution.sourceHead` field (JSON) and as a
+`source-head: <ref>` line in human output. `probe` exposes the same field.
+
+```
+$ git-sync sync --json … | jq .execution.sourceHead
+"refs/heads/main"
+```
+
+The target's default branch is **not** automatically reconciled. git's
+`push --mirror` doesn't propagate HEAD either; standard receive-pack has
+no portable mechanism for setting a remote symref's target (only newer
+git versions support a `symref-update` capability, and go-git's current
+alpha doesn't send it). The result: if you `git init --bare` your target
+with a default branch that differs from the source's, the mirror's HEAD
+will dangle even after a successful sync.
+
+Practical mitigations, in order of preference:
+
+1. **Match the default at init time.** `git init --bare --initial-branch=<source-default>` (or the equivalent on your host) avoids the problem entirely. Compare against `git-sync probe <source-url>`'s `sourceHead` to know what to pass.
+2. **Set HEAD manually post-sync.** On a self-hosted bare repo: `git symbolic-ref HEAD refs/heads/<source-default>`. On hosted providers (GitHub, GitLab, etc.), use the provider's API or web UI to set the default branch.
+
+Detecting the mismatch automatically is tracked as a follow-up; doing so
+requires a separate `upload-pack` round-trip against the target since the
+`receive-pack` advertisement we already query doesn't include HEAD.
+
 ## JSON Output
 
 Add `--json` to any command to emit machine-readable output instead of the default text format.
@@ -232,6 +260,7 @@ The JSON interface is stable:
 - refs and hashes are serialized as strings, not raw byte arrays
 - top-level keys include `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `warned`, `dryRun`, `protocol`, and `stats`, plus `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
 - each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
+- `execution.sourceHead` (sync/plan/replicate/bootstrap) and `sourceHead` (probe) carry the source's symref HEAD target when advertised
 
 ## Auth
 
