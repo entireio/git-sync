@@ -24,6 +24,10 @@ type PlanConfig struct {
 	// in any namespace when AllRefs is set; otherwise only refs/heads/
 	// and refs/tags/ are accepted.
 	AllRefs bool
+	// ExcludeRefPrefixes subtracts namespaces from auto-discovery. A ref
+	// whose name starts with any of these prefixes is not pulled, pushed,
+	// or pruned. Explicit Mappings are not subject to this filter.
+	ExcludeRefPrefixes []string
 }
 
 // BuildDesiredRefs constructs the set of desired refs and managed targets from
@@ -74,6 +78,9 @@ func BuildDesiredRefs(
 		selected := SelectBranches(branches, cfg.Branches)
 		for branch, hash := range selected {
 			refName := plumbing.NewBranchReferenceName(branch)
+			if IsRefExcluded(refName, cfg.ExcludeRefPrefixes) {
+				continue
+			}
 			if err := addManaged(refName, refName, RefKindBranch, hash); err != nil {
 				return nil, nil, err
 			}
@@ -91,6 +98,9 @@ func BuildDesiredRefs(
 			case kind == RefKindTag && wantTags:
 			case kind == RefKindOther && cfg.AllRefs:
 			default:
+				continue
+			}
+			if IsRefExcluded(refName, cfg.ExcludeRefPrefixes) {
 				continue
 			}
 			if _, ok := desired[refName]; ok {
@@ -235,6 +245,9 @@ func BuildReplicationPlans(
 func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, targetRefs map[plumbing.ReferenceName]plumbing.Hash, cfg PlanConfig) {
 	for targetRef := range targetRefs {
 		if _, ok := managed[targetRef]; ok {
+			continue
+		}
+		if IsRefExcluded(targetRef, cfg.ExcludeRefPrefixes) {
 			continue
 		}
 		switch {

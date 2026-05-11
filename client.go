@@ -105,6 +105,7 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (intern
 		req.IncludeTags,
 		req.AllRefs,
 		req.CollectStats,
+		req.ExcludeRefPrefixes,
 		c.httpClient,
 	), nil
 }
@@ -218,9 +219,10 @@ func bridgeScope(scope RefScope) internalbridge.RefScope {
 		})
 	}
 	return internalbridge.RefScope{
-		Branches: append([]string(nil), scope.Branches...),
-		Mappings: mappings,
-		AllRefs:  scope.AllRefs,
+		Branches:           append([]string(nil), scope.Branches...),
+		Mappings:           mappings,
+		AllRefs:            scope.AllRefs,
+		ExcludeRefPrefixes: append([]string(nil), scope.ExcludeRefPrefixes...),
 	}
 }
 

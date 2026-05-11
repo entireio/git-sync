@@ -80,11 +80,15 @@ type RefMapping struct {
 
 // RefScope constrains which refs a request manages. AllRefs broadens scope
 // to every refs/* on the source (branches, tags, notes, pulls, custom
-// namespaces) and implies SyncPolicy.IncludeTags.
+// namespaces) and implies SyncPolicy.IncludeTags. ExcludeRefPrefixes
+// subtracts namespaces from auto-discovery (useful for trimming
+// refs/pull/* when mirroring open-source GitHub repos under AllRefs);
+// explicit Mappings are not subject to it.
 type RefScope struct {
-	Branches []string     `json:"branches"`
-	Mappings []RefMapping `json:"mappings"`
-	AllRefs  bool         `json:"allRefs,omitempty"`
+	Branches           []string     `json:"branches"`
+	Mappings           []RefMapping `json:"mappings"`
+	AllRefs            bool         `json:"allRefs,omitempty"`
+	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
 }
 
 // SyncPolicy controls high-level sync behavior. BestEffort downgrades per-ref
@@ -100,12 +104,13 @@ type SyncPolicy struct {
 
 // ProbeRequest inspects source refs and optional target capabilities.
 type ProbeRequest struct {
-	Source       Endpoint     `json:"source"`
-	Target       *Endpoint    `json:"target"`
-	IncludeTags  bool         `json:"includeTags"`
-	AllRefs      bool         `json:"allRefs,omitempty"`
-	Protocol     ProtocolMode `json:"protocol"`
-	CollectStats bool         `json:"collectStats"`
+	Source             Endpoint     `json:"source"`
+	Target             *Endpoint    `json:"target"`
+	IncludeTags        bool         `json:"includeTags"`
+	AllRefs            bool         `json:"allRefs,omitempty"`
+	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
+	Protocol           ProtocolMode `json:"protocol"`
+	CollectStats       bool         `json:"collectStats"`
 }
 
 // PlanRequest computes ref actions without pushing.

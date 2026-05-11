@@ -180,6 +180,23 @@ advertises a hidden ref but refuses to serve a `want` for its tip (Gerrit
 `refs/changes/*` is a common case), the fetch errors out with no per-ref
 warn granularity. BestEffort only covers target-side `receive-pack`.
 
+Trim noisy namespaces with `--exclude-ref-prefix` (repeatable). The
+common case is mirroring an open-source GitHub repo where `--all-refs`
+would otherwise pull every PR's fork commits via `refs/pull/*`:
+
+```bash
+git-sync sync \
+  --all-refs \
+  --exclude-ref-prefix refs/pull/ \
+  <source-url> \
+  <target-url>
+```
+
+`--exclude-ref-prefix` subtracts from auto-discovery (branches, tags, and
+`--all-refs` namespaces) and from prune scope, so excluded refs are left
+alone entirely: not pulled from source, not pushed to target, not pruned
+from target. Explicit `--map` entries are not subject to this filter.
+
 `replicate --all-refs` broadens the same scope but does NOT enable
 best-effort. Replicate's contract is "target refs match source"; downgrading
 rejected refs to warnings would let partial mirrors exit successfully,

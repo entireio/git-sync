@@ -71,6 +71,7 @@ type Config struct {
 	Branches               []string
 	Mappings               []RefMapping
 	AllRefs                bool
+	ExcludeRefPrefixes     []string
 	IncludeTags            bool
 	DryRun                 bool
 	Verbose                bool
@@ -441,12 +442,13 @@ func (s *syncSession) applyRejections(plans []BranchPlan) int {
 
 func planConfig(cfg Config) planner.PlanConfig {
 	return planner.PlanConfig{
-		Branches:    cfg.Branches,
-		Mappings:    cfg.Mappings,
-		IncludeTags: cfg.IncludeTags,
-		AllRefs:     cfg.AllRefs,
-		Force:       cfg.Force,
-		Prune:       cfg.Prune,
+		Branches:           cfg.Branches,
+		Mappings:           cfg.Mappings,
+		IncludeTags:        cfg.IncludeTags,
+		AllRefs:            cfg.AllRefs,
+		ExcludeRefPrefixes: cfg.ExcludeRefPrefixes,
+		Force:              cfg.Force,
+		Prune:              cfg.Prune,
 	}
 }
 
@@ -891,6 +893,9 @@ func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceNa
 			continue
 		}
 		if _, ok := desiredRefs[targetRef]; ok {
+			continue
+		}
+		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes) {
 			continue
 		}
 		// AllRefs overrides per-namespace allowlists: under "all refs" a

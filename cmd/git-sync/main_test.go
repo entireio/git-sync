@@ -326,6 +326,47 @@ func TestRun_Sync_AllRefsSmokeTest(t *testing.T) {
 	}
 }
 
+// CLI smoke test for --exclude-ref-prefix under --all-refs: refs/pull/* on
+// the source is trimmed, refs/notes/commits is kept.
+func TestRun_Sync_ExcludeRefPrefixTrimsPullRefs(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	syncertest.SetRefAtBranch(t, sourceRepo, notesRef, testBranch)
+	pullRef := plumbing.ReferenceName("refs/pull/1/head")
+	syncertest.SetRefAtBranch(t, sourceRepo, pullRef, testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServer(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	err = run(context.Background(), []string{
+		"sync",
+		"--all-refs",
+		"--exclude-ref-prefix", "refs/pull/",
+		"--json",
+		sourceServer.RepoURL(),
+		targetServer.RepoURL(),
+	})
+	if err != nil {
+		t.Fatalf("run sync --all-refs --exclude-ref-prefix: %v", err)
+	}
+
+	if _, err := targetRepo.Reference(notesRef, true); err != nil {
+		t.Errorf("expected refs/notes/commits on target, got err=%v", err)
+	}
+	if _, err := targetRepo.Reference(pullRef, true); err == nil {
+		t.Errorf("expected refs/pull/1/head NOT on target")
+	}
+}
+
 func TestRun_Fetch_AllRefsCoversTagsAndOtherKind(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)

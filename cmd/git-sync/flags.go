@@ -52,6 +52,15 @@ const (
 	allRefsUsageScopeOnly  = "include every refs/* on the source (notes, pulls, custom namespaces) — scope only, no failure-handling effect"
 )
 
+// excludeRefPrefixFlag registers --exclude-ref-prefix. Repeatable; each
+// prefix is matched as a string prefix against ref names (e.g.
+// "refs/pull/" trims GitHub PR refs under --all-refs).
+func excludeRefPrefixFlag(cmd *cobra.Command, prefixes *[]string) {
+	cmd.Flags().StringArrayVar(prefixes, "exclude-ref-prefix", nil,
+		"exclude refs whose names start with this prefix; repeatable. "+
+			"Subtracts from auto-discovery (branches/tags/--all-refs); explicit --map values are not subject to this filter")
+}
+
 // allRefsFlag registers --all-refs with the supplied usage string and
 // bundles its implications. Each pointer in implies is set to true when
 // --all-refs is set, via a PreRunE hook that fires after flag parsing.

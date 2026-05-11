@@ -123,6 +123,7 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 		implies = append(implies, &req.Policy.BestEffort)
 	}
 	allRefsFlag(cmd, usage, &req.Scope.AllRefs, implies...)
+	excludeRefPrefixFlag(cmd, &req.Scope.ExcludeRefPrefixes)
 	cmd.Flags().BoolVar(&req.Options.CollectStats, "stats", false, "print transfer statistics")
 	cmd.Flags().BoolVar(&req.Options.MeasureMemory, "measure-memory", false, "sample elapsed time and Go heap usage")
 	cmd.Flags().BoolVar(&req.Options.Progress, "progress", false, "show live per-side throughput on stderr (TTY only)")

@@ -75,12 +75,13 @@ func (o AdvancedOptions) Validate() error {
 }
 
 type ProbeRequest struct {
-	Source      gitsync.Endpoint
-	Target      *gitsync.Endpoint
-	IncludeTags bool
-	AllRefs     bool
-	Protocol    gitsync.ProtocolMode
-	Options     AdvancedOptions
+	Source             gitsync.Endpoint
+	Target             *gitsync.Endpoint
+	IncludeTags        bool
+	AllRefs            bool
+	ExcludeRefPrefixes []string
+	Protocol           gitsync.ProtocolMode
+	Options            AdvancedOptions
 }
 
 type SyncRequest struct {
@@ -215,15 +216,16 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		return syncer.Config{}, err
 	}
 	cfg := syncer.Config{
-		Source:        source,
-		HTTPClient:    c.httpClient,
-		IncludeTags:   req.IncludeTags,
-		AllRefs:       req.AllRefs,
-		ShowStats:     req.Options.CollectStats,
-		MeasureMemory: req.Options.MeasureMemory,
-		Progress:      req.Options.Progress,
-		ProtocolMode:  protocolString(req.Protocol),
-		Verbose:       req.Options.Verbose,
+		Source:             source,
+		HTTPClient:         c.httpClient,
+		IncludeTags:        req.IncludeTags,
+		AllRefs:            req.AllRefs,
+		ExcludeRefPrefixes: append([]string(nil), req.ExcludeRefPrefixes...),
+		ShowStats:          req.Options.CollectStats,
+		MeasureMemory:      req.Options.MeasureMemory,
+		Progress:           req.Options.Progress,
+		ProtocolMode:       protocolString(req.Protocol),
+		Verbose:            req.Options.Verbose,
 	}
 	if req.Target != nil {
 		target, err := c.resolveEndpoint(ctx, *req.Target, gitsync.TargetRole)
@@ -255,6 +257,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		Branches:               append([]string(nil), req.Scope.Branches...),
 		Mappings:               validationMappings(req.Scope.Mappings),
 		AllRefs:                req.Scope.AllRefs,
+		ExcludeRefPrefixes:     append([]string(nil), req.Scope.ExcludeRefPrefixes...),
 		IncludeTags:            req.Policy.IncludeTags,
 		DryRun:                 req.DryRun,
 		ShowStats:              req.Options.CollectStats,
@@ -289,6 +292,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		Branches:           append([]string(nil), req.Scope.Branches...),
 		Mappings:           validationMappings(req.Scope.Mappings),
 		AllRefs:            req.Scope.AllRefs,
+		ExcludeRefPrefixes: append([]string(nil), req.Scope.ExcludeRefPrefixes...),
 		IncludeTags:        req.IncludeTags,
 		BestEffort:         req.BestEffort,
 		ShowStats:          req.Options.CollectStats,
@@ -308,16 +312,17 @@ func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:        source,
-		HTTPClient:    c.httpClient,
-		Branches:      append([]string(nil), req.Scope.Branches...),
-		AllRefs:       req.Scope.AllRefs,
-		IncludeTags:   req.IncludeTags,
-		ShowStats:     req.Options.CollectStats,
-		MeasureMemory: req.Options.MeasureMemory,
-		Progress:      req.Options.Progress,
-		ProtocolMode:  protocolString(req.Protocol),
-		Verbose:       req.Options.Verbose,
+		Source:             source,
+		HTTPClient:         c.httpClient,
+		Branches:           append([]string(nil), req.Scope.Branches...),
+		AllRefs:            req.Scope.AllRefs,
+		ExcludeRefPrefixes: append([]string(nil), req.Scope.ExcludeRefPrefixes...),
+		IncludeTags:        req.IncludeTags,
+		ShowStats:          req.Options.CollectStats,
+		MeasureMemory:      req.Options.MeasureMemory,
+		Progress:           req.Options.Progress,
+		ProtocolMode:       protocolString(req.Protocol),
+		Verbose:            req.Options.Verbose,
 	}, nil
 }
 

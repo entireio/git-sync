@@ -2821,6 +2821,49 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// --exclude-ref-prefix trims namespaces from --all-refs auto-discovery. The
+// GitHub use case is `--all-refs --exclude-ref-prefix refs/pull/`: mirror
+// branches/tags/notes but skip the fork-commit blowup from PR refs.
+func TestRun_IntegrationAllRefsExcludesRefPrefix(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	syncertest.SetRefAtBranch(t, sourceRepo, notesRef, testBranch)
+	pullRef := plumbing.ReferenceName("refs/pull/1/head")
+	syncertest.SetRefAtBranch(t, sourceRepo, pullRef, testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
+		AllRefs:            true,
+		ExcludeRefPrefixes: []string{"refs/pull/"},
+	})
+	if err != nil {
+		t.Fatalf("sync --all-refs --exclude-ref-prefix failed: %v", err)
+	}
+	if result.Pushed == 0 {
+		t.Fatalf("expected at least one ref pushed (branch + notes), got %+v", result)
+	}
+	if _, err := targetRepo.Reference(notesRef, true); err != nil {
+		t.Errorf("expected refs/notes/commits on target, got err=%v", err)
+	}
+	if _, err := targetRepo.Reference(pullRef, true); !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		t.Errorf("expected refs/pull/1/head NOT on target, got err=%v", err)
+	}
+}
+
 // AllRefs other-kind plans fail CanIncrementalRelay and fall through to the
 // materialized executor; this exercises that path end-to-end.
 func TestRun_IntegrationAllRefsMaterializedPathIntoExistingTarget(t *testing.T) {

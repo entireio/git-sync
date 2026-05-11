@@ -40,9 +40,10 @@ type EndpointAuth struct {
 }
 
 type RefScope struct {
-	Branches []string
-	Mappings []RefMapping
-	AllRefs  bool
+	Branches           []string
+	Mappings           []RefMapping
+	AllRefs            bool
+	ExcludeRefPrefixes []string
 }
 
 type SyncPolicy struct {
@@ -54,14 +55,15 @@ type SyncPolicy struct {
 	Protocol    ProtocolMode
 }
 
-func ProbeConfig(source Endpoint, sourceAuth EndpointAuth, target *Endpoint, targetAuth EndpointAuth, protocol ProtocolMode, includeTags, allRefs, collectStats bool, httpClient *http.Client) Config {
+func ProbeConfig(source Endpoint, sourceAuth EndpointAuth, target *Endpoint, targetAuth EndpointAuth, protocol ProtocolMode, includeTags, allRefs, collectStats bool, excludeRefPrefixes []string, httpClient *http.Client) Config {
 	cfg := syncer.Config{
-		Source:       ToSyncerEndpoint(source, sourceAuth),
-		HTTPClient:   httpClient,
-		IncludeTags:  includeTags,
-		AllRefs:      allRefs,
-		ShowStats:    collectStats,
-		ProtocolMode: protocolString(protocol),
+		Source:             ToSyncerEndpoint(source, sourceAuth),
+		HTTPClient:         httpClient,
+		IncludeTags:        includeTags,
+		AllRefs:            allRefs,
+		ExcludeRefPrefixes: append([]string(nil), excludeRefPrefixes...),
+		ShowStats:          collectStats,
+		ProtocolMode:       protocolString(protocol),
 	}
 	if target != nil {
 		cfg.Target = ToSyncerEndpoint(*target, targetAuth)
@@ -77,6 +79,7 @@ func SyncConfig(source Endpoint, sourceAuth EndpointAuth, target Endpoint, targe
 		Branches:               append([]string(nil), scope.Branches...),
 		Mappings:               ToValidationMappings(scope.Mappings),
 		AllRefs:                scope.AllRefs,
+		ExcludeRefPrefixes:     append([]string(nil), scope.ExcludeRefPrefixes...),
 		IncludeTags:            policy.IncludeTags,
 		DryRun:                 dryRun,
 		ShowStats:              collectStats,

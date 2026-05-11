@@ -452,6 +452,41 @@ func TestBuildDesiredRefsAllRefs(t *testing.T) {
 		}
 	})
 
+	t.Run("ExcludeRefPrefixes subtracts from AllRefs scope", func(t *testing.T) {
+		desired, _, err := BuildDesiredRefs(sourceRefs, PlanConfig{
+			AllRefs:            true,
+			ExcludeRefPrefixes: []string{"refs/pull/"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := desired[plumbing.ReferenceName("refs/pull/1/head")]; ok {
+			t.Error("expected refs/pull/1/head excluded")
+		}
+		if _, ok := desired[plumbing.ReferenceName("refs/notes/commits")]; !ok {
+			t.Error("expected refs/notes/commits to still be in scope")
+		}
+		if _, ok := desired[plumbing.NewBranchReferenceName("main")]; !ok {
+			t.Error("expected main branch to still be in scope")
+		}
+	})
+
+	t.Run("ExcludeRefPrefixes does not override explicit mappings", func(t *testing.T) {
+		// Mapping a notes ref while also excluding refs/notes/* — the mapping
+		// is explicit user intent and wins.
+		desired, _, err := BuildDesiredRefs(sourceRefs, PlanConfig{
+			Mappings:           []RefMapping{{Source: "refs/notes/commits", Target: "refs/notes/mirror"}},
+			AllRefs:            true,
+			ExcludeRefPrefixes: []string{"refs/notes/"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := desired[plumbing.ReferenceName("refs/notes/mirror")]; !ok {
+			t.Error("expected explicit mapping target to be in desired set")
+		}
+	})
+
 	t.Run("Other-kind mapping rejected without AllRefs", func(t *testing.T) {
 		_, _, err := BuildDesiredRefs(sourceRefs, PlanConfig{
 			Mappings: []RefMapping{{Source: "refs/notes/commits", Target: "refs/notes/mirror"}},
