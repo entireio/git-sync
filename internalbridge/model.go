@@ -88,6 +88,7 @@ type ProbeResult struct {
 	TargetCaps    []string    `json:"targetCapabilities,omitempty"`
 	Refs          []RefInfo   `json:"refs"`
 	SourceHEAD    string      `json:"sourceHead,omitempty"`
+	TargetHEAD    string      `json:"targetHead,omitempty"`
 	Stats         Stats       `json:"stats"`
 	Measurement   Measurement `json:"measurement"`
 }
@@ -115,6 +116,7 @@ type ExecutionSummary struct {
 	Reason             string       `json:"reason"`
 	BootstrapSuggested bool         `json:"bootstrapSuggested"`
 	SourceHEAD         string       `json:"sourceHead,omitempty"`
+	TargetHEAD         string       `json:"targetHead,omitempty"`
 	Batch              BatchSummary `json:"batch"`
 }
 
@@ -139,6 +141,7 @@ func FromProbeResult(result syncer.ProbeResult) ProbeResult {
 		TargetCaps:    append([]string(nil), result.TargetCaps...),
 		Refs:          make([]RefInfo, 0, len(result.Refs)),
 		SourceHEAD:    result.SourceHEAD.String(),
+		TargetHEAD:    result.TargetHEAD.String(),
 		Stats:         FromStats(result.Stats),
 		Measurement:   FromMeasurement(result.Measurement),
 	}
@@ -167,6 +170,7 @@ func FromSyncResult(result syncer.Result) SyncResult {
 			Reason:             result.RelayReason,
 			BootstrapSuggested: result.BootstrapSuggested,
 			SourceHEAD:         result.SourceHEAD.String(),
+			TargetHEAD:         result.TargetHEAD.String(),
 			Batch: BatchSummary{
 				Enabled: result.Batching,
 				Planned: result.PlannedBatchCount,

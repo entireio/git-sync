@@ -131,12 +131,12 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 
 // Result holds the outcome of a sync or bootstrap operation.
 //
-// SourceHEAD carries the source's symref HEAD target as read from the
-// upload-pack advertisement. It lets callers compare against the target's
-// intended default branch without scraping the notice stream. Target HEAD
-// is not exposed here because the receive-pack advertisement we already
-// perform doesn't include HEAD; surfacing target HEAD would need a
-// separate upload-pack round-trip and is tracked as a follow-up.
+// SourceHEAD and TargetHEAD carry each side's symref HEAD target. Source
+// is parsed from the upload-pack advertisement we already make. Target
+// requires an additional upload-pack info-refs round-trip (the
+// receive-pack advertisement omits HEAD by protocol design); when that
+// fails — push-only auth, empty target where HEAD's underlying ref
+// doesn't exist — TargetHEAD is empty.
 type Result struct {
 	Plans              []BranchPlan           `json:"plans"`
 	Pushed             int                    `json:"pushed"`
@@ -155,6 +155,7 @@ type Result struct {
 	TempRefs           []string               `json:"tempRefs"`
 	BootstrapSuggested bool                   `json:"bootstrapSuggested"`
 	SourceHEAD         plumbing.ReferenceName `json:"sourceHead,omitempty"`
+	TargetHEAD         plumbing.ReferenceName `json:"targetHead,omitempty"`
 	Stats              Stats                  `json:"stats"`
 	Measurement        Measurement            `json:"measurement"`
 	Protocol           string                 `json:"protocol"`
@@ -184,6 +185,9 @@ func (r Result) Lines() []string {
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
 	}
+	if r.TargetHEAD != "" {
+		lines = append(lines, "target-head: "+r.TargetHEAD.String())
+	}
 	return lines
 }
 
@@ -198,6 +202,7 @@ type ProbeResult struct {
 	TargetCaps    []string               `json:"targetCapabilities,omitempty"`
 	Refs          []RefInfo              `json:"refs"`
 	SourceHEAD    plumbing.ReferenceName `json:"sourceHead,omitempty"`
+	TargetHEAD    plumbing.ReferenceName `json:"targetHead,omitempty"`
 	Stats         Stats                  `json:"stats"`
 	Measurement   Measurement            `json:"measurement"`
 }
@@ -213,6 +218,9 @@ func (r ProbeResult) Lines() []string {
 	}
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
+	}
+	if r.TargetHEAD != "" {
+		lines = append(lines, "target-head: "+r.TargetHEAD.String())
 	}
 	if len(r.Capabilities) > 0 {
 		lines = append(lines, "source-capabilities: "+strings.Join(r.Capabilities, ", "))
@@ -723,7 +731,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 				Plans: plans, DryRun: true, RelayReason: reason,
 				OperationMode: modeSync, BootstrapSuggested: true, Stats: stats.snapshot(),
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
-				SourceHEAD: sourceService.HeadTarget,
+				SourceHEAD: sourceService.HeadTarget, TargetHEAD: s.target.headTarget,
 			}, nil
 		}
 		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason)
@@ -767,7 +775,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	result := Result{
 		Plans: plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: sourceService.Protocol,
 		Stats: stats.snapshot(), Measurement: measurementDone(),
-		SourceHEAD: sourceService.HeadTarget,
+		SourceHEAD: sourceService.HeadTarget, TargetHEAD: s.target.headTarget,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -854,6 +862,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				Measurement:        s.measurementDone(),
 				Protocol:           s.sourceService.Protocol,
 				SourceHEAD:         s.sourceService.HeadTarget,
+				TargetHEAD:         s.target.headTarget,
 			}, nil
 		}
 		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, "empty-target-managed-refs")
@@ -872,6 +881,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		Stats:         s.stats.snapshot(),
 		Measurement:   s.measurementDone(),
 		SourceHEAD:    s.sourceService.HeadTarget,
+		TargetHEAD:    s.target.headTarget,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -1068,7 +1078,7 @@ func bootstrapWithInputs(
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
 		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
-		SourceHEAD: s.sourceService.HeadTarget,
+		SourceHEAD: s.sourceService.HeadTarget, TargetHEAD: s.target.headTarget,
 	}, nil
 }
 
@@ -1175,6 +1185,7 @@ func (s *syncSession) newProbeResult() ProbeResult {
 	if s.target != nil {
 		result.TargetURL = s.cfg.Target.URL
 		result.TargetCaps = gitproto.AdvRefsCaps(s.target.adv)
+		result.TargetHEAD = s.target.headTarget
 		result.Stats = s.stats.snapshot()
 		result.Measurement = s.measurementDone()
 	}
