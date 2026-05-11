@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "52e0c0e2ab5e",
+  "session_id": "b9954e8e-b63a-4a5c-8e73-777034b2a6a6",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:44:26.999306Z",
+  "branch": "soph/add-ci-and-lint",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "43c1dac2829c",
+  "token_usage": {
+    "input_tokens": 3220,
+    "cache_creation_tokens": 181163,
+    "cache_read_tokens": 17704721,
+    "output_tokens": 56893,
+    "api_call_count": 157
+  },
+  "session_metrics": {
+    "turn_count": 14
+  }
+}

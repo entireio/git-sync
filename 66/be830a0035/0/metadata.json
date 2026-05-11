@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.5.7-nightly.202604280703.51ccd662",
+  "checkpoint_id": "66be830a0035",
+  "session_id": "0843583b-95af-4b6e-9887-1bb36c4b32ca",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T12:59:05.059367Z",
+  "branch": "soph/docs-update-for-oss-release",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "docs/bootstrap-batching.md",
+    "docs/bootstrap.md",
+    "docs/protocol.md",
+    "docs/replicate.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "27825813b893",
+  "checkpoint_transcript_start": 137,
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 580960,
+    "cache_read_tokens": 9302197,
+    "output_tokens": 41958,
+    "api_call_count": 40
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-29T12:59:04.949775Z",
+    "agent_lines": 228,
+    "agent_removed": 275,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 228,
+    "total_lines_changed": 503,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 48,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 48
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 48,
+      "user_lines_removed": 0,
+      "agent_lines_added": 48,
+      "agent_lines_removed": 249,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 48
+      }
+    }
+  ]
+}

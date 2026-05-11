@@ -1,0 +1,70 @@
+{
+  "cli_version": "v0.5.7-nightly.202604290658.a01814a9-dev-d5621e9a4",
+  "checkpoint_id": "8feaf84a600f",
+  "session_id": "019ddd6f-3680-7fb3-8f93-e567af97d303",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-30T08:21:45.233108Z",
+  "branch": "changes",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "internal/validation/validation.go",
+    "internal/validation/validation_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "0e1202c1a2c9",
+  "token_usage": {
+    "input_tokens": 48090,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 235648,
+    "output_tokens": 3765,
+    "api_call_count": 17
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-30T08:21:45.223117Z",
+    "agent_lines": 51,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 51,
+    "total_lines_changed": 54,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 33,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 33
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 33,
+      "user_lines_removed": 0,
+      "agent_lines_added": 8,
+      "agent_lines_removed": 3,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 33
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 33,
+      "user_lines_removed": 0,
+      "agent_lines_added": 8,
+      "agent_lines_removed": 3,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 33
+      }
+    }
+  ]
+}

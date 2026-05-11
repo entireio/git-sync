@@ -1,0 +1,6 @@
+Can you update CHANGELOG.md for a 0.1.1 with all the changes since repo was created. Keep the style of https://github.com/entireio/cli/blob/main/CHANGELOG.md 
+Have in mind, this is the very first version. So we can just highlight the bigger areas of the repo.
+
+---
+
+sorry, version would be v0.4.2

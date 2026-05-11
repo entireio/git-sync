@@ -1,0 +1,166 @@
+what's next
+
+---
+
+what's next
+
+---
+
+what's next
+
+---
+
+ok, just keep going, do individual commits
+
+---
+
+something is wrong, why would there be a .git/index.lock now every other commit?
+
+---
+
+what's next
+
+---
+
+ok, let's continue going through this
+
+---
+
+why is this happening?
+
+---
+
+if cmd is ignored that's an issue with .gitignore, let's fix that
+
+---
+
+ok, now continue
+
+---
+
+continue
+
+---
+
+do that
+
+---
+
+what's next
+
+---
+
+yeah do 1
+
+---
+
+yes
+
+---
+
+now do   2. Stabilize --json
+
+  - add explicit JSON field tags with lowercase names
+  - avoid Go-struct field names leaking into the external interface
+  - document the shape once and keep it stable
+
+---
+
+why you are needing that again
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+what's next
+
+---
+
+can you check if the readme is still up2date
+
+---
+
+patch it
+
+---
+
+yes
+
+---
+
+to use this as a syncing tool, what's left to do there?
+
+---
+
+how could we do 1?
+
+---
+
+I think setting this up as an action is to much, but using a dummy repo for testing is probably a good idea. Can we use the regular github credential helper locally?
+
+---
+
+yeah, let's implement this
+
+---
+
+so could we now do the integration tests with write but still not sure how we make this portal being dependent on a remote github, could we spin up a local server like gitea
+
+---
+
+is there an alternative to gitea?
+
+---
+
+yeah, then let's do a write integration test with git-http-backend, we can add more backends later
+
+---
+
+can we think a bit about some feasability studies, like when the tool makes sense. For example an initial empty repo from a to b, is it good for that? after which gap in changes the memory consumption becomes to much? can we control memory when larger gaps happen?
+
+---
+
+4. Longer-term: true source-to-target pack relay.
+      - best possible for initial empty-target syncs
+      - much more complex
+      - only really worth it if large migrations are a primary use case
+
+can we investigae this a bit?
+
+---
+
+yeah let's sketch this as an additional command path we could use for initial sync
+
+---
+
+let's call it bootstrap, go with the plan for v1, but maybe write down follow up steps
+
+---
+
+ok, let's start implementing go through each phase until you need my input, make meaningful commits
+
+---
+
+yeah let's do both one after another
+
+---
+
+what would phase 4 be again?
+
+---
+
+let's give it a try? build proper test harness first?
+
+---
+
+yes, we could also do a test case on https://github.com/torvalds/linux
+
+---
+
+do that

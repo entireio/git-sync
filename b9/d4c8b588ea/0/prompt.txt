@@ -1,0 +1,9 @@
+ok, we need to change /pkg/gitsync to /sync can you help me with that
+
+---
+
+ok, idea was to rename the package but the conflict is not great, so let's stick to "gitsync" but just move it out of the pkg folder and get rid of that folder
+
+---
+
+ok, change in plan: all files in the the root folder and package "gitsync" at the top

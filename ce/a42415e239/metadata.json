@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "cea42415e239",
+  "strategy": "manual-commit",
+  "branch": "soph/bump-go-git-v6-alpha2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".golangci.yaml",
+    "internal/gitproto/fetch.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ce/a42415e239/0/metadata.json",
+      "transcript": "/ce/a42415e239/0/transcript.jsonl",
+      "content_hash": "/ce/a42415e239/0/transcript_hash.txt",
+      "prompt": "/ce/a42415e239/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 45,
+    "cache_creation_tokens": 79445,
+    "cache_read_tokens": 2132332,
+    "output_tokens": 10689,
+    "api_call_count": 35
+  }
+}

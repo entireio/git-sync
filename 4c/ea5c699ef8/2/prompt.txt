@@ -1,0 +1,21 @@
+Review the latest changes since commit d11c597, focusing on internal/syncer/benchmark_test.go and the related tracker update. Check whether the new benchmarks are meaningful execution-path coverage, whether the setup is sound, and whether marking benchmark coverage done is justified. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review commit eb766e1 on this branch. Focus on the bootstrap missing-TargetPusher fail-fast changes and tests, the incremental relay policy injection changes and tests, and any architectural or correctness regressions they introduce. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit 9e0a8b5 (Extract benchmark repo fixtures). Focus on whether internal/syncertest is a sensible testing boundary, whether the moved helpers are actually generic enough, and whether the benchmark refactor introduced any semantic drift or maintenance issues. Concrete findings only.
+
+---
+
+Review commit e933b9a (Skip conservative tail probes in batching). Focus on whether the new no-probe tail-selection heuristic is conservative enough, whether it meaningfully reduces probe count without increasing risk, and whether the updated tests capture the intended behavior. Concrete findings only.
+
+---
+
+Review commit d9d38ab (Encapsulate bootstrap checkpoint planning state). Focus on whether the checkpointPlanner refactor preserved behavior, whether any probe-cache semantics changed unintentionally, and whether the tracker note is fair. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit 5d1679a (Cover batched pack stream interruption cleanup). Focus on whether the new bootstrap test meaningfully strengthens stream-lifecycle coverage for issue #5 and whether the tracker note is fair. Findings only, ordered by severity, with file/line references where possible.

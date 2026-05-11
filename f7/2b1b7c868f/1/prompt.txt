@@ -1,0 +1,18 @@
+I'm fine separating this more, maybe we have a validation package or e2e test package or if you have a better name, so it's a clear separation?
+
+---
+
+can I run the script now?
+
+---
+
+What I’d do next if we keep separating:
+
+  - Move semantic mapping validation (ValidateMappings / NormalizeMapping) out of planner
+    and into validation, or rename validation to something like input if you want parsing +
+    normalization there and planner-only semantics in planner.
+  - I would not extract the smart-HTTP integration harness yet unless we want a real
+    reusable e2e support package across multiple packages. Right now that move is possible,
+    but it’s more churn than benefit.
+
+so do this first or add the go test tool first, your call

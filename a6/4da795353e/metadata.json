@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "a64da795353e",
+  "strategy": "manual-commit",
+  "branch": "soph/prevent-double-fetch",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a6/4da795353e/0/metadata.json",
+      "transcript": "/a6/4da795353e/0/transcript.jsonl",
+      "content_hash": "/a6/4da795353e/0/transcript_hash.txt",
+      "prompt": "/a6/4da795353e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65,
+    "cache_creation_tokens": 89689,
+    "cache_read_tokens": 14959505,
+    "output_tokens": 45587,
+    "api_call_count": 50
+  }
+}

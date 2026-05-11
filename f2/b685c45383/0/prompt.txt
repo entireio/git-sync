@@ -1,0 +1,35 @@
+The branch has picked up a new commit since the last review: `d63bbb8 Tighten gitsync public boundary`. It addresses most of the concerns from the previous pass. Build and tests still pass.
+
+## What changed since the last review
+
+1. **`Config = syncer.Config` alias is gone.** `internalbridge.Config` is now a concrete struct wrapping `syncer.Config` in an unexported `raw` field (`internalbridge/config.go:13-15`). The stable surface no longer re-exports `syncer.Config`.
+2. **`RefMapping = validation.RefMapping` alias is gone.** Both `pkg/gitsync` and `internalbridge` now define their own concrete `RefMapping{Source, Target}` struct (`types.go:60-63`, `internalbridge/config.go:21-24`), with explicit mapping functions at each layer boundary.
+3. **`ProtocolMode` constants no longer alias `validation`.** `types.go:11-15` hardcodes `"auto"/"v1"/"v2"` so the stable ABI isn't implicitly tied to internal constant values.
+4. **Validation is front-loaded.** `SyncRequest.Validate` / `PlanRequest.Validate` / `ProbeRequest.Validate` now call `validation.NormalizeProtocolMode` and `ValidateMappings` (`client.go:133-173`). Tests cover this at `client_test.go:36-60`.
+5. **End-to-end test exists.** `TestClientSyncEndToEndWithLocalRepos` (`client_test.go:72-110`) drives `Client.Sync` against an `httptest` smart-HTTP server — no `internal/planner` or `internal/syncer` imports in the stable test file anymore; only `internal/syncertest` for fixtures.
+6. **Mapping helper is shared.** `unstable.syncerEndpoint` (`unstable/client.go:237`) now routes through `internalbridge.ToSyncerEndpoint`, removing the duplicated field-by-field endpoint translation.
+7. **`buildProbeConfig` cleaned up** to a single return path (`client.go:77-102`).
+
+Net effect: the bridge now actually bridges, and the stable package tests look like something an external embedder could write.
+
+## Remaining concerns
+
+1. **`pkg/gitsync` still imports `internal/validation` directly.** Used for `NormalizeProtocolMode` and `ValidateMappings` in `Validate()`, plus the local `validationMappings` converter. That's functional reuse rather than type-leakage, so it's defensible, but it means the stable validation semantics are defined internally. If you ever want `pkg/gitsync` to be a candidate for a separate module, this is the import you'll have to extract into a shareable package (e.g., `pkg/gitsync/refspec` or similar).
+
+2. **Endpoint/auth resolution still duplicated in `unstable`.** `buildProbeConfig`, `buildSyncConfig`, `buildBootstrapConfig`, and `buildFetchConfig` each repeat the `authFor(source)` / `authFor(target)` / `syncerEndpoint(...)` pattern (`unstable/client.go:127-221`). A small `resolveEndpoints(ctx, source, *target)` helper returning `(syncer.Endpoint, syncer.Endpoint, error)` would halve the ceremony.
+
+3. **`unstable.validationMappings` duplicates the bridge's `validationMappings`.** Both convert `gitsync.RefMapping` → `validation.RefMapping`; `unstable/client.go:249` is identical to `internalbridge/config.go:105`. The bridge could expose `ToValidationMappings` the way it exposes `ToSyncerEndpoint`.
+
+4. **`ProbeRequest` with `Target != nil && Target.URL == ""`.** `Validate` only checks `Source.URL`, so a caller passing a zero-valued target endpoint reaches `newSession` → `transport.NewEndpoint("")` before failing. Minor; worth a guard.
+
+5. **`ExecutionSummary.Mode` and `Reason`** (`internalbridge/model.go:95-103`) map from `RelayMode`/`RelayReason` but drop the `Relay` prefix. That's consistent with being nested under `Execution` conceptually, but the JSON keys `mode` / `reason` are vague at a glance. A nested `relay: {enabled, mode, reason}` would be more self-describing; stylistic call.
+
+6. **`NewConnWithHTTPClient` fallback path.** `smarthttp.go:55-58` silently installs `http.DefaultTransport` when `httpClient` is nil. In practice `instrumentHTTPClient` always passes a non-nil client, so the fallback only bites ad-hoc callers — but then they'd lose TLS-skip and counting. Worth a godoc note that this is intended for the always-instrumented path.
+
+7. **`internalbridge/model_test.go`** has only one trivial test (`HashString(zero)`). Given the `FromSyncResult` / `FromProbeResult` mappers are the contract surface, a couple of table-driven tests here would protect against silent schema drift better than asserting through the stable client.
+
+8. **Minor trailing-newline deletions** in `internal/syncer/auth_test.go` and `syncer_test.go` are still in the diff — unrelated to the packaging work, easy to drop in a cleanup pass.
+
+## Bottom line
+
+The last-commit tightening resolved the real blockers (`syncer.Config` alias, `RefMapping` alias, front-loaded validation, end-to-end test). What's left is duplication-cleanup and a couple of defensive guards — none of it blocks tagging the stable boundary. The structural case for `pkg/gitsync` vs `pkg/gitsync/unstable` is now well-supported by the code, not just the docs.

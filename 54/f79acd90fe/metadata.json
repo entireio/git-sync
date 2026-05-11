@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.7-nightly.202604280703.51ccd662",
+  "checkpoint_id": "54f79acd90fe",
+  "strategy": "manual-commit",
+  "branch": "soph/docs-update-for-oss-release",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/54/f79acd90fe/0/metadata.json",
+      "transcript": "/54/f79acd90fe/0/transcript.jsonl",
+      "content_hash": "/54/f79acd90fe/0/transcript_hash.txt",
+      "prompt": "/54/f79acd90fe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 302,
+    "cache_creation_tokens": 948442,
+    "cache_read_tokens": 33212512,
+    "output_tokens": 144000,
+    "api_call_count": 193
+  }
+}

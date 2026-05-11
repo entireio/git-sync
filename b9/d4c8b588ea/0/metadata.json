@@ -1,0 +1,102 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "b9d4c8b588ea",
+  "session_id": "5b613073-e70b-48a1-b6ae-c6aaa99ec2b1",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T15:08:38.901857Z",
+  "branch": "soph/move-to-root-package",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "client.go",
+    "client_test.go",
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go",
+    "cmd/git-sync/main.go",
+    "cmd/git-sync/main_test.go",
+    "doc.go",
+    "docs/architecture.md",
+    "docs/embedding.md",
+    "example_test.go",
+    "internalbridge/config.go",
+    "internalbridge/model.go",
+    "internalbridge/model_test.go",
+    "pkg/gitsync/client.go",
+    "pkg/gitsync/client_test.go",
+    "pkg/gitsync/doc.go",
+    "pkg/gitsync/example_test.go",
+    "pkg/gitsync/internalbridge/config.go",
+    "pkg/gitsync/internalbridge/model.go",
+    "pkg/gitsync/internalbridge/model_test.go",
+    "pkg/gitsync/types.go",
+    "pkg/gitsync/unstable/client.go",
+    "pkg/gitsync/unstable/client_test.go",
+    "pkg/gitsync/unstable/doc.go",
+    "types.go",
+    "unstable/client.go",
+    "unstable/client_test.go",
+    "unstable/doc.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "7495d898c51d",
+  "checkpoint_transcript_start": 19,
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 19678,
+    "cache_read_tokens": 1075149,
+    "output_tokens": 10947,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-29T15:08:38.887637Z",
+    "agent_lines": 24,
+    "agent_removed": 24,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 1561,
+    "total_committed": 24,
+    "total_lines_changed": 1609,
+    "agent_percentage": 2.983219390926041,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1593,
+      "user_lines_removed": 1561,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 32,
+        "gitsync/client.go": 257,
+        "gitsync/client_test.go": 275,
+        "gitsync/doc.go": 14,
+        "gitsync/example_test.go": 32,
+        "gitsync/internalbridge/config.go": 137,
+        "gitsync/internalbridge/model.go": 209,
+        "gitsync/internalbridge/model_test.go": 97,
+        "gitsync/types.go": 151,
+        "gitsync/unstable/client.go": 318,
+        "gitsync/unstable/client_test.go": 62,
+        "gitsync/unstable/doc.go": 9
+      },
+      "user_removed_per_file": {
+        "pkg/gitsync/client.go": 257,
+        "pkg/gitsync/client_test.go": 275,
+        "pkg/gitsync/doc.go": 14,
+        "pkg/gitsync/example_test.go": 32,
+        "pkg/gitsync/internalbridge/config.go": 137,
+        "pkg/gitsync/internalbridge/model.go": 209,
+        "pkg/gitsync/internalbridge/model_test.go": 97,
+        "pkg/gitsync/types.go": 151,
+        "pkg/gitsync/unstable/client.go": 318,
+        "pkg/gitsync/unstable/client_test.go": 62,
+        "pkg/gitsync/unstable/doc.go": 9
+      }
+    }
+  ]
+}

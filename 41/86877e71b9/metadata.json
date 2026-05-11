@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "4186877e71b9",
+  "strategy": "manual-commit",
+  "branch": "soph/replicate",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync/main_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/41/86877e71b9/0/metadata.json",
+      "transcript": "/41/86877e71b9/0/transcript.jsonl",
+      "content_hash": "/41/86877e71b9/0/transcript_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 12353,
+    "cache_read_tokens": 1760871,
+    "output_tokens": 5625,
+    "api_call_count": 11
+  }
+}

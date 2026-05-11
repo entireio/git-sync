@@ -1,0 +1,13 @@
+now looking at the json: I'm fine changing the stable API, this is a new project and there is only one external dependency using it yet. some of the reviews sounded as if the json isn't in a consistent state around casing, can we check?
+
+---
+
+is snake_case usually what go projects use for json? or is there no good best practice?
+
+---
+
+let's switch to camelCase
+
+---
+
+can you update README.md und docs/ for the new camelCase format

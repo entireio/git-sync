@@ -1,0 +1,67 @@
+Can you take a look at the go code (wasm) in /Users/soph/Work/entire/devenv/entire-io-worktree1 based a bit on that I wonder if something like this can be build:
+
+a "git sync" command that you call with a source repo and a target repo and it basically does a `git fetch` but from source (remote) to target (remote) by only using git primitives without a local repository and using low level git protocol calls ideally also just streaming blobs from a to b. so you can basically quickly mirror a repo from a to b and rerun it to keep it in sync
+
+---
+
+ok, let's build the MVP in this repo
+
+---
+
+can you explain what it does now
+
+---
+
+what is a `git fetch` doing in general?
+
+---
+
+is there the opposite to git fetch?
+
+---
+
+if I have a branch on the source and target, and the source adds a single commit on top, now I run the tool: how much data is transfered for that branch?
+
+---
+
+can we add that?
+
+---
+
+yes I want to continue, but before that I want to setup an integration tests which uses go-git as server for source and target and validates the right things are transfered
+
+---
+
+let's do that
+
+---
+
+yes, let's do that
+
+---
+
+does that have benefits?
+
+---
+
+ok, let's do ref listing, and then continue with the 5 other open items
+
+---
+
+what would need to be done for v2?
+
+---
+
+who supports v2 already?
+
+---
+
+let's add v2 then, do meaningful commits
+
+---
+
+why keep v1 for push?
+
+---
+
+then keep it, maybe highlight it in the readme why we made that decision

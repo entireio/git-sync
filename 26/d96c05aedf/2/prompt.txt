@@ -1,0 +1,17 @@
+Review commit 3d8ba82 on this branch. Focus on the adaptive bootstrap checkpoint probe-span logic in internal/strategy/bootstrap/bootstrap.go and the new unit coverage in bootstrap_test.go. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit 342fb90 (Add repeatable benchmark command). Focus on command ergonomics, whether the initial scenario set is the right minimum baseline, any correctness issues in target setup or URL normalization, and whether the report shape is useful for future optimization work. Concrete findings only.
+
+---
+
+Quick review of commit f82addb (Clean up README structure). Focus on whether the section reshuffle improves scanability without losing important operator guidance, and whether any docs wording now conflicts with current behavior. Concrete findings only.
+
+---
+
+Quick review of commit c44e996 (Split README details into docs). Focus on whether the README is now the right level of operator-facing detail, and whether docs/testing.md and docs/architecture.md capture the moved material accurately. Concrete findings only.
+
+---
+
+Review commit a05bee4 (Harden bootstrap pack close ownership). Focus on whether bootstrap now has a correct and explicit pack-stream ownership model across one-shot, batched, and tag phases, and whether the new tests cover the right failure cases. Concrete findings only.

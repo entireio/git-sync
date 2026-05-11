@@ -1,0 +1,32 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "002f876fb8bb",
+  "session_id": "019ddd6f-3680-7fb3-8f93-e567af97d303",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-30T14:59:07.095911Z",
+  "branch": "soph/cover-image",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md",
+    "docs/images/gh-repo-cover.png"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "51404f28398b",
+  "checkpoint_transcript_start": 20,
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-30T14:59:07.086512Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "fb6ddecdebbf",
+  "session_id": "7b2777b1-8075-41f4-a62a-cbfc1b76c01b",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T08:44:29.662654Z",
+  "branch": "soph/replicate",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CHANGELOG.md",
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync/main.go",
+    "docs/bootstrap-batching.md",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/syncer/entire_local_smoke_test.go",
+    "internal/syncer/git_http_backend_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/live_bootstrap_test.go",
+    "internal/syncer/syncer.go",
+    "pkg/gitsync/unstable/client.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "4bd4b072baec",
+  "token_usage": {
+    "input_tokens": 627,
+    "cache_creation_tokens": 1543078,
+    "cache_read_tokens": 124932883,
+    "output_tokens": 242117,
+    "api_call_count": 439
+  },
+  "session_metrics": {
+    "turn_count": 44
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-14T13:40:08.61135Z",
+    "agent_lines": 39,
+    "agent_removed": 48,
+    "human_added": 9,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 57,
+    "total_lines_changed": 114,
+    "agent_percentage": 76.31578947368422,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,11 @@
+Is there an easy way to show progress including data throughput? or is this a huge effort?
+
+---
+
+Yeah I want both, ideally also separated for source and target, like how fast did we get data from the source and how fast did target take it (might be bound to network but still)
+
+So also when doing a live ticket can we show both?
+
+---
+
+yes

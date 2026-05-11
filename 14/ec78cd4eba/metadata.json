@@ -1,0 +1,27 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "14ec78cd4eba",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/architecture.md",
+    "docs/rewrite-issue-list.md",
+    "docs/rewrite-memo.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/14/ec78cd4eba/0/metadata.json",
+      "transcript": "/14/ec78cd4eba/0/transcript.jsonl",
+      "content_hash": "/14/ec78cd4eba/0/transcript_hash.txt",
+      "prompt": "/14/ec78cd4eba/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1915447,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1703040,
+    "output_tokens": 1833,
+    "api_call_count": 10
+  }
+}

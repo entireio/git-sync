@@ -1,0 +1,48 @@
+{
+  "cli_version": "v0.6.1-nightly.202605060704.2754b404-dev-2754b4044",
+  "checkpoint_id": "566f7af7d862",
+  "session_id": "019dfead-9906-7420-96ec-f04e451e3a4e",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-06T19:16:20.824039Z",
+  "branch": "soph/streaming-pack-parse",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "0ff8aacb1eda",
+  "checkpoint_transcript_start": 15,
+  "token_usage": {
+    "input_tokens": 70254,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 320256,
+    "output_tokens": 2027,
+    "api_call_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-06T19:16:20.809968Z",
+    "agent_lines": 10,
+    "agent_removed": 165,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "total_lines_changed": 175,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 33,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 33
+      }
+    }
+  ]
+}

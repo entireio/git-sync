@@ -1,0 +1,48 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "bdbeba58c09f",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/strategy/incremental/incremental.go",
+    "internal/strategy/incremental/incremental_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/beba58c09f/0/metadata.json",
+      "transcript": "/bd/beba58c09f/0/transcript.jsonl",
+      "content_hash": "/bd/beba58c09f/0/transcript_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/bd/beba58c09f/1/metadata.json",
+      "transcript": "/bd/beba58c09f/1/transcript.jsonl",
+      "content_hash": "/bd/beba58c09f/1/transcript_hash.txt",
+      "prompt": "/bd/beba58c09f/1/prompt.txt"
+    },
+    {
+      "metadata": "/bd/beba58c09f/2/metadata.json",
+      "transcript": "/bd/beba58c09f/2/transcript.jsonl",
+      "content_hash": "/bd/beba58c09f/2/transcript_hash.txt",
+      "prompt": "/bd/beba58c09f/2/prompt.txt"
+    },
+    {
+      "metadata": "/bd/beba58c09f/3/metadata.json",
+      "transcript": "/bd/beba58c09f/3/transcript.jsonl",
+      "content_hash": "/bd/beba58c09f/3/transcript_hash.txt",
+      "prompt": "/bd/beba58c09f/3/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16602708,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 15184128,
+    "output_tokens": 60024,
+    "api_call_count": 149
+  }
+}

@@ -1,0 +1,1 @@
+this repo has been renamed from gitsync to git-sync I reckon I have tho change git ogirin urls. what is the git command to do that?

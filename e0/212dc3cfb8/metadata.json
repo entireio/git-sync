@@ -1,0 +1,30 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "e0212dc3cfb8",
+  "strategy": "manual-commit",
+  "branch": "soph/replicate",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "CHANGELOG.md",
+    "docs/architecture.md",
+    "internal/gitproto/fetch.go",
+    "internal/planner/planner_test.go",
+    "internal/planner/relay.go",
+    "internal/syncer/integration_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e0/212dc3cfb8/0/metadata.json",
+      "transcript": "/e0/212dc3cfb8/0/transcript.jsonl",
+      "content_hash": "/e0/212dc3cfb8/0/transcript_hash.txt",
+      "prompt": "/e0/212dc3cfb8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 115,
+    "cache_creation_tokens": 57127,
+    "cache_read_tokens": 15118558,
+    "output_tokens": 35378,
+    "api_call_count": 51
+  }
+}

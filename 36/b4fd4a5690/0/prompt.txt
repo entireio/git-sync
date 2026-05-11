@@ -1,0 +1,19 @@
+also let me guess, so it fails with a 500 but due to packfile size we try to shrink it until it fully fails: error: sync: sync: bootstrap execute: push bootstrap batch for refs/heads/entire/checkpoints/v1: target receive-pack: http 500: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git/git-receive-pack [Cf-Ray=9f68f6390e5ad2af-FRA, Server=cloudflare, Content-Type=text/plain; charset=UTF-8] Internal Server Error
+exit status 1
+
+---
+
+you would need to add more to verbose?
+
+---
+
+sorry, continue and add those, but also make sure `--verbose` works with the progress things: 
+
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+github.com → 487 B @ 926 B/s ✓  │  4.01 KB @ 389 B/s → 8b04592ed74a5cc…cloudflare.nettime=2026-05-04T19:26:38.514+02:00 level=INFO msg="bootstrap fetching refs from source" ref_count=1
+github.com → 6.76 KB @ 633 B/s  │  4.01 KB @ 389 B/s → 8b04592ed74a5cc…cloudflare.nettime=2026-05-04T19:26:38.803+02:00 level=INFO msg="bootstrap pushing refs to target" ref_count=1
+source: Enumerating objects: 64652, done.
+source: Counting objects: 100% (392/392), done.
+source: Compressing objects: 100% (271/271), done.B/s ✓ → 8b04592ed74a5cc…cloudflare.net  (pushing pack)source: Compressing objects:  36% (98/271))
+github.com → 44.1 MB @ 2.12 MB/s  │  44.0 MB @ 2.12 MB/s → 8b04592ed74a5cc…cloudflare.net  (pushing pack)

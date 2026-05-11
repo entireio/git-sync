@@ -1,0 +1,31 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "011ba13b7e3d",
+  "strategy": "manual-commit",
+  "branch": "soph/all-refs",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync/bootstrap.go",
+    "cmd/git-sync/fetch.go",
+    "cmd/git-sync/flags.go",
+    "cmd/git-sync/probe.go",
+    "cmd/git-sync/syncplan.go",
+    "docs/usage.md",
+    "unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/01/1ba13b7e3d/0/metadata.json",
+      "transcript": "/01/1ba13b7e3d/0/transcript.jsonl",
+      "content_hash": "/01/1ba13b7e3d/0/transcript_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 32858,
+    "cache_read_tokens": 11669900,
+    "output_tokens": 14128,
+    "api_call_count": 47
+  }
+}

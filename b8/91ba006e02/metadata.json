@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "b891ba006e02",
+  "strategy": "manual-commit",
+  "branch": "soph/fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/planner/planner_test.go",
+    "internal/planner/relay.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b8/91ba006e02/0/metadata.json",
+      "transcript": "/b8/91ba006e02/0/transcript.jsonl",
+      "content_hash": "/b8/91ba006e02/0/transcript_hash.txt",
+      "prompt": "/b8/91ba006e02/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 8502,
+    "cache_read_tokens": 4990943,
+    "output_tokens": 3893,
+    "api_call_count": 15
+  }
+}

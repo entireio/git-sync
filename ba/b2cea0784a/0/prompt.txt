@@ -1,0 +1,20 @@
+can we craft a failing test in ../../go-git for the NAK issue?
+
+---
+
+yes, add the fix
+
+---
+
+can you give me a short PR description
+
+---
+
+ok, what's the state on replicate
+
+---
+
+let's do   - Breaking JSON rename in the stable surface: execution.mode → execution.transfer_mode, plus new top-level operation_mode on syncer.Result. Worth a CHANGELOG
+   note if any external consumers parse that field.
+  - Small cleanups from the earlier review still outstanding: defaultOperationMode has a dead branch, BuildReplicationPlans mutates its caller's managed map.
+  Neither is correctness-critical.

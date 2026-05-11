@@ -1,0 +1,5 @@
+can you change the module name from github.com/soph/git-sync to github.com/enitrehq/git-sync ?
+
+---
+
+does it compile / run tests linter etc?

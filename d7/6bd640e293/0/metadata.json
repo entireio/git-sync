@@ -1,0 +1,64 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "d76bd640e293",
+  "session_id": "019df213-84b8-7b00-b3ef-a326c2842044",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-04T11:34:23.860306Z",
+  "branch": "soph/move-to-cobra",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/main.go",
+    "go.mod",
+    "go.sum"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "254d13f03acf",
+  "token_usage": {
+    "input_tokens": 114938,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 590336,
+    "output_tokens": 7062,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-04T11:34:23.833071Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 590,
+    "total_committed": 5,
+    "total_lines_changed": 590,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 635,
+      "user_lines_removed": 590,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 36,
+        "cmd/git-sync/bootstrap.go": 85,
+        "cmd/git-sync/fetch.go": 79,
+        "cmd/git-sync/flags.go": 117,
+        "cmd/git-sync/main.go": 24,
+        "cmd/git-sync/probe.go": 73,
+        "cmd/git-sync/root.go": 66,
+        "cmd/git-sync/syncplan.go": 124,
+        "cmd/git-sync/version.go": 19,
+        "go.mod": 3,
+        "go.sum": 9
+      },
+      "user_removed_per_file": {
+        "cmd/git-sync/main.go": 590
+      }
+    }
+  ]
+}

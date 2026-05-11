@@ -1,0 +1,53 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "b9d4c8b588ea",
+  "strategy": "manual-commit",
+  "branch": "soph/move-to-root-package",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "client.go",
+    "client_test.go",
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go",
+    "cmd/git-sync/main.go",
+    "cmd/git-sync/main_test.go",
+    "doc.go",
+    "docs/architecture.md",
+    "docs/embedding.md",
+    "example_test.go",
+    "internalbridge/config.go",
+    "internalbridge/model.go",
+    "internalbridge/model_test.go",
+    "pkg/gitsync/client.go",
+    "pkg/gitsync/client_test.go",
+    "pkg/gitsync/doc.go",
+    "pkg/gitsync/example_test.go",
+    "pkg/gitsync/internalbridge/config.go",
+    "pkg/gitsync/internalbridge/model.go",
+    "pkg/gitsync/internalbridge/model_test.go",
+    "pkg/gitsync/types.go",
+    "pkg/gitsync/unstable/client.go",
+    "pkg/gitsync/unstable/client_test.go",
+    "pkg/gitsync/unstable/doc.go",
+    "types.go",
+    "unstable/client.go",
+    "unstable/client_test.go",
+    "unstable/doc.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b9/d4c8b588ea/0/metadata.json",
+      "transcript": "/b9/d4c8b588ea/0/transcript.jsonl",
+      "content_hash": "/b9/d4c8b588ea/0/transcript_hash.txt",
+      "prompt": "/b9/d4c8b588ea/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 19678,
+    "cache_read_tokens": 1075149,
+    "output_tokens": 10947,
+    "api_call_count": 18
+  }
+}

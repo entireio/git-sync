@@ -1,0 +1,25 @@
+what kind of integration tests do we have and could one of catched this?
+
+---
+
+the kubernetes test worked now, but now I did this one:
+
+❯ go run ./cmd/git-sync sync \
+    --protocol v2 \
+    --measure-memory \
+    -v \
+    --target-username git \
+    --target-insecure-skip-tls-verify \
+    https://github.com/torvalds/linux.git \
+    https://localhost:8080/git/test/git-sync-smoke-8
+
+
+and it went to 74GB ram and then I had to kill it
+
+---
+
+yeah, let's add a fix to prevent this earlier
+
+---
+
+could we also just check the oldest ref if it's matching and fail if it's not?

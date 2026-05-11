@@ -1,0 +1,31 @@
+does git-sync handle any ref or just branches
+
+---
+
+how does git --mirror handle this?
+
+---
+
+but it should be straight forward to add, right?
+
+---
+
+but the distinction only matters for consequtive syncs, right? the inital sync (empty target) could just work?
+
+---
+
+how does a mirror push to github does this btw? I think I tried that and it did not error, but how did it handle the pull refs?
+
+---
+
+I'd suggest we add an "--all-refs" flag and the default behaviour is "warn" when we can't set/update it.
+
+---
+
+1: yes, 2: yes, basically "--all-refs" is best effort, specifying `--tags` means "I want all tags 100%" 
+
+--all-refs on first sync wouldn't work for pull refs when target and source is GitHub (or a flavour of GitHub)
+
+---
+
+ok, let's go, make a new branch, commit meaningful on the go

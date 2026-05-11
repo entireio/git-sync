@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "d9c9ff22be84",
+  "strategy": "manual-commit",
+  "branch": "soph/go-1-26-2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go.mod",
+    "mise.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/c9ff22be84/0/metadata.json",
+      "transcript": "/d9/c9ff22be84/0/transcript.jsonl",
+      "content_hash": "/d9/c9ff22be84/0/transcript_hash.txt",
+      "prompt": "/d9/c9ff22be84/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 21307,
+    "cache_read_tokens": 555296,
+    "output_tokens": 2939,
+    "api_call_count": 12
+  }
+}

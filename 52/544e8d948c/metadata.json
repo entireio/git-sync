@@ -1,0 +1,32 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "52544e8d948c",
+  "strategy": "manual-commit",
+  "branch": "soph/rewrite",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/rewrite-issue-list.md",
+    "internal/gitproto/fetch_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/52/544e8d948c/0/metadata.json",
+      "transcript": "/52/544e8d948c/0/transcript.jsonl",
+      "content_hash": "/52/544e8d948c/0/transcript_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/52/544e8d948c/1/metadata.json",
+      "transcript": "/52/544e8d948c/1/transcript.jsonl",
+      "content_hash": "/52/544e8d948c/1/transcript_hash.txt",
+      "prompt": "/52/544e8d948c/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1808151,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1803648,
+    "output_tokens": 3727,
+    "api_call_count": 10
+  }
+}

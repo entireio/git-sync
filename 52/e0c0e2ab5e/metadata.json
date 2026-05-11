@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.5.7-nightly.202604250638.f53b923a-dev-85fb8823d",
+  "checkpoint_id": "52e0c0e2ab5e",
+  "strategy": "manual-commit",
+  "branch": "soph/add-ci-and-lint",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/52/e0c0e2ab5e/0/metadata.json",
+      "transcript": "/52/e0c0e2ab5e/0/transcript.jsonl",
+      "content_hash": "/52/e0c0e2ab5e/0/transcript_hash.txt",
+      "prompt": "/52/e0c0e2ab5e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3220,
+    "cache_creation_tokens": 181163,
+    "cache_read_tokens": 17704721,
+    "output_tokens": 56893,
+    "api_call_count": 157
+  }
+}

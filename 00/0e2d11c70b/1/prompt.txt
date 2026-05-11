@@ -1,0 +1,5 @@
+let's do   If you want the next step, I’d pick probe-count visibility next: add instrumentation/
+  tests that assert how many source FetchPack probes planning performs on representative
+  histories, so future tuning is driven by measured deltas rather than intuition.
+
+I think kubernetes/kubernetes is a good sized repo ?

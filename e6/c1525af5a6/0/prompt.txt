@@ -1,0 +1,1378 @@
+it's making progress: 
+
+time=2026-04-13T21:18:11.012+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-13T21:18:11.012+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+source: Enumerating objects: 8853348, done.
+source: Enumerating objects: 1453051, done.
+source: Counting objects: 100% (24460/24460), done.
+source: Compressing objects: 100% (6522/6522), done.
+source: Enumerating objects: 528414, done.
+source: Counting objects: 100% (7969/7969), done.
+source: Compressing objects: 100% (1348/1348), done.
+source: Total 528414 (delta 7270), reused 6621 (delta 6621), pack-reused 520445 (from 1)
+source: Enumerating objects: 861304, done.
+source: Counting objects: 100% (23627/23627), done.
+source: Compressing objects: 100% (5107/5107), done.
+source: Enumerating objects: 692177, done.
+source: Counting objects: 100% (19204/19204), done.
+source: Compressing objects: 100% (3514/3514), done.
+source: Total 692177 (delta 17277), reused 15690 (delta 15690), pack-reused 672973 (from 1)
+source: Enumerating objects: 774636, done.
+source: Counting objects: 100% (16726/16726), done.
+source: Compressing objects: 100% (4879/4879), done.
+source: Total 774636 (delta 13785), reused 11847 (delta 11847), pack-reused 757910 (from 1)
+source: Enumerating objects: 714254, done.
+source: Counting objects: 100% (10018/10018), done.
+source: Compressing objects: 100% (1291/1291), done.
+source: Total 714254 (delta 9400), reused 8727 (delta 8727), pack-reused 704236 (from 1)
+source: Enumerating objects: 697358, done.
+source: Counting objects: 100% (18586/18586), done.
+source: Compressing objects: 100% (3262/3262), done.
+source: Total 697358 (delta 16838), reused 15324 (delta 15324), pack-reused 678772 (from 1)
+source: Enumerating objects: 704356, done.
+source: Counting objects: 100% (16976/16976), done.
+source: Compressing objects: 100% (2868/2868), done.
+source: Total 704356 (delta 15459), reused 14108 (delta 14108), pack-reused 687380 (from 1)
+source: Enumerating objects: 703362, done.
+source: Counting objects: 100% (16881/16881), done.
+source: Compressing objects: 100% (2943/2943), done.
+source: Total 703362 (delta 15314), reused 13938 (delta 13938), pack-reused 686481 (from 1)
+source: Enumerating objects: 702570, done.
+source: Counting objects: 100% (16867/16867), done.
+source: Compressing objects: 100% (2947/2947), done.
+source: Total 702570 (delta 15277), reused 13920 (delta 13920), pack-reused 685703 (from 1)
+source: Enumerating objects: 700854, done.
+source: Counting objects: 100% (16963/16963), done.
+source: Compressing objects: 100% (2976/2976), done.
+source: Total 700854 (delta 15352), reused 13987 (delta 13987), pack-reused 683891 (from 1)
+source: Enumerating objects: 702456, done.
+source: Counting objects: 100% (16972/16972), done.
+source: Compressing objects: 100% (2969/2969), done.
+source: Total 702456 (delta 15377), reused 14003 (delta 14003), pack-reused 685484 (from 1)
+source: Enumerating objects: 702386, done.
+source: Counting objects: 100% (17024/17024), done.
+source: Compressing objects: 100% (2962/2962), done.
+source: Total 702386 (delta 15429), reused 14062 (delta 14062), pack-reused 685362 (from 1)
+source: Enumerating objects: 701231, done.
+source: Counting objects: 100% (16985/16985), done.
+source: Compressing objects: 100% (2953/2953), done.
+source: Total 701231 (delta 15389), reused 14032 (delta 14032), pack-reused 684246 (from 1)
+source: Enumerating objects: 702150, done.
+source: Counting objects: 100% (16888/16888), done.
+source: Compressing objects: 100% (2970/2970), done.
+source: Total 702150 (delta 15290), reused 13918 (delta 13918), pack-reused 685262 (from 1)
+source: Enumerating objects: 701765, done.
+source: Counting objects: 100% (16677/16677), done.
+source: Compressing objects: 100% (2951/2951), done.
+source: Total 701765 (delta 15082), reused 13726 (delta 13726), pack-reused 685088 (from 1)
+time=2026-04-13T21:22:02.604+02:00 level=INFO msg="bootstrap batch planned checkpoint" branch=refs/heads/master checkpoint=a13ff0bb selected=1 chain_len=75767
+source: Enumerating objects: 2011027, done.
+source: Counting objects: 100% (204362/204362), done.
+source: Compressing objects: 100% (41832/41832), done.
+
+---
+
+I wonder if these could be bigger
+
+---
+
+what does pack-reused mean exactly where does this come from?
+
+---
+
+question, just investigation now: let's say we would want to use replicate (or sync) to not recreate the repo fully but instead create it but move every ref from the source repo into a prefixed ref. Like `refs/gh/` for example. Not sure yet if we keep or remove branches. But would this be an easy thing todo?
+
+---
+
+can you take a look at /tmp/linux-replicate.log
+
+time=2026-04-14T13:12:47.826+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=26 resume_hash=<zero>
+time=2026-04-14T13:12:47.826+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=26 from=<zero> to=a13ff0bb
+time=2026-04-14T13:12:47.826+02:00 level=INFO msg="bootstrap batch reusing prefetched probe pack" branch=refs/heads/master checkpoint=a13ff0bb bytes=268264725
+error: push bootstrap batch for refs/heads/master: target receive-pack: http 401: https://localhost:8080/git/test/git-sync-smoke-12/git-receive-pack Invalid or expired token
+exit status 1
+
+Also I never saw a line "target: "
+
+---
+
+hmm, can you help me understand what the bootstrap planing is doing exactly? Like it taking hours feels like a huge waste, like planing only makes sense if the planing isn't longer then the worst guessed plan? Or can we not just guess something?
+
+---
+
+let's do B
+
+---
+
+❯ time go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --batch-max-pack-bytes 1073741824 \
+    --max-pack-bytes 21474836480 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-3.log
+time=2026-04-14T14:01:22.228+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T14:01:22.229+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+time=2026-04-14T14:01:45.238+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=1
+time=2026-04-14T14:01:45.238+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+time=2026-04-14T14:02:10.275+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=1
+time=2026-04-14T14:02:10.275+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=1 resume_hash=<zero>
+time=2026-04-14T14:02:10.275+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=1 from=<zero> to=d60bc140
+source: Enumerating objects: 11429408, done.
+source: Counting objects: 100% (1444/1444), done.
+source: Compressing objects: 100% (609/609), done.
+error: push bootstrap batch for refs/heads/master: decode report-status: source pack exceeded max-pack-bytes limit (1073741824)
+exit status 1
+go run ./cmd/git-sync replicate -v --target-insecure-skip-tls-verify           45.32s user 6.00s system 52% cpu 1:38.44 total
+tee /tmp/linux-replicate-3.log  0.00s user 0.00s system 0% cpu 1:38.44 total
+
+---
+
+I think the target has a 2Gb limit
+
+---
+
+❯   time go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --batch-max-pack-bytes 209715200 \
+    --max-pack-bytes 21474836480 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-5.log
+time=2026-04-14T14:21:52.359+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T14:21:52.359+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+time=2026-04-14T14:22:15.827+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=3
+time=2026-04-14T14:22:15.827+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+time=2026-04-14T14:22:39.375+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=3
+time=2026-04-14T14:22:39.375+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=3 resume_hash=<zero>
+time=2026-04-14T14:22:39.375+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=3 from=<zero> to=9ca8e40c
+source: Enumerating objects: 874026, done.
+source: Counting objects: 100% (19112/19112), done.
+source: Compressing objects: 100% (4347/4347), done.
+source: Total 874026 (delta 16965), reused 14765 (delta 14765), pack-reused 854914 (from 1)
+target: Sending to replicas: 306.7 MiB, done.
+target: Storing objects: 874026/874026 (2 replicas), done.
+time=2026-04-14T14:23:34.444+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=1 batch_total=3
+time=2026-04-14T14:23:34.444+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=2 batch_total=3 from=9ca8e40c to=3eab887a
+source: Enumerating objects: 4031475, done.
+source: Counting objects: 100% (239935/239935), done.
+source: Compressing objects: 100% (45353/45353), done.
+source: Total 4031475 (delta 225695), reused 194581 (delta 194581), pack-reused 3791540 (from 1)
+target: Sending to replicas: 1382.0 MiB, done.
+target: Storing objects: 4031475/4031475 (2 replicas), done.
+time=2026-04-14T14:28:04.785+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=2 batch_total=3
+time=2026-04-14T14:28:04.785+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=3 from=3eab887a to=d60bc140
+source: Enumerating objects: 6523907, done.
+source: Counting objects: 100% (462345/462345), done.
+source: Compressing objects: 100% (132655/132655), done.
+error: push bootstrap batch for refs/heads/master: unpack error: push rejected: body exceeded size limit 2147483648 (trace_id=00000000000000000000000000000000)
+exit status 1
+go run ./cmd/git-sync replicate -v --target-insecure-skip-tls-verify           50.38s user 13.43s system 13% cpu 7:49.06 total
+tee /tmp/linux-replicate-5.log  0.00s user 0.01s system 0% cpu 7:49.06 total
+
+---
+
+but I thought we would just retry in that case with a smaller batch automatically?
+
+---
+
+stupid question: could we figure out while transfering from source to target that the packfile gets to big and then meanigful cut it?
+
+---
+
+oh we can do a HEAD check? then yeah we should totally do that
+
+---
+
+but just to be sure, we still try to guess meaningful sizes and then act on pack header, right? so it's still a waste on the source (having to build the pack file) but we still try to avoid it
+
+---
+
+do we have an architecture doc for replicate where we should add this? also sync should work in the same way right?
+
+---
+
+time=2026-04-14T15:26:14.444+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=3 resume_hash=3eab887a
+time=2026-04-14T15:26:14.444+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=3 from=3eab887a to=d60bc140
+source: Enumerating objects: 6523907, done.
+source: Counting objects: 100% (462419/462419), done.
+source: Compressing objects: 100% (132676/132676), done.
+time=2026-04-14T15:26:45.860+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/master old_remaining=1 new_remaining=2
+time=2026-04-14T15:26:45.860+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=4 from=3eab887a to=34c59da4
+source: Enumerating objects: 3429100, done.
+source: Counting objects: 100% (447733/447733), done.
+source: Compressing objects: 100% (126405/126405), done.
+time=2026-04-14T15:27:11.953+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/master old_remaining=2 new_remaining=4
+time=2026-04-14T15:27:11.953+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=6 from=3eab887a to=be76865d
+source: Enumerating objects: 1680848, done.
+source: Counting objects: 100% (354667/354667), done.
+source: Compressing objects: 100% (108451/108451), done.
+time=2026-04-14T15:27:29.955+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/master old_remaining=4 new_remaining=8
+time=2026-04-14T15:27:29.955+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=10 from=3eab887a to=04243787
+source: Enumerating objects: 862378, done.
+source: Counting objects: 100% (247445/247445), done.
+source: Compressing objects:  74% (59048/79794)
+
+---
+
+hmm, but why do we have it so low as 200mb? the limit is 2gb?
+
+---
+
+why would I need both attributes now?
+
+---
+
+yeah let's move to one `--target-max-pack-bytes` setting then, this is what you meant earlier too, right?
+
+---
+
+before I try this, the try before: 
+
+❯ time go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --batch-max-pack-bytes 1009715200 \
+    --max-pack-bytes 21474836480 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-8.log
+time=2026-04-14T15:30:18.167+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T15:30:18.167+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+time=2026-04-14T15:30:41.355+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=1
+time=2026-04-14T15:30:41.355+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+time=2026-04-14T15:31:04.424+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=1
+time=2026-04-14T15:31:04.424+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=1 resume_hash=04243787
+error: resume bootstrap batch for refs/heads/master: temp ref hash 04243787812cabb57726e50d8288a3dcacf54ad2 does not match any planned checkpoint
+exit status 1
+go run ./cmd/git-sync replicate -v --target-insecure-skip-tls-verify           44.07s user 3.25s system 100% cpu 47.151 total
+tee /tmp/linux-replicate-8.log  0.00s user 0.00s system 0% cpu 47.151 total
+
+---
+
+can / should we just clear temp refs on a start of a command run then?
+
+---
+
+hmm, should that be the expected behaviour? didn't we say we still keep the first ref estimate?
+
+---
+
+can you explain how it works from scratch now?
+
+---
+
+in the example: But I would like to not expect the first pack to be 8.2GB since we asked for a meaningful estimate? Like this is just a made up example right?
+
+---
+
+question: On the second branch for linux repo... shouldn't there be in theory a huge overlap? It feels like we are sending all packfiles again or is this completely different?
+
+---
+
+while I run this now from scratch the resume from before worked: great! one thing from the stats: 
+
+  "measurement": {
+    "enabled": true,
+    "elapsed_millis": 2002460,
+    "peak_alloc_bytes": 6431499624,
+    "peak_heap_inuse_bytes": 6550953984,
+    "total_alloc_bytes": 29009856576,
+    "gc_count": 1416
+  },
+
+the 6431499624 peak_alloc_bytes what's that bound by?
+
+---
+
+❯   go run ./cmd/git-sync plan --mode replicate -v \
+    --target-insecure-skip-tls-verify \
+    --target-max-pack-bytes 2000000000 \
+    --measure-memory --json \
+    $SRC $TGT | jq '.measurement'
+{
+  "enabled": true,
+  "elapsed_millis": 465,
+  "peak_alloc_bytes": 1116608,
+  "peak_heap_inuse_bytes": 2080768,
+  "total_alloc_bytes": 714392,
+  "gc_count": 0
+}
+
+---
+
+"measurement": {
+    "enabled": true,
+    "elapsed_millis": 1036527,
+    "peak_alloc_bytes": 6383750152,
+    "peak_heap_inuse_bytes": 6515146752,
+    "total_alloc_bytes": 22249361080,
+    "gc_count": 628
+  },
+
+---
+
+❯   # Add to the command:
+  GODEBUG=gctrace=1 go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --target-max-pack-bytes 2000000000 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-gc.log
+zsh: command not found: #
+gc 1 @0.002s 3%: 0.051+0.37+0.039 ms clock, 0.82+0.013/0.33/0+0.63 ms cpu, 3->4->0 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 2 @0.004s 4%: 0.083+0.54+0.097 ms clock, 1.3+0.047/0.79/0+1.5 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 3 @0.005s 4%: 0.015+2.5+0.028 ms clock, 0.24+0.19/1.9/0+0.45 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 4 @0.008s 5%: 0.025+0.75+0.041 ms clock, 0.41+0.020/1.0/0+0.66 ms cpu, 3->3->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 5 @0.010s 6%: 0.042+0.88+0.024 ms clock, 0.68+0.092/1.9/0+0.39 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 6 @0.013s 6%: 0.075+0.73+0.040 ms clock, 1.2+0.008/1.3/0+0.65 ms cpu, 3->3->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 7 @0.016s 5%: 0.056+1.5+0.004 ms clock, 0.90+0.25/1.8/0+0.072 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 8 @0.018s 5%: 0.053+2.3+0.004 ms clock, 0.85+0.045/2.8/0+0.067 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 9 @0.022s 5%: 0.038+1.3+0.033 ms clock, 0.61+0.18/1.6/0.023+0.52 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 10 @0.025s 5%: 0.062+1.6+0.003 ms clock, 1.0+0.21/2.4/0+0.056 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 11 @0.029s 5%: 0.038+0.73+0.009 ms clock, 0.61+0.25/1.8/0.28+0.15 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 12 @0.030s 6%: 0.026+0.63+0.21 ms clock, 0.42+0.038/1.2/2.2+3.5 ms cpu, 3->5->2 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 13 @0.031s 6%: 0.17+1.4+0.16 ms clock, 2.8+1.2/1.5/0.046+2.6 ms cpu, 3->6->3 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 14 @0.034s 6%: 0.20+2.5+0.14 ms clock, 3.2+2.1/2.0/0+2.3 ms cpu, 6->8->4 MB, 7 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 15 @0.038s 7%: 0.19+0.91+0.011 ms clock, 3.1+1.1/2.3/0+0.18 ms cpu, 8->8->4 MB, 9 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 16 @0.047s 6%: 0.34+1.2+0.006 ms clock, 5.5+0.058/2.5/0.89+0.10 ms cpu, 8->9->6 MB, 10 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 17 @0.052s 6%: 0.026+0.84+0.012 ms clock, 0.42+0.12/2.5/3.0+0.19 ms cpu, 10->12->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 18 @0.056s 6%: 0.022+0.59+0.018 ms clock, 0.35+0.025/1.8/3.5+0.29 ms cpu, 11->11->5 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 19 @0.059s 6%: 0.056+1.1+0.005 ms clock, 0.90+0.58/4.1/0+0.084 ms cpu, 10->10->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 20 @0.065s 6%: 0.048+1.4+0.008 ms clock, 0.76+0.43/4.2/0.45+0.13 ms cpu, 10->11->6 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 21 @0.072s 6%: 0.038+2.7+0.003 ms clock, 0.61+1.9/6.7/0.91+0.054 ms cpu, 10->12->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 22 @0.079s 6%: 0.024+4.7+0.023 ms clock, 0.39+0.20/2.7/2.0+0.38 ms cpu, 11->15->8 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 23 @0.095s 5%: 0.042+3.7+0.020 ms clock, 0.67+1.6/4.0/0.002+0.32 ms cpu, 14->17->7 MB, 17 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 24 @0.110s 5%: 0.083+2.1+0.003 ms clock, 1.3+0.19/5.3/0+0.063 ms cpu, 13->14->6 MB, 15 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 25 @0.120s 5%: 0.030+0.72+0.003 ms clock, 0.48+0.27/2.3/2.5+0.057 ms cpu, 11->12->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 26 @0.123s 5%: 0.042+0.77+0.022 ms clock, 0.67+0.24/2.3/2.0+0.35 ms cpu, 11->13->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 27 @0.127s 5%: 0.021+1.3+0.020 ms clock, 0.34+0.030/2.4/5.0+0.32 ms cpu, 11->12->5 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+time=2026-04-14T16:50:16.247+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T16:50:16.247+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+gc 1 @0.765s 0%: 0.031+2.3+0.008 ms clock, 0.51+1.5/4.3/0+0.14 ms cpu, 12->21->20 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 2 @0.768s 0%: 0.021+1.9+0.015 ms clock, 0.35+1.3/2.4/0.45+0.24 ms cpu, 35->43->43 MB, 41 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 3 @0.772s 0%: 0.022+1.2+0.020 ms clock, 0.35+0.44/3.9/1.9+0.33 ms cpu, 73->84->84 MB, 86 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 4 @0.777s 0%: 0.020+2.4+0.015 ms clock, 0.32+0.039/4.7/5.9+0.25 ms cpu, 144->169->169 MB, 169 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 5 @1.250s 0%: 0.077+3.5+0.013 ms clock, 1.2+0.018/13/31+0.21 ms cpu, 288->290->251 MB, 339 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 6 @1.954s 0%: 0.035+5.6+0.018 ms clock, 0.56+0.084/21/50+0.28 ms cpu, 428->430->365 MB, 503 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 7 @3.185s 0%: 0.033+8.0+0.018 ms clock, 0.53+0.062/31/84+0.30 ms cpu, 669->671->561 MB, 731 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 8 @5.275s 0%: 0.031+14+0.027 ms clock, 0.50+0.047/56/150+0.44 ms cpu, 1054->1059->883 MB, 1123 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 9 @8.908s 0%: 0.034+25+0.033 ms clock, 0.55+0/98/249+0.53 ms cpu, 1682->1689->1407 MB, 1766 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 10 @14.910s 0%: 0.036+50+0.017 ms clock, 0.58+0.19/198/536+0.28 ms cpu, 2790->2800->2292 MB, 2815 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 11 @22.332s 0%: 0.045+107+0.018 ms clock, 0.73+40/429/1167+0.29 ms cpu, 4549->4607->3453 MB, 4585 MB goal, 0 MB stacks, 0 MB globals, 16 P
+time=2026-04-14T16:50:39.021+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=3
+time=2026-04-14T16:50:39.021+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+gc 12 @30.384s 0%: 0.035+29+0.014 ms clock, 0.56+0.017/114/300+0.22 ms cpu, 6678->6683->2238 MB, 6907 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 13 @40.561s 0%: 0.035+70+0.016 ms clock, 0.56+0.021/277/732+0.25 ms cpu, 4373->4393->3026 MB, 4477 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 14 @47.111s 0%: 0.039+45+0.017 ms clock, 0.62+1.2/181/487+0.27 ms cpu, 5887->5979->3641 MB, 6054 MB goal, 0 MB stacks, 0 MB globals, 16 P
+time=2026-04-14T16:51:03.168+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=3
+time=2026-04-14T16:51:03.168+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=3 resume_hash=<zero>
+time=2026-04-14T16:51:03.168+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=3 from=<zero> to=9ca8e40c
+source: Enumerating objects: 874026, done.
+source: Counting objects: 100% (19112/19112), done.
+source: Compressing objects: 100% (4347/4347), done.
+source: Total 874026 (delta 16965), reused 14765 (delta 14765), pack-reused 854914 (from 1)
+target: Sending to replicas: 306.7 MiB, done.
+target: Storing objects: 874026/874026 (2 replicas), done.
+time=2026-04-14T16:51:57.666+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=1 batch_total=3
+time=2026-04-14T16:51:57.666+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=2 batch_total=3 from=9ca8e40c to=3eab887a
+source: Enumerating objects: 4031475, done.
+source: Counting objects: 100% (239935/239935), done.
+source: Compressing objects: 100% (45353/45353), done.
+time=2026-04-14T16:52:15.398+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/master old_remaining=2 new_remaining=4
+time=2026-04-14T16:52:15.398+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=2 batch_total=5 from=9ca8e40c to=ec616048
+GC forced
+gc 28 @121.846s 0%: 0.15+0.96+0.007 ms clock, 2.4+0/3.5/0+0.12 ms cpu, 6->6->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Enumerating objects: 1104041, done.
+source: Counting objects: 100% (166320/166320), done.
+source: Compressing objects: 100% (34193/34193), done.
+source: Total 1104041 (delta 153199), reused 132126 (delta 132126), pack-reused 937721 (from 1)
+GC forced
+gc 15 @167.201s 0%: 0.16+0.76+0.003 ms clock, 2.5+0/1.0/0+0.050 ms cpu, 5174->5174->9 MB, 7284 MB goal, 0 MB stacks, 0 MB globals, 16 P
+target: Sending to replicas: 390.3 MiB, done.
+target: Storing objects: 1104041/1104041 (2 replicas), done.
+time=2026-04-14T16:53:37.598+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=2 batch_total=5
+time=2026-04-14T16:53:37.598+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=5 from=ec616048 to=3eab887a
+source: Enumerating objects: 2927434, done.
+source: Counting objects: 100% (270041/270041), done.
+source: Compressing objects: 100% (58789/58789), done.
+gc 16 @218.614s 0%: 0.062+0.34+0.017 ms clock, 0.99+0.10/0.98/0.36+0.27 ms cpu, 17->18->16 MB, 20 MB goal, 0 MB stacks, 0 MB globals, 16 P
+time=2026-04-14T16:53:54.424+02:00 level=INFO msg="bootstrap batch subdividing before push (pack header estimate)" branch=refs/heads/master old_remaining=3 new_remaining=6
+time=2026-04-14T16:53:54.424+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=3 batch_total=8 from=ec616048 to=f05f8198
+source: Enumerating objects: 1246958, done.
+source: Counting objects: 100% (183724/183724), done.
+source: Compressing objects: 100% (45721/45721), done.
+gc 17 @228.024s 0%: 0.044+3.4+0.004 ms clock, 0.71+3.3/4.1/0.70+0.065 ms cpu, 28->28->9 MB, 33 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 18 @228.240s 0%: 0.055+0.35+0.006 ms clock, 0.89+0.019/1.1/1.4+0.10 ms cpu, 16->16->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 19 @228.376s 0%: 0.031+0.31+0.003 ms clock, 0.49+0.12/0.99/0.56+0.054 ms cpu, 16->16->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 20 @228.699s 0%: 0.029+0.33+0.003 ms clock, 0.47+0.14/0.97/0.72+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 21 @228.958s 0%: 0.028+0.36+0.003 ms clock, 0.46+0.016/0.94/0.51+0.054 ms cpu, 17->17->10 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 22 @229.116s 0%: 0.028+0.38+0.004 ms clock, 0.45+0.086/1.0/0.74+0.064 ms cpu, 20->20->12 MB, 20 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 23 @229.419s 0%: 0.027+0.31+0.003 ms clock, 0.44+0.15/0.98/0.84+0.054 ms cpu, 24->24->9 MB, 24 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 24 @229.646s 0%: 0.027+0.34+0.006 ms clock, 0.44+0/0.85/1.1+0.10 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 25 @229.874s 0%: 0.029+0.28+0.003 ms clock, 0.46+0/0.91/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 26 @230.101s 0%: 0.030+0.35+0.003 ms clock, 0.49+0.14/1.0/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 27 @230.331s 0%: 0.029+0.52+0.003 ms clock, 0.46+0.16/0.70/0.92+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 28 @230.559s 0%: 0.052+0.37+0.007 ms clock, 0.84+0.18/0.90/0.84+0.12 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 29 @230.783s 0%: 0.031+0.34+0.005 ms clock, 0.49+0/0.99/1.0+0.088 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 30 @231.015s 0%: 0.038+0.36+0.003 ms clock, 0.61+0.24/1.1/0.46+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 31 @231.245s 0%: 0.039+0.52+0.003 ms clock, 0.63+0/1.4/1.7+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 32 @231.478s 0%: 0.030+0.34+0.003 ms clock, 0.48+0.16/1.0/1.2+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 33 @231.705s 0%: 0.038+0.49+0.006 ms clock, 0.61+0/1.0/0.35+0.096 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 34 @231.880s 0%: 0.029+0.35+0.004 ms clock, 0.47+0.14/1.0/1.3+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 35 @232.108s 0%: 0.031+0.45+0.003 ms clock, 0.50+0.18/1.0/1.0+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 36 @232.313s 0%: 0.030+0.32+0.003 ms clock, 0.48+0/1.0/1.2+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 37 @232.542s 0%: 0.042+0.42+0.019 ms clock, 0.68+0/0.98/0.60+0.30 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 38 @232.772s 0%: 0.026+0.36+0.003 ms clock, 0.43+0.16/1.0/1.1+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 39 @232.995s 0%: 0.059+0.42+0.004 ms clock, 0.95+0.14/1.2/0.29+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 40 @233.224s 0%: 0.038+0.35+0.022 ms clock, 0.61+0.18/0.99/0.46+0.36 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 41 @233.452s 0%: 0.032+0.38+0.003 ms clock, 0.51+0.17/1.0/0+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 42 @233.681s 0%: 0.029+0.41+0.019 ms clock, 0.47+0.16/1.0/0.76+0.31 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 43 @233.909s 0%: 0.015+0.30+0.003 ms clock, 0.24+0.14/0.93/0.71+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 44 @234.139s 0%: 0.030+0.33+0.006 ms clock, 0.49+0.15/0.91/0.55+0.10 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 45 @234.311s 0%: 0.029+0.28+0.003 ms clock, 0.47+0.15/0.83/0.53+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 46 @234.517s 0%: 0.036+0.41+0.003 ms clock, 0.58+0/1.0/0.91+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 47 @234.744s 0%: 0.031+0.31+0.007 ms clock, 0.50+0.14/0.91/0.88+0.12 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 48 @234.971s 0%: 0.028+0.37+0.012 ms clock, 0.46+0.25/1.1/1.4+0.19 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 49 @235.199s 0%: 0.030+0.36+0.022 ms clock, 0.48+0.22/1.1/1.1+0.36 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 50 @235.427s 0%: 0.043+0.48+0.017 ms clock, 0.68+0.16/1.0/0.62+0.27 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 51 @235.886s 0%: 0.036+0.29+0.003 ms clock, 0.57+0.16/0.95/0.59+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 52 @236.043s 0%: 0.035+0.28+0.003 ms clock, 0.57+0.21/0.93/0.69+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 53 @236.341s 0%: 0.029+0.29+0.003 ms clock, 0.47+0.11/0.86/1.4+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 54 @236.579s 0%: 0.029+0.32+0.003 ms clock, 0.47+0.16/0.84/0.54+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 55 @236.814s 0%: 0.062+0.43+0.003 ms clock, 0.99+0.20/1.2/1.0+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 56 @237.043s 0%: 0.038+0.32+0.004 ms clock, 0.61+0.13/0.92/0.84+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 57 @237.267s 0%: 0.029+0.31+0.003 ms clock, 0.46+0.14/0.92/1.1+0.056 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 58 @237.500s 0%: 0.034+0.40+0.020 ms clock, 0.54+0.18/1.0/1.6+0.32 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 59 @237.693s 0%: 0.029+0.31+0.002 ms clock, 0.47+0.15/0.80/1.1+0.045 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 60 @237.884s 0%: 0.029+0.29+0.003 ms clock, 0.46+0.15/0.88/0.65+0.058 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 61 @238.117s 0%: 0.032+0.35+0.003 ms clock, 0.51+0.15/1.1/1.2+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 62 @238.346s 0%: 0.054+0.30+0.004 ms clock, 0.87+0/0.81/0.91+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 63 @238.575s 0%: 0.031+0.33+0.021 ms clock, 0.50+0.15/0.83/0.92+0.34 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 64 @238.800s 0%: 0.031+0.42+0.019 ms clock, 0.50+0.15/1.1/1.7+0.30 ms cpu, 18->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 65 @239.021s 0%: 0.028+0.30+0.004 ms clock, 0.45+0.15/0.99/1.0+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 66 @239.541s 0%: 0.031+0.31+0.003 ms clock, 0.50+0/0.99/1.5+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 67 @240.328s 0%: 0.029+0.35+0.006 ms clock, 0.47+0.26/0.99/1.7+0.10 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 68 @241.106s 0%: 0.035+0.28+0.004 ms clock, 0.56+0.14/0.79/0.73+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 69 @241.891s 0%: 0.029+0.46+0.003 ms clock, 0.47+0.15/0.73/0.73+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 70 @242.704s 0%: 0.030+0.61+0.003 ms clock, 0.48+0/1.0/0.60+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+GC forcedending to replicas: 400.3 MiB
+gc 29 @243.558s 0%: 0.032+0.79+0.003 ms clock, 0.52+0/3.0/0+0.060 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 71 @243.452s 0%: 0.038+0.45+0.003 ms clock, 0.61+0.10/0.82/0.35+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 72 @244.197s 0%: 0.031+0.27+0.003 ms clock, 0.49+0.14/0.88/0.82+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 73 @244.980s 0%: 0.037+0.30+0.003 ms clock, 0.60+0/0.72/0.63+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 74 @245.861s 0%: 0.030+0.30+0.004 ms clock, 0.49+0/0.87/1.2+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 75 @246.444s 0%: 0.029+0.31+0.006 ms clock, 0.47+0/0.98/0.70+0.096 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 76 @246.676s 0%: 0.029+0.26+0.003 ms clock, 0.47+0.15/0.82/0.66+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 77 @246.925s 0%: 0.032+0.32+0.004 ms clock, 0.52+0.13/1.0/0.92+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 78 @247.332s 0%: 0.028+0.37+0.003 ms clock, 0.46+0/1.1/0.88+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 79 @247.660s 0%: 0.030+0.50+0.003 ms clock, 0.48+0.12/1.0/1.0+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 80 @248.089s 0%: 0.042+0.25+0.003 ms clock, 0.68+0/0.76/0.46+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 1246958 (delta 165884), reused 138002 (delta 138002), pack-reused 1063234 (from 1)
+target: Sending to replicas: 471.2 MiB, done.
+target: Storing objects: 1246958/1246958 (2 replicas), done.
+time=2026-04-14T16:55:24.931+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=3 batch_total=8
+time=2026-04-14T16:55:24.931+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=4 batch_total=8 from=f05f8198 to=3eab887a
+source: Enumerating objects: 1680476, done.
+source: Counting objects: 100% (377425/377425), done.
+source: Compressing objects: 100% (106625/106625), done.
+gc 81 @324.722s 0%: 0.058+0.41+0.004 ms clock, 0.94+0.18/1.0/0.56+0.075 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 82 @324.977s 0%: 0.029+0.31+0.003 ms clock, 0.47+0/0.98/1.2+0.061 ms cpu, 19->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 83 @325.232s 0%: 0.029+0.38+0.003 ms clock, 0.47+0.19/1.1/0.91+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 84 @325.475s 0%: 0.029+0.34+0.003 ms clock, 0.46+0.15/1.0/0.98+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 85 @325.717s 0%: 0.029+0.31+0.004 ms clock, 0.47+0.14/1.0/1.0+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 86 @325.969s 0%: 0.030+0.29+0.003 ms clock, 0.48+0.16/0.98/0.84+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 87 @326.263s 0%: 0.027+0.31+0.003 ms clock, 0.44+0.17/0.98/1.4+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 88 @326.452s 0%: 0.029+0.27+0.003 ms clock, 0.46+0.14/0.85/0.62+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 89 @326.695s 0%: 0.031+0.31+0.004 ms clock, 0.50+0/1.0/1.5+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 90 @326.940s 0%: 0.034+0.34+0.004 ms clock, 0.54+0.16/0.88/0.88+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 91 @327.183s 0%: 0.031+0.35+0.034 ms clock, 0.49+0.18/1.0/1.3+0.55 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 92 @327.422s 0%: 0.030+0.26+0.004 ms clock, 0.48+0.14/0.86/1.2+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 93 @327.670s 0%: 0.053+0.37+0.027 ms clock, 0.86+0.18/0.91/0.63+0.44 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 94 @327.917s 0%: 0.027+0.35+0.005 ms clock, 0.44+0/0.88/0.88+0.083 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 95 @328.169s 0%: 0.028+0.28+0.003 ms clock, 0.45+0.14/0.88/0.65+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 96 @328.396s 0%: 0.029+0.40+0.003 ms clock, 0.47+0/1.1/1.9+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 97 @328.646s 0%: 0.030+0.33+0.003 ms clock, 0.48+0.19/1.0/0.64+0.060 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 98 @328.889s 0%: 0.028+0.43+0.003 ms clock, 0.45+0.16/1.1/0.58+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 99 @329.129s 0%: 0.032+0.28+0.004 ms clock, 0.51+0.17/0.91/0.44+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 100 @329.365s 0%: 0.030+0.29+0.003 ms clock, 0.49+0.16/0.94/0.81+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 101 @329.614s 0%: 0.033+0.40+0.027 ms clock, 0.53+0.16/1.1/1.3+0.43 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 102 @329.859s 0%: 0.030+0.27+0.004 ms clock, 0.48+0.16/0.78/0.74+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 103 @330.093s 0%: 0.030+0.37+0.003 ms clock, 0.48+0/1.0/2.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 104 @330.318s 0%: 0.028+0.32+0.004 ms clock, 0.46+0.14/0.98/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 105 @330.557s 0%: 0.030+0.32+0.004 ms clock, 0.48+0.18/0.93/1.3+0.073 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 106 @330.804s 0%: 0.031+0.23+0.003 ms clock, 0.49+0.16/0.77/0.60+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 107 @330.997s 0%: 0.031+0.31+0.003 ms clock, 0.49+0/0.83/0.61+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 108 @331.237s 0%: 0.032+0.45+0.003 ms clock, 0.51+0.16/1.1/1.1+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 109 @331.479s 0%: 0.032+0.28+0.003 ms clock, 0.51+0.14/0.90/0.44+0.050 ms cpu, 18->18->10 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 110 @331.704s 0%: 0.029+0.49+0.003 ms clock, 0.47+0.14/0.91/1.0+0.063 ms cpu, 20->20->11 MB, 20 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 111 @331.971s 0%: 0.032+0.42+0.014 ms clock, 0.52+0/1.1/1.0+0.23 ms cpu, 21->21->9 MB, 22 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 112 @332.208s 0%: 0.044+0.41+0.004 ms clock, 0.70+0.26/1.2/1.7+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 113 @332.446s 0%: 0.044+0.30+0.004 ms clock, 0.71+0.15/0.88/0.48+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 114 @332.683s 0%: 0.039+0.53+0.003 ms clock, 0.62+0.13/1.2/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 115 @332.926s 0%: 0.036+0.36+0.005 ms clock, 0.59+0/1.0/0.58+0.089 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 116 @333.154s 0%: 0.029+0.50+0.016 ms clock, 0.47+0.18/1.2/1.4+0.26 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 117 @333.390s 0%: 0.032+0.29+0.003 ms clock, 0.51+0.21/0.96/0.85+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 118 @333.631s 0%: 0.030+0.29+0.003 ms clock, 0.49+0.18/0.90/0.92+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 119 @333.866s 0%: 0.029+0.29+0.003 ms clock, 0.46+0/0.85/0.97+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 120 @334.067s 0%: 0.030+0.30+0.003 ms clock, 0.49+0.14/0.97/1.0+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 121 @334.307s 0%: 0.041+0.38+0.003 ms clock, 0.66+0.18/1.0/1.5+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 122 @334.542s 0%: 0.029+0.28+0.004 ms clock, 0.47+0.16/0.90/0.52+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 123 @334.778s 0%: 0.031+0.49+0.003 ms clock, 0.50+0/0.98/1.1+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 124 @335.015s 0%: 0.029+0.33+0.003 ms clock, 0.46+0.16/1.0/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 125 @335.253s 0%: 0.034+0.28+0.003 ms clock, 0.54+0.11/0.87/0.87+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 126 @335.488s 0%: 0.031+0.46+0.003 ms clock, 0.50+0.17/1.1/1.0+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 127 @335.719s 0%: 0.032+0.31+0.003 ms clock, 0.52+0.16/0.90/0.56+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 128 @336.427s 0%: 0.029+0.33+0.003 ms clock, 0.47+0/0.96/1.0+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 129 @337.250s 0%: 0.028+0.24+0.009 ms clock, 0.45+0/0.85/1.0+0.14 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 130 @337.926s 0%: 0.029+0.26+0.003 ms clock, 0.47+0/0.86/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 131 @338.692s 0%: 0.042+0.34+0.003 ms clock, 0.68+0/0.80/0.64+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 132 @339.513s 0%: 0.030+0.28+0.003 ms clock, 0.48+0.12/0.89/1.0+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 133 @340.365s 0%: 0.036+0.28+0.003 ms clock, 0.58+0/0.84/0.42+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 134 @341.128s 0%: 0.028+0.28+0.003 ms clock, 0.46+0/0.82/0.67+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 135 @341.911s 0%: 0.030+0.32+0.003 ms clock, 0.49+0.16/1.0/1.1+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 136 @342.740s 0%: 0.029+0.32+0.003 ms clock, 0.47+0/0.95/1.2+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 137 @343.670s 0%: 0.031+0.29+0.004 ms clock, 0.49+0.25/1.0/1.1+0.069 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 138 @344.624s 0%: 0.040+0.47+0.004 ms clock, 0.64+0.049/1.3/0.039+0.076 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 139 @345.491s 0%: 0.038+0.34+0.003 ms clock, 0.62+0/1.0/0.48+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 140 @346.343s 0%: 0.040+0.34+0.004 ms clock, 0.64+0/1.0/0.77+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 141 @347.199s 0%: 0.028+0.33+0.003 ms clock, 0.45+0/0.95/1.1+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 142 @348.039s 0%: 0.027+0.40+0.003 ms clock, 0.43+0.13/0.99/1.0+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 143 @348.555s 0%: 0.030+0.37+0.004 ms clock, 0.49+0.23/1.1/1.0+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 144 @349.418s 0%: 0.028+0.24+0.004 ms clock, 0.44+0/0.72/0.77+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 145 @349.716s 0%: 0.057+0.42+0.003 ms clock, 0.92+0.16/0.98/0.30+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 146 @349.961s 0%: 0.030+0.31+0.003 ms clock, 0.49+0.16/1.0/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 147 @350.183s 0%: 0.030+0.34+0.003 ms clock, 0.48+0.14/1.0/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 148 @350.419s 0%: 0.033+0.49+0.003 ms clock, 0.53+0/1.1/0.69+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 149 @350.641s 0%: 0.032+0.27+0.004 ms clock, 0.52+0/0.78/0.77+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 150 @350.872s 0%: 0.029+0.32+0.004 ms clock, 0.46+0/0.92/0.68+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 151 @351.102s 0%: 0.029+0.29+0.003 ms clock, 0.47+0.14/0.89/0.72+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 152 @351.349s 0%: 0.032+0.31+0.003 ms clock, 0.51+0.19/0.97/0.83+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 1680476 (delta 351997), reused 270800 (delta 270800), pack-reused 1303051 (from 1)
+GC forced
+gc 30 @363.567s 0%: 0.099+1.0+0.004 ms clock, 1.5+0/3.7/0+0.068 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+target: Sending to replicas: 540.5 MiB, done.
+target: Storing objects: 1680476/1680476 (2 replicas), done.
+time=2026-04-14T16:57:35.547+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=4 batch_total=8
+time=2026-04-14T16:57:35.547+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=5 batch_total=8 from=3eab887a to=be76865d
+source: Enumerating objects: 1680848, done.
+source: Counting objects: 100% (354667/354667), done.
+source: Compressing objects: 100% (108451/108451), done.
+gc 153 @457.956s 0%: 0.034+0.38+0.004 ms clock, 0.55+0.056/1.0/0.99+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 154 @458.145s 0%: 0.032+0.42+0.035 ms clock, 0.51+0.13/1.2/1.2+0.56 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 155 @458.417s 0%: 0.031+0.50+0.004 ms clock, 0.50+0.22/1.4/1.5+0.073 ms cpu, 18->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 156 @458.679s 0%: 0.029+0.47+0.014 ms clock, 0.47+0.21/1.0/1.4+0.22 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 157 @458.970s 0%: 0.032+0.30+0.003 ms clock, 0.51+0.057/0.98/1.6+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 158 @459.155s 0%: 0.030+0.51+0.004 ms clock, 0.48+0.14/1.4/1.8+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 159 @459.396s 0%: 0.028+0.45+0.028 ms clock, 0.45+0.16/1.0/1.0+0.45 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 160 @459.632s 0%: 0.033+0.26+0.003 ms clock, 0.53+0.15/0.86/0.95+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 161 @459.874s 0%: 0.031+0.36+0.004 ms clock, 0.51+0.22/1.1/2.1+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 162 @460.114s 0%: 0.031+0.42+0.019 ms clock, 0.49+0.15/1.0/0.92+0.31 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 163 @460.353s 0%: 0.021+0.29+0.003 ms clock, 0.34+0/0.82/0.86+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 164 @460.587s 0%: 0.029+0.27+0.003 ms clock, 0.46+0.16/0.86/0.93+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 165 @460.827s 0%: 0.048+0.28+0.004 ms clock, 0.78+0.16/0.85/0.54+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 166 @461.045s 0%: 0.021+0.31+0.003 ms clock, 0.34+0.18/0.93/0.36+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 167 @461.282s 0%: 0.026+0.48+0.003 ms clock, 0.43+0.23/0.97/1.1+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 168 @461.516s 0%: 0.031+0.45+0.027 ms clock, 0.49+0.13/1.0/0.68+0.44 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 169 @461.752s 0%: 0.043+0.47+0.004 ms clock, 0.69+0.14/1.1/0.17+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 170 @461.988s 0%: 0.030+0.35+0.003 ms clock, 0.48+0.12/0.97/0.78+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 171 @462.205s 0%: 0.035+0.41+0.004 ms clock, 0.56+0.17/0.98/0.53+0.073 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 172 @462.441s 0%: 0.040+0.28+0.003 ms clock, 0.64+0.15/0.87/0.97+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 173 @462.676s 0%: 0.032+0.31+0.003 ms clock, 0.51+0.15/0.93/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 174 @462.911s 0%: 0.041+0.27+0.002 ms clock, 0.65+0.17/0.87/0.98+0.042 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 175 @463.106s 0%: 0.031+0.45+0.028 ms clock, 0.50+0.17/1.1/1.2+0.44 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 176 @463.341s 0%: 0.030+0.28+0.003 ms clock, 0.49+0/0.74/1.0+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 177 @463.560s 0%: 0.030+0.31+0.003 ms clock, 0.48+0.15/0.97/0.74+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 178 @463.792s 0%: 0.023+0.29+0.004 ms clock, 0.37+0.15/0.92/1.1+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 179 @464.025s 0%: 0.031+0.25+0.003 ms clock, 0.49+0.20/0.78/0.95+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 180 @464.260s 0%: 0.033+0.49+0.004 ms clock, 0.53+0/1.2/0.52+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 181 @464.494s 0%: 0.27+1.2+0.038 ms clock, 4.3+0.24/1.7/0.30+0.61 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 182 @464.732s 0%: 0.021+0.31+0.003 ms clock, 0.33+0.18/0.91/0.40+0.056 ms cpu, 18->18->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 183 @464.955s 0%: 0.044+0.37+0.004 ms clock, 0.70+0.10/1.0/0.45+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 184 @465.183s 0%: 0.032+0.42+0.003 ms clock, 0.52+0.16/0.97/0.76+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 185 @465.372s 0%: 0.028+0.33+0.003 ms clock, 0.45+0.15/1.0/0.57+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 186 @465.610s 0%: 0.039+0.26+0.003 ms clock, 0.62+0.13/0.81/0.71+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 187 @465.842s 0%: 0.037+0.34+0.004 ms clock, 0.59+0.18/1.0/0.27+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 188 @466.070s 0%: 0.032+0.28+0.003 ms clock, 0.51+0.21/0.87/0.69+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 189 @466.304s 0%: 0.037+0.31+0.003 ms clock, 0.59+0.15/0.94/0.94+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 190 @466.533s 0%: 0.042+0.30+0.004 ms clock, 0.67+0.16/0.91/0.54+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 191 @466.764s 0%: 0.055+0.40+0.004 ms clock, 0.88+0.19/1.0/0.33+0.069 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 192 @466.989s 0%: 0.029+0.32+0.005 ms clock, 0.47+0.16/0.90/0.89+0.086 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 193 @467.218s 0%: 0.050+0.23+0.005 ms clock, 0.80+0/0.82/0.33+0.092 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 194 @467.414s 0%: 0.028+0.48+0.005 ms clock, 0.45+0.20/1.2/1.1+0.092 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 195 @467.648s 0%: 0.031+0.32+0.004 ms clock, 0.49+0/0.98/0.91+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 196 @467.882s 0%: 0.027+0.32+0.004 ms clock, 0.43+0.23/1.0/1.1+0.073 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 197 @468.117s 0%: 0.032+0.32+0.004 ms clock, 0.51+0.18/1.0/0.78+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 198 @468.342s 0%: 0.031+0.39+0.005 ms clock, 0.51+0.15/1.1/1.4+0.083 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 199 @468.565s 0%: 0.030+0.30+0.003 ms clock, 0.48+0/0.83/1.5+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 200 @468.786s 0%: 0.047+0.40+0.003 ms clock, 0.76+0.31/0.99/0.56+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 201 @469.021s 0%: 0.029+0.28+0.003 ms clock, 0.46+0.15/0.91/0.87+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 202 @469.255s 0%: 0.029+0.28+0.003 ms clock, 0.47+0/0.84/1.0+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 203 @469.485s 0%: 0.032+0.31+0.003 ms clock, 0.51+0.10/0.99/0.55+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 204 @469.688s 0%: 0.029+0.49+0.003 ms clock, 0.46+0.11/1.0/0.66+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 205 @469.917s 0%: 0.031+0.31+0.003 ms clock, 0.50+0.13/0.85/1.1+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 206 @470.146s 0%: 0.029+0.35+0.003 ms clock, 0.47+0.22/1.0/0.89+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 207 @470.369s 0%: 0.032+0.26+0.004 ms clock, 0.52+0.13/0.81/0.91+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 208 @470.594s 0%: 0.029+0.27+0.003 ms clock, 0.46+0.16/0.76/0.93+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 209 @470.822s 0%: 0.040+0.45+0.003 ms clock, 0.65+0.13/1.0/0.73+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 210 @471.054s 0%: 0.028+0.34+0.002 ms clock, 0.45+0.24/1.0/0.84+0.044 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 211 @471.285s 0%: 0.030+0.25+0.003 ms clock, 0.48+0.15/0.84/0.95+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 212 @471.512s 0%: 0.031+0.30+0.003 ms clock, 0.51+0.15/0.99/1.0+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 213 @471.715s 0%: 0.030+0.26+0.003 ms clock, 0.49+0.16/0.86/0.84+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 214 @471.940s 0%: 0.032+0.33+0.003 ms clock, 0.52+0.20/1.1/0.92+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 215 @472.160s 0%: 0.029+0.37+0.015 ms clock, 0.47+0.14/0.93/0.64+0.25 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 216 @472.392s 0%: 0.033+0.34+0.004 ms clock, 0.52+0.17/0.97/0.86+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 217 @472.623s 0%: 0.036+0.44+0.004 ms clock, 0.58+0.21/1.2/1.4+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 218 @473.356s 0%: 0.037+0.29+0.003 ms clock, 0.59+0/0.98/0.80+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 219 @474.280s 0%: 0.040+0.30+0.003 ms clock, 0.64+0/0.85/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 220 @475.119s 0%: 0.031+0.30+0.003 ms clock, 0.50+0/0.90/1.1+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 221 @475.959s 0%: 0.038+0.27+0.004 ms clock, 0.61+0/0.90/0.74+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 222 @476.820s 0%: 0.029+0.37+0.003 ms clock, 0.47+0.13/1.0/0.76+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 223 @477.696s 0%: 0.033+0.40+0.006 ms clock, 0.52+0/1.1/0.73+0.096 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 224 @478.623s 0%: 0.032+0.29+0.003 ms clock, 0.51+0/0.84/0.92+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 225 @479.455s 0%: 0.033+0.32+0.005 ms clock, 0.53+0/0.79/1.1+0.092 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 226 @480.245s 0%: 0.029+0.31+0.003 ms clock, 0.47+0/0.92/1.0+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 227 @481.152s 0%: 0.028+0.27+0.004 ms clock, 0.45+0/0.88/1.1+0.078 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 228 @481.925s 0%: 0.027+0.24+0.003 ms clock, 0.44+0.16/0.76/0.69+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 229 @482.618s 0%: 0.035+0.33+0.003 ms clock, 0.56+0.17/1.0/0.83+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 230 @483.327s 0%: 0.030+0.37+0.004 ms clock, 0.48+0.15/1.1/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+GC forced
+gc 31 @483.574s 0%: 0.030+0.80+0.003 ms clock, 0.48+0/3.0/0+0.054 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 231 @484.086s 0%: 0.049+0.28+0.003 ms clock, 0.79+0/0.77/0.35+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 232 @484.935s 0%: 0.041+0.26+0.004 ms clock, 0.66+0.13/0.83/0.54+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 233 @485.798s 0%: 0.034+0.32+0.004 ms clock, 0.55+0/0.96/0.85+0.078 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 234 @486.715s 0%: 0.028+0.32+0.004 ms clock, 0.44+0/1.0/1.1+0.065 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 235 @487.599s 0%: 0.045+0.32+0.004 ms clock, 0.73+0/0.94/0.64+0.076 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 236 @488.149s 0%: 0.032+0.45+0.004 ms clock, 0.52+0.16/1.2/0.78+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 237 @488.372s 0%: 0.031+0.27+0.003 ms clock, 0.49+0/0.87/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 238 @488.608s 0%: 0.031+0.31+0.004 ms clock, 0.50+0.13/1.0/0.68+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 239 @488.843s 0%: 0.028+0.40+0.015 ms clock, 0.45+0/1.1/0.84+0.25 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 240 @489.077s 0%: 0.028+0.29+0.003 ms clock, 0.45+0/0.96/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 241 @489.309s 0%: 0.031+0.33+0.003 ms clock, 0.49+0/1.0/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 242 @489.529s 0%: 0.028+0.30+0.003 ms clock, 0.45+0/0.78/1.1+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 1680848 (delta 326447), reused 246210 (delta 246210), pack-reused 1326181 (from 1)
+target: Sending to replicas: 665.1 MiB, done.
+target: Storing objects: 1680848/1680848 (2 replicas), done.
+time=2026-04-14T16:59:57.481+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=5 batch_total=8
+time=2026-04-14T16:59:57.481+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=6 batch_total=8 from=be76865d to=34c59da4
+source: Enumerating objects: 1748252, done.
+source: Counting objects: 100% (345147/345147), done.
+GC forcedompressing objects:  98% (115444/117800)
+gc 32 @603.585s 0%: 0.032+0.90+0.005 ms clock, 0.52+0/3.3/0+0.083 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Compressing objects: 100% (117800/117800), done.
+gc 243 @603.557s 0%: 0.029+0.35+0.004 ms clock, 0.47+0.18/1.0/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 244 @603.852s 0%: 0.029+0.31+0.003 ms clock, 0.47+0.20/0.90/0.60+0.062 ms cpu, 19->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 245 @604.100s 0%: 0.035+0.27+0.003 ms clock, 0.56+0.18/0.88/0.31+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 246 @604.329s 0%: 0.030+0.40+0.003 ms clock, 0.49+0.22/1.1/1.0+0.056 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 247 @604.565s 0%: 0.031+0.36+0.004 ms clock, 0.49+0.14/0.82/0.52+0.064 ms cpu, 18->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 248 @604.822s 0%: 0.028+0.43+0.004 ms clock, 0.45+0/1.0/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 249 @605.054s 0%: 0.035+0.40+0.018 ms clock, 0.56+0.17/1.0/1.5+0.29 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 250 @605.267s 0%: 0.030+0.29+0.003 ms clock, 0.48+0/0.96/1.2+0.052 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 251 @605.499s 0%: 0.034+0.37+0.025 ms clock, 0.54+0.18/1.0/0.23+0.41 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 252 @605.732s 0%: 0.034+0.34+0.003 ms clock, 0.54+0.15/0.95/1.3+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 253 @605.954s 0%: 0.040+0.36+0.004 ms clock, 0.65+0.15/1.0/1.1+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 254 @606.183s 0%: 0.029+0.43+0.003 ms clock, 0.46+0.17/1.0/0.86+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 255 @606.397s 0%: 0.029+0.27+0.003 ms clock, 0.47+0/0.89/1.0+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 256 @606.628s 0%: 0.031+0.39+0.004 ms clock, 0.49+0.13/1.0/0.79+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 257 @606.859s 0%: 0.027+0.28+0.004 ms clock, 0.43+0.19/0.83/1.2+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 258 @607.089s 0%: 0.029+0.36+0.003 ms clock, 0.47+0.17/0.97/1.3+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 259 @607.277s 0%: 0.028+0.39+0.003 ms clock, 0.45+0.16/1.1/1.8+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 260 @607.552s 0%: 0.016+0.28+0.004 ms clock, 0.26+0.27/0.93/0.38+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 261 @607.742s 0%: 0.029+0.31+0.005 ms clock, 0.47+0.15/0.89/1.1+0.094 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 262 @607.970s 0%: 0.028+0.33+0.003 ms clock, 0.44+0.14/1.0/1.4+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 263 @608.185s 0%: 0.029+0.32+0.004 ms clock, 0.46+0.22/0.87/0.84+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 264 @608.409s 0%: 0.030+0.43+0.018 ms clock, 0.49+0.16/0.92/0.57+0.28 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 265 @608.639s 0%: 0.029+0.39+0.006 ms clock, 0.47+0.15/0.95/1.1+0.11 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 266 @608.852s 0%: 0.028+0.31+0.003 ms clock, 0.44+0.18/0.85/0.68+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 267 @609.082s 0%: 0.035+0.35+0.003 ms clock, 0.57+0.16/0.98/0.87+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 268 @609.309s 0%: 0.032+0.30+0.003 ms clock, 0.51+0/0.85/1.2+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 269 @609.498s 0%: 0.028+0.31+0.003 ms clock, 0.46+0/0.98/1.1+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 270 @609.724s 0%: 0.032+0.32+0.003 ms clock, 0.51+0.13/0.98/0.87+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 271 @609.939s 0%: 0.045+0.35+0.004 ms clock, 0.73+0.13/1.0/0.80+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 272 @610.166s 0%: 0.032+0.32+0.004 ms clock, 0.51+0.20/0.86/0.52+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 273 @610.391s 0%: 0.032+0.31+0.003 ms clock, 0.52+0/0.98/0.70+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 274 @610.623s 0%: 0.031+0.46+0.014 ms clock, 0.50+0.19/1.0/0.96+0.23 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 275 @610.851s 0%: 0.029+0.32+0.003 ms clock, 0.46+0/0.85/0.63+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 276 @611.068s 0%: 0.030+0.28+0.003 ms clock, 0.48+0.14/0.86/0.71+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 277 @611.295s 0%: 0.029+0.37+0.003 ms clock, 0.46+0.22/1.0/0.82+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 278 @611.484s 0%: 0.029+0.26+0.005 ms clock, 0.47+0.27/0.85/0.42+0.080 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 279 @611.713s 0%: 0.032+0.25+0.003 ms clock, 0.52+0.16/0.81/0.71+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 280 @611.943s 0%: 0.029+0.37+0.003 ms clock, 0.47+0.13/0.86/0.69+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 281 @612.162s 0%: 0.030+0.33+0.003 ms clock, 0.49+0.17/0.99/1.1+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 282 @612.385s 0%: 0.029+0.41+0.004 ms clock, 0.47+0.18/0.73/0.33+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 283 @612.610s 0%: 0.031+0.26+0.002 ms clock, 0.50+0.16/0.83/0.84+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 284 @612.836s 0%: 0.020+0.45+0.007 ms clock, 0.32+0/1.0/0.75+0.11 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 285 @613.053s 0%: 0.036+0.32+0.003 ms clock, 0.57+0.17/0.90/0.60+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 286 @613.278s 0%: 0.029+0.28+0.004 ms clock, 0.46+0.13/0.80/0.88+0.079 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 287 @613.506s 0%: 0.028+0.42+0.020 ms clock, 0.45+0.23/0.90/1.0+0.32 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 288 @613.695s 0%: 0.030+0.38+0.003 ms clock, 0.48+0.32/0.91/1.4+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 289 @613.908s 0%: 0.030+0.29+0.003 ms clock, 0.48+0.15/0.96/0.41+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 290 @614.136s 0%: 0.028+0.33+0.003 ms clock, 0.45+0.17/1.0/1.3+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 291 @614.362s 0%: 0.030+0.31+0.003 ms clock, 0.48+0/0.97/1.0+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 292 @614.581s 0%: 0.052+0.33+0.003 ms clock, 0.83+0/1.0/0.62+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 293 @614.810s 0%: 0.028+0.35+0.003 ms clock, 0.45+0.21/1.0/1.1+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 294 @615.037s 0%: 0.032+0.29+0.003 ms clock, 0.52+0/0.90/0.54+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 295 @615.266s 0%: 0.040+0.35+0.003 ms clock, 0.64+0/1.1/1.2+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 296 @615.457s 0%: 0.038+0.39+0.003 ms clock, 0.61+0.18/0.92/0.63+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 297 @615.678s 0%: 0.030+0.29+0.003 ms clock, 0.48+0.17/0.88/0.97+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 298 @615.901s 0%: 0.028+0.27+0.004 ms clock, 0.45+0/0.78/0.79+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 299 @616.122s 0%: 0.031+0.26+0.003 ms clock, 0.49+0.12/0.80/0.84+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 300 @616.347s 0%: 0.032+0.43+0.003 ms clock, 0.52+0.14/1.1/0.63+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 301 @616.575s 0%: 0.033+0.28+0.004 ms clock, 0.54+0.16/0.90/0.69+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 302 @616.795s 0%: 0.038+0.27+0.003 ms clock, 0.60+0.14/0.82/0.83+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 303 @617.017s 0%: 0.027+0.42+0.002 ms clock, 0.43+0.16/0.95/0.80+0.047 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 304 @617.240s 0%: 0.031+0.28+0.003 ms clock, 0.50+0/0.85/0.89+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 305 @617.437s 0%: 0.028+0.27+0.003 ms clock, 0.46+0.13/0.90/0.60+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 306 @617.663s 0%: 0.038+0.33+0.003 ms clock, 0.61+0.17/1.1/1.1+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 307 @617.889s 0%: 0.028+0.35+0.004 ms clock, 0.45+0/1.0/1.2+0.077 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 308 @618.109s 0%: 0.035+0.29+0.003 ms clock, 0.56+0.18/0.93/0.74+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 309 @618.326s 0%: 0.039+0.47+0.004 ms clock, 0.63+0.22/1.1/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 310 @618.549s 0%: 0.065+0.26+0.004 ms clock, 1.0+0/0.86/0.71+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 311 @618.771s 0%: 0.031+0.35+0.017 ms clock, 0.50+0.14/0.97/0.95+0.28 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 312 @618.993s 0%: 0.028+0.29+0.004 ms clock, 0.46+0.19/0.89/1.0+0.077 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 313 @619.193s 0%: 0.031+0.31+0.003 ms clock, 0.50+0/0.94/1.1+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 314 @619.415s 0%: 0.027+0.35+0.003 ms clock, 0.44+0.18/1.0/0.61+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 315 @619.628s 0%: 0.030+0.35+0.003 ms clock, 0.48+0/1.0/0.51+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 316 @619.852s 0%: 0.042+0.27+0.003 ms clock, 0.67+0.11/0.80/0.46+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 317 @620.072s 0%: 0.039+0.36+0.003 ms clock, 0.62+0.16/0.95/0.89+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 318 @620.299s 0%: 0.029+0.44+0.015 ms clock, 0.47+0.17/1.0/1.1+0.24 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 319 @620.521s 0%: 0.040+0.28+0.003 ms clock, 0.65+0.17/0.88/1.0+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 320 @620.716s 0%: 0.034+0.46+0.003 ms clock, 0.54+0/1.1/1.5+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 321 @620.930s 0%: 0.029+0.34+0.003 ms clock, 0.47+0.16/1.1/1.0+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 322 @621.149s 0%: 0.030+0.28+0.004 ms clock, 0.48+0.14/0.86/0.96+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 323 @621.365s 0%: 0.032+0.24+0.003 ms clock, 0.52+0/0.83/0.87+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 324 @621.588s 0%: 0.039+0.39+0.003 ms clock, 0.62+0.27/1.1/0.86+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 325 @621.815s 0%: 0.028+0.45+0.017 ms clock, 0.45+0.14/0.89/1.1+0.28 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 326 @622.037s 0%: 0.030+0.28+0.003 ms clock, 0.48+0/0.90/1.0+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 327 @622.227s 0%: 0.035+0.24+0.003 ms clock, 0.56+0.093/0.68/0.55+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 328 @622.450s 0%: 0.029+0.32+0.003 ms clock, 0.47+0.16/0.97/0.87+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 329 @622.669s 0%: 0.032+0.29+0.004 ms clock, 0.52+0.15/0.89/0.72+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 330 @622.898s 0%: 0.030+0.60+0.026 ms clock, 0.48+0.22/1.3/1.8+0.42 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 331 @623.132s 0%: 0.032+0.38+0.004 ms clock, 0.51+0.16/1.0/1.4+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 332 @623.349s 0%: 0.030+0.33+0.003 ms clock, 0.48+0.14/0.98/0.74+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 333 @623.563s 0%: 0.027+0.41+0.003 ms clock, 0.43+0.15/0.91/0.95+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 334 @623.975s 0%: 0.031+1.0+0.017 ms clock, 0.50+1.0/0.91/0.88+0.28 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 335 @624.862s 0%: 0.040+0.19+0.004 ms clock, 0.64+0/0.64/0.41+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 336 @625.670s 0%: 0.030+0.28+0.003 ms clock, 0.49+0/0.88/1.2+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 337 @626.559s 0%: 0.038+0.31+0.003 ms clock, 0.61+0/1.0/0.71+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 338 @627.690s 0%: 0.035+0.22+0.003 ms clock, 0.57+0/0.72/0.52+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 339 @628.529s 0%: 0.029+0.32+0.003 ms clock, 0.46+0/1.0/1.4+0.060 ms cpu, 17->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 340 @629.387s 0%: 0.035+0.34+0.003 ms clock, 0.56+0/1.1/0.97+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 341 @630.363s 0%: 0.034+0.31+0.003 ms clock, 0.55+0/0.83/0.52+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 342 @631.251s 0%: 0.046+0.37+0.003 ms clock, 0.74+0.11/0.80/0.40+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 343 @632.244s 0%: 0.016+0.27+0.004 ms clock, 0.26+0/0.91/0.42+0.077 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 344 @633.133s 0%: 0.041+0.31+0.003 ms clock, 0.66+0/0.93/0.98+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 345 @634.064s 0%: 0.030+0.42+0.003 ms clock, 0.49+0/0.97/1.2+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 346 @634.935s 0%: 0.034+0.31+0.003 ms clock, 0.55+0/0.74/0.65+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 347 @635.880s 0%: 0.030+0.33+0.006 ms clock, 0.48+0/1.0/0.65+0.10 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 348 @636.737s 0%: 0.029+0.33+0.003 ms clock, 0.47+0.17/0.94/0.96+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 349 @637.749s 0%: 0.028+0.60+0.002 ms clock, 0.46+0.13/1.0/0.77+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 350 @638.875s 0%: 0.029+0.28+0.003 ms clock, 0.47+0.11/0.88/0.81+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 351 @639.709s 0%: 0.032+0.29+0.003 ms clock, 0.51+0/0.97/0.80+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 352 @641.016s 0%: 0.039+0.42+0.003 ms clock, 0.63+0.10/0.77/0.57+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 353 @641.883s 0%: 0.029+0.41+0.004 ms clock, 0.47+0/1.1/1.3+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 354 @642.392s 0%: 0.033+0.44+0.038 ms clock, 0.54+0.14/0.79/1.0+0.61 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 355 @642.951s 0%: 0.029+0.27+0.003 ms clock, 0.47+0/0.81/0.89+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 356 @643.254s 0%: 0.029+0.31+0.004 ms clock, 0.47+0.24/0.94/1.1+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 357 @643.469s 0%: 0.042+0.34+0.003 ms clock, 0.68+0/0.97/0.52+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 358 @643.697s 0%: 0.033+0.35+0.003 ms clock, 0.53+0.15/1.0/1.1+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 359 @643.918s 0%: 0.027+0.32+0.003 ms clock, 0.44+0.16/0.89/0.52+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 360 @644.152s 0%: 0.032+0.48+0.003 ms clock, 0.51+0/0.97/0.82+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 1748252 (delta 314444), reused 227347 (delta 227347), pack-reused 1403105 (from 1)
+GC forcedending to replicas: 867.3 MiB
+gc 33 @723.599s 0%: 0.027+0.80+0.008 ms clock, 0.44+0/2.8/0+0.13 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+target: Sending to replicas: 867.4 MiB, done.
+target: Storing objects: 1748252/1748252 (2 replicas), done.
+time=2026-04-14T17:02:35.137+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=6 batch_total=8
+time=2026-04-14T17:02:35.137+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=7 batch_total=8 from=34c59da4 to=b1737ad4
+source: Enumerating objects: 1637913, done.
+source: Counting objects: 100% (165315/165315), done.
+source: Compressing objects: 100% (82777/82777), done.
+gc 361 @757.447s 0%: 0.033+0.33+0.004 ms clock, 0.53+0.14/1.0/0.87+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 362 @757.736s 0%: 0.031+0.38+0.004 ms clock, 0.50+0.16/1.0/1.0+0.064 ms cpu, 19->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 363 @757.974s 0%: 0.028+0.28+0.003 ms clock, 0.45+0.12/0.84/0.80+0.057 ms cpu, 18->18->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 364 @758.150s 0%: 0.032+0.30+0.002 ms clock, 0.51+0/0.92/0.92+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 365 @758.387s 0%: 0.038+0.25+0.003 ms clock, 0.62+0/0.78/0.46+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 366 @758.623s 0%: 0.029+0.38+0.004 ms clock, 0.46+0.16/1.1/1.2+0.077 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 367 @758.850s 0%: 0.028+0.28+0.003 ms clock, 0.45+0.13/0.84/0.75+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 368 @759.082s 0%: 0.030+0.44+0.003 ms clock, 0.48+0.17/1.2/1.6+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 369 @759.318s 0%: 0.029+0.33+0.003 ms clock, 0.47+0/1.0/0.82+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 370 @759.815s 0%: 0.030+0.31+0.004 ms clock, 0.48+0.20/0.97/0.98+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 371 @760.067s 0%: 0.031+0.43+0.030 ms clock, 0.50+0.17/1.1/1.1+0.48 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 372 @760.304s 0%: 0.040+0.31+0.004 ms clock, 0.65+0.16/0.87/0.72+0.069 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 373 @760.539s 0%: 0.029+0.33+0.005 ms clock, 0.47+0.24/0.97/1.1+0.084 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 374 @760.768s 0%: 0.028+0.28+0.004 ms clock, 0.45+0.16/0.94/0.89+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 375 @760.997s 0%: 0.024+0.42+0.004 ms clock, 0.39+0.072/1.2/0.77+0.078 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 376 @761.230s 0%: 0.028+0.29+0.003 ms clock, 0.45+0/0.84/1.2+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 377 @761.466s 0%: 0.029+0.31+0.004 ms clock, 0.47+0/1.0/1.0+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 378 @761.693s 0%: 0.036+0.41+0.019 ms clock, 0.57+0.15/1.0/1.0+0.31 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 379 @761.925s 0%: 0.031+0.29+0.003 ms clock, 0.49+0.14/0.85/0.83+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 380 @762.154s 0%: 0.029+0.34+0.004 ms clock, 0.47+0/1.0/1.3+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 381 @762.379s 0%: 0.029+0.45+0.003 ms clock, 0.47+0/1.3/1.6+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 382 @762.619s 0%: 0.035+0.29+0.003 ms clock, 0.56+0.17/0.91/0.49+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 383 @762.853s 0%: 0.030+0.29+0.003 ms clock, 0.48+0.14/0.83/0.91+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 384 @763.083s 0%: 0.028+0.53+0.004 ms clock, 0.45+0.14/1.3/1.9+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 385 @763.294s 0%: 0.038+0.27+0.005 ms clock, 0.61+0.076/0.85/0.36+0.084 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 386 @763.501s 0%: 0.016+0.34+0.005 ms clock, 0.26+0.17/0.97/0.40+0.087 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 387 @763.733s 0%: 0.032+0.32+0.005 ms clock, 0.52+0.13/0.87/0.95+0.080 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 388 @763.965s 0%: 0.028+0.28+0.003 ms clock, 0.45+0.13/0.76/0.97+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 389 @764.190s 0%: 0.043+0.28+0.005 ms clock, 0.70+0/0.91/0.82+0.080 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 390 @764.417s 0%: 0.032+0.36+0.003 ms clock, 0.51+0/1.1/0.15+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 391 @764.645s 0%: 0.034+0.36+0.003 ms clock, 0.55+0.15/0.96/1.0+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 392 @764.870s 0%: 0.041+0.41+0.026 ms clock, 0.66+0.16/0.96/0.69+0.42 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 393 @765.096s 0%: 0.032+0.36+0.003 ms clock, 0.51+0/1.0/1.1+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 394 @765.326s 0%: 0.029+0.35+0.004 ms clock, 0.46+0.30/1.0/1.2+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 395 @765.550s 0%: 0.030+0.34+0.004 ms clock, 0.48+0.22/1.0/1.1+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 396 @765.776s 0%: 0.030+0.37+0.023 ms clock, 0.48+0/0.90/0.88+0.37 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 397 @765.983s 0%: 0.031+0.38+0.003 ms clock, 0.49+0.15/1.0/1.1+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 398 @766.204s 0%: 0.031+0.33+0.004 ms clock, 0.50+0/1.0/1.4+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 399 @766.437s 0%: 0.019+0.27+0.004 ms clock, 0.31+0.16/0.87/0.88+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 400 @766.663s 0%: 0.030+0.31+0.003 ms clock, 0.48+0/0.99/0.99+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 401 @766.884s 0%: 0.028+0.29+0.003 ms clock, 0.45+0.14/0.90/0.97+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 402 @767.117s 0%: 0.029+0.35+0.003 ms clock, 0.47+0/1.0/1.0+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 403 @767.345s 0%: 0.029+0.28+0.003 ms clock, 0.47+0/0.80/1.0+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 404 @767.565s 0%: 0.028+0.26+0.003 ms clock, 0.45+0.12/0.83/0.59+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 405 @767.760s 0%: 0.031+0.32+0.005 ms clock, 0.49+0.26/1.0/1.1+0.081 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 406 @767.991s 0%: 0.038+0.32+0.004 ms clock, 0.61+0/0.97/1.4+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 407 @768.216s 0%: 0.043+0.39+0.003 ms clock, 0.69+0.23/1.2/1.4+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 408 @768.442s 0%: 0.028+0.42+0.005 ms clock, 0.45+0/1.2/1.1+0.084 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 409 @768.675s 0%: 0.026+0.31+0.003 ms clock, 0.42+0.17/0.97/0.42+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 410 @768.905s 0%: 0.029+0.30+0.003 ms clock, 0.46+0.18/0.97/0.70+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 411 @769.134s 0%: 0.046+0.28+0.004 ms clock, 0.74+0.21/0.91/0.88+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 412 @769.359s 0%: 0.035+0.27+0.004 ms clock, 0.57+0/0.90/0.96+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 413 @769.574s 0%: 0.028+0.36+0.003 ms clock, 0.46+0.18/1.1/1.1+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 414 @769.799s 0%: 0.033+0.44+0.009 ms clock, 0.52+0.19/1.0/1.1+0.14 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 415 @769.994s 0%: 0.028+0.28+0.003 ms clock, 0.46+0.14/0.85/0.94+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 416 @770.226s 0%: 0.029+0.40+0.003 ms clock, 0.47+0.25/1.2/1.4+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 417 @770.454s 0%: 0.035+0.40+0.003 ms clock, 0.56+0/0.99/1.0+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 418 @770.683s 0%: 0.031+0.41+0.015 ms clock, 0.50+0/1.2/0.85+0.25 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 419 @770.911s 0%: 0.031+0.39+0.003 ms clock, 0.50+0/1.1/0.96+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 420 @771.131s 0%: 0.041+0.38+0.004 ms clock, 0.66+0.13/0.78/0.21+0.077 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 421 @771.360s 0%: 0.017+0.29+0.004 ms clock, 0.28+0.16/0.89/0.47+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 422 @771.578s 0%: 0.030+0.46+0.030 ms clock, 0.48+0/1.1/1.1+0.48 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 423 @771.787s 0%: 0.029+0.34+0.003 ms clock, 0.47+0.14/1.0/1.2+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 424 @772.020s 0%: 0.034+0.27+0.003 ms clock, 0.54+0.14/0.76/0.92+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 425 @772.245s 0%: 0.028+0.33+0.003 ms clock, 0.45+0.26/0.94/1.5+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 426 @772.473s 0%: 0.059+0.33+0.003 ms clock, 0.95+0.17/0.92/0.61+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 427 @772.701s 0%: 0.030+0.41+0.020 ms clock, 0.48+0.13/1.0/0.62+0.32 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 428 @772.925s 0%: 0.031+0.22+0.003 ms clock, 0.49+0.13/0.74/0.85+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 429 @773.148s 0%: 0.031+0.29+0.004 ms clock, 0.50+0/0.85/1.1+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 430 @773.373s 0%: 0.038+0.29+0.003 ms clock, 0.61+0.16/0.98/0.62+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 431 @773.593s 0%: 0.032+0.31+0.003 ms clock, 0.51+0.14/1.0/0.67+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 432 @773.826s 0%: 0.030+0.30+0.004 ms clock, 0.48+0.14/0.98/1.2+0.075 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 433 @774.034s 0%: 0.030+0.28+0.003 ms clock, 0.48+0.15/0.87/1.0+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 434 @774.262s 0%: 0.028+0.31+0.003 ms clock, 0.46+0.13/0.92/1.1+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 435 @774.487s 0%: 0.030+0.31+0.005 ms clock, 0.49+0/0.88/1.1+0.080 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 436 @774.714s 0%: 0.031+0.48+0.004 ms clock, 0.50+0/1.1/0.80+0.076 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 437 @774.937s 0%: 0.040+0.43+0.003 ms clock, 0.64+0/0.97/0.71+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 438 @775.167s 0%: 0.031+0.30+0.003 ms clock, 0.50+0.14/1.0/0.87+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 439 @775.391s 0%: 0.030+0.31+0.003 ms clock, 0.48+0/1.0/1.2+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 440 @775.618s 0%: 0.030+0.26+0.004 ms clock, 0.48+0.18/0.79/1.1+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 441 @775.844s 0%: 0.055+0.30+0.004 ms clock, 0.89+0/0.90/0.92+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 442 @776.071s 0%: 0.029+0.36+0.004 ms clock, 0.47+0.17/0.97/1.1+0.065 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 443 @776.282s 0%: 0.034+0.47+0.004 ms clock, 0.54+0/1.1/0.87+0.077 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 444 @776.509s 0%: 0.028+0.55+0.004 ms clock, 0.45+0.16/0.64/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 445 @776.730s 0%: 0.031+0.27+0.003 ms clock, 0.51+0.14/0.84/0.77+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 446 @776.957s 0%: 0.029+0.32+0.004 ms clock, 0.46+0.20/1.0/0.74+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 447 @777.175s 0%: 0.030+0.48+0.004 ms clock, 0.48+0.11/0.73/0.85+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 448 @777.400s 0%: 0.028+0.34+0.004 ms clock, 0.45+0/1.0/1.3+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 449 @777.632s 0%: 0.030+0.42+0.003 ms clock, 0.48+0/1.3/1.4+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 450 @777.860s 0%: 0.037+0.36+0.004 ms clock, 0.59+0.13/1.0/0.79+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 451 @778.414s 0%: 0.031+0.30+0.003 ms clock, 0.50+0.23/0.96/0.74+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 452 @778.726s 0%: 0.029+0.34+0.004 ms clock, 0.47+0.31/1.0/1.6+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 453 @778.968s 0%: 0.030+0.43+0.019 ms clock, 0.48+0.14/0.95/0.59+0.31 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 454 @779.209s 0%: 0.029+0.29+0.003 ms clock, 0.46+0.12/0.84/0.59+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 455 @779.457s 0%: 0.035+0.45+0.016 ms clock, 0.56+0.12/1.2/0.99+0.26 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 456 @779.692s 0%: 0.033+0.29+0.003 ms clock, 0.53+0/0.87/0.92+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 457 @779.934s 0%: 0.041+0.41+0.004 ms clock, 0.66+0.096/1.1/0.42+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 458 @780.240s 0%: 0.028+0.35+0.003 ms clock, 0.46+0.15/1.1/0.97+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 459 @780.485s 0%: 0.027+0.29+0.003 ms clock, 0.44+0.16/0.93/1.1+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 460 @780.730s 0%: 0.030+0.30+0.025 ms clock, 0.49+0.16/0.89/0.94+0.41 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 461 @780.953s 0%: 0.031+0.32+0.003 ms clock, 0.50+0.19/1.0/1.0+0.061 ms cpu, 18->18->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 462 @781.188s 0%: 0.029+0.28+0.003 ms clock, 0.46+0/0.89/1.2+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 463 @781.424s 0%: 0.032+0.35+0.004 ms clock, 0.51+0.15/1.1/0.89+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 464 @781.658s 0%: 0.031+0.31+0.004 ms clock, 0.49+0.16/0.97/0.54+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 465 @781.895s 0%: 0.030+0.49+0.003 ms clock, 0.48+0/0.85/1.1+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 466 @782.132s 0%: 0.031+0.29+0.004 ms clock, 0.50+0.19/0.96/1.2+0.078 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 467 @782.366s 0%: 0.032+0.39+0.002 ms clock, 0.51+0.23/1.0/1.0+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 468 @782.534s 0%: 0.030+0.28+0.003 ms clock, 0.49+0/0.85/0.97+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 469 @782.764s 0%: 0.016+0.36+0.004 ms clock, 0.27+0.17/1.0/0.52+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 470 @782.997s 0%: 0.028+0.45+0.003 ms clock, 0.45+0.17/1.3/1.8+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 471 @783.231s 0%: 0.030+0.30+0.003 ms clock, 0.48+0.16/0.97/0.86+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 472 @783.466s 0%: 0.029+0.35+0.003 ms clock, 0.47+0.18/1.1/0.94+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 473 @783.698s 0%: 0.032+0.33+0.003 ms clock, 0.52+0.16/1.0/1.2+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 474 @783.931s 0%: 0.028+0.34+0.003 ms clock, 0.45+0.21/1.0/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 475 @784.161s 0%: 0.033+0.30+0.004 ms clock, 0.53+0.16/0.96/1.1+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 476 @784.387s 0%: 0.033+0.28+0.003 ms clock, 0.53+0.16/0.88/1.0+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 477 @784.620s 0%: 0.041+0.40+0.004 ms clock, 0.66+0.19/1.0/0.38+0.075 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 478 @784.854s 0%: 0.031+0.31+0.003 ms clock, 0.51+0.13/1.0/0.88+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 479 @785.086s 0%: 0.031+0.34+0.003 ms clock, 0.50+0.16/1.1/1.5+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 480 @785.260s 0%: 0.067+0.27+0.003 ms clock, 1.0+0.16/0.93/0.51+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 481 @785.493s 0%: 0.030+0.33+0.003 ms clock, 0.48+0.15/0.97/0.83+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 482 @785.718s 0%: 0.029+0.30+0.004 ms clock, 0.46+0.17/0.88/0.81+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 483 @785.952s 0%: 0.029+0.33+0.003 ms clock, 0.47+0.14/0.90/0.67+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 484 @786.186s 0%: 0.028+0.29+0.003 ms clock, 0.46+0/0.89/1.0+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 485 @786.419s 0%: 0.036+0.32+0.012 ms clock, 0.58+0.13/0.86/0.62+0.20 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 486 @786.650s 0%: 0.030+0.30+0.003 ms clock, 0.49+0.17/0.90/0.98+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 487 @786.884s 0%: 0.030+0.26+0.003 ms clock, 0.48+0.17/0.81/0.57+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 488 @787.108s 0%: 0.052+0.32+0.004 ms clock, 0.83+0.20/1.0/0.40+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 489 @787.340s 0%: 0.030+0.31+0.003 ms clock, 0.49+0/1.0/1.1+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 490 @787.571s 0%: 0.032+0.30+0.003 ms clock, 0.51+0/1.0/1.1+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 491 @787.746s 0%: 0.037+0.32+0.003 ms clock, 0.59+0.14/0.92/0.57+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 492 @787.978s 0%: 0.029+0.39+0.003 ms clock, 0.47+0/1.1/1.4+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 493 @788.212s 0%: 0.028+0.30+0.003 ms clock, 0.45+0/0.99/1.4+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 494 @788.437s 0%: 0.029+0.38+0.004 ms clock, 0.47+0/1.0/1.3+0.076 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 495 @788.667s 0%: 0.031+0.44+0.004 ms clock, 0.50+0.32/1.2/1.5+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 496 @788.898s 0%: 0.028+0.57+0.003 ms clock, 0.45+0.47/1.4/2.3+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 497 @789.132s 0%: 0.029+0.37+0.003 ms clock, 0.46+0.19/1.0/1.3+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 498 @789.360s 0%: 0.029+0.48+0.003 ms clock, 0.47+0.16/1.1/0.99+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 499 @789.593s 0%: 0.029+0.41+0.018 ms clock, 0.46+0.18/1.2/1.3+0.30 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 500 @789.828s 0%: 0.028+0.31+0.003 ms clock, 0.45+0.14/0.94/1.0+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 501 @790.061s 0%: 0.027+0.43+0.002 ms clock, 0.44+0.11/0.98/1.0+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 502 @790.228s 0%: 0.029+0.32+0.003 ms clock, 0.47+0/1.0/1.5+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 503 @790.458s 0%: 0.030+0.27+0.003 ms clock, 0.49+0/0.91/0.76+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 504 @791.807s 0%: 0.028+0.30+0.003 ms clock, 0.45+0/0.99/0.99+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 505 @792.848s 0%: 0.039+0.53+0.004 ms clock, 0.63+0/0.87/0.33+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 506 @793.795s 0%: 0.032+0.24+0.003 ms clock, 0.51+0/0.87/0.73+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 507 @794.766s 0%: 0.031+0.34+0.003 ms clock, 0.49+0/1.0/1.7+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 508 @795.691s 0%: 0.029+0.35+0.003 ms clock, 0.47+0/0.98/1.0+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 509 @796.860s 0%: 0.036+0.39+0.003 ms clock, 0.59+0.15/0.91/0.66+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 510 @797.722s 0%: 0.030+0.29+0.003 ms clock, 0.48+0.21/0.74/1.2+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 511 @798.589s 0%: 0.030+0.33+0.003 ms clock, 0.48+0/0.98/1.5+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 512 @799.548s 0%: 0.029+0.30+0.003 ms clock, 0.47+0/0.93/1.2+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 513 @800.550s 0%: 0.030+0.36+0.003 ms clock, 0.48+0/1.0/1.1+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 514 @801.571s 0%: 0.046+0.39+0.011 ms clock, 0.73+0.31/0.96/1.5+0.18 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 515 @802.503s 0%: 0.031+0.42+0.003 ms clock, 0.51+0.13/0.90/0.64+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 516 @803.449s 0%: 0.029+0.41+0.003 ms clock, 0.47+0.12/0.85/0.69+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 517 @804.526s 0%: 0.039+0.42+0.003 ms clock, 0.63+0/1.1/0.69+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 518 @805.195s 0%: 0.029+0.30+0.004 ms clock, 0.47+0.20/1.0/0.82+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 519 @805.667s 0%: 0.028+0.32+0.003 ms clock, 0.45+0.15/0.95/0.62+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 520 @806.139s 0%: 0.031+0.33+0.003 ms clock, 0.50+0.14/0.95/1.2+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 521 @806.853s 0%: 0.048+0.57+0.005 ms clock, 0.77+0/1.0/0.46+0.082 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 1637913 (delta 143766), reused 82538 (delta 82538), pack-reused 1472598 (from 1)
+GC forced
+gc 34 @843.605s 0%: 0.035+1.0+0.003 ms clock, 0.57+0/3.2/0+0.063 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+target: Sending to replicas: 1200.5 MiB, done.
+target: Storing objects: 1637913/1637913 (2 replicas), done.
+time=2026-04-14T17:05:07.263+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=7 batch_total=8
+time=2026-04-14T17:05:07.263+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=8 batch_total=8 from=b1737ad4 to=d60bc140
+source: Enumerating objects: 1456894, done.
+source: Counting objects: 100% (104502/104502), done.
+source: Compressing objects: 100% (54507/54507), done.
+gc 522 @908.767s 0%: 0.031+0.30+0.004 ms clock, 0.50+0.14/0.94/0.53+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 523 @908.978s 0%: 0.029+0.27+0.003 ms clock, 0.47+0.17/0.85/0.73+0.056 ms cpu, 19->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 524 @909.243s 0%: 0.035+0.28+0.003 ms clock, 0.56+0.043/0.96/0.58+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 525 @909.443s 0%: 0.036+0.27+0.003 ms clock, 0.58+0.15/0.78/0.53+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 526 @909.708s 0%: 0.062+0.48+0.004 ms clock, 0.99+0/1.1/0.18+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 527 @909.899s 0%: 0.037+0.44+0.003 ms clock, 0.60+0.24/1.1/1.2+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 528 @910.102s 0%: 0.028+0.39+0.003 ms clock, 0.46+0.14/0.99/1.0+0.058 ms cpu, 19->19->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 529 @910.363s 0%: 0.039+0.32+0.003 ms clock, 0.63+0.047/0.78/0.86+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 530 @910.557s 0%: 0.035+0.45+0.022 ms clock, 0.56+0.17/1.2/0.93+0.35 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 531 @910.748s 0%: 0.029+0.39+0.003 ms clock, 0.47+0.18/1.0/0.97+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 532 @910.939s 0%: 0.030+0.29+0.003 ms clock, 0.49+0.13/0.81/0.86+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 533 @911.132s 0%: 0.028+0.56+0.003 ms clock, 0.46+0.17/1.7/2.7+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 534 @911.331s 0%: 0.030+0.36+0.004 ms clock, 0.48+0/0.99/0.80+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 535 @911.523s 0%: 0.030+0.43+0.022 ms clock, 0.48+0/1.0/1.9+0.35 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 536 @911.765s 0%: 0.032+0.42+0.015 ms clock, 0.51+0.12/1.1/1.6+0.25 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 537 @911.958s 0%: 0.029+0.34+0.004 ms clock, 0.47+0.12/1.1/0.93+0.079 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 538 @912.143s 0%: 0.030+0.26+0.003 ms clock, 0.48+0.15/0.78/0.86+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 539 @912.333s 0%: 0.028+0.34+0.003 ms clock, 0.46+0.24/0.99/1.0+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 540 @912.524s 0%: 0.030+0.45+0.015 ms clock, 0.48+0.15/0.95/0.67+0.24 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 541 @912.719s 0%: 0.036+0.24+0.003 ms clock, 0.59+0/0.76/0.42+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 542 @912.912s 0%: 0.028+0.42+0.014 ms clock, 0.45+0.14/1.0/1.3+0.23 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 543 @913.094s 0%: 0.031+0.39+0.019 ms clock, 0.49+0/1.1/1.0+0.31 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 544 @913.287s 0%: 0.037+0.35+0.003 ms clock, 0.60+0.18/1.0/0.96+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 545 @913.474s 0%: 0.029+0.40+0.003 ms clock, 0.46+0.13/0.99/0.85+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 546 @913.671s 0%: 0.029+0.27+0.003 ms clock, 0.46+0.15/0.78/1.1+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 547 @913.866s 0%: 0.056+0.50+0.003 ms clock, 0.90+0.17/0.67/0.70+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 548 @914.053s 0%: 0.030+0.31+0.004 ms clock, 0.48+0.13/0.91/0.74+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 549 @914.240s 0%: 0.030+0.33+0.003 ms clock, 0.48+0.14/1.1/0.88+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 550 @914.425s 0%: 0.030+0.34+0.002 ms clock, 0.48+0.14/1.0/1.1+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 551 @914.643s 0%: 0.027+0.34+0.005 ms clock, 0.43+0.19/0.95/0.39+0.080 ms cpu, 18->18->13 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 552 @914.879s 0%: 0.029+0.33+0.003 ms clock, 0.46+0/1.0/1.3+0.054 ms cpu, 26->26->9 MB, 27 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 553 @915.128s 0%: 0.030+0.30+0.012 ms clock, 0.49+0.17/0.97/1.1+0.19 ms cpu, 18->18->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 554 @915.317s 0%: 0.029+0.51+0.003 ms clock, 0.47+0/1.0/1.1+0.060 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 555 @915.502s 0%: 0.022+0.30+0.003 ms clock, 0.35+0.14/0.97/0.20+0.050 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 556 @915.650s 0%: 0.031+0.26+0.003 ms clock, 0.49+0.13/0.80/0.83+0.051 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 557 @915.875s 0%: 0.031+0.24+0.003 ms clock, 0.50+0/0.82/0.72+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 558 @916.073s 0%: 0.028+0.39+0.004 ms clock, 0.45+0.12/1.1/0.79+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 559 @916.259s 0%: 0.029+0.31+0.003 ms clock, 0.47+0.16/1.0/0.98+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 560 @916.447s 0%: 0.032+0.35+0.004 ms clock, 0.51+0/1.1/1.1+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 561 @916.637s 0%: 0.031+0.30+0.003 ms clock, 0.50+0.12/0.88/0.79+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 562 @916.825s 0%: 0.029+0.36+0.003 ms clock, 0.47+0.23/1.0/1.0+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 563 @917.012s 0%: 0.028+0.26+0.003 ms clock, 0.45+0.19/0.84/0.80+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 564 @917.195s 0%: 0.029+0.41+0.003 ms clock, 0.47+0.14/0.99/0.73+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 565 @917.379s 0%: 0.030+0.36+0.003 ms clock, 0.48+0.15/1.0/1.6+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 566 @917.565s 0%: 0.028+0.44+0.003 ms clock, 0.44+0.15/1.1/1.1+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 567 @917.751s 0%: 0.041+0.42+0.006 ms clock, 0.66+0/0.80/0.78+0.10 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 568 @917.940s 0%: 0.030+0.38+0.010 ms clock, 0.49+0.17/0.95/1.3+0.16 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 569 @918.125s 0%: 0.030+0.32+0.005 ms clock, 0.48+0.17/0.97/1.5+0.080 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 570 @918.279s 0%: 0.029+0.36+0.003 ms clock, 0.46+0.26/1.1/1.7+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 571 @918.465s 0%: 0.030+0.37+0.003 ms clock, 0.48+0.20/1.1/1.1+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 572 @918.651s 0%: 0.029+0.27+0.003 ms clock, 0.47+0.14/0.82/0.86+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 573 @918.836s 0%: 0.044+0.38+0.003 ms clock, 0.70+0.15/1.1/0.87+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 574 @919.023s 0%: 0.061+0.36+0.037 ms clock, 0.98+0.17/0.99/0.40+0.60 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 575 @919.191s 0%: 0.029+0.30+0.003 ms clock, 0.46+0.15/0.96/0.90+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 576 @919.372s 0%: 0.028+0.31+0.008 ms clock, 0.45+0.13/0.85/1.0+0.13 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 577 @919.558s 0%: 0.028+0.40+0.003 ms clock, 0.45+0.13/1.1/1.3+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 578 @919.743s 0%: 0.030+0.34+0.003 ms clock, 0.48+0.17/1.0/0.73+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 579 @919.924s 0%: 0.030+0.45+0.017 ms clock, 0.48+0.21/1.1/1.3+0.27 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 580 @920.110s 0%: 0.046+0.43+0.018 ms clock, 0.73+0.17/1.2/1.5+0.29 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 581 @920.298s 0%: 0.027+0.33+0.003 ms clock, 0.44+0.18/0.94/0.89+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 582 @920.482s 0%: 0.028+0.32+0.003 ms clock, 0.45+0.18/1.0/0.63+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 583 @920.669s 0%: 0.028+0.28+0.004 ms clock, 0.45+0.16/0.86/0.52+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 584 @920.853s 0%: 0.033+0.42+0.008 ms clock, 0.54+0.15/1.0/1.0+0.13 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 585 @921.042s 0%: 0.030+0.30+0.017 ms clock, 0.48+0.13/0.88/1.1+0.27 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 586 @921.228s 0%: 0.029+0.34+0.003 ms clock, 0.46+0.22/1.0/1.7+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 587 @921.377s 0%: 0.050+0.25+0.003 ms clock, 0.80+0/0.84/0.68+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 588 @921.560s 0%: 0.021+0.31+0.003 ms clock, 0.34+0.12/0.95/0.83+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 589 @921.728s 0%: 0.028+0.36+0.004 ms clock, 0.45+0.24/1.1/1.0+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 590 @921.913s 0%: 0.027+0.27+0.004 ms clock, 0.44+0.17/0.90/1.2+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 591 @922.095s 0%: 0.037+0.28+0.003 ms clock, 0.59+0.16/0.94/1.3+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 592 @922.281s 0%: 0.029+0.29+0.003 ms clock, 0.47+0.16/1.0/0.96+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 593 @922.467s 0%: 0.036+0.44+0.023 ms clock, 0.59+0.21/0.96/0.57+0.37 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 594 @922.653s 0%: 0.036+0.24+0.004 ms clock, 0.58+0/0.68/0.58+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 595 @922.838s 0%: 0.030+0.28+0.004 ms clock, 0.48+0/0.81/1.0+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 596 @923.024s 0%: 0.036+0.25+0.003 ms clock, 0.58+0/0.83/0.97+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 597 @923.199s 0%: 0.040+0.34+0.012 ms clock, 0.64+0.17/1.0/0.82+0.19 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 598 @923.385s 0%: 0.032+0.27+0.003 ms clock, 0.52+0.16/0.91/0.80+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 599 @923.545s 0%: 0.079+0.40+0.003 ms clock, 1.2+0.27/0.99/0.88+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 600 @923.729s 0%: 0.030+0.34+0.003 ms clock, 0.48+0.17/0.90/1.1+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 601 @923.915s 0%: 0.026+0.27+0.003 ms clock, 0.41+0.16/0.93/1.0+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 602 @924.096s 0%: 0.046+0.24+0.003 ms clock, 0.74+0.12/0.76/0.55+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 603 @924.263s 0%: 0.029+0.31+0.003 ms clock, 0.47+0.19/0.99/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 604 @924.453s 0%: 0.029+0.36+0.003 ms clock, 0.46+0.16/1.1/1.4+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 605 @924.637s 0%: 0.043+0.25+0.006 ms clock, 0.69+0.15/0.79/0.53+0.10 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 606 @924.824s 0%: 0.044+0.29+0.003 ms clock, 0.71+0/0.91/1.1+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 607 @924.998s 0%: 0.029+0.37+0.003 ms clock, 0.47+0.19/1.0/1.4+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 608 @925.180s 0%: 0.038+0.32+0.005 ms clock, 0.61+0.18/1.0/1.2+0.080 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 609 @925.363s 0%: 0.029+0.29+0.003 ms clock, 0.46+0.17/0.97/1.1+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 610 @925.546s 0%: 0.030+0.26+0.004 ms clock, 0.48+0.12/0.84/0.91+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 611 @925.705s 0%: 0.041+0.30+0.003 ms clock, 0.66+0.16/0.91/1.0+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 612 @925.885s 0%: 0.029+0.37+0.004 ms clock, 0.47+0/1.1/0.98+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 613 @926.073s 0%: 0.029+0.31+0.004 ms clock, 0.47+0.21/0.91/1.2+0.071 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 614 @926.257s 0%: 0.028+0.26+0.003 ms clock, 0.45+0/0.92/0.65+0.063 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 615 @926.426s 0%: 0.029+0.36+0.004 ms clock, 0.47+0.15/1.0/0.82+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 616 @926.616s 0%: 0.028+0.32+0.003 ms clock, 0.45+0.14/1.0/1.0+0.051 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 617 @926.797s 0%: 0.029+0.36+0.003 ms clock, 0.46+0/1.2/1.4+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 618 @926.977s 0%: 0.031+0.46+0.003 ms clock, 0.50+0.14/1.1/0.89+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 619 @927.160s 0%: 0.037+0.47+0.050 ms clock, 0.60+0/1.0/0.50+0.81 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 620 @927.341s 0%: 0.035+0.31+0.004 ms clock, 0.57+0.16/0.98/1.0+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 621 @927.515s 0%: 0.043+0.29+0.004 ms clock, 0.70+0.13/0.80/0.47+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 622 @927.677s 0%: 0.044+0.28+0.003 ms clock, 0.71+0.14/0.90/0.83+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 623 @927.863s 0%: 0.029+0.33+0.003 ms clock, 0.47+0.15/0.94/1.3+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 624 @928.051s 0%: 0.029+0.44+0.016 ms clock, 0.47+0.14/1.2/1.6+0.26 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 625 @928.233s 0%: 0.044+0.33+0.004 ms clock, 0.70+0.17/0.81/0.57+0.074 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 626 @928.417s 0%: 0.028+0.43+0.014 ms clock, 0.46+0.15/1.1/0.84+0.22 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 627 @928.606s 0%: 0.031+0.40+0.017 ms clock, 0.50+0/1.2/1.1+0.28 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 628 @928.774s 0%: 0.031+0.32+0.003 ms clock, 0.51+0/1.0/1.2+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 629 @928.943s 0%: 0.045+0.23+0.003 ms clock, 0.72+0.15/0.79/0.69+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 630 @929.126s 0%: 0.030+0.45+0.003 ms clock, 0.48+0.28/1.3/1.3+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 631 @929.306s 0%: 0.031+0.37+0.021 ms clock, 0.50+0.23/1.0/1.3+0.34 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 632 @929.491s 0%: 0.029+0.37+0.004 ms clock, 0.46+0.13/1.1/1.1+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 633 @929.656s 0%: 0.029+0.43+0.014 ms clock, 0.46+0.15/1.1/0.76+0.23 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 634 @929.842s 0%: 0.032+0.32+0.003 ms clock, 0.51+0.17/1.0/1.2+0.050 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 635 @930.023s 0%: 0.030+0.26+0.003 ms clock, 0.48+0.14/0.89/0.89+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 636 @930.194s 0%: 0.029+0.29+0.003 ms clock, 0.47+0/0.78/0.99+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 637 @930.369s 0%: 0.037+0.24+0.004 ms clock, 0.60+0.19/0.81/0.48+0.069 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 638 @930.552s 0%: 0.031+0.41+0.003 ms clock, 0.50+0.14/1.0/0.85+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 639 @930.728s 0%: 0.039+0.27+0.003 ms clock, 0.62+0.16/0.92/0.80+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 640 @930.910s 0%: 0.037+0.30+0.004 ms clock, 0.60+0.20/0.89/0.78+0.072 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 641 @931.089s 0%: 0.031+0.29+0.003 ms clock, 0.49+0.23/0.89/0.91+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 642 @931.267s 0%: 0.027+0.26+0.003 ms clock, 0.44+0.14/0.86/0.88+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 643 @931.431s 0%: 0.031+0.44+0.003 ms clock, 0.50+0.15/1.1/2.0+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 644 @931.614s 0%: 0.029+0.35+0.004 ms clock, 0.47+0.20/1.1/1.0+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 645 @931.794s 0%: 0.030+0.48+0.003 ms clock, 0.48+0.17/1.1/1.1+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 646 @931.970s 0%: 0.032+0.38+0.020 ms clock, 0.51+0.21/0.91/0.77+0.32 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 647 @932.155s 0%: 0.031+0.31+0.003 ms clock, 0.49+0.15/0.98/0.77+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 648 @932.334s 0%: 0.038+0.33+0.003 ms clock, 0.61+0.15/1.0/0.51+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 649 @932.504s 0%: 0.039+0.27+0.003 ms clock, 0.62+0/0.80/0.71+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 650 @932.682s 0%: 0.028+0.31+0.004 ms clock, 0.45+0.16/0.88/0.86+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 651 @932.866s 0%: 0.030+0.56+0.003 ms clock, 0.48+0.16/0.68/1.0+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 652 @933.038s 0%: 0.030+0.29+0.004 ms clock, 0.48+0.15/0.97/0.84+0.066 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 653 @933.218s 0%: 0.029+0.50+0.003 ms clock, 0.46+0.13/0.74/1.0+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 654 @933.395s 0%: 0.027+0.28+0.003 ms clock, 0.44+0.22/0.87/1.2+0.060 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 655 @933.574s 0%: 0.033+0.32+0.004 ms clock, 0.54+0.21/1.0/1.4+0.073 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 656 @933.745s 0%: 0.044+0.32+0.003 ms clock, 0.70+0/0.79/0.48+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 657 @933.925s 0%: 0.028+0.34+0.004 ms clock, 0.45+0.24/1.0/1.1+0.075 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 658 @934.120s 0%: 0.028+0.28+0.003 ms clock, 0.45+0.15/0.78/0.91+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 659 @935.659s 0%: 0.035+0.25+0.002 ms clock, 0.56+0/0.80/0.42+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 660 @936.682s 0%: 0.028+0.27+0.003 ms clock, 0.46+0/0.96/0.89+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 661 @937.590s 0%: 0.031+0.34+0.004 ms clock, 0.50+0/1.0/1.3+0.073 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 662 @938.697s 0%: 0.030+0.24+0.003 ms clock, 0.49+0/0.80/1.0+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 663 @939.891s 0%: 0.042+0.25+0.004 ms clock, 0.68+0/0.71/0.58+0.070 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 664 @940.955s 0%: 0.043+0.23+0.003 ms clock, 0.69+0/0.74/0.45+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 665 @941.966s 0%: 0.030+0.28+0.003 ms clock, 0.48+0.17/0.87/1.0+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 666 @943.044s 0%: 0.029+0.32+0.004 ms clock, 0.47+0.14/0.95/1.2+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 667 @944.170s 0%: 0.032+0.28+0.004 ms clock, 0.52+0/0.95/1.2+0.064 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 668 @945.220s 0%: 0.037+0.44+0.003 ms clock, 0.60+0/0.90/0.32+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 669 @946.437s 0%: 0.042+0.30+0.003 ms clock, 0.68+0/0.79/0.52+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 670 @947.463s 0%: 0.032+0.33+0.002 ms clock, 0.51+0.14/1.0/1.1+0.047 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 671 @948.570s 0%: 0.029+0.38+0.003 ms clock, 0.46+0.16/1.0/1.3+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 672 @949.590s 0%: 0.039+0.29+0.003 ms clock, 0.62+0/1.0/0.97+0.062 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 673 @950.339s 0%: 0.028+0.29+0.003 ms clock, 0.45+0/0.94/1.1+0.057 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 674 @951.298s 0%: 0.028+0.35+0.027 ms clock, 0.46+0/1.1/1.3+0.43 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 1456894 (delta 83479), reused 49995 (delta 49995), pack-reused 1352392 (from 2)
+GC forcedending to replicas: 1150.3 MiB
+gc 35 @963.611s 0%: 0.027+0.84+0.003 ms clock, 0.44+0/3.1/0+0.056 ms cpu, 5->5->5 MB, 11 MB goal, 0 MB stacks, 0 MB globals, 16 P
+target: Sending to replicas: 1150.5 MiB, done.
+target: Storing objects: 1456894/1456894 (2 replicas), done.
+time=2026-04-14T17:07:26.533+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/master batch=8 batch_total=8
+time=2026-04-14T17:07:26.541+02:00 level=INFO msg="bootstrap batch branch finalized" branch=refs/heads/master
+time=2026-04-14T17:07:26.541+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/nocache-cleanup temp_ref=refs/gitsync/bootstrap/heads/nocache-cleanup planned_batches=3 resume_hash=<zero>
+time=2026-04-14T17:07:26.541+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/nocache-cleanup batch=1 batch_total=3 from=<zero> to=267e2a9c
+source: Total 0 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
+target: Sending to replicas: 0.0 MiB, done.
+target: Storing objects: 0 (0 replicas), done.
+time=2026-04-14T17:07:26.787+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/nocache-cleanup batch=1 batch_total=3
+time=2026-04-14T17:07:26.787+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/nocache-cleanup batch=2 batch_total=3 from=267e2a9c to=e3b22bc3
+source: Total 0 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
+target: Sending to replicas: 0.0 MiB, done.
+target: Storing objects: 0 (0 replicas), done.
+time=2026-04-14T17:07:29.835+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/nocache-cleanup batch=2 batch_total=3
+time=2026-04-14T17:07:29.835+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/nocache-cleanup batch=3 batch_total=3 from=e3b22bc3 to=809b997a
+source: Total 0 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
+target: Sending to replicas: 0.0 MiB, done.
+target: Storing objects: 0 (0 replicas), done.
+time=2026-04-14T17:07:34.235+02:00 level=INFO msg="bootstrap batch checkpoint complete" branch=refs/heads/nocache-cleanup batch=3 batch_total=3
+time=2026-04-14T17:07:34.242+02:00 level=INFO msg="bootstrap batch branch finalized" branch=refs/heads/nocache-cleanup
+{
+  "plans": [
+    {
+      "branch": "master",
+      "source_ref": "refs/heads/master",
+      "target_ref": "refs/heads/master",
+      "source_hash": "d60bc140158342716e13ff0f8aa65642f43ba053",
+      "target_hash": "0000000000000000000000000000000000000000",
+      "kind": "branch",
+      "action": "create",
+      "reason": "create refs/heads/master at d60bc140"
+    },
+    {
+      "branch": "nocache-cleanup",
+      "source_ref": "refs/heads/nocache-cleanup",
+      "target_ref": "refs/heads/nocache-cleanup",
+      "source_hash": "809b997a5ce945ab470f70c187048fe4f5df20bf",
+      "target_hash": "0000000000000000000000000000000000000000",
+      "kind": "branch",
+      "action": "create",
+      "reason": "create refs/heads/nocache-cleanup at 809b997a"
+    }
+  ],
+  "pushed": 2,
+  "skipped": 0,
+  "blocked": 0,
+  "deleted": 0,
+  "dry_run": false,
+  "operation_mode": "replicate",
+  "relay": true,
+  "relay_mode": "bootstrap-batch",
+  "relay_reason": "empty-target-managed-refs",
+  "batching": true,
+  "batch_count": 11,
+  "planned_batch_count": 6,
+  "temp_refs": [
+    "refs/gitsync/bootstrap/heads/master",
+    "refs/gitsync/bootstrap/heads/nocache-cleanup"
+  ],
+  "bootstrap_suggested": false,
+  "stats": {
+    "enabled": true,
+    "items": {
+      "source git-upload-pack info-refs": {
+        "name": "source git-upload-pack info-refs",
+        "requests": 1,
+        "request_bytes": 0,
+        "response_bytes": 191,
+        "wants": 0,
+        "haves": 0,
+        "commands": 0
+      },
+      "source upload-pack fetch": {
+        "name": "source upload-pack fetch",
+        "requests": 15,
+        "request_bytes": 2568,
+        "response_bytes": 7403727560,
+        "wants": 0,
+        "haves": 0,
+        "commands": 0
+      },
+      "source upload-pack ls-refs": {
+        "name": "source upload-pack ls-refs",
+        "requests": 1,
+        "request_bytes": 85,
+        "response_bytes": 139,
+        "wants": 0,
+        "haves": 0,
+        "commands": 0
+      },
+      "target git-receive-pack info-refs": {
+        "name": "target git-receive-pack info-refs",
+        "requests": 1,
+        "request_bytes": 0,
+        "response_bytes": 194,
+        "wants": 0,
+        "haves": 0,
+        "commands": 0
+      },
+      "target receive-pack push": {
+        "name": "target receive-pack push",
+        "requests": 13,
+        "request_bytes": 341,
+        "response_bytes": 18975,
+        "wants": 0,
+        "haves": 0,
+        "commands": 0
+      }
+    }
+  },
+  "measurement": {
+    "enabled": true,
+    "elapsed_millis": 1038432,
+    "peak_alloc_bytes": 6951984624,
+    "peak_heap_inuse_bytes": 7087652864,
+    "total_alloc_bytes": 22103555032,
+    "gc_count": 674
+  },
+  "protocol": "v2"
+}
+
+---
+
+what do we need to investigate this on go-git?
+
+---
+
+the planing phase needs an empty target, right? that might also have been my mistake before
+
+---
+
+time=2026-04-14T17:22:18.600+02:00 level=INFO msg="bootstrap batch commit graph stored" branch=refs/heads/master commits=1431299 trees=0 blobs=0 tags=0 total=1431299
+
+---
+
+stop, I want this to be state less, so 4gb of disk is also not helping, so wait:
+
+if we only need the first 75k we have no way to get only these?
+
+---
+
+yeah let's verify, give me the command
+
+---
+
+can we craft a command for this? or a param that just does this part without kicking of the fetching? I guess it won't be needed  but "--debug-bootstrap" or something?
+
+---
+
+❯   GODEBUG=gctrace=1 go run ./cmd/git-sync replicate -v \
+    --target-insecure-skip-tls-verify \
+    --target-max-pack-bytes 2000000000 \
+    --measure-memory --stats --json \
+    $SRC $TGT 2>&1 | tee /tmp/linux-replicate-mem.log
+gc 1 @0.002s 4%: 0.053+0.63+0.060 ms clock, 0.85+0.076/1.0/0+0.97 ms cpu, 3->4->0 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 2 @0.004s 4%: 0.015+0.92+0.056 ms clock, 0.24+0.38/0.88/0+0.90 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 3 @0.007s 4%: 0.077+1.9+0.007 ms clock, 1.2+0.065/0.81/0+0.11 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 4 @0.010s 4%: 0.010+1.0+0.069 ms clock, 0.16+0.33/1.3/0.59+1.1 ms cpu, 3->5->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 5 @0.012s 5%: 0.042+0.73+0.007 ms clock, 0.67+0.060/1.7/0.027+0.12 ms cpu, 3->3->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 6 @0.014s 5%: 0.049+1.7+0.091 ms clock, 0.79+0.089/2.0/0+1.4 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 7 @0.017s 5%: 0.036+3.2+0.026 ms clock, 0.58+0.62/2.6/0+0.42 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 8 @0.021s 5%: 0.055+1.0+0.004 ms clock, 0.88+0.50/1.8/0+0.066 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 9 @0.025s 5%: 0.051+2.2+0.019 ms clock, 0.81+0.28/3.0/0+0.31 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 10 @0.027s 5%: 0.041+0.44+0.002 ms clock, 0.65+0.058/1.2/1.8+0.044 ms cpu, 3->4->1 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 11 @0.028s 6%: 0.10+1.2+0.16 ms clock, 1.6+1.1/1.4/0.007+2.5 ms cpu, 3->6->2 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 12 @0.030s 7%: 0.16+2.6+0.13 ms clock, 2.6+3.5/2.5/0+2.1 ms cpu, 5->8->4 MB, 6 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 13 @0.035s 7%: 0.20+1.8+0.13 ms clock, 3.2+1.1/2.2/0+2.0 ms cpu, 7->9->5 MB, 9 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 14 @0.044s 6%: 0.52+3.9+0.027 ms clock, 8.4+0/2.2/2.2+0.44 ms cpu, 9->10->6 MB, 10 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 15 @0.053s 6%: 0.035+0.68+0.019 ms clock, 0.57+0.12/2.2/3.2+0.30 ms cpu, 11->12->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 16 @0.056s 6%: 0.022+0.70+0.005 ms clock, 0.35+0.035/2.2/4.6+0.080 ms cpu, 10->11->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 17 @0.060s 6%: 0.083+1.7+0.033 ms clock, 1.3+0.067/5.4/0.28+0.53 ms cpu, 10->11->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 18 @0.068s 6%: 0.073+0.99+0.036 ms clock, 1.1+0.25/3.1/2.4+0.58 ms cpu, 10->11->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 19 @0.075s 6%: 0.023+1.4+0.033 ms clock, 0.37+0.021/4.9/0.14+0.54 ms cpu, 11->12->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 20 @0.080s 6%: 0.035+0.69+0.003 ms clock, 0.56+0.061/2.3/4.0+0.062 ms cpu, 10->11->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 21 @0.087s 5%: 0.030+2.4+0.004 ms clock, 0.49+0.41/3.9/0+0.077 ms cpu, 10->11->6 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 22 @0.098s 5%: 0.026+2.1+0.005 ms clock, 0.41+0.014/4.8/0.001+0.094 ms cpu, 11->12->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 23 @0.107s 5%: 0.038+2.3+0.029 ms clock, 0.61+0.039/5.4/0+0.47 ms cpu, 11->12->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 24 @0.118s 5%: 0.021+1.0+0.039 ms clock, 0.34+0.30/2.8/2.3+0.62 ms cpu, 11->12->6 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 25 @0.125s 5%: 0.043+0.74+0.011 ms clock, 0.70+0.12/2.2/2.2+0.18 ms cpu, 11->13->7 MB, 13 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 26 @0.129s 4%: 0.022+0.80+0.011 ms clock, 0.35+0.045/2.6/4.4+0.17 ms cpu, 13->14->5 MB, 15 MB goal, 0 MB stacks, 0 MB globals, 16 P
+# github.com/soph/git-sync/cmd/git-sync
+gc 1 @0.000s 3%: 0.003+0.12+0.013 ms clock, 0.062+0.030/0.24/0+0.21 ms cpu, 3->4->3 MB, 4 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 2 @0.001s 3%: 0.002+0.18+0.016 ms clock, 0.047+0.007/0.41/0.060+0.26 ms cpu, 6->7->6 MB, 7 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 3 @0.008s 1%: 0.008+0.23+0.005 ms clock, 0.12+0.008/0.62/0.47+0.089 ms cpu, 11->11->9 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 4 @0.010s 1%: 0.007+0.27+0.015 ms clock, 0.11+0.052/0.74/0.67+0.24 ms cpu, 17->18->17 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 5 @0.034s 0%: 0.014+0.55+0.005 ms clock, 0.23+0.081/1.1/0.19+0.092 ms cpu, 35->35->22 MB, 35 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 6 @0.084s 0%: 0.015+0.34+0.015 ms clock, 0.24+0/0.99/1.0+0.25 ms cpu, 43->43->25 MB, 45 MB goal, 0 MB stacks, 0 MB globals, 16 P
+time=2026-04-14T17:33:38.936+02:00 level=INFO msg="bootstrap batch planning checkpoints" branch_ref_count=2
+time=2026-04-14T17:33:38.936+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/master
+gc 1 @0.717s 0%: 0.050+1.2+0.026 ms clock, 0.81+0.17/3.1/1.2+0.42 ms cpu, 12->25->24 MB, 12 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 2 @0.719s 0%: 0.018+1.3+0.020 ms clock, 0.30+0.037/3.3/1.4+0.33 ms cpu, 42->61->61 MB, 50 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 3 @0.723s 0%: 0.022+1.4+0.012 ms clock, 0.36+0.49/3.5/4.4+0.20 ms cpu, 104->114->114 MB, 122 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 4 @0.824s 0%: 0.026+1.6+0.018 ms clock, 0.42+0.053/5.7/10+0.30 ms cpu, 195->196->190 MB, 229 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 5 @1.452s 0%: 0.031+2.9+0.033 ms clock, 0.49+0.020/11/21+0.52 ms cpu, 324->325->276 MB, 380 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 6 @2.394s 0%: 0.033+4.6+0.018 ms clock, 0.53+0.049/17/44+0.29 ms cpu, 470->471->402 MB, 552 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 7 @3.642s 0%: 0.031+9.2+0.010 ms clock, 0.50+0.16/35/79+0.17 ms cpu, 685->687->586 MB, 804 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 8 @5.932s 0%: 0.032+16+0.019 ms clock, 0.52+0.012/63/168+0.30 ms cpu, 1125->1129->934 MB, 1172 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 9 @9.926s 0%: 0.031+29+0.011 ms clock, 0.50+0.93/114/307+0.17 ms cpu, 1853->1864->1533 MB, 1869 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 10 @16.941s 0%: 0.047+69+0.027 ms clock, 0.75+0/277/741+0.43 ms cpu, 3028->3046->2510 MB, 3067 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 11 @25.227s 0%: 0.034+95+0.010 ms clock, 0.55+2.0/379/1027+0.16 ms cpu, 4954->5014->3561 MB, 5020 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 12 @25.658s 0%: 0.036+11+0.004 ms clock, 0.58+0/46/111+0.076 ms cpu, 4861->4861->1407 MB, 7123 MB goal, 0 MB stacks, 0 MB globals, 16 P (forced)
+time=2026-04-14T17:34:04.333+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/master chain_len=75800 estimated_batches=3
+time=2026-04-14T17:34:04.333+02:00 level=INFO msg="bootstrap batch fetching commit graph" branch=refs/heads/nocache-cleanup
+gc 13 @32.846s 0%: 0.023+18+0.019 ms clock, 0.38+0.10/73/196+0.30 ms cpu, 2801->2803->1230 MB, 2814 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 14 @37.520s 0%: 0.053+38+0.13 ms clock, 0.85+0.020/152/398+2.1 ms cpu, 2370->2379->1954 MB, 2460 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 15 @45.138s 0%: 0.047+65+0.021 ms clock, 0.75+0.028/260/730+0.33 ms cpu, 3780->3793->3077 MB, 3909 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 16 @49.748s 0%: 0.051+46+0.013 ms clock, 0.82+0.057/185/502+0.21 ms cpu, 5951->6002->3320 MB, 6154 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 17 @49.878s 0%: 0.031+0.36+0.006 ms clock, 0.50+0/1.0/1.1+0.10 ms cpu, 3408->3408->7 MB, 6641 MB goal, 0 MB stacks, 0 MB globals, 16 P (forced)
+time=2026-04-14T17:34:28.526+02:00 level=INFO msg="bootstrap batch planned checkpoints" branch=refs/heads/nocache-cleanup chain_len=75198 estimated_batches=3
+time=2026-04-14T17:34:28.526+02:00 level=INFO msg="bootstrap batch branch plan" branch=refs/heads/master temp_ref=refs/gitsync/bootstrap/heads/master planned_batches=3 resume_hash=<zero>
+time=2026-04-14T17:34:28.526+02:00 level=INFO msg="bootstrap batch push checkpoint" branch=refs/heads/master batch=1 batch_total=3 from=<zero> to=9ca8e40c
+source: Enumerating objects: 874026, done.
+source: Counting objects: 100% (19112/19112), done.
+source: Compressing objects: 100% (4347/4347), done.
+gc 18 @54.439s 0%: 0.056+0.30+0.006 ms clock, 0.90+0.11/0.83/0.45+0.11 ms cpu, 13->13->9 MB, 15 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 19 @54.580s 0%: 0.063+0.25+0.003 ms clock, 1.0+0.10/0.71/0.63+0.050 ms cpu, 16->16->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 20 @54.754s 0%: 0.033+0.25+0.006 ms clock, 0.54+0.029/0.80/0.89+0.10 ms cpu, 15->15->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 21 @54.867s 0%: 0.029+0.25+0.003 ms clock, 0.47+0.16/0.82/0.93+0.056 ms cpu, 15->15->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 22 @55.035s 0%: 0.038+0.33+0.007 ms clock, 0.61+0.12/0.89/0.43+0.11 ms cpu, 16->16->9 MB, 19 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 23 @55.240s 0%: 0.030+0.42+0.021 ms clock, 0.48+0.10/0.78/1.3+0.34 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 24 @55.426s 0%: 0.042+0.35+0.003 ms clock, 0.67+0.12/0.97/0.62+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 25 @55.631s 0%: 0.033+0.28+0.006 ms clock, 0.52+0.21/0.91/0.67+0.11 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 26 @55.876s 0%: 0.029+0.28+0.003 ms clock, 0.47+0.21/0.76/0.96+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 27 @56.059s 0%: 0.031+0.31+0.002 ms clock, 0.50+0.14/0.89/0.95+0.045 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 28 @56.256s 0%: 0.040+0.20+0.008 ms clock, 0.64+0/0.69/0.37+0.13 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 29 @56.435s 0%: 0.030+0.31+0.003 ms clock, 0.48+0.13/0.91/0.59+0.052 ms cpu, 17->17->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 30 @56.630s 0%: 0.028+0.28+0.003 ms clock, 0.46+0.18/0.74/0.49+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 31 @56.815s 0%: 0.030+0.33+0.003 ms clock, 0.49+0.28/1.0/1.1+0.061 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 32 @57.060s 0%: 0.031+0.48+0.005 ms clock, 0.51+0.13/1.1/0.72+0.086 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 33 @57.246s 0%: 0.029+0.34+0.004 ms clock, 0.47+0.19/1.0/1.2+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 34 @57.441s 0%: 0.032+0.33+0.003 ms clock, 0.51+0.22/1.0/0.99+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 35 @57.620s 0%: 0.029+0.28+0.004 ms clock, 0.47+0.15/0.87/1.0+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 36 @57.809s 0%: 0.029+0.38+0.002 ms clock, 0.47+0.27/1.1/1.0+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 37 @58.007s 0%: 0.028+0.32+0.003 ms clock, 0.46+0/0.94/1.3+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 38 @58.186s 0%: 0.030+0.28+0.003 ms clock, 0.48+0/0.65/0.87+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 39 @58.369s 0%: 0.039+0.27+0.003 ms clock, 0.62+0.15/0.81/1.0+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 40 @58.553s 0%: 0.029+0.27+0.003 ms clock, 0.46+0/0.83/0.93+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 41 @58.737s 0%: 0.031+0.26+0.003 ms clock, 0.51+0.15/0.82/0.91+0.055 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 42 @58.916s 0%: 0.034+0.37+0.003 ms clock, 0.55+0.17/1.1/1.2+0.049 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 43 @59.098s 0%: 0.027+0.28+0.002 ms clock, 0.44+0.13/0.78/0.96+0.046 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 44 @59.282s 0%: 0.043+0.29+0.003 ms clock, 0.69+0.14/1.0/0.95+0.058 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 45 @59.419s 0%: 0.030+0.30+0.003 ms clock, 0.49+0.16/0.89/0.95+0.052 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 46 @59.602s 0%: 0.037+0.36+0.003 ms clock, 0.60+0.16/1.1/1.0+0.053 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 47 @59.787s 0%: 0.028+0.36+0.011 ms clock, 0.45+0/0.90/0.77+0.18 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 48 @60.026s 0%: 0.027+0.26+0.003 ms clock, 0.43+0.21/0.89/1.1+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 49 @60.209s 0%: 0.033+0.29+0.004 ms clock, 0.52+0.19/0.87/1.1+0.073 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 50 @60.344s 0%: 0.028+0.26+0.004 ms clock, 0.45+0.21/0.87/0.77+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 51 @60.523s 0%: 0.028+0.34+0.004 ms clock, 0.46+0.22/1.0/1.4+0.068 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 52 @60.706s 0%: 0.028+0.45+0.008 ms clock, 0.45+0/1.0/1.1+0.14 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 53 @60.898s 0%: 0.034+0.28+0.003 ms clock, 0.54+0.14/0.92/0.94+0.056 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 54 @61.080s 0%: 0.027+0.45+0.026 ms clock, 0.44+0.097/1.0/0.67+0.41 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 55 @61.265s 0%: 0.029+0.32+0.003 ms clock, 0.47+0.18/0.95/1.0+0.059 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 56 @61.456s 0%: 0.030+0.34+0.002 ms clock, 0.48+0/0.96/1.5+0.047 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 57 @61.637s 0%: 0.032+0.47+0.003 ms clock, 0.51+0.15/1.0/0.57+0.048 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 58 @61.819s 0%: 0.030+0.45+0.004 ms clock, 0.48+0.13/1.0/0.55+0.067 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+gc 59 @62.684s 0%: 0.029+0.31+0.003 ms clock, 0.47+0.17/0.93/0.94+0.054 ms cpu, 18->18->9 MB, 18 MB goal, 0 MB stacks, 0 MB globals, 16 P
+source: Total 874026 (delta 16965), reused 14765 (delta 14765), pack-reused 854914 (from 1)
+
+---
+
+ok, can you give me a good PR description highlighting the key architecture decisions and outcomes?
+
+---
+
+https://github.com/entirehq/git-sync/pull/4 can you look at the PR comments?

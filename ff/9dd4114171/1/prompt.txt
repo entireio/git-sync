@@ -1,0 +1,84 @@
+I'd like to also add some benchmarking output as part of verbose, can we also easily track memory consumptiion?
+
+---
+
+yeah add the verbose logging and only if -v and --measure-memory is passed in
+
+---
+
+where is the memory here: 
+
+❯   go run ./cmd/git-sync sync \
+    --protocol v2 \
+    --measure-memory \
+    -v \
+    --target-username git \
+    --target-insecure-skip-tls-verify \
+    https://github.com/kubernetes/kubernetes.git \
+    https://localhost:8080/git/test/git-sync-smoke-5
+[git-sync] bootstrap: fetching 61 ref(s) from source
+[git-sync] bootstrap: pushing 61 ref(s) to target
+Sending to replicas: 1215.4 MiB, done.
+Storing objects: 1732836/1732836 (2 replicas), done.
+CREATE refs/heads/feature-rate-limiting - create refs/heads/feature-rate-limiting at 563ab268
+CREATE refs/heads/feature-serverside-apply - create refs/heads/feature-serverside-apply at afc81f41
+CREATE refs/heads/feature-workload-ga - create refs/heads/feature-workload-ga at b80b7b08
+CREATE refs/heads/fix-local-e2e-cni-ptp - create refs/heads/fix-local-e2e-cni-ptp at 0ee5729e
+CREATE refs/heads/master - create refs/heads/master at 02753822
+CREATE refs/heads/release-0.10 - create refs/heads/release-0.10 at 6925024e
+CREATE refs/heads/release-0.12 - create refs/heads/release-0.12 at de5dbdc3
+CREATE refs/heads/release-0.13 - create refs/heads/release-0.13 at 28efb1d8
+CREATE refs/heads/release-0.14 - create refs/heads/release-0.14 at f5582e8b
+CREATE refs/heads/release-0.15 - create refs/heads/release-0.15 at efdd58b7
+CREATE refs/heads/release-0.16 - create refs/heads/release-0.16 at 7932ef58
+CREATE refs/heads/release-0.17 - create refs/heads/release-0.17 at 4c118f66
+CREATE refs/heads/release-0.18 - create refs/heads/release-0.18 at 5920e276
+CREATE refs/heads/release-0.19 - create refs/heads/release-0.19 at 48726482
+CREATE refs/heads/release-0.20 - create refs/heads/release-0.20 at e200feca
+CREATE refs/heads/release-0.21 - create refs/heads/release-0.21 at 49e70bc9
+CREATE refs/heads/release-0.4 - create refs/heads/release-0.4 at b7669603
+CREATE refs/heads/release-0.5 - create refs/heads/release-0.5 at dfb235c6
+CREATE refs/heads/release-0.6 - create refs/heads/release-0.6 at 1263b966
+CREATE refs/heads/release-0.7 - create refs/heads/release-0.7 at 4d8363cf
+CREATE refs/heads/release-0.8 - create refs/heads/release-0.8 at 7e134cb7
+CREATE refs/heads/release-0.9 - create refs/heads/release-0.9 at b314b648
+CREATE refs/heads/release-1.0 - create refs/heads/release-1.0 at b9a9d98d
+CREATE refs/heads/release-1.1 - create refs/heads/release-1.1 at aec7b416
+CREATE refs/heads/release-1.10 - create refs/heads/release-1.10 at f170ef66
+CREATE refs/heads/release-1.11 - create refs/heads/release-1.11 at 9016740a
+CREATE refs/heads/release-1.12 - create refs/heads/release-1.12 at 5f799a48
+CREATE refs/heads/release-1.13 - create refs/heads/release-1.13 at 874f0559
+CREATE refs/heads/release-1.14 - create refs/heads/release-1.14 at c8b135d0
+CREATE refs/heads/release-1.15 - create refs/heads/release-1.15 at a34f1e48
+CREATE refs/heads/release-1.16 - create refs/heads/release-1.16 at 18936c8b
+CREATE refs/heads/release-1.17 - create refs/heads/release-1.17 at 1d9e1e6d
+CREATE refs/heads/release-1.18 - create refs/heads/release-1.18 at 0f3e6609
+CREATE refs/heads/release-1.19 - create refs/heads/release-1.19 at 8dd52e6c
+CREATE refs/heads/release-1.2 - create refs/heads/release-1.2 at 3d5d1aa6
+CREATE refs/heads/release-1.20 - create refs/heads/release-1.20 at 4a89df56
+CREATE refs/heads/release-1.21 - create refs/heads/release-1.21 at 2fef630d
+CREATE refs/heads/release-1.22 - create refs/heads/release-1.22 at bc4763cb
+CREATE refs/heads/release-1.23 - create refs/heads/release-1.23 at 1635c380
+CREATE refs/heads/release-1.24 - create refs/heads/release-1.24 at 2cb31c93
+CREATE refs/heads/release-1.25 - create refs/heads/release-1.25 at 88e994f6
+CREATE refs/heads/release-1.26 - create refs/heads/release-1.26 at 840d9bfe
+CREATE refs/heads/release-1.27 - create refs/heads/release-1.27 at f5da3b71
+CREATE refs/heads/release-1.28 - create refs/heads/release-1.28 at 9d9e08b3
+CREATE refs/heads/release-1.29 - create refs/heads/release-1.29 at 4c1e535e
+CREATE refs/heads/release-1.3 - create refs/heads/release-1.3 at 587d1643
+CREATE refs/heads/release-1.30 - create refs/heads/release-1.30 at e2e64ef5
+CREATE refs/heads/release-1.31 - create refs/heads/release-1.31 at fa33e07f
+CREATE refs/heads/release-1.32 - create refs/heads/release-1.32 at 1214ccfc
+CREATE refs/heads/release-1.33 - create refs/heads/release-1.33 at 875a0ab0
+CREATE refs/heads/release-1.34 - create refs/heads/release-1.34 at a48ef21c
+CREATE refs/heads/release-1.35 - create refs/heads/release-1.35 at c889751f
+CREATE refs/heads/release-1.36 - create refs/heads/release-1.36 at 1cc680e1
+CREATE refs/heads/release-1.4 - create refs/heads/release-1.4 at ae85e0be
+CREATE refs/heads/release-1.5 - create refs/heads/release-1.5 at f35802d3
+CREATE refs/heads/release-1.6 - create refs/heads/release-1.6 at 4fd45574
+CREATE refs/heads/release-1.6.3 - create refs/heads/release-1.6.3 at d6f43322
+CREATE refs/heads/release-1.7 - create refs/heads/release-1.7 at 347f6529
+CREATE refs/heads/release-1.8 - create refs/heads/release-1.8 at a654bda3
+CREATE refs/heads/release-1.9 - create refs/heads/release-1.9 at b5ec061c
+CREATE refs/heads/revert-121614-decode-respect-timeout-context - create refs/heads/revert-121614-decode-respect-timeout-context at 98a2f22e
+summary: pushed=61 deleted=0 skipped=0 blocked=0 protocol=v2 relay=true relay-mode=bootstrap relay-reason=empty-target-managed-refs batching=false batch-count=0 planned-batches=0

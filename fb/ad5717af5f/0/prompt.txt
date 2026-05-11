@@ -1,0 +1,33 @@
+Review the latest changes since commit f9170fc, focusing on the structured logging change in internal/strategy/bootstrap/bootstrap.go, the wiring in internal/syncer/syncer.go, and the tracker update. Check whether slog was introduced coherently, whether any useful context was lost compared to the old progress messages, and whether marking logging done is justified. Do not edit files. Return concise findings first with file references.
+
+---
+
+Review commit 07ddaa2 on this branch. Focus on the new centralized bootstrap capability checks in gitproto/fetch.go, the bootstrap strategy wiring changes, the missing-TargetPusher fix, and the related tests/docs updates. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit 3f2d1cb on this branch. Focus on the optimistic tip-probe logic in internal/strategy/bootstrap/bootstrap.go and the new unit coverage in bootstrap_test.go. Return findings only, ordered by severity, with file references. Do not make changes.
+
+---
+
+Review commit ddd4c7c (Extract validation package). Focus on whether the new internal/validation boundary is clean, whether any validation responsibilities still clearly belong elsewhere, and whether the refactor introduced any correctness or maintainability regressions. Please give concrete findings only.
+
+---
+
+Review commit b1842f4 (Expose materialized sync safety limit). Focus on whether exposing materialized-max-objects is the right user-facing contract, whether the new integration test covers a real materialized fallback, and whether any docs or CLI behavior are misleading. Findings only, ordered by severity, with file/line references where possible.
+
+---
+
+Review commit 8ba4146 ("Cover malformed fetch packets after startup") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether the new tests actually exercise malformed mid-stream protocol handling after valid startup, whether the sideband setup is realistic, and whether any cleanup/closure behavior is being assumed incorrectly. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review commit 32d5b66 ("Remove superseded rewrite planning docs") in /Users/soph/Work/entire/devenv/git-sync. Focus on whether any live documentation references or useful current-state content were lost by removing docs/rewrite-issue-list.md and docs/rewrite-memo.md. Report only concrete findings with file/line refs if any; otherwise say no findings.
+
+---
+
+Review the current worktree changes switching pkg/gitsync from request-scoped auth fields to an injected AuthProvider model. Focus on: 1) API boundary quality and whether auth ownership is now coherent, 2) correctness of the provider resolution path in Probe/Plan/Sync config building, 3) any obvious missing tests or bad semantics for source vs target auth. Findings only, ordered by severity with file references.
+
+---
+
+Review the current pkg/gitsync decoupling changes introducing pkg/gitsync/internalbridge for stable-client config/execution wiring. Focus on whether this is a sensible private boundary, whether client.go is now meaningfully less coupled to internal/syncer, and whether any weird type duplication or maintenance risk was introduced. Findings only, ordered by severity.

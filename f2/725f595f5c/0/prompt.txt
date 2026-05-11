@@ -1,0 +1,59 @@
+Here's a review of the 13 commits on `soph/packagable` (`e37fb72..HEAD`), which split git-sync into a stable library surface, an unstable first-party surface, and keep the CLI using the unstable path. Tests pass; build is clean.
+
+## What the branch does
+- Adds `pkg/gitsync/` (stable): `Probe`, `Plan`, `Sync` with typed requests/results, injected `AuthProvider` and `*http.Client`.
+- Adds `pkg/gitsync/unstable/`: exposes `Bootstrap`, `Fetch`, and engine-adjacent knobs (batch sizing, memory sampling, verbose, `MaterializedMaxObjects`).
+- Adds `pkg/gitsync/internalbridge/`: a mapping layer between stable types and `internal/syncer`.
+- Moves both CLIs (`cmd/git-sync`, `cmd/git-sync-bench`) onto the `unstable` client.
+- Threads a caller-supplied `*http.Client` all the way to `gitproto.Conn` via a new `NewConnWithHTTPClient` (backward-compatible).
+- Documents the split in `README.md`, `docs/architecture.md`, and the new `docs/embedding.md`.
+
+## Strengths
+- **Layering.** The three-tier split (stable / unstable / internal) is clean, and the doc text about why is consistent across README / architecture / embedding.
+- **Result shape.** `SyncResult = {Refs, Counts, Execution, Stats, Measurement}` is genuinely more worker-friendly than the flat `syncer.Result`, and `PlanResult = SyncResult` is a sensible simplification for dry-run.
+- **Auth model.** Moving per-request source/target credentials out of `Endpoint` and into an `AuthProvider` keeps endpoint identity separate from credential precedence — the doc note on this at `pkg/gitsync/types.go:24-25` captures the rationale well.
+- **HTTP injection** is done carefully: the client is cloned (`syncer.go:299`) so the caller's client isn't mutated, and counting round-trippers still work.
+- **Backward-compat kept inside `gitproto`**: `NewConn` delegates to `NewConnWithHTTPClient` — no internal callers broken.
+
+## Concerns / smells
+
+1. **`internalbridge/config.go:13` — `type Config = syncer.Config`.**
+   The whole point of `internalbridge` is to keep `syncer` types out of the stable surface, but this alias re-exports `syncer.Config` unchanged, and `Client.buildSyncConfig`/`buildProbeConfig` return it. `pkg/gitsync/client_test.go` then reaches through and asserts `cfg.ProtocolMode`, `cfg.MaterializedMaxObjects`, `cfg.HTTPClient`, etc. So the isolation holds in production code but leaks into the stable package's own tests. Consider returning the syncer config only via an unexported helper, or have the bridge own a minimal struct.
+
+2. **Internal types aliased into the stable API.**
+   `pkg/gitsync/types.go:61` has `type RefMapping = validation.RefMapping`, and `ProtocolAuto/V1/V2` are string aliases of `validation.Protocol*`. Any change to those internal constants or to the `RefMapping` struct silently mutates the stable surface. Defining a concrete `gitsync.RefMapping` struct (even if identical today) would give you a real version boundary.
+
+3. **Unstable duplicates the bridge mapping.**
+   `pkg/gitsync/unstable/client.go` assembles `syncer.Endpoint` / `syncer.Config` directly (`syncerEndpoint` at `client.go:234`, `buildSyncConfig`/`buildBootstrapConfig`/`buildFetchConfig`). The stable client goes through `internalbridge.SyncConfig`. Endpoint/auth translation now exists in two places. The "Deduplicate gitsync adapter wiring" commit partly addressed this, but unstable still carries its own copy because it needs `MaxPackBytes`, `BatchMaxPackBytes`, `Verbose`, `MeasureMemory`, etc. Either extend the bridge with an advanced config variant, or at minimum share the endpoint/auth mapping.
+
+4. **`Client.buildProbeConfig` is awkward.**
+   `pkg/gitsync/client.go:76-109` has two near-identical return statements for target-nil vs target-present and uses a generic `ptr` helper only in one branch. Collapsing to a single exit would read cleaner.
+
+5. **Unstable→stable dependency direction.**
+   `pkg/gitsync/unstable` imports `pkg/gitsync` for `Endpoint`, `EndpointAuth`, `AuthProvider`, etc. (`unstable/client.go:10`). That makes unstable a strict superset of stable's public types, which is fine today but means a breaking change in stable transitively breaks unstable. A small shared types-only package could invert that if the surface ever diverges.
+
+6. **`AuthProvider` resolution for probes without a target.**
+   In `pkg/gitsync/client.go:84`, when `req.Target != nil` you resolve target auth; when nil, you pass `EndpointAuth{}`. That's right. But the CLI still hands a full `StaticAuthProvider{Source, Target}` even for probe-only flows, so the target auth is just unused. Not a bug, worth noting for doc examples.
+
+7. **`unstable.Plan` mutates the request value.**
+   `unstable/client.go:92` sets `req.DryRun = true` on the by-value parameter. Harmless but makes the method surprising to read — prefer copying to a local before mutation or taking `SyncRequest` by pointer-free builder.
+
+8. **`pkg/gitsync/client_test.go` imports `internal/planner` and `internal/syncer`.**
+   Because `FromSyncResult` and `HashString` take `syncer.Result`/`plumbing.Hash`, testing the mapper requires internal types. Fine — but it means stable package tests aren't a clean outside-in consumer demo. Consider a separate mapper-test file under `internalbridge` so `pkg/gitsync` tests look like what an external embedder would write (this is what `example_test.go` starts to do).
+
+9. **Validation is shallow.**
+   `ProbeRequest.Validate` / `PlanRequest.Validate` / `SyncRequest.Validate` only check URL presence. No check that `Protocol` is a known value (normalization still happens internally via `validation.NormalizeProtocolMode`), and no early validation of `Mappings` or `Scope.Branches`. Currently any invalid mapping surfaces inside `newSession`. Not a blocker, but the doc positions `pkg/gitsync` as a worker-facing contract; front-loading errors is part of that value.
+
+10. **No end-to-end test through the stable client.**
+    All full-flow coverage still lives in `internal/syncer`. `client_test.go` only exercises `buildSyncConfig`/`buildProbeConfig` and the result mapper. Given this is now the public API, one end-to-end `Client.Sync` test against an `httptest` server (similar to `git_http_backend_test.go`) would protect the stable boundary.
+
+11. **Minor style.**
+    - `internal/syncer/git_http_backend_test.go` lost an alignment pass on the `bstrap.PlanCheckpoints` struct literal (`SourceConn`/`SourceService` columns shifted).
+    - Trailing newline removals in `internal/syncer/auth_test.go` and `syncer_test.go` are fine but unrelated to the packagable work.
+
+## Bottom line
+Structurally this is a good split, and the stable result shape is a real usability win. The main things I'd push back on before tagging this as a stable API:
+- remove the `Config = syncer.Config` alias so the bridge actually bridges,
+- stop re-exporting `validation.RefMapping` through the stable surface,
+- add at least one end-to-end test against `Client.Sync`,
+- consolidate the endpoint/auth translation shared between `pkg/gitsync` and `pkg/gitsync/unstable`.

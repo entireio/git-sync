@@ -1,0 +1,666 @@
+what's next
+
+---
+
+what's next
+
+---
+
+what's next
+
+---
+
+ok, just keep going, do individual commits
+
+---
+
+something is wrong, why would there be a .git/index.lock now every other commit?
+
+---
+
+what's next
+
+---
+
+ok, let's continue going through this
+
+---
+
+why is this happening?
+
+---
+
+if cmd is ignored that's an issue with .gitignore, let's fix that
+
+---
+
+ok, now continue
+
+---
+
+continue
+
+---
+
+do that
+
+---
+
+what's next
+
+---
+
+yeah do 1
+
+---
+
+yes
+
+---
+
+now do   2. Stabilize --json
+
+  - add explicit JSON field tags with lowercase names
+  - avoid Go-struct field names leaking into the external interface
+  - document the shape once and keep it stable
+
+---
+
+why you are needing that again
+
+---
+
+continue
+
+---
+
+continue
+
+---
+
+what's next
+
+---
+
+can you check if the readme is still up2date
+
+---
+
+patch it
+
+---
+
+yes
+
+---
+
+to use this as a syncing tool, what's left to do there?
+
+---
+
+how could we do 1?
+
+---
+
+I think setting this up as an action is to much, but using a dummy repo for testing is probably a good idea. Can we use the regular github credential helper locally?
+
+---
+
+yeah, let's implement this
+
+---
+
+so could we now do the integration tests with write but still not sure how we make this portal being dependent on a remote github, could we spin up a local server like gitea
+
+---
+
+is there an alternative to gitea?
+
+---
+
+yeah, then let's do a write integration test with git-http-backend, we can add more backends later
+
+---
+
+can we think a bit about some feasability studies, like when the tool makes sense. For example an initial empty repo from a to b, is it good for that? after which gap in changes the memory consumption becomes to much? can we control memory when larger gaps happen?
+
+---
+
+4. Longer-term: true source-to-target pack relay.
+      - best possible for initial empty-target syncs
+      - much more complex
+      - only really worth it if large migrations are a primary use case
+
+can we investigae this a bit?
+
+---
+
+yeah let's sketch this as an additional command path we could use for initial sync
+
+---
+
+let's call it bootstrap, go with the plan for v1, but maybe write down follow up steps
+
+---
+
+ok, let's start implementing go through each phase until you need my input, make meaningful commits
+
+---
+
+yeah let's do both one after another
+
+---
+
+what would phase 4 be again?
+
+---
+
+let's give it a try? build proper test harness first?
+
+---
+
+yes, we could also do a test case on https://github.com/torvalds/linux
+
+---
+
+do that
+
+---
+
+can we now expand this?
+
+---
+
+let's go through them, do commits build necessary tests, ask me if you need input
+
+---
+
+what is - tag retarget relay
+
+---
+
+can you give me a good pr description for the changes in this branch?
+
+---
+
+can you create me a mise.toml, can you llok at ../cli
+
+---
+
+can you create me a mise.toml, can you llok at ../cli/mise.toml for comparision
+
+---
+
+I had to cancel the linux smoke test due to eating to much memory, but I wonder is this a sign of the syncer having an issue or is the git-http-backend keeping everything in memoryß
+
+---
+
+ah so should the linux smoke test rather use bootstra?
+
+---
+
+yeah let's do that
+
+---
+
+❯ mise run test:linux-smoke
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+    live_bootstrap_test.go:43: live linux bootstrap failed: push target refs: source pack exceeded max-pack-bytes limit (536870912)
+--- FAIL: TestBootstrap_LiveLinuxSource (44.16s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        44.521s
+FAIL
+[test:linux-smoke] ERROR task failed
+
+---
+
+patch it
+
+---
+
+❯ mise run test:linux-smoke
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+    live_bootstrap_test.go:43: live linux bootstrap failed: push target refs: source pack exceeded max-pack-bytes limit (2147483648)
+--- FAIL: TestBootstrap_LiveLinuxSource (100.53s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        101.145s
+FAIL
+[test:linux-smoke] ERROR task failed
+
+---
+
+can this work in batches too? otherwise remove the limit for now and I want to see if it works
+
+---
+
+do that
+
+---
+
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+panic: test timed out after 10m0s
+        running tests:
+                TestBootstrap_LiveLinuxSource (10m0s)
+
+goroutine 71 [running]:
+testing.(*M).startAlarm.func1()
+        /Users/soph/.local/share/mise/installs/go/1.25.2/src/testing/testing.go:2682 +0x2b0
+created by time.goFunc
+        /Users/soph/.local/share/mise/installs/go/1.25.2/src/time/sleep.go:215 +0x38
+
+---
+
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+    live_bootstrap_test.go:42: live linux bootstrap failed: push target refs: unpack error: index-pack abnormal exit
+--- FAIL: TestBootstrap_LiveLinuxSource (268.29s)
+FAIL
+FAIL    github.com/soph/git-sync/internal/syncer        268.914s
+FAIL
+[test:linux-smoke] ERROR task failed
+
+---
+
+yes do that
+
+---
+
+[test:linux-smoke] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestBootstrap…
+=== RUN   TestBootstrap_LiveLinuxSource
+--- PASS: TestBootstrap_LiveLinuxSource (506.67s)
+PASS
+ok      github.com/soph/git-sync/internal/syncer        507.293s
+
+---
+
+how would batching look for large bootstrap jobs?
+
+---
+
+ok, let's design this
+
+---
+
+let's start Phase A, do commits, keep going
+
+---
+
+can you explain both:   - add per-branch/per-ref parallelism to batched bootstrap
+  - or start designing batch ideas for non-empty incremental relay
+
+---
+
+is mise run test:linux-smoke using batching?
+
+---
+
+yeah let's add batched second test
+
+---
+
+this takes really a long time so far
+
+---
+
+could we show progress?
+
+---
+
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=400c5bd5 (3/75732)
+
+---
+
+❯ mise run test:linux-smoke:batched
+[test:linux-smoke:batched] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestB…
+=== RUN   TestBootstrap_LiveLinuxSourceBatched
+[git-sync] bootstrap-batch: planning checkpoints for 1 branch ref(s)
+[git-sync] bootstrap-batch: fetching commit graph for refs/heads/master
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fdfc552a base=<zero>
+[git-sync] bootstrap-batch: checkpoint=fdfc552a exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=355e0c48 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=355e0c48 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=ccbe495c base=<zero>
+[git-sync] bootstrap-batch: checkpoint=ccbe495c fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=1fcccbac base=<zero>
+[git-sync] bootstrap-batch: checkpoint=1fcccbac exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=535e0c17 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=535e0c17 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=308efab5 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=308efab5 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=642a74e7 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=642a74e7 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=26b23ace base=<zero>
+[git-sync] bootstrap-batch: checkpoint=26b23ace fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=0f2cc4ec base=<zero>
+[git-sync] bootstrap-batch: checkpoint=0f2cc4ec exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=41630959 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=41630959 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=b1bf9368 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=b1bf9368 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=4850f524 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=4850f524 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=6d6b89bd base=<zero>
+[git-sync] bootstrap-batch: checkpoint=6d6b89bd exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=d03ab7ff base=<zero>
+[git-sync] bootstrap-batch: checkpoint=d03ab7ff fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=8724fdb5 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=8724fdb5 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=379e3a82 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=379e3a82 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=13dda80e base=<zero>
+[git-sync] bootstrap-batch: checkpoint=13dda80e fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=13dda80e (1/75732)
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=77624cd2 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=77624cd2 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=d2033f2c base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=d2033f2c exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=4440673a base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=4440673a fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=568b4455 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=568b4455 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=331fee3c base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=331fee3c fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=1d9d8639 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=1d9d8639 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=910ffdb1 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=910ffdb1 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=d7b96ca5 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=d7b96ca5 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=ed4e6a94 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=ed4e6a94 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=f59dc2bb base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=f59dc2bb exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=b6b19f25 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=b6b19f25 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=3dbff0d5 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=3dbff0d5 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=7a684c45 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=7a684c45 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=74779e22 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=74779e22 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=5031a2a7 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=5031a2a7 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=5031a2a7 (2/75732)
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=776e49e8 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=776e49e8 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=84ed2da0 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=84ed2da0 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=13f5004c base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=13f5004c fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=4dcee4d8 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=4dcee4d8 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=68c2f356 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=68c2f356 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=7a834ba5 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=7a834ba5 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=d590b2d4 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=d590b2d4 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=be0e1987 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=be0e1987 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=f5a8160c base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=f5a8160c fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=3d6f4780 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=3d6f4780 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=11eaaadb base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=11eaaadb exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=66339fda base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=66339fda fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=f66477a0 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=f66477a0 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=9bd9fa6c base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=9bd9fa6c fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=400c5bd5 base=5031a2a7
+[git-sync] bootstrap-batch: checkpoint=400c5bd5 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=400c5bd5 (3/75732)
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fafe1e39 base=400c5bd5
+[git-sync] bootstrap-batch: checkpoint=fafe1e39 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=f8f65382 base=400c5bd5
+[git-sync] bootstrap-batch: checkpoint=f8f65382 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=2575be8a base=400c5bd5
+[git-sync] bootstrap-batch: checkpoint=2575be8a fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=31336ed9 base=400c5bd5
+[git-sync] bootstrap-batch: checkpoint=31336ed9 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=54f70f52 base=400c5bd5
+
+---
+
+but it took at least 10-15mins
+
+---
+
+let's try 2
+
+---
+
+[test:linux-smoke:batched] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestB…
+=== RUN   TestBootstrap_LiveLinuxSourceBatched
+[git-sync] bootstrap-batch: planning checkpoints for 1 branch ref(s)
+[git-sync] bootstrap-batch: fetching commit graph for refs/heads/master
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a55f7f5f base=<zero>
+[git-sync] bootstrap-batch: checkpoint=a55f7f5f exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a180eab0 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=a180eab0 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=0dcb7b6f base=<zero>
+[git-sync] bootstrap-batch: checkpoint=0dcb7b6f exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fdfc552a base=<zero>
+[git-sync] bootstrap-batch: checkpoint=fdfc552a exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=07a887d3 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=07a887d3 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=da52a7ca base=<zero>
+[git-sync] bootstrap-batch: checkpoint=da52a7ca fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=3cfc2c42 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=3cfc2c42 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=1fcccbac base=<zero>
+[git-sync] bootstrap-batch: checkpoint=1fcccbac exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=641615ab base=<zero>
+[git-sync] bootstrap-batch: checkpoint=641615ab fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=32337f8a base=<zero>
+[git-sync] bootstrap-batch: checkpoint=32337f8a fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=46bbffad base=<zero>
+[git-sync] bootstrap-batch: checkpoint=46bbffad fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a1b57ac0 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=a1b57ac0 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=1fae4cfb base=<zero>
+[git-sync] bootstrap-batch: checkpoint=1fae4cfb exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=6c0ad5df base=<zero>
+[git-sync] bootstrap-batch: checkpoint=6c0ad5df exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=524df557 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=524df557 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=bc535154 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=bc535154 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=13dda80e base=<zero>
+[git-sync] bootstrap-batch: checkpoint=13dda80e fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=6d6b89bd base=<zero>
+[git-sync] bootstrap-batch: checkpoint=6d6b89bd exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=13dda80e selected=1 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a55f7f5f base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=a55f7f5f exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=f0b0d403 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=f0b0d403 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=22565ae7 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=22565ae7 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=3e2a590a base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=3e2a590a exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=77624cd2 base=13dda80e
+[git-sync] bootstrap-batch: checkpoint=77624cd2 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=b11a2783 base=13dda80e
+
+---
+
+let's try   4. Add a “sampling” mode for batching
+
+  - instead of trying to maximize each batch under the byte limit, aim for rough equal
+    chunks by commit distance
+  - maybe only probe every Nth candidate or every frontier jump
+  - much faster, less exact
+
+---
+
+=== RUN   TestBootstrap_LiveLinuxSourceBatched
+[git-sync] bootstrap-batch: planning checkpoints for 1 branch ref(s)
+[git-sync] bootstrap-batch: fetching commit graph for refs/heads/master
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a55f7f5f base=<zero>
+[git-sync] bootstrap-batch: checkpoint=a55f7f5f exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fdfc552a base=<zero>
+[git-sync] bootstrap-batch: checkpoint=fdfc552a exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=355e0c48 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=355e0c48 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=355e0c48 selected=1 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fdfc552a base=355e0c48
+[git-sync] bootstrap-batch: checkpoint=fdfc552a fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=fdfc552a selected=2 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=c6503f12 base=fdfc552a
+
+---
+
+question: how is the git cli doing the initial clone? (the source is in /Users/soph/Work/entire/research/git)
+
+---
+
+and a push?
+
+---
+
+but could we stream the fetch to the push?
+
+---
+
+so does batching make really sense if we have two scenarios: 
+
+- initial sync from source to empty target
+- regular syncs with small difss (triggered for example through github webhooks)
+
+---
+
+❯ mise run test:linux-smoke:batched
+[test:linux-smoke:batched] $ GITSYNC_E2E_LIVE_LINUX=1 go test ./internal/syncer -run TestB…
+=== RUN   TestBootstrap_LiveLinuxSourceBatched
+[git-sync] bootstrap-batch: planning checkpoints for 1 branch ref(s)
+[git-sync] bootstrap-batch: fetching commit graph for refs/heads/master
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a55f7f5f base=<zero>
+[git-sync] bootstrap-batch: checkpoint=a55f7f5f exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fdfc552a base=<zero>
+[git-sync] bootstrap-batch: checkpoint=fdfc552a exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=355e0c48 base=<zero>
+[git-sync] bootstrap-batch: checkpoint=355e0c48 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=355e0c48 selected=1 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fdfc552a base=355e0c48
+[git-sync] bootstrap-batch: checkpoint=fdfc552a fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=fdfc552a selected=2 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=c6503f12 base=fdfc552a
+[git-sync] bootstrap-batch: checkpoint=c6503f12 exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=60b3e7bd base=fdfc552a
+[git-sync] bootstrap-batch: checkpoint=60b3e7bd exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=93ccb391 base=fdfc552a
+[git-sync] bootstrap-batch: checkpoint=93ccb391 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=93ccb391 selected=3 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=7cd9beb3 base=93ccb391
+[git-sync] bootstrap-batch: checkpoint=7cd9beb3 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=7cd9beb3 selected=4 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=7d6a31c3 base=7cd9beb3
+[git-sync] bootstrap-batch: checkpoint=7d6a31c3 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=7d6a31c3 selected=5 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=0e40da3e base=7d6a31c3
+[git-sync] bootstrap-batch: checkpoint=0e40da3e exceeds limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=9f3a0941 base=7d6a31c3
+[git-sync] bootstrap-batch: checkpoint=9f3a0941 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=9f3a0941 selected=6 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=0e40da3e base=9f3a0941
+[git-sync] bootstrap-batch: checkpoint=0e40da3e fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=0e40da3e selected=7 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fffb08b3 base=0e40da3e
+[git-sync] bootstrap-batch: checkpoint=fffb08b3 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=fffb08b3 selected=8 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=f419f031 base=fffb08b3
+[git-sync] bootstrap-batch: checkpoint=f419f031 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=f419f031 selected=9 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=fb7d0829 base=f419f031
+[git-sync] bootstrap-batch: checkpoint=fb7d0829 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=fb7d0829 selected=10 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=10d916c8 base=fb7d0829
+[git-sync] bootstrap-batch: checkpoint=10d916c8 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=10d916c8 selected=11 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=3abc79dc base=10d916c8
+[git-sync] bootstrap-batch: checkpoint=3abc79dc fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=3abc79dc selected=12 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=2accfdb7 base=3abc79dc
+[git-sync] bootstrap-batch: checkpoint=2accfdb7 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=2accfdb7 selected=13 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=0f70f5b0 base=2accfdb7
+[git-sync] bootstrap-batch: checkpoint=0f70f5b0 fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=0f70f5b0 selected=14 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master probe checkpoint=a55f7f5f base=0f70f5b0
+[git-sync] bootstrap-batch: checkpoint=a55f7f5f fits limit=536870912
+[git-sync] bootstrap-batch: branch=refs/heads/master planned-checkpoint=a55f7f5f selected=15 chain-len=75732
+[git-sync] bootstrap-batch: branch=refs/heads/master temp-ref=refs/gitsync/bootstrap/heads/master planned-batches=15 resume=<zero>
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=1/15 from=<zero> to=355e0c48
+Löse Unterschiede auf: 100% (484510/484510), fertig.
+Prüfe Konnektivität: 602510, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=1/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=2/15 from=355e0c48 to=fdfc552a
+Löse Unterschiede auf: 100% (1110079/1110079), fertig.
+Prüfe Konnektivität: 1374087, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=2/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=3/15 from=fdfc552a to=93ccb391
+Löse Unterschiede auf: 100% (686006/686006), fertig.
+Prüfe Konnektivität: 852449, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=3/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=4/15 from=93ccb391 to=7cd9beb3
+Löse Unterschiede auf: 100% (1001210/1001210), fertig.
+Prüfe Konnektivität: 1214465, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=4/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=5/15 from=7cd9beb3 to=7d6a31c3
+Löse Unterschiede auf: 100% (1004623/1004623), fertig.
+Prüfe Konnektivität: 1241737, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=5/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=6/15 from=7d6a31c3 to=9f3a0941
+Löse Unterschiede auf: 100% (549069/549069), fertig.
+Prüfe Konnektivität: 705339, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=6/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=7/15 from=9f3a0941 to=0e40da3e
+Löse Unterschiede auf: 100% (476356/476356), fertig.
+Prüfe Konnektivität: 592928, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=7/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=8/15 from=0e40da3e to=fffb08b3
+Löse Unterschiede auf: 100% (498825/498825), fertig.
+Prüfe Konnektivität: 641864, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=8/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=9/15 from=fffb08b3 to=f419f031
+Löse Unterschiede auf: 100% (503477/503477), fertig.
+Prüfe Konnektivität: 650315, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=9/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=10/15 from=f419f031 to=fb7d0829
+Löse Unterschiede auf: 100% (459986/459986), fertig.
+Prüfe Konnektivität: 599447, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=10/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=11/15 from=fb7d0829 to=10d916c8
+Löse Unterschiede auf: 100% (460659/460659), fertig.
+Prüfe Konnektivität: 618756, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=11/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=12/15 from=10d916c8 to=3abc79dc
+Löse Unterschiede auf: 100% (467986/467986), fertig.
+Prüfe Konnektivität: 621807, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=12/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=13/15 from=3abc79dc to=2accfdb7
+Löse Unterschiede auf: 100% (473770/473770), fertig.
+Prüfe Konnektivität: 620208, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=13/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=14/15 from=2accfdb7 to=0f70f5b0
+Löse Unterschiede auf: 100% (402991/402991), fertig.
+Prüfe Konnektivität: 541100, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=14/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=15/15 from=0f70f5b0 to=a55f7f5f
+Löse Unterschiede auf: 100% (409802/409802), fertig.
+Prüfe Konnektivität: 544627, fertig.
+[git-sync] bootstrap-batch: branch=refs/heads/master batch=15/15 complete
+[git-sync] bootstrap-batch: branch=refs/heads/master finalized
+--- PASS: TestBootstrap_LiveLinuxSourceBatched (1433.27s)
+PASS
+ok      github.com/soph/git-sync/internal/syncer        1433.585s
+
+---
+
+yes. let's do it

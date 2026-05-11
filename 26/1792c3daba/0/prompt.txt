@@ -1,0 +1,42 @@
+review the changes, I'm adding for the first time the goreleaser configuration to release versions using goreleaser. Review the changes, and, there are a couple of things missing like, completions (is it implemented? if not. skip ), version replacement via ldflags ( do we have version variables to replace ? ), any other findings?
+
+---
+
+commit only the add version command for now
+
+---
+
+is this the best description? 
+
+homebrew_casks:
+  - name: git-sync
+    repository:
+      owner: entireio
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/entireio/git-sync"
+    description: "git-sync — replicate and sync Git repositories"
+    binaries:
+      - git-sync
+    skip_upload: auto
+
+Read the README.md to validate it
+
+---
+
+na, about:
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+---
+
+do we need it? when is it used?
+
+---
+
+give a goreleaser command to dry run it locally and see if it is working
+
+---
+
+ship it

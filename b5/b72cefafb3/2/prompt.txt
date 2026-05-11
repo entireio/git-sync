@@ -1,0 +1,17 @@
+can you review the current state of the branch in relation to docs/rewrite-issue-list.md and @docs/rewrite-memo.md
+
+---
+
+go-git/v5 <- why are we not using v6
+
+---
+
+I'd like to still switch to v6
+
+---
+
+2
+
+---
+
+did you commit?
