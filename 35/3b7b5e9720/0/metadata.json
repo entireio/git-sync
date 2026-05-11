@@ -1,0 +1,47 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "353b7b5e9720",
+  "session_id": "8155f2c7-bab2-4be9-9e17-b4140feb7b6b",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-11T15:12:29.821312Z",
+  "branch": "nodo/go-billy-bump",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go.mod",
+    "go.sum"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "15aed482052a",
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 15113,
+    "cache_read_tokens": 173210,
+    "output_tokens": 905,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-11T15:12:29.814609Z",
+    "agent_lines": 6,
+    "agent_removed": 9,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "total_lines_changed": 15,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
