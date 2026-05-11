@@ -1,0 +1,273 @@
+/simplify
+
+---
+
+1. High: `replicate --all-refs` still weakens replicate’s failure semantics and can return success after only a partial mirror. `--all-refs` is wired through `allRefsFlag(..., &req.Policy.BestEffort)` for every sync-like command, including `replicate` ([cmd/git-sync/syncplan.go](/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/syncplan.go:114), [cmd/git-sync/flags.go](/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/flags.go:52)). In the replicate path, per-ref `receive-pack` rejections are then downgraded to `warn` and counted via `finalizeCounts`, not returned as an error ([internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:391), [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:858)). That means a host rejecting `refs/pull/*` or similar can leave the target incomplete while `replicate` still exits successfully, which contradicts the command’s “overwrite target refs to match source” behavior.
+
+2. High: `replicate --prune --all-refs` can still take the bootstrap shortcut even when stale managed “other” refs on the target should be pruned. `replicateCanBootstrap` only blocks bootstrap-on-prune for branches and opted-in tags; it never checks `AllRefs` namespaces ([internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:864)). By contrast, normal prune planning does treat `AllRefs` namespaces as managed and deletable ([internal/planner/planner.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner.go:229)). So if the target only has stale `refs/notes/*` / `refs/pull/*` refs, replicate can incorrectly skip straight to bootstrap and leave them behind.
+
+3. Medium: the `--all-refs` surface still promises “every `refs/*`”, but tags are explicitly excluded unless `--tags` is also set. The docs say `--all-refs` broadens discovery “to every `refs/*` namespace” ([docs/usage.md](/Users/soph/Work/entire/devenv/git-sync/docs/usage.md:167)) and the CLI help says “mirror every refs/*” ([cmd/git-sync/flags.go](/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/flags.go:54)), but `BuildDesiredRefs` only adds tags under `IncludeTags` and the test suite locks that in (`"tag should not appear without IncludeTags"`) ([internal/planner/planner.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner.go:77), [internal/planner/planner.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner.go:87), [internal/planner/planner_test.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner_test.go:398)). This is at least a user-facing contract mismatch.
+
+I did not rerun the full Go test suite in this environment; the review is based on the updated diff and targeted code inspection.
+
+---
+
+1. Medium: the public/API contract for `AllRefs` still overstates what the library and unstable `fetch` path actually do. `RefScope` says `AllRefs` broadens scope “to every `refs/*` on the source” ([types.go](/Users/soph/Work/entire/devenv/git-sync/types.go:81)), and `fetch --all-refs` says it will “include every `refs/*`” ([cmd/git-sync/fetch.go](/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/fetch.go:72)). But the actual selection logic still excludes tags unless `IncludeTags` is set ([internal/planner/planner.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner.go:82), [unstable/client.go](/Users/soph/Work/entire/devenv/git-sync/unstable/client.go:313), [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:956)), and the test suite explicitly locks that in (`"tag should not appear without IncludeTags"`) ([internal/planner/planner_test.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner_test.go:398)). The CLI `sync`/`bootstrap`/`replicate` wrappers now paper over this by implying `--tags`, but direct library callers and the unstable `fetch` command still get a narrower scope than the wording promises.
+
+The earlier replicate/best-effort and replicate/prune/bootstrap issues appear fixed in the current branch. I didn’t find additional correctness regressions beyond the remaining scope-contract mismatch above.
+
+---
+
+1. Stale phase log when tail is non-tag (bootstrap.go:626)
+  The on-phase reporter still emits "pushing tags" even when the tail batch contains only RefKindOther refs. After the rename to tailPlans, the user-visible phase string lies under
+  --all-refs without --tags. Update to e.g. "pushing tail refs" or branch on whether tailPlans actually contains tags.
+
+  2. Behavioral change in runReplicate beyond AllRefs (syncer.go:844)
+  The check moved from len(relayPlans) > 0 to len(pushPlans) > 0, which means pure-delete replicate runs (executeReplicate) now where previously it was a silent no-op. This is what
+  makes TestRun_IntegrationReplicateAllRefsPruneSkipsBootstrapForStaleOtherRef pass, but it also changes pre-existing replicate --prune scenarios that produce only deletions. The new
+  test covers the AllRefs case; consider adding a non-AllRefs pure-prune replicate test, or at minimum confirm repstrat.Execute handles a delete-only pushPlans cleanly (it should skip
+   the relay fetch).
+
+  3. Pushed - warned arithmetic in bootstrapWithInputs (syncer.go:1001)
+  This relies on bResult.Pushed having already counted the rejected refs (since the rejection callback fires after the pack is sent). It does today, but the relationship is implicit.
+  A short comment on why warned is subtracted, or shifting to "count from plans after rewrite" symmetric with finalizeCounts, would prevent future drift.
+
+  4. allRefsFlag PreRunE chain
+  Composing cmd.PreRunE via captured-prev is fine for current callers but not idempotent — calling allRefsFlag twice on one command would silently install two hooks. Not a real bug
+  given current usage; just worth a one-line guard or comment if you anticipate sharing this helper.
+
+---
+
+Second pass — with corrections from the first review.
+
+## Corrections to first review
+
+**My #1 (stale "pushing tags" log) was wrong.** I missed `tailPhaseLabel` at `internal/strategy/bootstrap/bootstrap.go:661`, which already picks between `"pushing tags"`, `"pushing other refs"`, and `"pushing tags and other refs"`. Retracted.
+
+**My #3 (`Pushed - warned` arithmetic) was wrong.** The actual code at `syncer.go:1006` already recounts `Pushed` from the rewritten plan slice rather than subtracting from `bResult.Pushed`, with a comment explaining why. Retracted.
+
+## Findings that still stand
+
+**Replicate behavioral change beyond AllRefs (`syncer.go:844`).** Original main: `executeReplicate` only ran when `len(relayPlans) > 0`. New code: runs when `len(pushPlans) > 0`. This silently fixes a long-standing issue where pure-delete replicate (e.g. `replicate --prune` against a target with stale refs but matching tips) was a no-op. `replicate.Execute` does handle delete-only correctly (skips the FetchPack section, just calls `PushCommands`). But the change is untested for the non-AllRefs case. Add one targeted regression: `replicate --prune` with a target that has one stale branch and otherwise-current tips, assert the deletion lands.
+
+**`allRefsFlag` PreRunE composition (`flags.go:60`).** Capturing `prev` and reassigning `cmd.PreRunE` works for current callers but isn't idempotent. If anyone ever calls `allRefsFlag` twice on the same command, only the last `implies` set fires. Cheap to harden with a one-liner guard or comment.
+
+## New findings on the second pass
+
+**`CanReplicateRelay` rejects `RefKindOther` outright (`internal/planner/relay.go:165`).** The default branch in the switch returns `(false, "replicate-unsupported-ref-kind")` regardless of action. Effects:
+- `replicate --all-refs` against an *empty* target works (bootstrap path bypasses the relay check).
+- `replicate --all-refs` against a non-empty target with an other-kind ref to create or update fails with "use sync instead". Covered by `TestRun_IntegrationAllRefsReplicateRejectsOtherKindIntoExistingTarget`.
+- Critically, **idempotent re-runs**: a user running `replicate --all-refs` periodically as a mirror will succeed when the source notes/pull ref hasn't changed (Action=Skip) but fail the moment that ref updates. Worth at least a doc note in `usage.md` — the current text only frames `replicate --all-refs` against the bootstrap-into-empty case.
+
+**`PlanRef` treats `RefKindOther` like a branch (`internal/planner/planner.go:288`).** The switch covers `RefKindTag` explicitly; everything else (including other-kind) falls through to fast-forward ancestry checks against the source store. For `refs/notes/*` updates this is wrong-shaped — notes commits don't form a linear chain in the same sense as branch tips, so a typical notes append will fail the FF check and require `--force` to update. Probably acceptable as v1 behavior, but the user-facing `Reason` ("is not an ancestor of") will be confusing for notes refs. Either special-case `RefKindOther` to behave like tags (block-without-force on differing hashes, with a clearer reason) or document the limitation.
+
+**`fetch --all-refs` flag string is misleading (`cmd/git-sync/fetch.go:72`).** Reads `"include every refs/* on the source (notes, pulls, custom namespaces) in the fetch request"`. AllRefs implies tags too at the library level, but the wording lists only the "extra" namespaces, so a user who reads it might think they need both `--tags` and `--all-refs`. The `sync`/`bootstrap` usage strings are clearer about this.
+
+**`BestEffort` only reachable from CLI via `--all-refs` implication.** The library exposes `SyncPolicy.BestEffort` independently and the docs note this is intentional, but there's no `--best-effort` flag. If a CLI user wants warn-semantics on a narrower scope, they can't get it. Probably an intentional surface decision (avoid flag proliferation), but worth confirming — three lines in `syncplan.go` would expose it.
+
+**No unit tests for `applyRejections` / `finalizeCounts`.** Both are pure functions over `[]BranchPlan` and a `map[ReferenceName]string`; integration coverage is solid but a direct test would catch refactor regressions on the rejection-keying logic (especially the "warned downgrade preserves Reason format" assertion).
+
+## Non-issues I checked
+
+- Concurrency on `s.rejections`: writes happen inside `sendReceivePack` which runs serially in the strategy executors. No goroutines involved. Safe.
+- `IsTag` for tail batches mixing tags+other-kind: results in `include-tag` being requested when at least one tag is present. Other-kind refs are explicit `want`s so `include-tag` doesn't matter. Fine.
+- `replicateCanBootstrap` second-loop additions correctly extend prune-scope to other-kind under AllRefs.
+
+## Net
+
+Smaller list than the first pass once I corrected my misses. The replicate-update-of-other-kind-fails-on-second-run UX and the `RefKindOther` ancestry behavior are the two things I'd want addressed (or explicitly documented as v1 limits) before merge. The pure-delete-replicate test is cheap insurance for a real behavioral change. Everything else is polish.
+
+---
+
+Third pass. New angles I hadn't checked.
+
+## New findings
+
+**1. `--all-refs` + `--branch foo` interaction is inconsistent (`internal/planner/planner.go:71`).**
+With `--branch foo --all-refs`:
+- `SelectBranches` filters branches to just `foo` (line 73).
+- `AllRefs` then unconditionally adds *all* tags (line 84) and *all* other-kind refs (line 95).
+
+So `--branch foo` is honored for branches but silently ignored for tags and other-kind refs. The doc comment on `PlanConfig.AllRefs` says it broadens "in addition to whatever branches/tags the existing flags select" — but for tags the implementation overrides the existing tag scope, not adds to it. Either:
+- Reject `--branch ... --all-refs` as a conflicting combination at the CLI level, or
+- Document that `--all-refs` overrides namespace filters except for `--branch`, or
+- Make branch filtering also respect AllRefs (AllRefs wins → all branches).
+
+No test exists for this combination today.
+
+**2. `Pusher` value-receiver fragility (`internal/gitproto/push.go:32`).**
+`NewPusher` returns `Pusher` by value; methods take value receivers. The wiring at `syncer.go:603` works because:
+1. `s.target.pusher = NewPusher(...)` stores a value inside a `*targetSession`.
+2. `s.target.pusher.OnRejection = ...` mutates the stored value.
+3. Strategies receive `s.target.pusher` later (after step 2), so the captured copy includes the callback.
+
+Order-of-operations dependent. If anyone moves the strategy capture before the OnRejection assignment, or stores the pusher in a non-pointer location, BestEffort silently breaks with no test signal. Cheap fix: switch `NewPusher` to return `*Pusher` and use pointer receivers, or expose `WithOnRejection(fn)` as a builder method.
+
+**3. BestEffort downgrades only target-side rejections, not source-side (`internal/gitproto/push.go` callback location).**
+The `OnRejection` callback fires from `sendReceivePack` decoding receive-pack's report-status. If the *source* `upload-pack` rejects a `want <hash>` for an other-kind ref (e.g. Gerrit `refs/changes/*` where the hash isn't in the publicly-fetchable closure), the entire `FetchPack` errors out and nothing downgrades to a warning. Common case: `--all-refs` against a server that advertises hidden refs but doesn't allow direct fetch of them. The user gets a hard failure with no per-ref granularity.
+
+`docs/usage.md` says BestEffort handles "per-ref receive-pack rejections" — that's accurate but the user-visible failure mode for hostile sources isn't called out. Worth adding a sentence: "Source-side `upload-pack` failures (the server refusing a `want`) remain fatal; BestEffort only covers target-side `receive-pack`."
+
+**4. `--all-refs --prune` for sync mode lacks a dedicated test.**
+The replicate path is covered (`TestRun_IntegrationReplicateAllRefsPruneSkipsBootstrapForStaleOtherRef`), and `addPruneCandidates` works for both. But there's no sync-mode test asserting that a stale `refs/notes/foo` on the target is deleted under `sync --all-refs --prune`. Same code path as replicate-prune, but worth a one-test sanity check given how new this scope is.
+
+**5. JSON `warned` field has no `omitempty`.**
+`json:"warned"` is always present, value defaults to 0. That's fine for forward compat but worth noting: a release-note line "stable JSON adds `warned`; field always present, value 0 when no warnings" lets downstream consumers know what to expect.
+
+## Things I checked and found clean
+
+- `s.rejections` map writes are serial (single goroutine through `sendReceivePack`); no race.
+- `Pusher` interface satisfaction across strategies (bootstrap/incremental/materialized/replicate) — all four declare local `TargetPusher` interfaces with just `PushPack`/`PushCommands`/`PushObjects`; the value-typed Pusher satisfies them via the closure-captured callback.
+- v1 source path: refPrefixes are ignored, full advertisement is consumed, then planner does the AllRefs filtering. CLI smoke test against v1 server is reaching the right code.
+- `replicateCanBootstrap` second-loop addition for other-kind under AllRefs: correct.
+
+## Carryover from second pass that I'd still prioritize
+
+- `replicate --all-refs` updating an existing other-kind ref always errors with "use sync instead" (because `CanReplicateRelay` defaults to reject for `RefKindOther`). For periodic mirrors this is a real foot-gun. At minimum, document.
+- `PlanRef` runs ancestry/FF logic on `RefKindOther` (treats them like branches). For notes refs this produces wrong-shaped error messages. Either branch on `RefKindOther` or document.
+- Add a non-AllRefs `replicate --prune` regression test for the `relayPlans==0 && pushPlans>0` case that the loop change at `syncer.go:844` newly enables.
+
+## Net
+
+Three passes haven't surfaced anything that should block merge. The branch is well-tested, the layering is clean, and the contract differences (`replicate` strict / `sync` best-effort, `AllRefs` implies tag inclusion, BestEffort independent of scope at library level) are explicit. Above are sharpening notes — pick what's worth the time, ship the rest.
+
+---
+
+## Findings new to this pass
+
+**1. `result.Pushed = len(plans)` in batched bootstrap is internally inconsistent under BestEffort (`internal/strategy/bootstrap/bootstrap.go:653`).**
+The batched executor sets `Pushed` to the plan count without consulting whether the tail-phase `PushPack` callback fired any rejections. It works in practice because `bootstrapWithInputs` (`syncer.go:1006`) recounts from the rewritten plan slice, but a direct caller of `Bootstrap` from `internal/strategy/bootstrap` would see inflated `Pushed` numbers. Currently only syncer wraps it, so not user-visible — but worth aligning the strategy's own bookkeeping (count from plan actions, same as the wrapping syncer does).
+
+**2. No test covers batched bootstrap + AllRefs + BestEffort with a hostile target.**
+- `TestBootstrap_IntegrationAllRefsBatchedTailPhase` exercises batched + AllRefs but uses a clean target.
+- `TestRun_IntegrationAllRefsBestEffortDowngradesNgToWarn` exercises BestEffort but doesn't set `TargetMaxPackBytes`, so it goes through the single-pack path, not batched.
+
+The combination is the most complex code path: `OnRejection` callback flowing through the Pusher value-copy into `bootstrap.Params.TargetPusher` interface, hitting during the tail phase after checkpointed branch batches. A target rejecting the notes ref under that scenario would catch wiring breaks the existing tests don't. One additional test (extend `TestBootstrap_IntegrationAllRefsBatchedTailPhase` with the receivePack hook from the warn test) would close the gap.
+
+**3. `applyRejections` runs twice when there are rejections (`syncer.go:393–395`).**
+Once on `pushPlans`, then again on `result.Plans`. Cosmetic — the second call iterates over the full plan slice (Skip/Block included) for no functional reason. A pointer-slice approach (`[]*BranchPlan` for `pushPlans` aliasing into `result.Plans`) would let one mutation suffice. Minor refactor opportunity, not a bug.
+
+**4. Tag-prune scope is broad in mapping mode (pre-existing, but worth noting alongside the `--branch` interaction from pass 3).**
+`addPruneCandidates` for tags only checks `IncludeTags || AllRefs` — it doesn't gate on whether the user is in mapping mode. So `git-sync sync --map main:stable --tags --prune` will prune every stale tag on the target even though the user only mapped one branch. This is pre-existing main behavior, not introduced here, but the `--all-refs --prune` combination this PR adds inherits the same shape — so a user running `--branch foo --all-refs --prune` may be surprised by collateral tag/notes deletions on the target.
+
+If the inconsistency from pass 3 (`--branch` + `--all-refs`) is addressed, this falls out naturally; otherwise the docs should call out that `--prune` operates over the full namespace scope, not just the filtered subset.
+
+**5. Phase reporter cardinality.**
+`tailPhaseLabel` returns one of three strings: `"pushing tags"`, `"pushing other refs"`, `"pushing tags and other refs"`. The third option is grammatically a little off ("pushing tags and other refs" reads ambiguously — "other refs" relative to what?). Pure nit, but `"pushing tags and non-branch refs"` or `"pushing tail refs"` would be clearer. Truly cosmetic.
+
+## Verified clean this pass
+
+- `closeOnce` wrapping is consistent across single-pack, batched-branch, and tail-phase code paths in bootstrap.
+- `applyRejections` correctly mutates both slices (pushPlans and result.Plans are independent value-copies, so both need the rewrite for JSON output to match the counts).
+- `OnRejection` doesn't leak across sync sessions: `s.rejections` is per-session, and the callback closure captures the per-session map.
+- Force × BestEffort interaction is sound: `--force` controls planner-level FF/retarget decisions; BestEffort downgrades target-side rejections of those forced updates. They're orthogonal and compose correctly.
+- `--all-refs` with v1 source: refPrefixes are ignored at the wire level, but the planner does its own AllRefs filtering on the full advertisement, so v1 reaches parity with v2 functionally.
+
+## Overall after four passes
+
+The branch is solid. The remaining items in priority order:
+
+1. **`replicate --all-refs` updating an existing other-kind ref always errors** (pass 2) — real UX foot-gun for periodic mirrors. Document or fix `CanReplicateRelay`.
+2. **`--branch foo --all-refs` ignores branch filter for tags/other-kind** (pass 3) — semantic surprise; either document precedence or reject the combination.
+3. **Pure-delete `replicate --prune` regression test for non-AllRefs** (pass 2) — covers the `syncer.go:844` loop change.
+4. **Batched bootstrap + AllRefs + BestEffort test** (pass 4) — closes the most complex untested path.
+5. Doc: source-side want failures aren't downgraded by BestEffort (pass 3).
+
+Everything else is polish (cosmetics, internal consistency, minor refactors). I don't think a fifth pass would surface much that's actionable — diminishing returns set in around here.
+
+---
+
+/simplify
+
+---
+
+can you give me a short pr description
+
+---
+
+can you give me a short pr description
+
+---
+
+can you give it to me without artifiical line breaks
+
+---
+
+question: compared to git pull / push --mirror is there anything else we are missing?
+
+---
+
+Can we create issues for all 3 on the repo? One thing with --force-with-lease: this works with a local repo because you have a known remote state usually, but git-syncs next run is stateless as the one before, but the idea would be to get what target has and then when pushing new things (after loading them from source) to then check refs didn't move?
+
+---
+
+linting fails can you fix and push
+
+---
+
+ok, one more thing: if we do --all-refs and include github pull refs, on an opensource repo this means pulling all the commits that are maybe not even merged so we are pulling commits in from forks... I wonder if we need to differentiate that
+
+---
+
+ok, one more thing: if we do --all-refs and include github pull refs, on an opensource repo this means pulling all the commits that are maybe not even merged so we are pulling commits in from forks... I wonder if we need to differentiate that
+
+---
+
+add the exclude flag and update the doc
+
+---
+
+Findings
+
+1. `probe --exclude-ref-prefix` is wired but ineffective in the returned ref list. [cmd/git-sync/probe.go](/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/probe.go:67) exposes the flag, and the docs say excluded refs are “left alone entirely” and “not pulled from source” via auto-discovery semantics [docs/usage.md](/Users/soph/Work/entire/devenv/git-sync/docs/usage.md:195). But `newProbeResult()` still serializes every entry from `s.sourceRefMap` without applying `planner.IsRefExcluded` [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:1114). The planner path does apply that filter for sync/fetch behavior [internal/planner/planner.go](/Users/soph/Work/entire/devenv/git-sync/internal/planner/planner.go:93), so probe is the odd one out. In practice, `probe --all-refs --exclude-ref-prefix refs/pull/` will still report `refs/pull/*`, which makes the new public `ProbeRequest.ExcludeRefPrefixes` knob misleading and breaks probe as a way to preview the effective scoped ref set.
+
+Assumption
+
+- I’m assuming the intended contract is that probe reflects the same filtered auto-discovery set as sync/fetch. The commit message and CLI/docs wording strongly suggest that, but there is no probe-specific regression test in this commit to lock it down.
+
+Change summary
+
+- The rest of the wiring looks consistent: sync/bootstrap/fetch/planner/prune all carry the new field through correctly, and the explicit-mapping bypass is implemented as described.
+
+---
+
+ok, pr is merged, can you now work https://github.com/entireio/git-sync/issues/45 (create a new branch, start with tests, do meaningful commits)
+
+---
+
+we should rather push both on go-git, right?
+
+---
+
+can you explain the work for 2 more?
+
+---
+
+yeah let's add that then to this PR, and then I'll see to get a stab at creating a go-git pr
+
+---
+
+/simplify
+
+---
+
+- Low: the new docs promise concurrent target-HEAD discovery, but the implementation is explicitly serialized. docs/usage.md:241 says the extra upload-pack info-refs round-trip
+    “runs concurrently with the existing target setup”, while internal/syncer/syncer.go:638 does the opposite and documents why: it must run after receive-pack because both calls
+    share targetConn and RequestInfoRefs mutates conn.Endpoint under FollowInfoRefsRedirect. That’s not a correctness break, but it is a user-visible behavior/perf claim that is
+    currently false.
+
+---
+
+let's open a PR
+
+---
+
+can we also mention that GitHub and GitLab aren't supporting symref-update ?
+
+---
+
+DiscoverHEAD may corrupt target endpoint for push operations
+
+Medium Severity
+
+When --target-follow-info-refs-redirect is enabled, DiscoverHEAD calls RequestInfoRefs for upload-pack on the same targetConn that was already used for receive-pack. RequestInfoRefs mutates conn.Endpoint.Host/Scheme to the final redirect destination. If the upload-pack endpoint redirects to a different host than receive-pack did, subsequent push operations (which use conn.Endpoint via the Pusher created on the same *Conn) will target the wrong server. The conn.Endpoint needs to be saved and restored around the DiscoverHEAD call, or a separate connection used.
