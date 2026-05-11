@@ -1850,37 +1850,25 @@ func TestProbe_IntegrationTargetCapabilities(t *testing.T) {
 	}
 }
 
-// ProbeResult.SourceHEAD and TargetHEAD let `git-sync probe` preview the
-// default-branch mismatch without actually mutating the target.
-func TestProbe_IntegrationSurfacesBothHEADs(t *testing.T) {
+// ProbeResult.SourceHEAD lets `git-sync probe` show the source's default
+// branch without performing a sync. Same protocol limitation as the sync
+// path: target HEAD isn't exposed by receive-pack advertisements.
+func TestProbe_IntegrationSurfacesSourceHEAD(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
 
-	targetRepo, err := git.Init(memory.NewStorage(), nil, git.WithDefaultBranch("refs/heads/main"))
-	if err != nil {
-		t.Fatalf("init target repo: %v", err)
-	}
-
 	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
-	targetServer := newSmartHTTPRepoServer(t, targetRepo)
 	defer sourceServer.Close()
-	defer targetServer.Close()
 
 	result, err := Probe(context.Background(), Config{
 		Source:       Endpoint{URL: sourceServer.RepoURL()},
-		Target:       Endpoint{URL: targetServer.RepoURL()},
 		ProtocolMode: protocolModeAuto,
 	})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
-	wantSource := plumbing.NewBranchReferenceName(testBranch)
-	if result.SourceHEAD != wantSource {
-		t.Errorf("SourceHEAD = %q, want %q", result.SourceHEAD, wantSource)
-	}
-	wantTarget := plumbing.ReferenceName("refs/heads/main")
-	if result.TargetHEAD != wantTarget {
-		t.Errorf("TargetHEAD = %q, want %q", result.TargetHEAD, wantTarget)
+	if got, want := result.SourceHEAD, plumbing.NewBranchReferenceName(testBranch); got != want {
+		t.Errorf("SourceHEAD = %q, want %q", got, want)
 	}
 }
 
@@ -2855,52 +2843,16 @@ func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-// Result.SourceHEAD and Result.TargetHEAD capture each side's symref HEAD
-// target, so library callers can detect a default-branch mismatch without
-// scraping the notice stream. Bootstrap into an empty target whose bare-repo
-// HEAD default differs from the source's surfaces this case.
-func TestRun_IntegrationBootstrapSurfacesHEADInResult(t *testing.T) {
+// Result.SourceHEAD carries the source's symref HEAD target, parsed from
+// the v2 ls-refs response (or v1 advertisement's symref capability), so
+// library callers can compare against the target's intended default
+// branch without out-of-band metadata. Target HEAD is not exposed: the
+// receive-pack advertisement we already query doesn't include HEAD, and
+// detecting it would need a separate upload-pack round-trip.
+func TestRun_IntegrationSyncSurfacesSourceHEADInResult(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 1)
 
-	// go-git Init defaults HEAD to refs/heads/master; pin target to
-	// refs/heads/main so the symrefs diverge.
-	targetRepo, err := git.Init(memory.NewStorage(), nil, git.WithDefaultBranch("refs/heads/main"))
-	if err != nil {
-		t.Fatalf("init target repo: %v", err)
-	}
-
-	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
-	targetServer := newSmartHTTPRepoServer(t, targetRepo)
-	defer sourceServer.Close()
-	defer targetServer.Close()
-
-	result, err := Run(context.Background(), Config{
-		Source:       Endpoint{URL: sourceServer.RepoURL()},
-		Target:       Endpoint{URL: targetServer.RepoURL()},
-		ProtocolMode: protocolModeAuto,
-	})
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	wantSourceHEAD := plumbing.NewBranchReferenceName(testBranch)
-	if result.SourceHEAD != wantSourceHEAD {
-		t.Errorf("SourceHEAD = %q, want %q", result.SourceHEAD, wantSourceHEAD)
-	}
-	wantTargetHEAD := plumbing.ReferenceName("refs/heads/main")
-	if result.TargetHEAD != wantTargetHEAD {
-		t.Errorf("TargetHEAD = %q, want %q", result.TargetHEAD, wantTargetHEAD)
-	}
-}
-
-// When source HEAD and target HEAD match, the sync surfaces both fields
-// identically — no mismatch from the consumer's perspective.
-func TestRun_IntegrationBootstrapHEADMatch(t *testing.T) {
-	sourceRepo, sourceFS := newSourceRepo(t)
-	makeCommits(t, sourceRepo, sourceFS, 1)
-
-	// Both source and target default to refs/heads/master via go-git's
-	// plumbing.Master.
 	targetRepo, err := git.Init(memory.NewStorage())
 	if err != nil {
 		t.Fatalf("init target repo: %v", err)
@@ -2919,8 +2871,8 @@ func TestRun_IntegrationBootstrapHEADMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if result.SourceHEAD != result.TargetHEAD {
-		t.Errorf("expected matching HEADs, got source=%q target=%q", result.SourceHEAD, result.TargetHEAD)
+	if got, want := result.SourceHEAD, plumbing.NewBranchReferenceName(testBranch); got != want {
+		t.Errorf("SourceHEAD = %q, want %q", got, want)
 	}
 }
 
@@ -3874,9 +3826,12 @@ func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, _ *http.
 
 func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
 	prefixes := make([]string, 0, len(req.Args))
+	wantSymrefs := false
 	for _, arg := range req.Args {
 		if strings.HasPrefix(arg, "ref-prefix ") {
 			prefixes = append(prefixes, strings.TrimPrefix(arg, "ref-prefix "))
+		} else if arg == "symrefs" {
+			wantSymrefs = true
 		}
 	}
 
@@ -3887,6 +3842,14 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	}
 
 	var buf bytes.Buffer
+	if wantSymrefs && lsRefsCoversHead(prefixes) {
+		if headLine, ok := s.lsRefsHeadLine(); ok {
+			if _, err := pktline.WriteString(&buf, headLine); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 	for _, ref := range refs {
 		if _, err := pktline.WriteString(&buf, ref.Hash().String()+" "+ref.Name().String()+"\n"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4131,6 +4094,34 @@ func isConnectionCloseError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection reset by peer")
+}
+
+// lsRefsCoversHead returns true when prefixes is empty (matches everything)
+// or any prefix is a prefix of "HEAD".
+func lsRefsCoversHead(prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return true
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix("HEAD", p) {
+			return true
+		}
+	}
+	return false
+}
+
+// lsRefsHeadLine formats a v2 ls-refs HEAD line with symref-target attribute,
+// matching what real git advertises when a client requests "symrefs".
+func (s *smartHTTPRepoServer) lsRefsHeadLine() (string, bool) {
+	head, err := s.repo.Storer.Reference(plumbing.HEAD)
+	if err != nil || head.Type() != plumbing.SymbolicReference {
+		return "", false
+	}
+	resolved, err := s.repo.Reference(head.Target(), true)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("%s HEAD symref-target:%s\n", resolved.Hash(), head.Target()), true
 }
 
 func (s *smartHTTPRepoServer) refsMatchingPrefixes(prefixes []string) ([]*plumbing.Reference, error) {
