@@ -131,25 +131,26 @@ func (r RefInfo) MarshalJSON() ([]byte, error) {
 
 // Result holds the outcome of a sync or bootstrap operation.
 type Result struct {
-	Plans              []BranchPlan `json:"plans"`
-	Pushed             int          `json:"pushed"`
-	Skipped            int          `json:"skipped"`
-	Blocked            int          `json:"blocked"`
-	Deleted            int          `json:"deleted"`
-	Warned             int          `json:"warned"`
-	DryRun             bool         `json:"dryRun"`
-	OperationMode      string       `json:"operationMode"`
-	Relay              bool         `json:"relay"`
-	RelayMode          string       `json:"relayMode"`
-	RelayReason        string       `json:"relayReason"`
-	Batching           bool         `json:"batching"`
-	BatchCount         int          `json:"batchCount"`
-	PlannedBatchCount  int          `json:"plannedBatchCount"`
-	TempRefs           []string     `json:"tempRefs"`
-	BootstrapSuggested bool         `json:"bootstrapSuggested"`
-	Stats              Stats        `json:"stats"`
-	Measurement        Measurement  `json:"measurement"`
-	Protocol           string       `json:"protocol"`
+	Plans              []BranchPlan           `json:"plans"`
+	Pushed             int                    `json:"pushed"`
+	Skipped            int                    `json:"skipped"`
+	Blocked            int                    `json:"blocked"`
+	Deleted            int                    `json:"deleted"`
+	Warned             int                    `json:"warned"`
+	DryRun             bool                   `json:"dryRun"`
+	OperationMode      string                 `json:"operationMode"`
+	Relay              bool                   `json:"relay"`
+	RelayMode          string                 `json:"relayMode"`
+	RelayReason        string                 `json:"relayReason"`
+	Batching           bool                   `json:"batching"`
+	BatchCount         int                    `json:"batchCount"`
+	PlannedBatchCount  int                    `json:"plannedBatchCount"`
+	TempRefs           []string               `json:"tempRefs"`
+	BootstrapSuggested bool                   `json:"bootstrapSuggested"`
+	SourceHEAD         plumbing.ReferenceName `json:"sourceHead,omitempty"`
+	Stats              Stats                  `json:"stats"`
+	Measurement        Measurement            `json:"measurement"`
+	Protocol           string                 `json:"protocol"`
 }
 
 func (r Result) Lines() []string {
@@ -173,21 +174,25 @@ func (r Result) Lines() []string {
 	if r.Batching && len(r.TempRefs) > 0 {
 		lines = append(lines, "batching: temp-refs="+strings.Join(r.TempRefs, ","))
 	}
+	if r.SourceHEAD != "" {
+		lines = append(lines, "source-head: "+r.SourceHEAD.String())
+	}
 	return lines
 }
 
 // ProbeResult holds the outcome of a probe operation.
 type ProbeResult struct {
-	SourceURL     string      `json:"sourceUrl"`
-	TargetURL     string      `json:"targetUrl,omitempty"`
-	RequestedMode string      `json:"requestedMode"`
-	Protocol      string      `json:"protocol"`
-	RefPrefixes   []string    `json:"refPrefixes"`
-	Capabilities  []string    `json:"sourceCapabilities"`
-	TargetCaps    []string    `json:"targetCapabilities,omitempty"`
-	Refs          []RefInfo   `json:"refs"`
-	Stats         Stats       `json:"stats"`
-	Measurement   Measurement `json:"measurement"`
+	SourceURL     string                 `json:"sourceUrl"`
+	TargetURL     string                 `json:"targetUrl,omitempty"`
+	RequestedMode string                 `json:"requestedMode"`
+	Protocol      string                 `json:"protocol"`
+	RefPrefixes   []string               `json:"refPrefixes"`
+	Capabilities  []string               `json:"sourceCapabilities"`
+	TargetCaps    []string               `json:"targetCapabilities,omitempty"`
+	Refs          []RefInfo              `json:"refs"`
+	SourceHEAD    plumbing.ReferenceName `json:"sourceHead,omitempty"`
+	Stats         Stats                  `json:"stats"`
+	Measurement   Measurement            `json:"measurement"`
 }
 
 func (r ProbeResult) Lines() []string {
@@ -198,6 +203,9 @@ func (r ProbeResult) Lines() []string {
 	}
 	if len(r.RefPrefixes) > 0 {
 		lines = append(lines, "ref-prefixes: "+strings.Join(r.RefPrefixes, ", "))
+	}
+	if r.SourceHEAD != "" {
+		lines = append(lines, "source-head: "+r.SourceHEAD.String())
 	}
 	if len(r.Capabilities) > 0 {
 		lines = append(lines, "source-capabilities: "+strings.Join(r.Capabilities, ", "))
@@ -688,6 +696,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 				Plans: plans, DryRun: true, RelayReason: reason,
 				OperationMode: modeSync, BootstrapSuggested: true, Stats: stats.snapshot(),
 				Measurement: measurementDone(), Protocol: sourceService.Protocol,
+				SourceHEAD: s.sourceService.HeadTarget,
 			}, nil
 		}
 		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason)
@@ -731,6 +740,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	result := Result{
 		Plans: plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: sourceService.Protocol,
 		Stats: stats.snapshot(), Measurement: measurementDone(),
+		SourceHEAD: s.sourceService.HeadTarget,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -816,6 +826,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				Stats:              s.stats.snapshot(),
 				Measurement:        s.measurementDone(),
 				Protocol:           s.sourceService.Protocol,
+				SourceHEAD:         s.sourceService.HeadTarget,
 			}, nil
 		}
 		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, "empty-target-managed-refs")
@@ -833,6 +844,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		Protocol:      s.sourceService.Protocol,
 		Stats:         s.stats.snapshot(),
 		Measurement:   s.measurementDone(),
+		SourceHEAD:    s.sourceService.HeadTarget,
 	}
 
 	pushPlans := make([]BranchPlan, 0, len(plans))
@@ -1029,6 +1041,7 @@ func bootstrapWithInputs(
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
 		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
+		SourceHEAD: s.sourceService.HeadTarget,
 	}, nil
 }
 
@@ -1128,6 +1141,7 @@ func (s *syncSession) newProbeResult() ProbeResult {
 		RefPrefixes:   planner.RefPrefixes(planConfig(s.cfg)),
 		Capabilities:  s.sourceService.Capabilities(),
 		Refs:          refInfos,
+		SourceHEAD:    s.sourceService.HeadTarget,
 		Stats:         s.stats.snapshot(),
 		Measurement:   s.measurementDone(),
 	}

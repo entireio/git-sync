@@ -2781,6 +2781,144 @@ func TestRun_IntegrationAddHistoricalAnnotatedTagAfterInitialBranchSync_NoThinTa
 	}
 }
 
+// Sync surfaces the source's symref HEAD target on Result, parsed from the
+// upload-pack advertisement we already make. Used by callers to know the
+// source's default branch without out-of-band metadata.
+func TestRun_IntegrationSyncSurfacesSourceHEAD(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if got, want := result.SourceHEAD, plumbing.NewBranchReferenceName(testBranch); got != want {
+		t.Errorf("SourceHEAD = %q, want %q", got, want)
+	}
+}
+
+// Regression: with --map remapping source HEAD's branch to a different
+// target name, hoisting must match by source-side ref (where HEAD points)
+// and rewrite the target name, so the target server still sees the right
+// mapped ref pushed first. Without the SourceRef-based match the cmd's
+// Name (TargetRef) never equals sourceHEAD and hoisting silently skips.
+func TestRun_IntegrationBootstrapPushesSourceHeadBranchFirstUnderMapping(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	syncertest.SetRefAtBranch(t, sourceRepo, plumbing.NewBranchReferenceName("alpha"), testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	var firstCommandRef plumbing.ReferenceName
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		if firstCommandRef == "" && len(req.Commands) > 0 {
+			firstCommandRef = req.Commands[0].Name
+		}
+		return nil
+	}
+
+	if _, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+		// Map source's HEAD branch (master) to a different target name.
+		// Plus alpha mapped 1:1 to ensure the hoist isn't trivially first.
+		Mappings: []RefMapping{
+			{Source: "alpha", Target: "alpha"},
+			{Source: testBranch, Target: "stable"},
+		},
+	}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	want := plumbing.NewBranchReferenceName("stable")
+	if firstCommandRef != want {
+		t.Errorf("first receive-pack command = %q, want %q (mapped target of source HEAD's branch should be pushed first)", firstCommandRef, want)
+	}
+}
+
+// Bootstrap pushes the source HEAD's branch as the first ref command, so
+// hosts that pick the default branch from the first push on a fresh repo
+// (GitHub, GitLab) end up with the right default. Source has an alpha
+// branch that sorts before master alphabetically; without the ordering
+// fix the bootstrap pushes alpha first and master second.
+func TestRun_IntegrationBootstrapPushesSourceHeadBranchFirst(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	syncertest.SetRefAtBranch(t, sourceRepo, plumbing.NewBranchReferenceName("alpha"), testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	var firstCommandRef plumbing.ReferenceName
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		if firstCommandRef == "" && len(req.Commands) > 0 {
+			firstCommandRef = req.Commands[0].Name
+		}
+		return nil // delegate to default handler
+	}
+
+	if _, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	want := plumbing.NewBranchReferenceName(testBranch)
+	if firstCommandRef != want {
+		t.Errorf("first receive-pack command = %q, want %q (source HEAD's branch should be pushed first)", firstCommandRef, want)
+	}
+}
+
+// Probe surfaces the source's symref HEAD target without performing a sync.
+func TestProbe_IntegrationSurfacesSourceHEAD(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	defer sourceServer.Close()
+
+	result, err := Probe(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got, want := result.SourceHEAD, plumbing.NewBranchReferenceName(testBranch); got != want {
+		t.Errorf("SourceHEAD = %q, want %q", got, want)
+	}
+}
+
 func TestRun_IntegrationAllRefsBootstrapsCustomNamespace(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -3771,9 +3909,12 @@ func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, _ *http.
 
 func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
 	prefixes := make([]string, 0, len(req.Args))
+	wantSymrefs := false
 	for _, arg := range req.Args {
 		if strings.HasPrefix(arg, "ref-prefix ") {
 			prefixes = append(prefixes, strings.TrimPrefix(arg, "ref-prefix "))
+		} else if arg == "symrefs" {
+			wantSymrefs = true
 		}
 	}
 
@@ -3784,6 +3925,16 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	}
 
 	var buf bytes.Buffer
+	// Real git emits HEAD with symref-target attribute under "symrefs", as
+	// long as a ref-prefix covers HEAD (or no prefixes are given).
+	if wantSymrefs && coversHead(prefixes) {
+		if line, ok := s.lsRefsHeadLine(); ok {
+			if _, err := pktline.WriteString(&buf, line); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 	for _, ref := range refs {
 		if _, err := pktline.WriteString(&buf, ref.Hash().String()+" "+ref.Name().String()+"\n"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4028,6 +4179,33 @@ func isConnectionCloseError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection reset by peer")
+}
+
+// coversHead reports whether the ls-refs prefix list would include HEAD.
+func coversHead(prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return true
+	}
+	for _, p := range prefixes {
+		if p == "HEAD" {
+			return true
+		}
+	}
+	return false
+}
+
+// lsRefsHeadLine formats a v2 ls-refs HEAD line with the symref-target
+// attribute, matching what real git advertises under "symrefs".
+func (s *smartHTTPRepoServer) lsRefsHeadLine() (string, bool) {
+	head, err := s.repo.Storer.Reference(plumbing.HEAD)
+	if err != nil || head.Type() != plumbing.SymbolicReference {
+		return "", false
+	}
+	resolved, err := s.repo.Reference(head.Target(), true)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("%s HEAD symref-target:%s\n", resolved.Hash(), head.Target()), true
 }
 
 func (s *smartHTTPRepoServer) refsMatchingPrefixes(prefixes []string) ([]*plumbing.Reference, error) {

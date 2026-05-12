@@ -22,6 +22,68 @@ import (
 	"entire.io/entire/git-sync/internal/planner"
 )
 
+func TestHoistSourceHeadPlan(t *testing.T) {
+	main := plumbing.NewBranchReferenceName("main")
+	master := plumbing.NewBranchReferenceName("master")
+	alpha := plumbing.NewBranchReferenceName("alpha")
+	stable := plumbing.NewBranchReferenceName("stable")
+
+	plan := func(source, target plumbing.ReferenceName) planner.BranchPlan {
+		return planner.BranchPlan{SourceRef: source, TargetRef: target}
+	}
+
+	tests := []struct {
+		name           string
+		plans          []planner.BranchPlan
+		head           plumbing.ReferenceName
+		wantTargetRefs []plumbing.ReferenceName
+	}{
+		{
+			name:           "hoists matching plan to front",
+			plans:          []planner.BranchPlan{plan(alpha, alpha), plan(main, main), plan(master, master)},
+			head:           main,
+			wantTargetRefs: []plumbing.ReferenceName{main, alpha, master},
+		},
+		{
+			name:           "matches on SourceRef, hoists mapped TargetRef",
+			plans:          []planner.BranchPlan{plan(alpha, alpha), plan(master, stable)},
+			head:           master,
+			wantTargetRefs: []plumbing.ReferenceName{stable, alpha},
+		},
+		{
+			name:           "already first stays put",
+			plans:          []planner.BranchPlan{plan(main, main), plan(alpha, alpha)},
+			head:           main,
+			wantTargetRefs: []plumbing.ReferenceName{main, alpha},
+		},
+		{
+			name:           "empty source HEAD is a no-op",
+			plans:          []planner.BranchPlan{plan(alpha, alpha), plan(main, main)},
+			head:           "",
+			wantTargetRefs: []plumbing.ReferenceName{alpha, main},
+		},
+		{
+			name:           "no matching plan is a no-op",
+			plans:          []planner.BranchPlan{plan(alpha, alpha), plan(master, master)},
+			head:           main,
+			wantTargetRefs: []plumbing.ReferenceName{alpha, master},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hoistSourceHeadPlan(tt.plans, tt.head)
+			if len(got) != len(tt.wantTargetRefs) {
+				t.Fatalf("length mismatch: got %d, want %d", len(got), len(tt.wantTargetRefs))
+			}
+			for i, want := range tt.wantTargetRefs {
+				if got[i].TargetRef != want {
+					t.Errorf("position %d: got %q, want %q", i, got[i].TargetRef, want)
+				}
+			}
+		})
+	}
+}
+
 func TestIsTargetBodyLimitError(t *testing.T) {
 	tests := []struct {
 		name string

@@ -222,6 +222,31 @@ git-sync sync \
   <target-url>
 ```
 
+## HEAD / Default Branch
+
+git-sync surfaces the source's symref HEAD target — the source's default
+branch — in result output:
+
+- JSON: `execution.sourceHead` (sync / plan / replicate / bootstrap); `sourceHead` (probe).
+- Human: a `source-head: <ref>` line.
+
+```
+$ git-sync probe --json <source-url> | jq .sourceHead
+"refs/heads/main"
+```
+
+**Bootstrap pushes the source HEAD's branch first.** When initializating a new 
+repository, the default branch is based on the first push to a fresh repo (GitHub, GitLab,
+others), this makes the mirror's default branch match the source
+without any manual step. No flag needed — the ordering is always applied.
+
+git's wire protocol has no command for updating a remote symref, so for
+hosts that *don't* infer the default from first-push (raw bare repos,
+some self-hosted setups), the default branch has to be set out of band:
+
+1. **Match the default at init time** — `git init --bare --initial-branch=<source-default>` on the target before the first sync.
+2. **Set HEAD post-sync** — `git symbolic-ref HEAD refs/heads/<source-default>` on the bare repo, or the host's API/UI (GitHub `PATCH /repos/{owner}/{repo}` with `default_branch`; GitLab `PUT /projects/:id` with `default_branch`).
+
 ## JSON Output
 
 Add `--json` to any command to emit machine-readable output instead of the default text format.
@@ -232,6 +257,7 @@ The JSON interface is stable:
 - refs and hashes are serialized as strings, not raw byte arrays
 - top-level keys include `plans`, `pushed`, `skipped`, `blocked`, `deleted`, `warned`, `dryRun`, `protocol`, and `stats`, plus `relay`, `relayMode`, `relayReason`, `batching`, `batchCount`, `plannedBatchCount`, and `tempRefs`
 - each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
+- `execution.sourceHead` (sync/plan/replicate/bootstrap) and `sourceHead` (probe) carry the source's symref HEAD target when advertised
 
 ## Auth
 
