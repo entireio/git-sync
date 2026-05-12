@@ -3771,9 +3771,12 @@ func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, _ *http.
 
 func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
 	prefixes := make([]string, 0, len(req.Args))
+	wantSymrefs := false
 	for _, arg := range req.Args {
 		if strings.HasPrefix(arg, "ref-prefix ") {
 			prefixes = append(prefixes, strings.TrimPrefix(arg, "ref-prefix "))
+		} else if arg == "symrefs" {
+			wantSymrefs = true
 		}
 	}
 
@@ -3784,6 +3787,16 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	}
 
 	var buf bytes.Buffer
+	// Real git emits HEAD with symref-target attribute under "symrefs", as
+	// long as a ref-prefix covers HEAD (or no prefixes are given).
+	if wantSymrefs && coversHead(prefixes) {
+		if line, ok := s.lsRefsHeadLine(); ok {
+			if _, err := pktline.WriteString(&buf, line); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 	for _, ref := range refs {
 		if _, err := pktline.WriteString(&buf, ref.Hash().String()+" "+ref.Name().String()+"\n"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -4028,6 +4041,33 @@ func isConnectionCloseError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection reset by peer")
+}
+
+// coversHead reports whether the ls-refs prefix list would include HEAD.
+func coversHead(prefixes []string) bool {
+	if len(prefixes) == 0 {
+		return true
+	}
+	for _, p := range prefixes {
+		if p == "HEAD" {
+			return true
+		}
+	}
+	return false
+}
+
+// lsRefsHeadLine formats a v2 ls-refs HEAD line with the symref-target
+// attribute, matching what real git advertises under "symrefs".
+func (s *smartHTTPRepoServer) lsRefsHeadLine() (string, bool) {
+	head, err := s.repo.Storer.Reference(plumbing.HEAD)
+	if err != nil || head.Type() != plumbing.SymbolicReference {
+		return "", false
+	}
+	resolved, err := s.repo.Reference(head.Target(), true)
+	if err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("%s HEAD symref-target:%s\n", resolved.Hash(), head.Target()), true
 }
 
 func (s *smartHTTPRepoServer) refsMatchingPrefixes(prefixes []string) ([]*plumbing.Reference, error) {
