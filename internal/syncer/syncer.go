@@ -878,7 +878,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		}
 		repResult, err := s.executeReplicate(ctx, desiredRefs, pushPlans)
 		if err != nil {
-			return result, fmt.Errorf("replicate relay failed: %w; use sync instead", err)
+			return result, fmt.Errorf("replicate relay failed: %w", err)
 		}
 		result.Relay = repResult.Relay
 		result.RelayMode = repResult.RelayMode
