@@ -1,0 +1,28 @@
+{
+  "cli_version": "v0.6.1-dev-774ee21f1",
+  "checkpoint_id": "604f682ccdc6",
+  "strategy": "manual-commit",
+  "branch": "soph/force-clarification",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync/main_test.go",
+    "cmd/git-sync/syncplan.go",
+    "internal/convert/convert.go",
+    "internal/gitproto/push.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/60/4f682ccdc6/0/metadata.json",
+      "transcript": "/60/4f682ccdc6/0/transcript.jsonl",
+      "content_hash": "/60/4f682ccdc6/0/transcript_hash.txt",
+      "prompt": "/60/4f682ccdc6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3191,
+    "cache_creation_tokens": 18237,
+    "cache_read_tokens": 2072062,
+    "output_tokens": 9386,
+    "api_call_count": 10
+  }
+}
