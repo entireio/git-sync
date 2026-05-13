@@ -1,0 +1,49 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "98799f8a9225",
+  "session_id": "aefcb05b-206d-434a-94bf-d11991a74a0a",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-13T14:53:12.187573Z",
+  "branch": "soph/force-clarification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "d0e999b916b6",
+  "token_usage": {
+    "input_tokens": 3422,
+    "cache_creation_tokens": 601455,
+    "cache_read_tokens": 24313771,
+    "output_tokens": 112947,
+    "api_call_count": 146
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-13T14:53:12.104959Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 1,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 35,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 35
+      }
+    }
+  ]
+}
