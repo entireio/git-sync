@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.6.1-dev-774ee21f1",
+  "checkpoint_id": "6432aa0b89a7",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/push.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/64/32aa0b89a7/0/metadata.json",
+      "transcript": "/64/32aa0b89a7/0/transcript.jsonl",
+      "content_hash": "/64/32aa0b89a7/0/transcript_hash.txt",
+      "prompt": "/64/32aa0b89a7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1353,
+    "cache_creation_tokens": 7409152,
+    "cache_read_tokens": 370026781,
+    "output_tokens": 701276,
+    "api_call_count": 929
+  }
+}
