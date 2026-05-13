@@ -413,7 +413,7 @@ func TestAnnotateLeaseFailureWrapsStaleInfo(t *testing.T) {
 
 func TestAnnotateLeaseFailurePassesNonCommandStatusErrors(t *testing.T) {
 	err := errors.New("network blew up")
-	if got := annotateLeaseFailure(err); got != err {
+	if got := annotateLeaseFailure(err); !errors.Is(got, err) {
 		t.Fatalf("unrelated error should pass through unchanged, got %v", got)
 	}
 }
