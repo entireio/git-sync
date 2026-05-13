@@ -3,9 +3,10 @@
   "checkpoint_id": "6432aa0b89a7",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
-    "internal/gitproto/push.go"
+    "internal/gitproto/push.go",
+    "internal/gitproto/push_test.go"
   ],
   "sessions": [
     {
@@ -13,13 +14,19 @@
       "transcript": "/64/32aa0b89a7/0/full.jsonl",
       "content_hash": "/64/32aa0b89a7/0/content_hash.txt",
       "prompt": "/64/32aa0b89a7/0/prompt.txt"
+    },
+    {
+      "metadata": "/64/32aa0b89a7/1/metadata.json",
+      "transcript": "/64/32aa0b89a7/1/full.jsonl",
+      "content_hash": "/64/32aa0b89a7/1/content_hash.txt",
+      "prompt": "/64/32aa0b89a7/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1353,
-    "cache_creation_tokens": 7409152,
-    "cache_read_tokens": 370026781,
-    "output_tokens": 701276,
-    "api_call_count": 929
+    "input_tokens": 1517,
+    "cache_creation_tokens": 7930975,
+    "cache_read_tokens": 381813020,
+    "output_tokens": 770318,
+    "api_call_count": 1023
   }
 }
