@@ -1,0 +1,73 @@
+can you look at https://github.com/entireio/git-sync/issues/46 and then chat
+
+---
+
+It
+
+---
+
+I think the idea is to support atomic where the change is small, for a intial flow with multiple pack files I think the assumption is that no target changes happen at the same time. If anxything maybe https://github.com/entireio/git-sync/issues/47 should help making sure after each packfile we fail if state has changed.
+
+---
+
+How would that work with something like github pull refs that should be warn skipped now if fail to create?
+
+---
+
+but from what we looked git push mirror did also only warn about github special refs and not fail? or does it?
+
+---
+
+but then we should update the issue since it claims git does it without the atomic flag, would then more consider rewriting it, that atomic is currently not supported and then we wait if people start askin?
+
+---
+
+keep issue open, but remove implementation, flag that commenting on the issue if you need it, add a comment explain the current state
+
+---
+
+ok then maaybe work on https://github.com/entireio/git-sync/issues/47
+
+---
+
+so the force that exists is force with lease?
+
+---
+
+I'd go with renaming --force to --force-with-lease and just add a real normal --force
+
+---
+
+I do 1
+
+---
+
+yes,
+
+---
+
+or no, do c
+
+---
+
+can you do meaninful commits, also mayxbe we update the changelog when we do a release?
+
+---
+
+/simplify
+
+---
+
+can you give me a short pr descriptikon
+
+---
+
+Findings:
+
+1. High: `BestEffort` currently defeats the new `--force-with-lease` guarantee. In [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:634), any best-effort run installs `OnRejection` for all per-ref `ng` statuses. Then [internal/gitproto/push.go](/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/push.go:172) skips `report.Error()` entirely when that callback is present, so lease-mismatch statuses get downgraded to warnings instead of failing the run. That means `sync --all-refs --force-with-lease` can exit successfully after a concurrent target update, which contradicts the documented lease semantics.
+
+2. Medium: the public and unstable APIs no longer reject invalid force combinations at the request edge. [client.go](/Users/soph/Work/entire/devenv/git-sync/client.go:146) validates URLs/protocol/mappings, but never rejects `ForceWithLease && ForceBlind` or `ModeReplicate` plus force flags. The unstable client has the same issue: [unstable/client.go](/Users/soph/Work/entire/devenv/git-sync/unstable/client.go:152) goes straight into `buildSyncConfig`, and the actual rejection only happens later in [internal/syncer/syncer.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/syncer.go:569). That’s a regression from the stated “fail before I/O / at the API edge” intent, and it also means custom auth providers may run before the request is rejected.
+
+3. Low: the updated docs now describe `replicate` incorrectly. [docs/usage.md](/Users/soph/Work/entire/devenv/git-sync/docs/usage.md:248) says “replicate is fast-forward-only by design,” but the implementation and tests still treat it as overwrite-oriented replication; for example [internal/syncer/integration_test.go](/Users/soph/Work/entire/devenv/git-sync/internal/syncer/integration_test.go:2576) explicitly asserts divergent tag overwrite succeeds in replicate mode. That wording will mislead users choosing between `sync` and `replicate`.
+
+I also tried to run `go test ./internal/gitproto ./internal/syncer ./cmd/git-sync`, but the sandbox blocks `httptest` from binding a local port, so I couldn’t use test execution to validate these paths here.
