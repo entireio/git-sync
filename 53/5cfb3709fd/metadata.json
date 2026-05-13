@@ -1,0 +1,29 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "535cfb3709fd",
+  "strategy": "manual-commit",
+  "branch": "soph/head-symref-info",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/refs.go",
+    "internal/gitproto/target_features.go",
+    "internal/gitproto/target_features_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/53/5cfb3709fd/0/metadata.json",
+      "transcript": "/53/5cfb3709fd/0/transcript.jsonl",
+      "content_hash": "/53/5cfb3709fd/0/transcript_hash.txt",
+      "prompt": "/53/5cfb3709fd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4545,
+    "cache_creation_tokens": 2277758,
+    "cache_read_tokens": 364200117,
+    "output_tokens": 450369,
+    "api_call_count": 885
+  }
+}
