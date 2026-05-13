@@ -1,0 +1,49 @@
+can you look at https://github.com/entireio/git-sync/issues/46 and then chat
+
+---
+
+It
+
+---
+
+I think the idea is to support atomic where the change is small, for a intial flow with multiple pack files I think the assumption is that no target changes happen at the same time. If anxything maybe https://github.com/entireio/git-sync/issues/47 should help making sure after each packfile we fail if state has changed.
+
+---
+
+How would that work with something like github pull refs that should be warn skipped now if fail to create?
+
+---
+
+but from what we looked git push mirror did also only warn about github special refs and not fail? or does it?
+
+---
+
+but then we should update the issue since it claims git does it without the atomic flag, would then more consider rewriting it, that atomic is currently not supported and then we wait if people start askin?
+
+---
+
+keep issue open, but remove implementation, flag that commenting on the issue if you need it, add a comment explain the current state
+
+---
+
+ok then maaybe work on https://github.com/entireio/git-sync/issues/47
+
+---
+
+so the force that exists is force with lease?
+
+---
+
+I'd go with renaming --force to --force-with-lease and just add a real normal --force
+
+---
+
+I do 1
+
+---
+
+yes,
+
+---
+
+or no, do c
