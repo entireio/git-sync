@@ -246,8 +246,10 @@ before any push, so the lease check is a second line of defense against
 races for users who opt into non-fast-forward updates.
 
 `bootstrap` and `replicate` do not accept force flags. Bootstrap seeds an
-empty target where every ref is a create; replicate is fast-forward-only by
-design.
+empty target where every ref is a create. Replicate's contract is
+source-authoritative overwrite: divergent branches and tags are retargeted
+against the source unconditionally, so there is no fast-forward gate for a
+force flag to opt out of.
 
 The pre-0.5 `--force` flag is removed. Its semantics were lease-protected
 (it never sent a zero expected-old), so the closest direct replacement is

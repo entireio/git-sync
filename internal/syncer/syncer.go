@@ -426,6 +426,27 @@ func tallyActions(plans []BranchPlan) (pushed, deleted int) {
 	return pushed, deleted
 }
 
+// leaseFailureError surfaces receive-pack lease misses as a fatal error even
+// when BestEffort would otherwise downgrade them. Without this, a sync with
+// both --force-with-lease and --all-refs (which implies BestEffort) would
+// silently treat a concurrent target update as a warning, defeating the lease.
+func (s *syncSession) leaseFailureError() error {
+	if len(s.rejections) == 0 {
+		return nil
+	}
+	var refs []string
+	for name, status := range s.rejections {
+		if gitproto.IsLeaseFailure(status) {
+			refs = append(refs, name.String())
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	sort.Strings(refs)
+	return fmt.Errorf("lease failure on %d ref(s) (%s) — target moved during sync; rerun, or use --force-blind to overwrite", len(refs), strings.Join(refs, ", "))
+}
+
 // applyRejections downgrades plans whose ref was rejected by the target to
 // ActionWarn and returns the count.
 func (s *syncSession) applyRejections(plans []BranchPlan) int {
@@ -801,6 +822,9 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	}
 
 	s.finalizeCounts(pushPlans, &result)
+	if err := s.leaseFailureError(); err != nil {
+		return result, err
+	}
 	result.Stats = stats.snapshot()
 	result.Measurement = measurementDone()
 	return result, nil
@@ -895,6 +919,9 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	}
 
 	s.finalizeCounts(pushPlans, &result)
+	if err := s.leaseFailureError(); err != nil {
+		return result, err
+	}
 	result.Stats = s.stats.snapshot()
 	result.Measurement = s.measurementDone()
 	return result, nil

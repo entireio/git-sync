@@ -136,6 +136,9 @@ func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
 	if err := req.Options.Validate(); err != nil {
 		return Result{}, fmt.Errorf("plan: %w", err)
 	}
+	if err := req.Policy.Validate(); err != nil {
+		return Result{}, fmt.Errorf("plan: %w", err)
+	}
 	planReq := req
 	planReq.DryRun = true
 	cfg, err := c.buildSyncConfig(ctx, planReq)
@@ -151,6 +154,9 @@ func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
 
 func (c *Client) Sync(ctx context.Context, req SyncRequest) (Result, error) {
 	if err := req.Options.Validate(); err != nil {
+		return Result{}, fmt.Errorf("sync: %w", err)
+	}
+	if err := req.Policy.Validate(); err != nil {
 		return Result{}, fmt.Errorf("sync: %w", err)
 	}
 	cfg, err := c.buildSyncConfig(ctx, req)
@@ -169,6 +175,9 @@ func (c *Client) Replicate(ctx context.Context, req SyncRequest) (Result, error)
 		return Result{}, fmt.Errorf("replicate: %w", err)
 	}
 	req.Policy.Mode = gitsync.ModeReplicate
+	if err := req.Policy.Validate(); err != nil {
+		return Result{}, fmt.Errorf("replicate: %w", err)
+	}
 	cfg, err := c.buildSyncConfig(ctx, req)
 	if err != nil {
 		return Result{}, err

@@ -59,6 +59,20 @@ func TestValidateRequests(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatalf("expected duplicate mapping validation error")
 	}
+	if err := (SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+		Policy: SyncPolicy{ForceWithLease: true, ForceBlind: true},
+	}).Validate(); err == nil {
+		t.Fatalf("expected force-with-lease + force-blind to be rejected at the request edge")
+	}
+	if err := (SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+		Policy: SyncPolicy{Mode: ModeReplicate, ForceWithLease: true},
+	}).Validate(); err == nil {
+		t.Fatalf("expected replicate + force to be rejected at the request edge")
+	}
 }
 
 func TestClientReturnsAuthProviderErrors(t *testing.T) {

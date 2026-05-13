@@ -2,6 +2,8 @@ package gitsync
 
 import (
 	"context"
+	"errors"
+
 	"entire.io/entire/git-sync/internalbridge"
 )
 
@@ -109,6 +111,17 @@ type SyncPolicy struct {
 	Prune          bool          `json:"prune"`
 	BestEffort     bool          `json:"bestEffort,omitempty"`
 	Protocol       ProtocolMode  `json:"protocol"`
+}
+
+// Validate enforces SyncPolicy invariants at the request edge.
+func (p SyncPolicy) Validate() error {
+	if p.ForceWithLease && p.ForceBlind {
+		return errors.New("ForceWithLease and ForceBlind are mutually exclusive")
+	}
+	if p.Mode == ModeReplicate && (p.ForceWithLease || p.ForceBlind) {
+		return errors.New("replicate does not support force flags; use sync instead")
+	}
+	return nil
 }
 
 // ProbeRequest inspects source refs and optional target capabilities.

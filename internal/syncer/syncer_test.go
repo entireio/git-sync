@@ -35,6 +35,32 @@ func TestApplyRejectionsDowngradesAndCarriesReason(t *testing.T) {
 	}
 }
 
+func TestLeaseFailureErrorEscalatesPastBestEffort(t *testing.T) {
+	main := plumbing.NewBranchReferenceName("main")
+	pull := plumbing.ReferenceName("refs/pull/1/head")
+
+	// Non-lease rejection alone: BestEffort handles it as a warning, no fatal.
+	s := &syncSession{rejections: map[plumbing.ReferenceName]string{
+		pull: "deny updating a hidden ref",
+	}}
+	if err := s.leaseFailureError(); err != nil {
+		t.Fatalf("expected nil for non-lease rejection, got %v", err)
+	}
+
+	// Lease rejection: must escalate, naming the affected ref and the override flag.
+	s.rejections[main] = "stale info, exp 1234, got abcd"
+	err := s.leaseFailureError()
+	if err == nil {
+		t.Fatal("expected lease failure to escalate past BestEffort")
+	}
+	if !strings.Contains(err.Error(), main.String()) {
+		t.Errorf("expected affected ref in error, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "--force-blind") {
+		t.Errorf("expected migration hint in error, got %q", err)
+	}
+}
+
 func TestApplyRejectionsEmptyMapIsNoOp(t *testing.T) {
 	plans := []BranchPlan{{TargetRef: plumbing.NewBranchReferenceName("main"), Action: ActionUpdate}}
 	s := &syncSession{}

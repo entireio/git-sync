@@ -116,6 +116,20 @@ var leaseFailureMarkers = []string{
 	"does not match",
 }
 
+// IsLeaseFailure reports whether a receive-pack ng reason indicates the
+// captured target tip no longer matched at push time. Callers that downgrade
+// per-ref rejections to warnings (BestEffort) must still treat these as fatal
+// to preserve --force-with-lease semantics.
+func IsLeaseFailure(status string) bool {
+	lowered := strings.ToLower(status)
+	for _, marker := range leaseFailureMarkers {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // annotateLeaseFailure wraps a lease-failure CommandStatusErr with a retry/
 // override hint. Other receive-pack errors pass through unchanged.
 func annotateLeaseFailure(err error) error {
@@ -123,13 +137,10 @@ func annotateLeaseFailure(err error) error {
 	if !errors.As(err, &cs) {
 		return err
 	}
-	status := strings.ToLower(cs.Status)
-	for _, marker := range leaseFailureMarkers {
-		if strings.Contains(status, marker) {
-			return fmt.Errorf("%w (target ref %s moved or differs from session start; rerun, or use --force-blind to overwrite)", err, cs.ReferenceName)
-		}
+	if !IsLeaseFailure(cs.Status) {
+		return err
 	}
-	return err
+	return fmt.Errorf("%w (target ref %s moved or differs from session start; rerun, or use --force-blind to overwrite)", err, cs.ReferenceName)
 }
 
 // sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
