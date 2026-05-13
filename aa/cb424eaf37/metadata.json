@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "aacb424eaf37",
+  "strategy": "manual-commit",
+  "branch": "soph/all-refs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/planner/relay.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/cb424eaf37/0/metadata.json",
+      "transcript": "/aa/cb424eaf37/0/transcript.jsonl",
+      "content_hash": "/aa/cb424eaf37/0/transcript_hash.txt",
+      "prompt": "/aa/cb424eaf37/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 682,
+    "cache_creation_tokens": 1560000,
+    "cache_read_tokens": 164696425,
+    "output_tokens": 286511,
+    "api_call_count": 555
+  }
+}

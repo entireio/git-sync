@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.6.1-nightly.202605070709.47a2e910-dev-15b9bdae7",
+  "checkpoint_id": "46c64a68d58f",
+  "strategy": "manual-commit",
+  "branch": "nodo/fix-error-message",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/46/c64a68d58f/0/metadata.json",
+      "transcript": "/46/c64a68d58f/0/transcript.jsonl",
+      "content_hash": "/46/c64a68d58f/0/transcript_hash.txt",
+      "prompt": "/46/c64a68d58f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 16253,
+    "cache_read_tokens": 262194,
+    "output_tokens": 2051,
+    "api_call_count": 9
+  }
+}
