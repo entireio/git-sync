@@ -47,3 +47,7 @@ yes,
 ---
 
 or no, do c
+
+---
+
+can you do meaninful commits, also mayxbe we update the changelog when we do a release?
