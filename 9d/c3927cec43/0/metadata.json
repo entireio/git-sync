@@ -1,0 +1,42 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "9dc3927cec43",
+  "session_id": "019e260b-71e8-73a1-9e68-5857379ffab6",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-14T11:03:04.055722Z",
+  "branch": "soph/ssh-transport",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/gitproto/ssh.go",
+    "internal/gitproto/ssh_test.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "c0b34c4fa24f",
+  "checkpoint_transcript_start": 63,
+  "token_usage": {
+    "input_tokens": 29965,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4079616,
+    "output_tokens": 14672,
+    "api_call_count": 32
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-14T11:03:04.03359Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 509,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 509,
+    "total_lines_changed": 517,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
