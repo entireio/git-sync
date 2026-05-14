@@ -1,0 +1,59 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "d483810593fd",
+  "session_id": "019e27f2-b7de-71c3-a0f9-70d6539231ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-14T19:48:05.828045Z",
+  "branch": "soph/go-git-alpha3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/main_test.go",
+    "internal/gitproto/fetch.go",
+    "internal/gitproto/fetch_test.go",
+    "internal/gitproto/push.go",
+    "internal/gitproto/push_test.go",
+    "internal/gitproto/refs.go",
+    "internal/gitproto/refs_test.go",
+    "internal/gitproto/target_features.go",
+    "internal/gitproto/target_features_test.go",
+    "internal/syncer/integration_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "efcd0f7c91a3",
+  "checkpoint_transcript_start": 75,
+  "token_usage": {
+    "input_tokens": 74638,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 182912,
+    "output_tokens": 304,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-14T19:48:05.81429Z",
+    "agent_lines": 10,
+    "agent_removed": 10,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "total_lines_changed": 20,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 43,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 43
+      }
+    }
+  ]
+}

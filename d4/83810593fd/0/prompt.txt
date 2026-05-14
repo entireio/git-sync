@@ -1,0 +1,13 @@
+[lint:gofmt] $ ~/Work/entire/devenv/git-sync/mise-tasks/lint/gofmt
+[lint:gofmt] These .go files need to be formatted:
+[lint:gofmt]
+[lint:gofmt] cmd/git-sync/main_test.go
+[lint:gofmt] internal/gitproto/fetch.go
+[lint:gofmt] internal/gitproto/fetch_test.go
+[lint:gofmt] internal/gitproto/push.go
+[lint:gofmt] internal/gitproto/push_test.go
+[lint:gofmt] internal/gitproto/refs.go
+[lint:gofmt] internal/gitproto/refs_test.go
+[lint:gofmt] internal/gitproto/target_features.go
+[lint:gofmt] internal/gitproto/target_features_test.go
+[lint:gofmt] internal/syncer/integration_test.go
