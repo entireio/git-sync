@@ -1,0 +1,7 @@
+yes, commit
+
+---
+
+Medium Severity
+
+In SSHConn.RequestInfoRefs, if cmd.Stdin.Close() fails, the function returns early without calling cmd.wait() or closing cmd.Stdout. The SSH process started by startRPC is left running with an open stdout pipe, leaking both the process and the file descriptor. The same cleanup pattern (close stdout, wait for process) used in PostRPCStreamBody's error path is missing here.
