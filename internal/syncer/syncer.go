@@ -349,7 +349,7 @@ func measurementLine(m Measurement) []string {
 
 // --- Session setup ---
 
-func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.Conn, error) {
+func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.HTTPConn, error) {
 	ep, err := transport.ParseURL(raw.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
@@ -366,7 +366,7 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	}
 	stats.setSideDisplay(label, hostnameFromURL(raw.URL))
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
-	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
+	conn := gitproto.NewHTTPConnWithClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
 	return conn, nil
 }
@@ -539,7 +539,7 @@ type syncSession struct {
 	cfg             Config
 	stats           *statsCollector
 	logger          *slog.Logger
-	sourceConn      *gitproto.Conn
+	sourceConn      gitproto.Conn
 	sourceService   *gitproto.RefService
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	target          *targetSession
@@ -571,7 +571,7 @@ func (s *syncSession) notice(msg string) {
 }
 
 type targetSession struct {
-	conn     *gitproto.Conn
+	conn     gitproto.Conn
 	adv      *packp.AdvRefs
 	refMap   map[plumbing.ReferenceName]plumbing.Hash
 	features gitproto.TargetFeatures
@@ -624,7 +624,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
-	s.sourceConn.ProgressOut = &sessionStderr{s: s}
+	s.sourceConn.SetProgressWriter(&sessionStderr{s: s})
 
 	refPrefixes := planner.RefPrefixes(planConfig(cfg))
 	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
@@ -640,7 +640,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
-		targetConn.ProgressOut = &sessionStderr{s: s}
+		targetConn.SetProgressWriter(&sessionStderr{s: s})
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)

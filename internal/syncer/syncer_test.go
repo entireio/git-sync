@@ -212,7 +212,7 @@ func TestProbeWithoutTargetIgnoresEndpointEqualityCheck(t *testing.T) {
 // TestNewConn_PropagatesFollowInfoRefsRedirect proves the plumbing from
 // Endpoint → gitproto.Conn is in place. Without this the flag on
 // Endpoint is dead config.
-func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
+func TestNewHTTPConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 	stats := newStats(false)
 
 	off, err := newConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)

@@ -40,10 +40,10 @@ var GitHubRepoAPIBaseURL = "https://api.github.com"
 
 // Params holds the inputs for a bootstrap execution.
 type Params struct {
-	SourceConn    *gitproto.Conn
+	SourceConn    gitproto.Conn
 	SourceService interface {
-		FetchPack(ctx context.Context, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-		FetchCommitGraph(ctx context.Context, store storer.Storer, conn *gitproto.Conn, ref gitproto.DesiredRef, haves []plumbing.Hash) error
+		FetchPack(ctx context.Context, conn gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+		FetchCommitGraph(ctx context.Context, store storer.Storer, conn gitproto.Conn, ref gitproto.DesiredRef, haves []plumbing.Hash) error
 		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
@@ -1326,7 +1326,7 @@ func packReaderForCheckpoint(
 // --- GitHub preflight ---
 
 func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
-	if p.TargetMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint == nil {
+	if p.TargetMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint() == nil {
 		return 0, false
 	}
 	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
@@ -1346,7 +1346,11 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	return limit, true
 }
 
-func lookupGitHubRepoSizeKB(ctx context.Context, conn *gitproto.Conn) (int64, bool) {
+func lookupGitHubRepoSizeKB(ctx context.Context, conn gitproto.Conn) (int64, bool) {
+	httpConn, ok := conn.(*gitproto.HTTPConn)
+	if !ok {
+		return 0, false
+	}
 	owner, repo, ok := GitHubOwnerRepo(conn)
 	if !ok {
 		return 0, false
@@ -1360,7 +1364,7 @@ func lookupGitHubRepoSizeKB(ctx context.Context, conn *gitproto.Conn) (int64, bo
 	req.Header.Set("X-Github-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", capability.DefaultAgent())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
-	resp, err := conn.HTTP.Do(req)
+	resp, err := httpConn.HTTP.Do(req)
 	if err != nil {
 		return 0, false
 	}
@@ -1378,11 +1382,11 @@ func lookupGitHubRepoSizeKB(ctx context.Context, conn *gitproto.Conn) (int64, bo
 }
 
 // GitHubOwnerRepo extracts the owner/repo from a GitHub endpoint.
-func GitHubOwnerRepo(conn *gitproto.Conn) (string, string, bool) {
-	if conn == nil || conn.Endpoint == nil {
+func GitHubOwnerRepo(conn gitproto.Conn) (string, string, bool) {
+	if conn == nil || conn.Endpoint() == nil {
 		return "", "", false
 	}
-	ep := conn.Endpoint
+	ep := conn.Endpoint()
 	if ep.Scheme != "http" && ep.Scheme != "https" {
 		return "", "", false
 	}

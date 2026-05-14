@@ -15,19 +15,19 @@ import (
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
-func TestNewConn(t *testing.T) {
+func TestNewHTTPConn(t *testing.T) {
 	ep, err := transport.ParseURL("https://github.com/user/repo.git")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	auth := &transporthttp.BasicAuth{Username: "user", Password: "pass"}
-	conn := NewConn(ep, "test-label", auth, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test-label", auth, http.DefaultTransport)
 
 	if conn.Label != "test-label" {
 		t.Errorf("Label = %q, want %q", conn.Label, "test-label")
 	}
-	if conn.Endpoint != ep {
-		t.Error("Endpoint mismatch")
+	if conn.EndpointURL != ep {
+		t.Error("EndpointURL mismatch")
 	}
 	if conn.Auth != auth {
 		t.Error("Auth mismatch")
@@ -37,13 +37,13 @@ func TestNewConn(t *testing.T) {
 	}
 }
 
-func TestNewConnStripsTrailingEndpointSlash(t *testing.T) {
+func TestNewHTTPConnStripsTrailingEndpointSlash(t *testing.T) {
 	ep, err := url.Parse("https://example.com/repo.git///")
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	var gotURLs []string
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		gotURLs = append(gotURLs, req.URL.String())
 		res := &http.Response{
 			StatusCode: http.StatusOK,
@@ -58,8 +58,8 @@ func TestNewConnStripsTrailingEndpointSlash(t *testing.T) {
 		return res, nil
 	}))
 
-	if got, want := conn.Endpoint.Path, "/repo.git"; got != want {
-		t.Fatalf("Endpoint.Path = %q, want %q", got, want)
+	if got, want := conn.EndpointURL.Path, "/repo.git"; got != want {
+		t.Fatalf("EndpointURL.Path = %q, want %q", got, want)
 	}
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
@@ -141,7 +141,7 @@ func TestRequestInfoRefsContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -211,7 +211,7 @@ func TestRequestInfoRefsRequiresAdvertisementContentType(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse endpoint: %v", err)
 			}
-			conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 				res := &http.Response{
 					StatusCode: http.StatusOK,
 					Request:    req,
@@ -250,7 +250,7 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		started <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
@@ -285,7 +285,7 @@ func TestPostRPCStreamContextCanceled(t *testing.T) {
 }
 
 // TestRequestInfoRefs_FollowInfoRefsRedirect verifies that when the flag is
-// set, a 307 on /info/refs rewrites Conn.Endpoint.Host so subsequent PostRPC
+// set, a 307 on /info/refs rewrites HTTPConn.EndpointURL.Host so subsequent PostRPC
 // calls target the redirected node. Matches vanilla git's smart-HTTP
 // behaviour and lets clients use a cluster entry domain for info/refs while
 // packs land on the hosting replica.
@@ -307,7 +307,7 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
 	conn.FollowInfoRefsRedirect = true
 
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
@@ -315,8 +315,8 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 	}
 
 	nodeURL := strings.TrimPrefix(node.URL, "http://")
-	if conn.Endpoint.Host != nodeURL {
-		t.Errorf("Endpoint.Host = %q, want %q (endpoint should follow the 307)", conn.Endpoint.Host, nodeURL)
+	if conn.EndpointURL.Host != nodeURL {
+		t.Errorf("EndpointURL.Host = %q, want %q (endpoint should follow the 307)", conn.EndpointURL.Host, nodeURL)
 	}
 }
 
@@ -360,7 +360,7 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
-	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
 	conn.FollowInfoRefsRedirect = true
 
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
@@ -387,7 +387,7 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect_SubsequentPOSTHitsRedirectedHost
 }
 
 // TestRequestInfoRefs_DoesNotFollowByDefault confirms the default behaviour
-// is unchanged: Endpoint is stable even if the server 307s.
+// is unchanged: EndpointURL is stable even if the server 307s.
 func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
@@ -407,15 +407,15 @@ func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 		t.Fatalf("parse endpoint: %v", err)
 	}
 	entryHost := ep.Host
-	conn := NewConn(ep, "test", nil, http.DefaultTransport)
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
 	// FollowInfoRefsRedirect intentionally not set.
 
 	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
 
-	if conn.Endpoint.Host != entryHost {
-		t.Errorf("Endpoint.Host = %q, want %q (endpoint should be unchanged by default)", conn.Endpoint.Host, entryHost)
+	if conn.EndpointURL.Host != entryHost {
+		t.Errorf("EndpointURL.Host = %q, want %q (endpoint should be unchanged by default)", conn.EndpointURL.Host, entryHost)
 	}
 }
 

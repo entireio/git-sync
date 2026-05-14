@@ -55,7 +55,7 @@ func (s *RefService) SupportsBootstrapBatch() bool {
 func (s *RefService) FetchToStore(
 	ctx context.Context,
 	store storer.Storer,
-	conn *Conn,
+	conn Conn,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) error {
@@ -81,7 +81,7 @@ func (s *RefService) FetchToStore(
 // Caller must close the returned ReadCloser.
 func (s *RefService) FetchPack(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) (io.ReadCloser, error) {
@@ -102,7 +102,7 @@ func (s *RefService) FetchPack(
 func (s *RefService) FetchCommitGraph(
 	ctx context.Context,
 	store storer.Storer,
-	conn *Conn,
+	conn Conn,
 	ref DesiredRef,
 	haves []plumbing.Hash,
 ) error {
@@ -156,7 +156,7 @@ func (s *RefService) Capabilities() []string {
 func fetchToStoreV2(
 	ctx context.Context,
 	store storer.Storer,
-	conn *Conn,
+	conn Conn,
 	caps *V2Capabilities,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
@@ -194,12 +194,12 @@ func fetchToStoreV2(
 		return err
 	}
 	defer ioutil.CheckClose(reader, &err)
-	return storeV2FetchPack(store, reader, verbose, conn.ProgressOut)
+	return storeV2FetchPack(store, reader, verbose, conn.ProgressWriter())
 }
 
 func fetchPackV2(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	caps *V2Capabilities,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
@@ -240,7 +240,7 @@ func fetchPackV2(
 	if err != nil {
 		return nil, err
 	}
-	packStream, err := openV2PackStream(reader, verbose, conn.ProgressOut)
+	packStream, err := openV2PackStream(reader, verbose, conn.ProgressWriter())
 	if err != nil {
 		_ = reader.Close()
 		return nil, err
@@ -431,7 +431,7 @@ func buildV1UploadPackBody(
 func fetchToStoreV1(
 	ctx context.Context,
 	store storer.Storer,
-	conn *Conn,
+	conn Conn,
 	adv *packp.AdvRefs,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
@@ -456,7 +456,7 @@ func fetchToStoreV1(
 	if drainErr := drainTrailingNAKs(buffered); drainErr != nil {
 		return fmt.Errorf("drain server response: %w", drainErr)
 	}
-	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressOut))
+	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressWriter()))
 	if err := packfile.UpdateObjectStorage(store, sbReader); err != nil {
 		return fmt.Errorf("update object storage: %w", err)
 	}
@@ -465,7 +465,7 @@ func fetchToStoreV1(
 
 func fetchPackV1(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	adv *packp.AdvRefs,
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
@@ -491,7 +491,7 @@ func fetchPackV1(
 		return nil, fmt.Errorf("drain server response: %w", drainErr)
 	}
 	return &wrappedRC{
-		Reader: buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressOut)),
+		Reader: buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressWriter())),
 		Closer: reader,
 	}, nil
 }

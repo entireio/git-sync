@@ -70,12 +70,12 @@ type AuthMethod interface {
 	Authorizer(req *http.Request) error
 }
 
-// Conn represents a connection to a remote Git HTTP endpoint.
-type Conn struct {
-	Label    string
-	Endpoint *url.URL
-	HTTP     *http.Client
-	Auth     AuthMethod
+// HTTPConn represents a connection to a remote Git HTTP endpoint.
+type HTTPConn struct {
+	Label       string
+	EndpointURL *url.URL
+	HTTP        *http.Client
+	Auth        AuthMethod
 
 	// FollowInfoRefsRedirect, when true, rewrites Endpoint.Scheme and
 	// Endpoint.Host to the final URL returned by RequestInfoRefs after
@@ -96,27 +96,35 @@ type Conn struct {
 	ProgressOut io.Writer
 }
 
-// NewConn creates a new connection to the given endpoint.
-func NewConn(ep *url.URL, label string, auth AuthMethod, rt http.RoundTripper) *Conn {
+// NewHTTPConn creates a new connection to the given endpoint.
+func NewHTTPConn(ep *url.URL, label string, auth AuthMethod, rt http.RoundTripper) *HTTPConn {
 	httpClient := &http.Client{Transport: rt}
-	return NewConnWithHTTPClient(ep, label, auth, httpClient)
+	return NewHTTPConnWithClient(ep, label, auth, httpClient)
 }
 
-// NewConnWithHTTPClient creates a new connection using the provided HTTP client.
+// NewHTTPConnWithClient creates a new connection using the provided HTTP client.
 // Passing nil falls back to a default client and is intended only for direct
 // callers outside git-sync's normal instrumented session setup.
-func NewConnWithHTTPClient(ep *url.URL, label string, auth AuthMethod, httpClient *http.Client) *Conn {
+func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClient *http.Client) *HTTPConn {
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: http.DefaultTransport}
 	}
 	normalizeEndpointPath(ep)
-	return &Conn{
-		Label:    label,
-		Endpoint: ep,
-		HTTP:     httpClient,
-		Auth:     auth,
+	return &HTTPConn{
+		Label:       label,
+		EndpointURL: ep,
+		HTTP:        httpClient,
+		Auth:        auth,
 	}
 }
+
+func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
+
+func (c *HTTPConn) ProgressWriter() io.Writer { return c.ProgressOut }
+
+func (c *HTTPConn) SetProgressWriter(w io.Writer) { c.ProgressOut = w }
+
+func (c *HTTPConn) Close() error { return nil }
 
 func normalizeEndpointPath(ep *url.URL) {
 	if ep == nil {
@@ -143,8 +151,13 @@ func NewHTTPTransport(skipTLS bool) http.RoundTripper {
 }
 
 // RequestInfoRefs fetches /info/refs for the given service.
-func RequestInfoRefs(ctx context.Context, conn *Conn, service string, gitProtocol string) ([]byte, error) {
-	reqURL := fmt.Sprintf("%s/info/refs?service=%s", conn.Endpoint.String(), service)
+func RequestInfoRefs(ctx context.Context, conn Conn, service string, gitProtocol string) ([]byte, error) {
+	return conn.RequestInfoRefs(ctx, service, gitProtocol)
+}
+
+// RequestInfoRefs fetches /info/refs for the given service.
+func (conn *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProtocol string) ([]byte, error) {
+	reqURL := fmt.Sprintf("%s/info/refs?service=%s", conn.EndpointURL.String(), service)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create info-refs request: %w", err)
@@ -178,9 +191,9 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service string, gitProtoco
 	}
 	if conn.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
 		final := res.Request.URL
-		if final.Host != conn.Endpoint.Host || final.Scheme != conn.Endpoint.Scheme {
-			conn.Endpoint.Scheme = final.Scheme
-			conn.Endpoint.Host = final.Host
+		if final.Host != conn.EndpointURL.Host || final.Scheme != conn.EndpointURL.Scheme {
+			conn.EndpointURL.Scheme = final.Scheme
+			conn.EndpointURL.Host = final.Host
 		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
@@ -198,7 +211,7 @@ func RequestInfoRefs(ctx context.Context, conn *Conn, service string, gitProtoco
 
 // PostRPC sends a buffered POST to the given service and returns the full response body.
 // Responses are bounded to prevent unbounded memory allocation (issue #9).
-func PostRPC(ctx context.Context, conn *Conn, service string, body []byte, v2 bool, phase string) ([]byte, error) {
+func PostRPC(ctx context.Context, conn Conn, service string, body []byte, v2 bool, phase string) ([]byte, error) {
 	reader, err := PostRPCStream(ctx, conn, service, body, v2, phase)
 	if err != nil {
 		return nil, err
@@ -218,14 +231,20 @@ func PostRPC(ctx context.Context, conn *Conn, service string, body []byte, v2 bo
 
 // PostRPCStream sends a POST to the given service and returns the response body
 // as a streaming reader. Caller must close the returned ReadCloser.
-func PostRPCStream(ctx context.Context, conn *Conn, service string, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
+func PostRPCStream(ctx context.Context, conn Conn, service string, body []byte, v2 bool, phase string) (io.ReadCloser, error) {
 	return PostRPCStreamBody(ctx, conn, service, bytes.NewReader(body), v2, phase)
 }
 
 // PostRPCStreamBody sends a POST to the given service using a streaming request body.
 // Caller must close the returned ReadCloser.
-func PostRPCStreamBody(ctx context.Context, conn *Conn, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
-	reqURL := fmt.Sprintf("%s/%s", conn.Endpoint.String(), service)
+func PostRPCStreamBody(ctx context.Context, conn Conn, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
+	return conn.PostRPCStreamBody(ctx, service, body, v2, phase)
+}
+
+// PostRPCStreamBody sends a POST to the given service using a streaming request body.
+// Caller must close the returned ReadCloser.
+func (conn *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
+	reqURL := fmt.Sprintf("%s/%s", conn.EndpointURL.String(), service)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("create RPC request: %w", err)

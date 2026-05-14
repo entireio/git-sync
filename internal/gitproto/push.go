@@ -34,14 +34,14 @@ type PushCommand struct {
 // construction without worrying about whether downstream strategies have
 // already captured a value copy.
 type Pusher struct {
-	Conn        *Conn
+	Conn        Conn
 	Adv         *packp.AdvRefs
 	Verbose     bool
 	OnRejection func(refName plumbing.ReferenceName, status string)
 }
 
 // NewPusher builds a target-side push executor.
-func NewPusher(conn *Conn, adv *packp.AdvRefs, verbose bool) *Pusher {
+func NewPusher(conn Conn, adv *packp.AdvRefs, verbose bool) *Pusher {
 	return &Pusher{Conn: conn, Adv: adv, Verbose: verbose}
 }
 
@@ -140,7 +140,7 @@ func annotateLeaseFailure(err error) error {
 // sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
 func sendReceivePack(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	req *packp.UpdateRequests,
 	packData io.Reader,
 	verbose bool,
@@ -166,11 +166,11 @@ func sendReceivePack(
 	switch {
 	case req.Capabilities.Supports(capability.Sideband64k):
 		dem := sideband.NewDemuxer(sideband.Sideband64k, reader)
-		dem.Progress = progressSink(verbose, "target: ", conn.ProgressOut)
+		dem.Progress = progressSink(verbose, "target: ", conn.ProgressWriter())
 		respReader = dem
 	case req.Capabilities.Supports(capability.Sideband):
 		dem := sideband.NewDemuxer(sideband.Sideband, reader)
-		dem.Progress = progressSink(verbose, "target: ", conn.ProgressOut)
+		dem.Progress = progressSink(verbose, "target: ", conn.ProgressWriter())
 		respReader = dem
 	}
 
@@ -201,7 +201,7 @@ func sendReceivePack(
 // PushObjects pushes locally-materialized objects to the target.
 func PushObjects(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	store storer.Storer,
@@ -242,7 +242,7 @@ func PushObjects(
 // PushPack pushes a pack stream (relay) to the target.
 func PushPack(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	pack io.ReadCloser,
@@ -276,7 +276,7 @@ func PushPack(
 // PushCommands sends ref update commands without a pack (for ref-only changes).
 func PushCommands(
 	ctx context.Context,
-	conn *Conn,
+	conn Conn,
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	verbose bool,

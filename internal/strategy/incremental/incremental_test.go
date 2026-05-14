@@ -113,12 +113,12 @@ func TestPlansToPushPlans(t *testing.T) {
 }
 
 type fakeSourceService struct {
-	fetchPack func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchPack func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 }
 
 func (f fakeSourceService) FetchPack(
 	ctx context.Context,
-	conn *gitproto.Conn,
+	conn gitproto.Conn,
 	desired map[plumbing.ReferenceName]gitproto.DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) (io.ReadCloser, error) {
@@ -179,7 +179,7 @@ func TestExecuteIncrementalRelayUsesTargetRefsAsHaves(t *testing.T) {
 
 	params := Params{
 		SourceService: fakeSourceService{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				gotDesired = desired
 				gotHaves = targetRefs
 				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
@@ -242,7 +242,7 @@ func TestExecuteFullTagCreateRelayOmitsHaves(t *testing.T) {
 
 	params := Params{
 		SourceService: fakeSourceService{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				gotHaves = targetRefs
 				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
 			},
@@ -297,7 +297,7 @@ func TestExecuteIncrementalRelayClosesPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeSourceService{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},
@@ -344,7 +344,7 @@ func TestExecuteIncrementalRelayClosesPackOnReadInterruption(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeSourceService{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
 			},
 		},

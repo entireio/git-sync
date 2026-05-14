@@ -19,9 +19,9 @@ import (
 
 // Params holds the inputs for an incremental relay execution.
 type Params struct {
-	SourceConn    *gitproto.Conn
+	SourceConn    gitproto.Conn
 	SourceService interface {
-		FetchPack(ctx context.Context, conn *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+		FetchPack(ctx context.Context, conn gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 	}
 	TargetPusher interface {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
