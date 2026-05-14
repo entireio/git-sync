@@ -1,0 +1,42 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "f97b592d8e72",
+  "strategy": "manual-commit",
+  "branch": "soph/ssh-transport",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/gitproto/conn.go",
+    "internal/gitproto/fetch.go",
+    "internal/gitproto/fetch_test.go",
+    "internal/gitproto/push.go",
+    "internal/gitproto/push_test.go",
+    "internal/gitproto/refs.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/strategy/incremental/incremental.go",
+    "internal/strategy/incremental/incremental_test.go",
+    "internal/strategy/materialized/materialized.go",
+    "internal/strategy/replicate/replicate.go",
+    "internal/strategy/replicate/replicate_test.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f9/7b592d8e72/0/metadata.json",
+      "transcript": "/f9/7b592d8e72/0/full.jsonl",
+      "content_hash": "/f9/7b592d8e72/0/content_hash.txt",
+      "prompt": "/f9/7b592d8e72/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 275668,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3727744,
+    "output_tokens": 19526,
+    "api_call_count": 53
+  }
+}
