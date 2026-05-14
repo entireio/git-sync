@@ -1,0 +1,39 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "1ae05f312d98",
+  "session_id": "019e260b-71e8-73a1-9e68-5857379ffab6",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-14T11:05:20.750993Z",
+  "branch": "soph/ssh-transport",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "c0b34c4fa24f",
+  "checkpoint_transcript_start": 101,
+  "token_usage": {
+    "input_tokens": 20698,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2606848,
+    "output_tokens": 6696,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-14T11:05:20.733311Z",
+    "agent_lines": 87,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 87,
+    "total_lines_changed": 89,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
