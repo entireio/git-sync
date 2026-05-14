@@ -1,0 +1,39 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "5f03021cd910",
+  "session_id": "019e260b-71e8-73a1-9e68-5857379ffab6",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-14T11:09:17.036127Z",
+  "branch": "soph/ssh-transport",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/usage.md",
+    "README.md",
+    "docs/protocol.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "c0b34c4fa24f",
+  "token_usage": {
+    "input_tokens": 363491,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 16216320,
+    "output_tokens": 52622,
+    "api_call_count": 138
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-14T11:09:17.006114Z",
+    "agent_lines": 25,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 25,
+    "total_lines_changed": 27,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
