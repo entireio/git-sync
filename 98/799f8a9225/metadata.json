@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.6.1-dev-774ee21f1",
+  "checkpoint_id": "98799f8a9225",
+  "strategy": "manual-commit",
+  "branch": "soph/force-clarification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/98/799f8a9225/0/metadata.json",
+      "transcript": "/98/799f8a9225/0/transcript.jsonl",
+      "content_hash": "/98/799f8a9225/0/transcript_hash.txt",
+      "prompt": "/98/799f8a9225/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3422,
+    "cache_creation_tokens": 601455,
+    "cache_read_tokens": 24313771,
+    "output_tokens": 112947,
+    "api_call_count": 146
+  }
+}
