@@ -73,7 +73,7 @@ func (c *SSHConn) RequestInfoRefs(ctx context.Context, service string, gitProtoc
 }
 
 func (c *SSHConn) PostRPCStreamBody(ctx context.Context, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
-	_ = phase
+	_ = phase // phase labels are HTTP-only today; SSH transport has no per-RPC stats tagging
 	gitProtocol := ""
 	if v2 {
 		gitProtocol = "version=2"
@@ -161,7 +161,7 @@ func sshRemoteCommand(ep *url.URL, service string, gitProtocol string) (string, 
 	if ep == nil || ep.Path == "" {
 		return "", fmt.Errorf("missing SSH repository path")
 	}
-	path := shellQuote(ep.Path)
+	path := shellQuotePath(ep.Path)
 	if gitProtocol != "" {
 		return gitProtocolEnv(gitProtocol) + " " + service + " " + path, nil
 	}
@@ -174,6 +174,17 @@ func gitProtocolEnv(gitProtocol string) string {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+func shellQuotePath(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return shellQuote(path)
+	}
+	slash := strings.IndexByte(path, '/')
+	if slash < 0 {
+		return path
+	}
+	return path[:slash+1] + shellQuote(path[slash+1:])
 }
 
 type sshCommand struct {

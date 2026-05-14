@@ -71,6 +71,18 @@ func TestSSHConnRequestInfoRefsSupportsSCPStyleAndPort(t *testing.T) {
 	}
 }
 
+func TestSSHConnRequestInfoRefsPreservesTildePaths(t *testing.T) {
+	env := newSSHShimEnv(t)
+
+	conn := newSSHTestConn(t, "git@example.com:~/repo with spaces.git", env.script)
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if got, want := env.logLines(t)[0], "git@example.com\tgit-upload-pack ~/'repo with spaces.git'"; got != want {
+		t.Fatalf("ssh invocation = %q, want %q", got, want)
+	}
+}
+
 func TestSSHConnPostRPCStreamBodyCanBeCalledRepeatedly(t *testing.T) {
 	env := newSSHShimEnv(t)
 	conn := newSSHTestConn(t, "ssh://example.com/repo.git", env.script)
@@ -130,6 +142,29 @@ func TestSSHConnRequestInfoRefsHonorsContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("RequestInfoRefs error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestSSHConnPostRPCStreamBodyHonorsContext(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "ssh-read-sleep.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >/dev/null\nsleep 5\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	conn := newSSHTestConn(t, "ssh://example.com/repo.git", script)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	reader, err := conn.PostRPCStreamBody(ctx, "git-upload-pack", strings.NewReader("body"), false, "fetch")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	if _, err := io.ReadAll(reader); err != nil && !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("ReadAll error = %v", err)
+	}
+	if err := reader.Close(); err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("reader.Close error = %v, want context deadline exceeded", err)
 	}
 }
 

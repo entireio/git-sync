@@ -139,7 +139,11 @@ host-key prompts during syncs. On first contact with a host, add it to
 for that host in your SSH config.
 
 Current limitation: `--progress` and `--show-stats` do not yet include
-byte-counted SSH transfer metrics, so those views omit SSH-side throughput.
+byte-counted SSH transfer metrics, so `--progress` and `--stats` omit
+SSH-side throughput.
+
+If `ssh` is not available on `PATH`, `git-sync` fails early with a clear
+`locate ssh binary` error before contacting either remote.
 
 ## Sync Behavior
 

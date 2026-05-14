@@ -552,7 +552,7 @@ func sshStatsWarning(cfg Config, sourceConn, targetConn gitproto.Conn) string {
 	if !hasSSH {
 		return ""
 	}
-	return "warning: SSH transport does not yet expose byte-counted throughput; --progress and --show-stats output will omit SSH transfer bytes"
+	return "warning: SSH transport does not yet expose byte-counted throughput; --progress and --stats output will omit SSH transfer bytes"
 }
 
 // --- Session setup (issue #12) ---
