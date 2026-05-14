@@ -1,0 +1,11 @@
+if we would want to do progress on top of the ssh code path, what needs to be done there?
+
+---
+
+ok, maybe let's first do a branch on top of this one setting up a docker based ssh end to end test
+
+---
+
+temporary SSH keypair and ~/.ssh/config
+
+we should not touch/polute the default ssh config
