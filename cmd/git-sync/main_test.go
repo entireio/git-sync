@@ -23,7 +23,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
@@ -807,9 +807,9 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 }
 
 func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List)) ([]byte, error) {
-	ar := packp.NewAdvRefs()
+	ar := &packp.AdvRefs{}
 	if err := ar.Decode(bytes.NewReader(data)); err == nil {
-		mutate(ar.Capabilities)
+		mutate(&ar.Capabilities)
 		var buf bytes.Buffer
 		if err := ar.Encode(&buf); err != nil {
 			return nil, err
@@ -822,11 +822,11 @@ func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List))
 	if err := smart.Decode(rd); err != nil {
 		return nil, err
 	}
-	ar = packp.NewAdvRefs()
+	ar = &packp.AdvRefs{}
 	if err := ar.Decode(rd); err != nil {
 		return nil, err
 	}
-	mutate(ar.Capabilities)
+	mutate(&ar.Capabilities)
 	var buf bytes.Buffer
 	if err := smart.Encode(&buf); err != nil {
 		return nil, err
@@ -866,7 +866,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		req := packp.NewUpdateRequests()
+		req := &packp.UpdateRequests{}
 		if err := req.Decode(bytes.NewReader(body)); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

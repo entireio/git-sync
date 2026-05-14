@@ -227,13 +227,13 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	defer r.Body.Close()
 
 	if !bytes.Contains(body, []byte("PACK")) {
-		req := packp.NewUpdateRequests()
+		req := &packp.UpdateRequests{}
 		if err := req.Decode(bytes.NewReader(body)); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		report := packp.NewReportStatus()
+		report := &packp.ReportStatus{}
 		report.UnpackStatus = "ok"
 		for _, cmd := range req.Commands {
 			status := "ok"

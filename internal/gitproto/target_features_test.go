@@ -4,17 +4,16 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
-	"github.com/stretchr/testify/require"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
 func TestTargetFeaturesFromAdvRefs(t *testing.T) {
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.DeleteRefs))
-	require.NoError(t, adv.Capabilities.Set(capability.Capability("no-thin")))
-	require.NoError(t, adv.Capabilities.Set(capability.OFSDelta))
-	require.NoError(t, adv.Capabilities.Set(capability.ReportStatus))
-	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.DeleteRefs)
+	adv.Capabilities.Set(capability.Capability("no-thin"))
+	adv.Capabilities.Set(capability.OFSDelta)
+	adv.Capabilities.Set(capability.ReportStatus)
+	adv.Capabilities.Set(capability.Sideband64k)
 
 	got := TargetFeaturesFromAdvRefs(adv)
 	if !got.Known || !got.DeleteRefs || !got.NoThin || !got.OFSDelta || !got.ReportStatus || !got.Sideband64k {

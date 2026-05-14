@@ -3,8 +3,7 @@ package gitproto
 import (
 	"testing"
 
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
-	"github.com/stretchr/testify/require"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
 func TestV2CapabilitiesFetchSupports(t *testing.T) {
@@ -145,9 +144,9 @@ func TestPreferredSideband(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			list := capability.NewList()
+			list := &capability.List{}
 			for _, c := range tt.caps {
-				require.NoError(t, list.Set(c))
+				list.Set(c)
 			}
 			got := PreferredSideband(list)
 			if got != tt.want {

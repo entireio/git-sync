@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
-	"github.com/go-git/go-git/v6/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/stretchr/testify/require"
 )
@@ -116,7 +116,7 @@ func fakeReceivePackServer(t *testing.T, reportErr string) *httptest.Server {
 
 		if reportErr != "" {
 			// Write a minimal report-status with an error.
-			report := packp.NewReportStatus()
+			report := &packp.ReportStatus{}
 			report.UnpackStatus = reportErr
 			if err := report.Encode(w); err != nil {
 				t.Logf("encode report: %v", err)
@@ -142,8 +142,7 @@ func TestPushPackClosesPackOnSuccess(t *testing.T) {
 
 	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
 	conn := connForServer(t, srv)
-	adv := packp.NewAdvRefs()
-	adv.Capabilities = capability.NewList()
+	adv := &packp.AdvRefs{}
 
 	err := PushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
@@ -170,8 +169,7 @@ func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 
 	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
 	conn := connForServer(t, srv)
-	adv := packp.NewAdvRefs()
-	adv.Capabilities = capability.NewList()
+	adv := &packp.AdvRefs{}
 
 	err := PushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
@@ -198,8 +196,7 @@ func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
 	}))
 
 	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
-	adv := packp.NewAdvRefs()
-	adv.Capabilities = capability.NewList()
+	adv := &packp.AdvRefs{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -245,8 +242,7 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 	defer srv.Close()
 
 	conn := connForServer(t, srv)
-	adv := packp.NewAdvRefs()
-	adv.Capabilities = capability.NewList()
+	adv := &packp.AdvRefs{}
 
 	pack := &gatedReadCloser{
 		first:   []byte("PACK"),
@@ -281,10 +277,10 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 }
 
 func TestBuildUpdateRequest(t *testing.T) {
-	adv := packp.NewAdvRefs()
-	require.NoError(t, adv.Capabilities.Set(capability.ReportStatus))
-	require.NoError(t, adv.Capabilities.Set(capability.DeleteRefs))
-	require.NoError(t, adv.Capabilities.Set(capability.Sideband64k))
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	adv.Capabilities.Set(capability.DeleteRefs)
+	adv.Capabilities.Set(capability.Sideband64k)
 
 	req, hasDelete, hasUpdates, err := buildUpdateRequest(adv, []PushCommand{
 		{Name: "refs/heads/main", New: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
@@ -308,7 +304,7 @@ func TestBuildUpdateRequest(t *testing.T) {
 }
 
 func TestBuildUpdateRequestDeleteWithoutCapability(t *testing.T) {
-	adv := packp.NewAdvRefs()
+	adv := &packp.AdvRefs{}
 	// No delete-refs capability.
 
 	_, _, _, err := buildUpdateRequest(adv, []PushCommand{
@@ -322,8 +318,7 @@ func TestBuildUpdateRequestDeleteWithoutCapability(t *testing.T) {
 func TestPushPackRejectsDeletes(t *testing.T) {
 	pack := &trackingReadCloser{ReadCloser: io.NopCloser(bytes.NewBufferString("PACK"))}
 	// PushPack should reject delete commands before even trying to connect.
-	adv := packp.NewAdvRefs()
-	adv.Capabilities = capability.NewList()
+	adv := &packp.AdvRefs{}
 	// Use a nil-transport conn -- we should never reach the network.
 	ep, err := transport.ParseURL("https://example.com/repo.git")
 	require.NoError(t, err)
