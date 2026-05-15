@@ -1,0 +1,137 @@
+can you do a commit
+
+---
+
+env GOCACHE=/tmp/go-build go test ./internal/syncer -run 'TestRun_SSHDockerSync|TestRun_IntegrationSyncOverSSHShimV2'
+
+this is super quick, there isn't even a container running
+
+---
+
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:82: docker inspect -f {{(index (index .NetworkSettings.Ports "22/tcp") 0).HostPort}} 54f5fe2565fafede31ef6ba7682edbad1f47616ca84b31e89b0e752b6ce2b347 failed: exit status 1
+
+        template parsing error: template: :1:3: executing "" at <index (index .NetworkSettings.Ports "22/tcp") 0>: error calling index: index of untyped nil
+--- FAIL: TestRun_SSHDockerSync (10.65s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       11.023s
+FAIL
+[test:ssh-docker] ERROR task failed
+
+---
+
+git-sync on  soph/ssh-e2e-docker via 🐹 v1.26.2 took 12s
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:82: docker port dd0956c7783d6a06a3a7b441e0001f029850561795be28ac40d2a1b0c3d4fb6c 22/tcp failed: exit status 1
+        no public port '22/tcp' published for dd0956c7783d6a06a3a7b441e0001f029850561795be28ac40d2a1b0c3d4fb6c
+
+        container-status: Exited (1) Less than a second ago
+        container-logs:
+        cp: omitting directory '/authorized_keys'
+--- FAIL: TestRun_SSHDockerSync (6.43s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       6.649s
+FAIL
+[test:ssh-docker] ERROR task failed
+
+---
+
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:86: docker port 13d7e7277f4e92f320ac073cf2d9090107a138964eb6fabcaa7dda8c1960f307 22/tcp failed: exit status 1
+        no public port '22/tcp' published for 13d7e7277f4e92f320ac073cf2d9090107a138964eb6fabcaa7dda8c1960f307
+
+        container-status: Exited (1) Less than a second ago
+        container-logs:
+        cp: can't stat '/test-auth/authorized_keys': No such file or directory
+--- FAIL: TestRun_SSHDockerSync (1.82s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       2.056s
+FAIL
+[test:ssh-docker] ERROR task failed
+
+---
+
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:86: docker port 0b2056b80ecd1e95186ea78cfc92c937e2799e593631fcfa81a63279f45f1761 22/tcp failed: exit status 1
+        no public port '22/tcp' published for 0b2056b80ecd1e95186ea78cfc92c937e2799e593631fcfa81a63279f45f1761
+
+        container-status: Exited (1) Less than a second ago
+        container-logs:
+        cp: can't stat '/test-auth/authorized_keys': No such file or directory
+--- FAIL: TestRun_SSHDockerSync (1.83s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       2.078s
+FAIL
+[test:ssh-docker] ERROR task failed
+
+---
+
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:128: ssh server did not become ready: exit status 255: /private/tmp/gitsync-ssh-docker-3882604336/ssh_config line 4: no argument after keyword "[::]:32771"
+        /private/tmp/gitsync-ssh-docker-3882604336/ssh_config: terminating, 1 bad configuration options
+--- FAIL: TestRun_SSHDockerSync (22.15s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       22.398s
+FAIL
+[test:ssh-docker] ERROR task failed
+
+---
+
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:128: ssh server did not become ready: exit status 255: Connection closed by 127.0.0.1 port 32772
+--- FAIL: TestRun_SSHDockerSync (22.50s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       22.719s
+FAIL
+[test:ssh-docker] ERROR task failed
+
+---
+
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:145: git rev-parse refs/heads/master failed: exit status 128
+        fatal: ambiguous argument 'refs/heads/master': unknown revision or path not in the working tree.
+        Use '--' to separate paths from revisions, like this:
+        'git <command> [<revision>...] -- [<file>...]'
+        refs/heads/master
+--- FAIL: TestRun_SSHDockerSync (8.15s)
+FAIL
+FAIL    entire.io/entire/git-sync/internal/syncer       8.415s
+FAIL
+
+---
+
+❯ mise run test:ssh-docker
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+--- PASS: TestRun_SSHDockerSync (6.15s)
+PASS
+ok      entire.io/entire/git-sync/internal/syncer       6.436s
+
+---
+
+yes, or I think ammending into one commit in this branch is also fine
+
+---
+
+can you open a PR on top of the other for this?
+
+---
+
+can you fix linting
+
+---
+
+mise run lint is still failing
