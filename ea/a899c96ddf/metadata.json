@@ -1,0 +1,29 @@
+{
+  "cli_version": "v0.6.1-dev-774ee21f1",
+  "checkpoint_id": "eaa899c96ddf",
+  "strategy": "manual-commit",
+  "branch": "soph/force-clarification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "client.go",
+    "docs/usage.md",
+    "internal/syncer/syncer.go",
+    "types.go",
+    "unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ea/a899c96ddf/0/metadata.json",
+      "transcript": "/ea/a899c96ddf/0/transcript.jsonl",
+      "content_hash": "/ea/a899c96ddf/0/transcript_hash.txt",
+      "prompt": "/ea/a899c96ddf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3391,
+    "cache_creation_tokens": 576023,
+    "cache_read_tokens": 20040200,
+    "output_tokens": 100976,
+    "api_call_count": 130
+  }
+}
