@@ -1,0 +1,91 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "ae52adb63cec",
+  "session_id": "ff0a7d3f-e73b-48cc-a5d1-49b930a82fdf",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-18T14:03:04.799216Z",
+  "branch": "soph/ssh-transport",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/gitproto/refs.go",
+    "internal/gitproto/refs_test.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go",
+    "internal/gitproto/ssh.go",
+    "internal/gitproto/ssh_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "fe6ee5938f68",
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 72637,
+    "cache_read_tokens": 2269838,
+    "output_tokens": 17282,
+    "api_call_count": 48
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-18T14:03:04.778684Z",
+    "agent_lines": 92,
+    "agent_removed": 29,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 92,
+    "total_lines_changed": 121,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 2231,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 43,
+        ".clawpatch/config.json": 37,
+        ".clawpatch/features/feat_cli-command_2291be7405.json": 120,
+        ".clawpatch/features/feat_cli-command_7dea8906fb.json": 88,
+        ".clawpatch/features/feat_config_3d18bcf3a8.json": 50,
+        ".clawpatch/features/feat_library_1a65e34359.json": 37,
+        ".clawpatch/features/feat_library_21b9e7386b.json": 55,
+        ".clawpatch/features/feat_library_3b7676eae6.json": 47,
+        ".clawpatch/features/feat_library_546edbfde3.json": 103,
+        ".clawpatch/features/feat_library_87b4e70ec0.json": 91,
+        ".clawpatch/features/feat_library_8f6e5cb7e8.json": 163,
+        ".clawpatch/features/feat_library_92daac2f81.json": 71,
+        ".clawpatch/features/feat_library_a1e1160df6.json": 107,
+        ".clawpatch/features/feat_library_a1ec0e8a5d.json": 119,
+        ".clawpatch/features/feat_library_b6efd0013e.json": 87,
+        ".clawpatch/features/feat_library_e8a21fb5f8.json": 107,
+        ".clawpatch/features/feat_library_fa8a66effb.json": 107,
+        ".clawpatch/features/feat_service_8b9901f628.json": 41,
+        ".clawpatch/features/feat_service_8d6ddf78bb.json": 239,
+        ".clawpatch/features/feat_service_9b2bcd5685.json": 79,
+        ".clawpatch/findings/fnd_sig-feat-cli-command-2291be7405-_1e5a58f786.json": 46,
+        ".clawpatch/findings/fnd_sig-feat-cli-command-2291be7405-_f3acbdb6aa.json": 53,
+        ".clawpatch/findings/fnd_sig-feat-cli-command-7dea8906fb-_4ad6110059.json": 46,
+        ".clawpatch/findings/fnd_sig-feat-cli-command-7dea8906fb-_b3d0b6adc9.json": 60,
+        ".clawpatch/findings/fnd_sig-feat-config-3d18bcf3a8-f1698_55f20d34b2.json": 32,
+        ".clawpatch/project.json": 27,
+        ".clawpatch/reports/20260517T191015-3280dc.md": 145,
+        ".clawpatch/runs/20260517T191015-3280dc.json": 31
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 43,
+      "user_lines_removed": 0,
+      "agent_lines_added": 2188,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 43
+      }
+    }
+  ]
+}
