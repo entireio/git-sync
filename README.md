@@ -130,7 +130,9 @@ For concrete numbers on your own setup, run the included benchmark tool against 
 
 ### Does it support SSH?
 
-No. `git-sync` supports smart HTTP/HTTPS only.
+Yes. `git-sync` supports SSH remotes through the local `ssh` binary, including
+`ssh://`, SCP-style `git@host:path.git`, and `git+ssh://` URLs. See
+[docs/usage.md](docs/usage.md) for details and current caveats.
 
 ### Does it run as a daemon or watch for changes?
 

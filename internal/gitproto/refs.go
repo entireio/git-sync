@@ -16,6 +16,10 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
 
+// GitProtocolV2 is the value passed via the Git-Protocol header / GIT_PROTOCOL
+// env var to negotiate protocol v2 with the remote.
+const GitProtocolV2 = "version=2"
+
 // RefService encapsulates the result of source ref discovery and the negotiated
 // protocol, providing methods for subsequent fetch and pack operations.
 type RefService struct {
@@ -34,7 +38,7 @@ type RefService struct {
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
 // Returns the list of refs and a RefService for subsequent operations.
-func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
+func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
 		adv, refs, err := listSourceRefsV1(ctx, conn)
@@ -44,8 +48,15 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
 
 	case "auto", "v2":
-		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, "version=2")
+		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, GitProtocolV2)
 		if err != nil {
+			if protocolMode == "auto" && isSSHScheme(conn) {
+				refs, svc, v1Err := listSourceRefsAutoV1(ctx, conn)
+				if v1Err != nil {
+					return nil, nil, errors.Join(err, v1Err)
+				}
+				return refs, svc, nil
+			}
 			return nil, nil, err
 		}
 		if caps, err := DecodeV2Capabilities(bytes.NewReader(data)); err == nil {
@@ -77,8 +88,27 @@ func ListSourceRefs(ctx context.Context, conn *Conn, protocolMode string, refPre
 	}
 }
 
+func listSourceRefsAutoV1(ctx context.Context, conn Conn) ([]*plumbing.Reference, *RefService, error) {
+	adv, refs, err := listSourceRefsV1(ctx, conn)
+	if err != nil {
+		return nil, nil, err
+	}
+	return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+}
+
+func isSSHScheme(conn Conn) bool {
+	if conn == nil || conn.Endpoint() == nil {
+		return false
+	}
+	switch conn.Endpoint().Scheme {
+	case "ssh", "git+ssh":
+		return true
+	}
+	return false
+}
+
 // AdvertisedRefsV1 fetches and decodes v1 advertised refs for the given service.
-func AdvertisedRefsV1(ctx context.Context, conn *Conn, service string) (*packp.AdvRefs, error) {
+func AdvertisedRefsV1(ctx context.Context, conn Conn, service string) (*packp.AdvRefs, error) {
 	data, err := RequestInfoRefs(ctx, conn, service, "")
 	if err != nil {
 		return nil, err
@@ -128,7 +158,7 @@ func AdvRefsCaps(adv *packp.AdvRefs) []string {
 	return items
 }
 
-func listSourceRefsV1(ctx context.Context, conn *Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
+func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
 	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackService)
 	if err != nil {
 		return nil, nil, err
@@ -140,7 +170,7 @@ func listSourceRefsV1(ctx context.Context, conn *Conn) (*packp.AdvRefs, []*plumb
 	return adv, refs, nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn *Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
+func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
 	// Always include "HEAD" so the server returns the symref-target attribute
 	// for HEAD. Without this, callers that pass only "refs/heads/" or
 	// "refs/tags/" prefixes filter HEAD out of the response and lose the

@@ -20,7 +20,8 @@ Out of scope (with pointers):
 
 - The pack format itself (object types, deltas, index format) — see [Git's pack-format docs](https://git-scm.com/docs/pack-format)
 - Dumb HTTP — `git-sync` does not support it
-- SSH transport — `git-sync` is HTTPS-only
+- Full SSH transport details — `git-sync` supports SSH, but this document is
+  focused on the Smart HTTP wire flow
 - Bundle URI, partial clones, and other newer extensions
 
 ## Smart HTTP Overview

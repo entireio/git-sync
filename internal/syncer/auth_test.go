@@ -15,6 +15,7 @@ import (
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 
 	"entire.io/entire/git-sync/internal/auth"
+	"entire.io/entire/git-sync/internal/gitproto"
 )
 
 func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
@@ -47,7 +48,7 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 	}
 }
 
-func TestNewConnSkipTLSVerify(t *testing.T) {
+func TestNewHTTPConnSkipTLSVerify(t *testing.T) {
 	stats := newStats(false)
 	conn, err := newConn(Endpoint{
 		URL:           "https://example.com/repo.git",
@@ -56,9 +57,13 @@ func TestNewConnSkipTLSVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
-	rt, ok := conn.HTTP.Transport.(*countingRoundTripper)
+	httpConn, ok := conn.(*gitproto.HTTPConn)
 	if !ok {
-		t.Fatalf("expected countingRoundTripper, got %T", conn.HTTP.Transport)
+		t.Fatalf("expected *gitproto.HTTPConn, got %T", conn)
+	}
+	rt, ok := httpConn.HTTP.Transport.(*countingRoundTripper)
+	if !ok {
+		t.Fatalf("expected countingRoundTripper, got %T", httpConn.HTTP.Transport)
 	}
 	base, ok := rt.base.(*http.Transport)
 	if !ok {
@@ -69,7 +74,7 @@ func TestNewConnSkipTLSVerify(t *testing.T) {
 	}
 }
 
-func TestNewConnUsesProvidedHTTPClient(t *testing.T) {
+func TestNewHTTPConnUsesProvidedHTTPClient(t *testing.T) {
 	stats := newStats(false)
 	baseTransport := http.DefaultTransport
 	baseClient := &http.Client{Transport: baseTransport}
@@ -78,12 +83,16 @@ func TestNewConnUsesProvidedHTTPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
-	if conn.HTTP == baseClient {
+	httpConn, ok := conn.(*gitproto.HTTPConn)
+	if !ok {
+		t.Fatalf("expected *gitproto.HTTPConn, got %T", conn)
+	}
+	if httpConn.HTTP == baseClient {
 		t.Fatalf("expected cloned HTTP client, got original pointer")
 	}
-	rt, ok := conn.HTTP.Transport.(*countingRoundTripper)
+	rt, ok := httpConn.HTTP.Transport.(*countingRoundTripper)
 	if !ok {
-		t.Fatalf("expected countingRoundTripper, got %T", conn.HTTP.Transport)
+		t.Fatalf("expected countingRoundTripper, got %T", httpConn.HTTP.Transport)
 	}
 	if rt.base != baseTransport {
 		t.Fatalf("wrapped base transport = %T, want %T", rt.base, baseTransport)

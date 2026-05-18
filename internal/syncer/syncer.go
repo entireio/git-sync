@@ -349,10 +349,19 @@ func measurementLine(m Measurement) []string {
 
 // --- Session setup ---
 
-func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (*gitproto.Conn, error) {
+func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (gitproto.Conn, error) { //nolint:ireturn // transport selection intentionally returns the shared connection interface
 	ep, err := transport.ParseURL(raw.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
+	}
+	switch ep.Scheme {
+	case "ssh", "git+ssh":
+		stats.setSideDisplay(label, hostnameFromURL(raw.URL))
+		conn, err := gitproto.NewSSHConn(ep, label)
+		if err != nil {
+			return nil, fmt.Errorf("new SSH connection: %w", err)
+		}
+		return conn, nil
 	}
 	authEp := auth.Endpoint{
 		Username:      raw.Username,
@@ -366,7 +375,7 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	}
 	stats.setSideDisplay(label, hostnameFromURL(raw.URL))
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
-	conn := gitproto.NewConnWithHTTPClient(ep, label, authMethod, client)
+	conn := gitproto.NewHTTPConnWithClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
 	return conn, nil
 }
@@ -531,6 +540,25 @@ func needsLocalSourceClosure(
 	return false
 }
 
+func sshStatsWarning(cfg Config, sourceConn, targetConn gitproto.Conn) string {
+	if !cfg.Progress && !cfg.ShowStats {
+		return ""
+	}
+	hasSSH := false
+	if _, ok := sourceConn.(*gitproto.SSHConn); ok {
+		hasSSH = true
+	}
+	if !hasSSH && targetConn != nil {
+		if _, ok := targetConn.(*gitproto.SSHConn); ok {
+			hasSSH = true
+		}
+	}
+	if !hasSSH {
+		return ""
+	}
+	return "warning: SSH transport does not yet expose byte-counted throughput; --progress and --stats output will omit SSH transfer bytes"
+}
+
 // --- Session setup (issue #12) ---
 
 // syncSession holds the shared state for a sync operation, reducing
@@ -539,7 +567,7 @@ type syncSession struct {
 	cfg             Config
 	stats           *statsCollector
 	logger          *slog.Logger
-	sourceConn      *gitproto.Conn
+	sourceConn      gitproto.Conn
 	sourceService   *gitproto.RefService
 	sourceRefMap    map[plumbing.ReferenceName]plumbing.Hash
 	target          *targetSession
@@ -556,6 +584,12 @@ func (s *syncSession) finish() {
 	if s.progress != nil {
 		s.progress.terminate()
 	}
+	if s.sourceConn != nil {
+		_ = s.sourceConn.Close()
+	}
+	if s.target != nil && s.target.conn != nil {
+		_ = s.target.conn.Close()
+	}
 }
 
 // notice surfaces a one-line human-readable event during a sync. When
@@ -571,7 +605,7 @@ func (s *syncSession) notice(msg string) {
 }
 
 type targetSession struct {
-	conn     *gitproto.Conn
+	conn     gitproto.Conn
 	adv      *packp.AdvRefs
 	refMap   map[plumbing.ReferenceName]plumbing.Hash
 	features gitproto.TargetFeatures
@@ -614,6 +648,22 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		stats:           newStats(cfg.ShowStats),
 		measurementDone: startMeasurement(cfg.MeasureMemory),
 	}
+	var warnedSSHStats bool
+	warnSSHStats := func(sourceConn, targetConn gitproto.Conn) {
+		if warnedSSHStats {
+			return
+		}
+		warning := sshStatsWarning(cfg, sourceConn, targetConn)
+		if warning == "" {
+			return
+		}
+		warnedSSHStats = true
+		out := cfg.progressOut
+		if out == nil {
+			out = os.Stderr
+		}
+		fmt.Fprintln(out, warning)
+	}
 	if cfg.Verbose {
 		s.logger = slog.New(slog.NewTextHandler(&sessionStderr{s: s}, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
@@ -624,7 +674,8 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
-	s.sourceConn.ProgressOut = &sessionStderr{s: s}
+	s.sourceConn.SetProgressWriter(&sessionStderr{s: s})
+	warnSSHStats(s.sourceConn, nil)
 
 	refPrefixes := planner.RefPrefixes(planConfig(cfg))
 	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
@@ -640,7 +691,8 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
-		targetConn.ProgressOut = &sessionStderr{s: s}
+		targetConn.SetProgressWriter(&sessionStderr{s: s})
+		warnSSHStats(s.sourceConn, targetConn)
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
@@ -669,7 +721,6 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			}
 		}
 	}
-
 	// Start the live progress ticker only after auth resolution and the
 	// initial ref-listing round trips have completed. The auth path may
 	// shell out to `git credential fill`, which inherits our stderr and

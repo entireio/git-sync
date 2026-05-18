@@ -2,11 +2,14 @@ package syncer
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
 
+	"entire.io/entire/git-sync/internal/gitproto"
 	bstrap "entire.io/entire/git-sync/internal/strategy/bootstrap"
 )
 
@@ -212,14 +215,18 @@ func TestProbeWithoutTargetIgnoresEndpointEqualityCheck(t *testing.T) {
 // TestNewConn_PropagatesFollowInfoRefsRedirect proves the plumbing from
 // Endpoint → gitproto.Conn is in place. Without this the flag on
 // Endpoint is dead config.
-func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
+func TestNewHTTPConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 	stats := newStats(false)
 
 	off, err := newConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (off): %v", err)
 	}
-	if off.FollowInfoRefsRedirect {
+	offHTTP, ok := off.(*gitproto.HTTPConn)
+	if !ok {
+		t.Fatalf("expected *gitproto.HTTPConn, got %T", off)
+	}
+	if offHTTP.FollowInfoRefsRedirect {
 		t.Error("FollowInfoRefsRedirect should default to false")
 	}
 
@@ -227,7 +234,84 @@ func TestNewConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new conn (on): %v", err)
 	}
-	if !on.FollowInfoRefsRedirect {
+	onHTTP, ok := on.(*gitproto.HTTPConn)
+	if !ok {
+		t.Fatalf("expected *gitproto.HTTPConn, got %T", on)
+	}
+	if !onHTTP.FollowInfoRefsRedirect {
 		t.Error("FollowInfoRefsRedirect was not propagated from Endpoint to Conn")
+	}
+}
+
+func TestNewConnBuildsSSHTransport(t *testing.T) {
+	orig := gitproto.SSHLookPath
+	t.Cleanup(func() { gitproto.SSHLookPath = orig })
+	script := filepath.Join(t.TempDir(), "ssh-stub.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write ssh stub: %v", err)
+	}
+	gitproto.SSHLookPath = func(string) (string, error) {
+		return script, nil
+	}
+
+	stats := newStats(false)
+	tests := []string{
+		"ssh://example.com/repo.git",
+		"git+ssh://example.com/repo.git",
+		"git@example.com:repo.git",
+	}
+	for _, raw := range tests {
+		t.Run(raw, func(t *testing.T) {
+			conn, err := newConn(Endpoint{URL: raw}, "source", stats, nil)
+			if err != nil {
+				t.Fatalf("new conn: %v", err)
+			}
+			if _, ok := conn.(*gitproto.SSHConn); !ok {
+				t.Fatalf("expected *gitproto.SSHConn, got %T", conn)
+			}
+		})
+	}
+}
+
+func TestSSHStatsWarning(t *testing.T) {
+	tests := []struct {
+		name   string
+		cfg    Config
+		source gitproto.Conn
+		target gitproto.Conn
+		want   bool
+	}{
+		{
+			name:   "no flags",
+			cfg:    Config{},
+			source: &gitproto.SSHConn{},
+		},
+		{
+			name:   "http only",
+			cfg:    Config{Progress: true},
+			source: &gitproto.HTTPConn{},
+			target: &gitproto.HTTPConn{},
+		},
+		{
+			name:   "progress with ssh source",
+			cfg:    Config{Progress: true},
+			source: &gitproto.SSHConn{},
+			want:   true,
+		},
+		{
+			name:   "show stats with ssh target",
+			cfg:    Config{ShowStats: true},
+			source: &gitproto.HTTPConn{},
+			target: &gitproto.SSHConn{},
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sshStatsWarning(tt.cfg, tt.source, tt.target)
+			if (got != "") != tt.want {
+				t.Fatalf("sshStatsWarning() = %q, want warning=%t", got, tt.want)
+			}
+		})
 	}
 }

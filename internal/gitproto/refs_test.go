@@ -3,6 +3,8 @@ package gitproto
 import (
 	"context"
 	"errors"
+	"io"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -18,9 +20,9 @@ func TestRefHashMap(t *testing.T) {
 	hashB := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 	refs := []*plumbing.Reference{
-		plumbing.NewHashReference("refs/heads/main", hashA),
+		plumbing.NewHashReference(refsHeadsMain, hashA),
 		plumbing.NewHashReference("refs/heads/dev", hashB),
-		plumbing.NewSymbolicReference("HEAD", "refs/heads/main"), // symbolic, should be skipped
+		plumbing.NewSymbolicReference("HEAD", refsHeadsMain), // symbolic, should be skipped
 	}
 
 	m := RefHashMap(refs)
@@ -28,7 +30,7 @@ func TestRefHashMap(t *testing.T) {
 	if len(m) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(m))
 	}
-	if got := m["refs/heads/main"]; got != hashA {
+	if got := m[refsHeadsMain]; got != hashA {
 		t.Errorf("refs/heads/main = %s, want %s", got, hashA)
 	}
 	if got := m["refs/heads/dev"]; got != hashB {
@@ -50,7 +52,7 @@ func TestHeadTargetFromAdv(t *testing.T) {
 
 	adv := &packp.AdvRefs{}
 	adv.Capabilities.Add(capability.SymRef, "HEAD:refs/heads/main")
-	if got := headTargetFromAdv(adv); got.String() != "refs/heads/main" {
+	if got := headTargetFromAdv(adv); got.String() != refsHeadsMain {
 		t.Errorf("headTargetFromAdv = %q, want refs/heads/main", got)
 	}
 
@@ -106,7 +108,7 @@ func TestAdvRefsToSlice(t *testing.T) {
 	hashA := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	hashB := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	adv.References = []*plumbing.Reference{
-		plumbing.NewHashReference("refs/heads/main", hashA),
+		plumbing.NewHashReference(refsHeadsMain, hashA),
 		plumbing.NewHashReference("refs/heads/dev", hashB),
 	}
 
@@ -122,8 +124,8 @@ func TestAdvRefsToSlice(t *testing.T) {
 	for _, ref := range refs {
 		found[ref.Name()] = ref.Hash()
 	}
-	if found["refs/heads/main"] != hashA {
-		t.Errorf("refs/heads/main = %s, want %s", found["refs/heads/main"], hashA)
+	if found[refsHeadsMain] != hashA {
+		t.Errorf("refs/heads/main = %s, want %s", found[refsHeadsMain], hashA)
 	}
 	if found["refs/heads/dev"] != hashB {
 		t.Errorf("refs/heads/dev = %s, want %s", found["refs/heads/dev"], hashB)
@@ -200,3 +202,134 @@ func TestListSourceRefsUnsupportedProtocol(t *testing.T) {
 		t.Fatal("expected error for unsupported protocol mode")
 	}
 }
+
+func TestListSourceRefsAutoFallsBackToV1AfterSSHV2ProbeError(t *testing.T) {
+	t.Parallel()
+
+	conn := &stubConn{
+		reqInfoRefs: func(_ context.Context, _ string, gitProtocol string) ([]byte, error) {
+			if gitProtocol == GitProtocolV2 {
+				return nil, errors.New("ssh server rejected v2 probe")
+			}
+
+			var body strings.Builder
+			if _, err := pktline.Writef(&body, "# service=%s\n", transport.UploadPackService); err != nil {
+				t.Fatalf("write smart service line: %v", err)
+			}
+			if err := pktline.WriteFlush(&body); err != nil {
+				t.Fatalf("write smart flush: %v", err)
+			}
+			if _, err := pktline.Writef(&body, "%s HEAD\x00%s\n", strings.Repeat("a", 40), capability.SymRef+"=HEAD:refs/heads/main"); err != nil {
+				t.Fatalf("write advertised head: %v", err)
+			}
+			if _, err := pktline.Writef(&body, "%s refs/heads/main\n", strings.Repeat("a", 40)); err != nil {
+				t.Fatalf("write advertised ref: %v", err)
+			}
+			if err := pktline.WriteFlush(&body); err != nil {
+				t.Fatalf("write trailing flush: %v", err)
+			}
+			return []byte(body.String()), nil
+		},
+	}
+
+	refs, svc, err := ListSourceRefs(t.Context(), conn, "auto", nil)
+	if err != nil {
+		t.Fatalf("ListSourceRefs(auto) error = %v", err)
+	}
+	if svc.Protocol != "v1" {
+		t.Fatalf("protocol = %q, want v1", svc.Protocol)
+	}
+	if got := svc.HeadTarget.String(); got != refsHeadsMain {
+		t.Fatalf("head target = %q, want refs/heads/main", got)
+	}
+	foundMain := false
+	for _, ref := range refs {
+		if ref.Name().String() == refsHeadsMain {
+			foundMain = true
+			break
+		}
+	}
+	if !foundMain {
+		t.Fatalf("refs = %#v, want refs/heads/main to be advertised", refs)
+	}
+}
+
+func TestListSourceRefsAutoJoinsErrorsWhenV1FallbackAlsoFails(t *testing.T) {
+	t.Parallel()
+
+	v2Err := errors.New("ssh v2 probe failed")
+	v1Err := errors.New("ssh v1 fallback failed")
+	conn := &stubConn{
+		reqInfoRefs: func(_ context.Context, _ string, gitProtocol string) ([]byte, error) {
+			if gitProtocol == GitProtocolV2 {
+				return nil, v2Err
+			}
+			return nil, v1Err
+		},
+	}
+
+	_, _, err := ListSourceRefs(t.Context(), conn, "auto", nil)
+	if err == nil {
+		t.Fatal("expected error when both v2 probe and v1 fallback fail")
+	}
+	if !errors.Is(err, v2Err) {
+		t.Errorf("err does not wrap v2 error: %v", err)
+	}
+	if !errors.Is(err, v1Err) {
+		t.Errorf("err does not wrap v1 error: %v", err)
+	}
+}
+
+func TestListSourceRefsAutoDoesNotFallBackForNonSSH(t *testing.T) {
+	t.Parallel()
+
+	v2Err := errors.New("https v2 probe failed")
+	v1Called := false
+	conn := &stubConn{
+		reqInfoRefs: func(_ context.Context, _ string, gitProtocol string) ([]byte, error) {
+			if gitProtocol == GitProtocolV2 {
+				return nil, v2Err
+			}
+			v1Called = true
+			return nil, errors.New("unexpected v1 call")
+		},
+		endpoint: &url.URL{Scheme: "https", Host: "github.com"},
+	}
+
+	_, _, err := ListSourceRefs(t.Context(), conn, "auto", nil)
+	if err == nil {
+		t.Fatal("expected error from v2 probe")
+	}
+	if !errors.Is(err, v2Err) {
+		t.Errorf("err does not wrap v2 error: %v", err)
+	}
+	if v1Called {
+		t.Error("v1 fallback should not be attempted for non-SSH schemes")
+	}
+}
+
+type stubConn struct {
+	reqInfoRefs func(ctx context.Context, service string, gitProtocol string) ([]byte, error)
+	endpoint    *url.URL
+}
+
+func (s *stubConn) RequestInfoRefs(ctx context.Context, service string, gitProtocol string) ([]byte, error) {
+	return s.reqInfoRefs(ctx, service, gitProtocol)
+}
+
+func (s *stubConn) PostRPCStreamBody(context.Context, string, io.Reader, bool, string) (io.ReadCloser, error) {
+	return nil, errors.New("unexpected PostRPCStreamBody call")
+}
+
+func (s *stubConn) Endpoint() *url.URL {
+	if s.endpoint != nil {
+		return s.endpoint
+	}
+	return &url.URL{Scheme: "ssh", Host: "github.com"}
+}
+
+func (s *stubConn) ProgressWriter() io.Writer { return nil }
+
+func (s *stubConn) SetProgressWriter(io.Writer) {}
+
+func (s *stubConn) Close() error { return nil }

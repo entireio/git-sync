@@ -121,6 +121,30 @@ git-sync sync \
   <target-url>
 ```
 
+### SSH remotes
+
+`git-sync` also supports SSH remotes. Accepted forms include:
+
+- `ssh://git@example.com/org/repo.git`
+- `git@example.com:org/repo.git`
+- `git+ssh://example.com/org/repo.git`
+
+SSH transport shells out to the local `ssh` binary, so host aliases,
+`IdentityFile`, agent-backed keys, and other `~/.ssh/config` behavior come
+from your existing SSH setup rather than separate `git-sync` flags.
+
+`git-sync` runs SSH with `BatchMode=yes`, which avoids interactive password or
+host-key prompts during syncs. On first contact with a host, add it to
+`known_hosts` ahead of time or configure `StrictHostKeyChecking=accept-new`
+for that host in your SSH config.
+
+Current limitation: `--progress` and `--show-stats` do not yet include
+byte-counted SSH transfer metrics, so `--progress` and `--stats` omit
+SSH-side throughput.
+
+If `ssh` is not available on `PATH`, `git-sync` fails early with a clear
+`locate ssh binary` error before contacting either remote.
+
 ## Sync Behavior
 
 `sync` picks the bootstrap relay path automatically when the target is empty. For non-empty targets, safe fast-forward updates also use a relay path that streams the source pack directly into target `receive-pack` without local materialization. Anything not relay-eligible (force, prune, deletes, tag retargets) falls back to a materialized path bounded by `--materialized-max-objects`.

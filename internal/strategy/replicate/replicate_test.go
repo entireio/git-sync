@@ -13,12 +13,12 @@ import (
 )
 
 type fakeSourceService struct {
-	fetchPack func(context.Context, *gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchPack func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
 }
 
 func (f fakeSourceService) FetchPack(
 	ctx context.Context,
-	conn *gitproto.Conn,
+	conn gitproto.Conn,
 	desired map[plumbing.ReferenceName]gitproto.DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) (io.ReadCloser, error) {
@@ -51,7 +51,7 @@ func TestExecuteReplicateRelaysUpdatesAndDeletesSeparately(t *testing.T) {
 
 	result, err := Execute(context.Background(), Params{
 		SourceService: fakeSourceService{
-			fetchPack: func(_ context.Context, _ *gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+			fetchPack: func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				gotDesired = desired
 				gotHaves = targetRefs
 				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
