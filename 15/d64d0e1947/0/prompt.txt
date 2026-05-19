@@ -1,0 +1,5 @@
+but this means the whole idea of git-sync being just "in the middle, streaming" is now broken in this case?
+
+---
+
+yes, ammend
