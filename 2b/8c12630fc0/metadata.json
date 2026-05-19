@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.6.3-nightly.202605270736.c94e9573-dev-8616ee201",
+  "checkpoint_id": "2b8c12630fc0",
+  "strategy": "manual-commit",
+  "branch": "soph/http-stale-pool-fix",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2b/8c12630fc0/0/metadata.json",
+      "transcript": "/2b/8c12630fc0/0/full.jsonl",
+      "content_hash": "/2b/8c12630fc0/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 6921,
+    "cache_read_tokens": 1256993,
+    "output_tokens": 3892,
+    "api_call_count": 10
+  }
+}
