@@ -201,20 +201,38 @@ func normalizeEndpointPath(ep *url.URL) {
 	ep.RawPath = strings.TrimRight(ep.RawPath, "/")
 }
 
-// NewHTTPTransport creates an http.Transport with optional TLS skip.
+// NewHTTPTransport returns the default git-sync HTTP transport. It clones
+// http.DefaultTransport so config changes (TLS, keep-alive policy) don't
+// leak into other code in the same process.
+//
+// Keep-alives are disabled. The git smart-HTTP workflow over the same host
+// is coarse-grained — info/refs, then a single upload-pack or receive-pack
+// POST — with real work in between (planning, source fetch, local object
+// materialization). On the push side that gap is long enough for CDN
+// edges and some hosted git providers to close their end of an idle TLS
+// socket; the next POST then fails with "use of closed network connection"
+// because the pooled connection is half-dead. Pool reuse would save at
+// most one TLS handshake per sync, which is negligible against multi-MB
+// to multi-GB transfers, so we prefer a fresh connection per request and
+// avoid the race entirely.
+//
+// Library callers that need pool reuse (e.g. embedding git-sync in a
+// long-running process that hits the same host repeatedly with short
+// gaps) can pass their own RoundTripper to NewHTTPConn instead.
 func NewHTTPTransport(skipTLS bool) http.RoundTripper {
-	if !skipTLS {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
 		return http.DefaultTransport
 	}
-	if cloned, ok := http.DefaultTransport.(*http.Transport); ok {
-		tc := cloned.Clone()
+	tc := base.Clone()
+	tc.DisableKeepAlives = true
+	if skipTLS {
 		if tc.TLSClientConfig == nil {
 			tc.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
 		tc.TLSClientConfig.InsecureSkipVerify = true
-		return tc
 	}
-	return http.DefaultTransport
+	return tc
 }
 
 // RequestInfoRefs fetches /info/refs for the given service.

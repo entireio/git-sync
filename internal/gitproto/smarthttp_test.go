@@ -83,22 +83,35 @@ func TestNewHTTPConnStripsTrailingEndpointSlash(t *testing.T) {
 }
 
 func TestNewHTTPTransport(t *testing.T) {
-	// Without TLS skip should return default transport.
+	// Default (no TLS skip) returns a cloned transport, not the shared
+	// http.DefaultTransport — config must not leak into other code.
 	rt := NewHTTPTransport(false)
-	if rt != http.DefaultTransport {
-		t.Error("expected http.DefaultTransport when skipTLS is false")
+	if rt == http.DefaultTransport {
+		t.Error("expected a cloned transport, got shared http.DefaultTransport")
+	}
+	ht, ok := rt.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", rt)
+	}
+	if !ht.DisableKeepAlives {
+		t.Error("expected DisableKeepAlives = true on the default transport")
 	}
 
-	// With TLS skip should return a transport with InsecureSkipVerify.
+	// With TLS skip we still get a cloned transport with keep-alives off,
+	// plus InsecureSkipVerify on the TLS config.
 	rt = NewHTTPTransport(true)
 	if rt == http.DefaultTransport {
-		t.Error("expected a different transport when skipTLS is true")
+		t.Error("expected a cloned transport when skipTLS is true")
 	}
-	// Verify the returned transport is an *http.Transport with skip verify.
-	if ht, ok := rt.(*http.Transport); ok {
-		if ht.TLSClientConfig == nil || !ht.TLSClientConfig.InsecureSkipVerify {
-			t.Error("expected InsecureSkipVerify = true")
-		}
+	ht, ok = rt.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", rt)
+	}
+	if !ht.DisableKeepAlives {
+		t.Error("expected DisableKeepAlives = true when skipTLS is true")
+	}
+	if ht.TLSClientConfig == nil || !ht.TLSClientConfig.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify = true when skipTLS is true")
 	}
 }
 
