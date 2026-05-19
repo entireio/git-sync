@@ -1,0 +1,181 @@
+Not primarily. The main cause is `--all-refs` itself, not the fact that you previously ran `--tags`.
+
+What the earlier `--tags` run changed is the target state:
+- after that run, the target was no longer “empty”
+- so the later `--all-refs` run became a sync against an existing target
+
+That can matter, but the important part is this:
+
+- if `--all-refs` produces only branch/tag-style work, relay can still be used
+- if `--all-refs` includes “other” refs or ref shapes the relay checks won’t handle, it falls back to materialized
+
+So the difference is not simply:
+- first `--tags`, then `--all-refs` => broken
+
+It is more like:
+- `--all-refs` exposed refs outside the normal heads/tags set
+- on this repo/target state, that made incremental relay ineligible
+- therefore the run used materialized push
+- that is the HTTP target path currently failing
+
+The earlier `--tags` run may have contributed indirectly by making the target non-empty, which can change planning, but it is not the root reason by itself.
+
+Short version:
+- `--tags` did not “poison” the target
+- `--all-refs` triggered a different strategy because it covered a broader ref set
+
+If you want, I can inspect the plan logic for this repo and tell you exactly which ref namespace under `--all-refs` is forcing materialized.
+
+can you explain me this?
+
+---
+
+but not sure I understand why the decision was made to handle this with --all-refs like that
+
+---
+
+but in theory if I use a force variant it should actually overwrite no matter what?
+
+---
+
+I'm also still struggling, maybe you can explain more: 
+
+If I have a ref pointing to a commit, now we run sync again, and that ref points now to a different commit, why would we not just update this on the target? Do ref have the concept of fast forward and merge at all? how does the git cli does this with --mirror? (you can check ../../research/git
+
+---
+
+and what's the additional work for the refs why a full commit tree is needed
+
+---
+
+ok, back to the initial issue with http timing out, what's now the best approach here?
+
+---
+
+can you review this: The narrow fix is: stop streaming `PushObjects` directly into HTTP `receive-pack`.
+
+Right now the materialized path does this:
+
+- [internal/strategy/materialized/materialized.go](/Users/soph/Work/entire/devenv/git-sync/internal/strategy/materialized/materialized.go:109) calls `TargetPusher.PushObjects(...)`
+- [internal/gitproto/push.go](/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/push.go:208) creates an `io.Pipe`
+- the pack encoder writes into that pipe on one goroutine
+- `sendReceivePack(...)` immediately POSTs that live stream to HTTP
+
+That gives you an unknown-length request body. Your backend reads the first few KB, then stops draining it.
+
+**Best fix**
+Buffer the full materialized `receive-pack` request body to a temp file first, then POST the file with a real `Content-Length`.
+
+That means:
+
+1. Build the update-request header as today.
+2. Encode the pack to a temp file instead of an `io.Pipe`.
+3. Reopen/seek the file.
+4. Send `io.MultiReader(header, file)` with an explicit content length.
+5. Clean up the temp file after the POST.
+
+**Why this is the right scope**
+It fixes the path you are actually hitting without redesigning every push mode.
+
+- failing path: `PushObjects`
+- working path: `PushPack` / relay
+- so fix `PushObjects` first
+
+**Where to change it**
+Mainly two places:
+
+- [internal/gitproto/push.go](/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/push.go:208)
+- [internal/gitproto/smarthttp.go](/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/smarthttp.go:254)
+
+**Likely code shape**
+Add an HTTP-specific helper for fixed-length RPC posts, something like:
+
+- `PostRPCFileBody(...)` or
+- `PostRPCStreamBodyWithLength(..., contentLength int64)`
+
+Then in `PushObjects`:
+
+- if `conn` is `*HTTPConn`, spool the pack to temp file and send fixed-length
+- otherwise keep current streaming behavior for SSH
+
+**Why not change only `smarthttp.go`**
+Because `smarthttp` cannot invent a length for a live `io.Pipe`. The materialized path has to change how it produces the body.
+
+**One more point**
+If you want maximum backend compatibility, eventually the same issue may apply to relay/bootstrap too, since they also stream packs. But based on your tests, the immediate bug is specifically the materialized HTTP push path.
+
+So I’d implement this in two steps:
+
+1. Fix `PushObjects` over HTTP by spooling to a temp file.
+2. Leave relay/bootstrap unchanged for now.
+3. If needed later, add an optional “buffer HTTP receive-pack uploads” mode for all push paths.
+
+If you want, I can implement step 1 now.
+
+---
+
+ok, let's confirm the diagnosis
+
+---
+
+❯ GODEBUG=http2client=0 go run ./cmd/git-sync sync -v --all-refs --progress https://github.com/entireio/git-sync.git "$ARTIFACTS_REMOTE"
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+source: Enumerating objects: 10899, done.
+source: Counting objects: 100% (1347/1347), done.
+source: Compressing objects: 100% (188/188), done.
+source: Total 10899 (delta 1212), reused 1228 (delta 1149), pack-reused 9552 (from 1)
+github.com → 47.3 MB @ 4.17 MB/s ✓  │  7.86 KB @ 98 B/s ✓ → 8b04592ed74a5cc…cloudflare.net
+error: sync: sync: materialized execute: push target refs: target receive-pack: post RPC stream body: post RPC: Post "https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-git-sync-ssh.git/git-receive-pack": round trip: use of closed network connection
+exit status 1
+
+---
+
+one more detail, I did run git-sync before with --tags (and not --all-refs) and that worked, then I did run --all-refs next and that surfaces the issue
+
+---
+
+yes
+
+---
+
+do option B might be helpful in the future?
+
+---
+
+yes
+
+---
+
+❯ GITSYNC_HTTP_TRACE=1 GODEBUG=http2client=0 \
+    go run ./cmd/git-sync sync -v --all-refs --progress \
+      ssh://git@github.com/entireio/git-sync "$ARTIFACTS_REMOTE"
+warning: SSH transport does not yet expose byte-counted throughput; --progress and --stats output will omit SSH transfer bytes
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+[httptrace] GET git-receive-pack/info/refs GetConn 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net:443
+[httptrace] GET git-receive-pack/info/refs ConnectStart tcp 104.18.16.116:443
+[httptrace] GET git-receive-pack/info/refs ConnectDone tcp 104.18.16.116:443 err=<nil>
+[httptrace] GET git-receive-pack/info/refs TLSHandshakeStart
+[httptrace] GET git-receive-pack/info/refs TLSHandshakeDone resumed=false err=<nil>
+[httptrace] GET git-receive-pack/info/refs GotConn reused=false wasIdle=false idle=0s local=192.168.1.114:50582 remote=104.18.16.116:443
+[httptrace] GET git-receive-pack/info/refs WroteRequest err=<nil>
+[httptrace] GET git-receive-pack/info/refs PutIdleConn ok
+source: Enumerating objects: 10942, done.
+source: Counting objects: 100% (1390/1390), done.
+source: Compressing objects: 100% (215/215), done.
+source: Total 10942 (delta 1224), reused 1279 (delta 1157), pack-reused 9552 (from 1)
+github.com → 0 B @ 0 B/s  │  1.61 KB @ 276 B/s ✓ → 8b04592ed74a5cc…cloudflare.net[httptrace] POST git-receive-pack GetConn 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net:443
+[httptrace] POST git-receive-pack GotConn reused=true wasIdle=true idle=13.001639584s local=192.168.1.114:50582 remote=104.18.16.116:443
+github.com → 0 B @ 0 B/s  │  7.90 KB @ 426 B/s ✓ → 8b04592ed74a5cc…cloudflare.net[httptrace] POST git-receive-pack WroteRequest err=use of closed network connection
+github.com → 0 B @ 0 B/s  │  7.90 KB @ 93 B/s ✓ → 8b04592ed74a5cc…cloudflare.net
+error: sync: sync: materialized execute: push target refs: target receive-pack: post RPC stream body: post RPC: Post "https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-git-sync-ssh-e.git/git-receive-pack": round trip: use of closed network connection
+exit status 1
+
+---
+
+This is a CLI, this is also sending a lot of data in theory. I think having to reopen a connection and do another TLS handshake is in the scope of things marginal, or?
+
+---
+
+sorry, slight step back: we are also a library. But still I feel the trade off of the reconnect isn't that big. Doing new connections after each "step" sounds reasonable?
