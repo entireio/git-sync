@@ -217,27 +217,10 @@ func postReceivePack(
 
 // PushObjects pushes locally-materialized objects to the target.
 //
-// The receive-pack body (update-request header + pack) is written to a
-// temp file before the POST so the upload goes out in one continuous
-// burst. go-git's encoder runs delta selection synchronously before
-// writing any pack bytes, which on big repos stalls the request body
-// for tens of seconds — long enough for CDN edges like Cloudflare's to
-// hit their idle-write timeout and close the connection mid-upload.
-// Spooling collapses encoding and writing into one phase from the
-// network's point of view, so the body bytes stream out without gaps.
-//
-// As a side benefit the spooled body carries a known length, so the
-// POST sends Content-Length instead of Transfer-Encoding: chunked
-// (matching upstream git's smart-HTTP transport), and req.GetBody lets
-// Go's transport retry transient connection failures.
-//
-// The materialized strategy already requires the full source object
-// closure to be local before encoding begins, so a temp file on upload
-// doesn't change its fundamental shape. Relay paths (PushPack) keep
-// streaming source bytes through to target with chunked encoding —
-// source pack data flows steadily, there's no stall to engineer
-// around, and the "streaming proxy" property git-sync is built around
-// is preserved.
+// The encoded body (update-request + pack) is spooled to a temp file
+// before the POST so the upload streams without a mid-stream stall.
+// See SpooledBody for why this matters. Relay paths (PushPack) keep
+// streaming source bytes directly and don't need this.
 func PushObjects(
 	ctx context.Context,
 	conn Conn,
@@ -282,7 +265,8 @@ func PushObjects(
 }
 
 // countingWriter wraps an io.Writer and tracks total bytes written.
-// Reads of the count are safe to call concurrently with Write.
+// The count is read by the progress ticker concurrently with the
+// encoder's writes, so the counter is atomic.
 type countingWriter struct {
 	w io.Writer
 	n atomic.Int64

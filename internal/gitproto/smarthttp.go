@@ -379,15 +379,9 @@ func PostRPCStreamBody(ctx context.Context, conn Conn, service string, body io.R
 // PostRPCStreamBody sends a POST to the given service using a streaming request body.
 // Caller must close the returned ReadCloser.
 //
-// The body is sent as-is. Streaming bodies (io.MultiReader, io.PipeReader)
-// produce a chunked request — that's the right shape for relay paths,
-// where source pack bytes flow steadily from source through to target.
-// Callers whose body would otherwise stall mid-stream (e.g. the
-// materialized push path, where the encoder's delta-selection phase
-// produces no bytes for tens of seconds) spool the full payload first
-// and pass a *SpooledBody; PostRPCStreamBody sets req.ContentLength and
-// req.GetBody from its fields so the upload goes out in one continuous
-// burst and Go's transport can auto-retry transient connection failures.
+// The body is sent as-is — streaming bodies produce a chunked request,
+// which is the right shape for relay paths. A *SpooledBody triggers
+// fixed-length encoding and replayable retries; see SpooledBody.
 func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
 	reqURL := fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
 	ctx = withHTTPTrace(ctx, "POST "+service)
@@ -397,11 +391,7 @@ func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body i
 		return nil, fmt.Errorf("create RPC request: %w", err)
 	}
 	if spooled, ok := body.(*SpooledBody); ok {
-		req.ContentLength = spooled.size
-		path := spooled.path
-		req.GetBody = func() (io.ReadCloser, error) {
-			return os.Open(path)
-		}
+		spooled.applyTo(req)
 	}
 	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
 	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
@@ -480,6 +470,17 @@ func NewSpooledBody(write func(io.Writer) error) (*SpooledBody, func(), error) {
 		return nil, func() {}, fmt.Errorf("rewind spooled body: %w", err)
 	}
 	return &SpooledBody{ReadCloser: f, path: path, size: size}, cleanup, nil
+}
+
+// applyTo wires the spooled body's known length and a fresh-reader
+// factory into req. GetBody lets Go's transport replay the request
+// body on transient connection failures by reopening the temp file.
+func (s *SpooledBody) applyTo(req *http.Request) {
+	req.ContentLength = s.size
+	path := s.path
+	req.GetBody = func() (io.ReadCloser, error) {
+		return os.Open(path)
+	}
 }
 
 // ApplyAuth applies the given auth method to an HTTP request. Errors from
