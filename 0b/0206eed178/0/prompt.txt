@@ -57,3 +57,11 @@ ok, ../../go-git is where go-git is checked out, so yeah maybe let's just open a
 ---
 
 /simplify
+
+---
+
+can you check the commit messages are inline with the linting rules for commit messages
+
+---
+
+only do the rewording
