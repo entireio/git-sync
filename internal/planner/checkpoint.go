@@ -181,6 +181,130 @@ func hashLess(a, b plumbing.Hash) bool {
 	return a.Compare(b.Bytes()) < 0
 }
 
+// FirstParentChainFromParents is the parents-map analogue of
+// FirstParentChainStoppingAt. parents is keyed by commit hash; the
+// value is the commit's parent list (first entry is the first parent).
+// Commits not present in parents are treated as roots (chain ends).
+// Returns the chain in root-to-tip order, excluding any commit in
+// stopAt. When tip itself is in stopAt, returns an empty chain.
+//
+// Used by the bootstrap planner so it can walk a parents-only map
+// extracted from a tree:0 pack instead of a full in-memory object
+// store. See ExtractCommitParents in internal/gitproto.
+func FirstParentChainFromParents(
+	parents map[plumbing.Hash][]plumbing.Hash,
+	tip plumbing.Hash,
+	stopAt map[plumbing.Hash]struct{},
+) ([]plumbing.Hash, error) {
+	if _, stop := stopAt[tip]; stop {
+		return nil, nil
+	}
+	if _, ok := parents[tip]; !ok {
+		return nil, fmt.Errorf("tip commit %s not found in parents map", tip)
+	}
+	chain := make([]plumbing.Hash, 0, 128)
+	current := tip
+	seen := make(map[plumbing.Hash]struct{}, 128)
+	for {
+		if _, dup := seen[current]; dup {
+			return nil, fmt.Errorf("cycle detected at %s", current)
+		}
+		seen[current] = struct{}{}
+		chain = append(chain, current)
+		ps, ok := parents[current]
+		if !ok || len(ps) == 0 {
+			break
+		}
+		first := ps[0]
+		if _, stop := stopAt[first]; stop {
+			break
+		}
+		current = first
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
+// TopoChainFromParents is the parents-map analogue of
+// TopoChainStoppingAt. Same deterministic topological order
+// (parents-before-children, hash tiebreak) on a parents-only map.
+func TopoChainFromParents(
+	parents map[plumbing.Hash][]plumbing.Hash,
+	tip plumbing.Hash,
+	stopAt map[plumbing.Hash]struct{},
+) ([]plumbing.Hash, error) {
+	if _, stop := stopAt[tip]; stop {
+		return nil, nil
+	}
+
+	reachable := map[plumbing.Hash][]plumbing.Hash{}
+	queue := []plumbing.Hash{tip}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		if _, ok := reachable[h]; ok {
+			continue
+		}
+		if _, stop := stopAt[h]; stop {
+			continue
+		}
+		ps, ok := parents[h]
+		if !ok {
+			return nil, fmt.Errorf("commit %s not found in parents map", h)
+		}
+		reachable[h] = ps
+		for _, p := range ps {
+			if _, stop := stopAt[p]; stop {
+				continue
+			}
+			if _, ok := reachable[p]; ok {
+				continue
+			}
+			queue = append(queue, p)
+		}
+	}
+
+	inDeg := make(map[plumbing.Hash]int, len(reachable))
+	children := make(map[plumbing.Hash][]plumbing.Hash, len(reachable))
+	for h, ps := range reachable {
+		for _, p := range ps {
+			if _, ok := reachable[p]; !ok {
+				continue
+			}
+			inDeg[h]++
+			children[p] = append(children[p], h)
+		}
+	}
+
+	ready := make([]plumbing.Hash, 0)
+	for h := range reachable {
+		if inDeg[h] == 0 {
+			ready = append(ready, h)
+		}
+	}
+	sortHashes(ready)
+
+	chain := make([]plumbing.Hash, 0, len(reachable))
+	for len(ready) > 0 {
+		h := ready[0]
+		ready = ready[1:]
+		chain = append(chain, h)
+		for _, child := range children[h] {
+			inDeg[child]--
+			if inDeg[child] == 0 {
+				ready = appendSortedHash(ready, child)
+			}
+		}
+	}
+	if len(chain) != len(reachable) {
+		return nil, fmt.Errorf("cycle detected in commit graph (emitted %d of %d)",
+			len(chain), len(reachable))
+	}
+	return chain, nil
+}
+
 // FirstParentChainFromMap walks a first-parent map from tip back to root.
 // The map key is a commit hash, the value is its first parent hash.
 // A zero-value parent marks the root. Returns the chain in root-to-tip order.

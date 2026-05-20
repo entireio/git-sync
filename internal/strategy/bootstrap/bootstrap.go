@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,8 +19,6 @@ import (
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
-	"github.com/go-git/go-git/v6/plumbing/storer"
-	"github.com/go-git/go-git/v6/storage/memory"
 
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
@@ -43,7 +40,7 @@ type Params struct {
 	SourceConn    gitproto.Conn
 	SourceService interface {
 		FetchPack(ctx context.Context, conn gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-		FetchCommitGraph(ctx context.Context, store storer.Storer, conn gitproto.Conn, ref gitproto.DesiredRef, haves []plumbing.Hash) error
+		FetchCommitParents(ctx context.Context, conn gitproto.Conn, ref gitproto.DesiredRef, haves []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error)
 		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
@@ -846,29 +843,29 @@ func planCheckpointsFromChain(
 		"have_count", len(trunkHaves),
 		"stop_at_count", len(trunkStopAt))
 
-	// Fetch all commits (tree:0 filter) into a temporary in-memory store.
-	// Without haves this is ~1.4M commits for linux (~4.6 GB transient).
-	// With trunk haves, the source only sends commits not reachable from
-	// trunk, which for typical feature branches is tiny. We extract the
-	// first-parent chain immediately and discard the store so GC can
-	// reclaim it. The transient spike is unavoidable with git protocol v2
-	// (no first-parent-only fetch) and go-git's pack parser (needs full
-	// store for delta resolution).
-	graphStore := memory.NewStorage()
+	// Stream the tree:0-filtered commit graph and extract (commit ->
+	// parent hashes) directly from the pack, discarding all object
+	// content as it arrives. For linux this drops the planning-phase
+	// peak from ~4.6 GiB (full in-memory store of ~1.4M decoded
+	// commits) to ~100 MiB (parents map plus a small fixed delta
+	// cache). See internal/gitproto.ExtractCommitParents. With trunk
+	// haves the source sends only divergent commits, so feature
+	// branches' planning is already small either way.
 	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
-	if err := p.SourceService.FetchCommitGraph(ctx, graphStore, p.SourceConn, gpRef, trunkHaves); err != nil {
-		return nil, nil, nil, fmt.Errorf("fetch bootstrap planning graph for %s: %w", ref.TargetRef, err)
+	parentsMap, err := p.SourceService.FetchCommitParents(ctx, p.SourceConn, gpRef, trunkHaves)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("fetch bootstrap commit parents for %s: %w", ref.TargetRef, err)
 	}
 	var chain []plumbing.Hash
 	switch p.Strategy {
 	case "", "first-parent":
-		c, walkErr := planner.FirstParentChainStoppingAt(graphStore, ref.SourceHash, trunkStopAt)
+		c, walkErr := planner.FirstParentChainFromParents(parentsMap, ref.SourceHash, trunkStopAt)
 		if walkErr != nil {
 			return nil, nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, walkErr)
 		}
 		chain = c
 	case "topo":
-		c, walkErr := planner.TopoChainStoppingAt(graphStore, ref.SourceHash, trunkStopAt)
+		c, walkErr := planner.TopoChainFromParents(parentsMap, ref.SourceHash, trunkStopAt)
 		if walkErr != nil {
 			return nil, nil, nil, fmt.Errorf("walk topo chain for %s: %w", ref.TargetRef, walkErr)
 		}
@@ -876,16 +873,13 @@ func planCheckpointsFromChain(
 	default:
 		return nil, nil, nil, fmt.Errorf("unsupported bootstrap strategy %q (want \"first-parent\" or \"topo\")", p.Strategy)
 	}
-	// Collect all commit hashes in the fetched graph so callers can extend
-	// their stop set. We only need the keys — ~8 bytes per commit, so the
-	// linux ancestry set is ~11 MB vs the store's ~4.6 GB.
-	ancestors, err := collectCommitHashes(graphStore)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("collect commit hashes for %s: %w", ref.TargetRef, err)
+	// Every commit the source sent is now an ancestor we can use as a
+	// stop set for subsequent branches. Map keys give us the set
+	// directly.
+	ancestors := make(map[plumbing.Hash]struct{}, len(parentsMap))
+	for h := range parentsMap {
+		ancestors[h] = struct{}{}
 	}
-	// graphStore is unused beyond this point; runtime.GC reclaims its
-	// transient allocations before we move on to the next branch.
-	runtime.GC()
 
 	if len(chain) == 0 {
 		// Tip is already covered by the stop set. Emit a single-checkpoint
@@ -903,24 +897,6 @@ func planCheckpointsFromChain(
 		"estimated_batches", len(checkpoints))
 
 	return checkpoints, chain, ancestors, nil
-}
-
-// collectCommitHashes returns the set of commit hashes in store. Used to build
-// the trunk reachability set for subsequent branches' stop-at walks.
-func collectCommitHashes(store *memory.Storage) (map[plumbing.Hash]struct{}, error) {
-	iter, err := store.IterEncodedObjects(plumbing.CommitObject)
-	if err != nil {
-		return nil, fmt.Errorf("iterate commit objects: %w", err)
-	}
-	defer iter.Close()
-	out := map[plumbing.Hash]struct{}{}
-	if err := iter.ForEach(func(obj plumbing.EncodedObject) error {
-		out[obj.Hash()] = struct{}{}
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("walk commit objects: %w", err)
-	}
-	return out, nil
 }
 
 func estimateBatchCount(chainLen int64, batchMaxPack int64) int {

@@ -139,6 +139,65 @@ func (s *RefService) FetchCommitGraph(
 	return storeV2FetchPack(store, reader, false, nil)
 }
 
+// FetchCommitParents fetches a commit graph (tree:0 filter) and
+// extracts (commit -> parent hashes) directly from the pack stream
+// without materializing the full object set into a store. Peak memory
+// during this call is dominated by the result map plus a small fixed
+// delta-resolution cache; no commit content is retained.
+//
+// Same wire protocol as FetchCommitGraph (v2 fetch with tree:0 filter).
+// Returns an empty map (not nil) when the source has no new commits.
+func (s *RefService) FetchCommitParents(
+	ctx context.Context,
+	conn Conn,
+	ref DesiredRef,
+	haves []plumbing.Hash,
+) (parents map[plumbing.Hash][]plumbing.Hash, err error) {
+	if s.Protocol != "v2" {
+		return nil, errors.New("commit parents fetch requires protocol v2")
+	}
+	if !s.V2Caps.FetchSupports("filter") {
+		return nil, errors.New("source does not advertise fetch filter support")
+	}
+
+	sortedHaves := SortedUniqueHashes(haves)
+	cmdArgs := make([]string, 0, 4+len(sortedHaves))
+	cmdArgs = append(cmdArgs,
+		"ofs-delta",
+		"no-progress",
+		"filter tree:0",
+		"want "+ref.SourceHash.String(),
+	)
+	for _, h := range sortedHaves {
+		cmdArgs = append(cmdArgs, "have "+h.String())
+	}
+	cmdArgs = append(cmdArgs, "done")
+
+	body, err := EncodeCommand("fetch", s.V2Caps.RequestCapabilities(), cmdArgs)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, true, "upload-pack fetch")
+	if err != nil {
+		return nil, err
+	}
+	defer ioutil.CheckClose(reader, &err)
+
+	parents = map[plumbing.Hash][]plumbing.Hash{}
+	consumeErr := consumeV2FetchPack(reader, false, nil, func(packReader io.Reader) error {
+		got, perr := ExtractCommitParents(packReader)
+		if perr != nil {
+			return perr
+		}
+		parents = got
+		return nil
+	})
+	if consumeErr != nil {
+		return nil, consumeErr
+	}
+	return parents, nil
+}
+
 // Capabilities returns the sorted capability list for display.
 func (s *RefService) Capabilities() []string {
 	switch s.Protocol {
@@ -249,6 +308,24 @@ func fetchPackV2(
 }
 
 func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool, progressOut io.Writer) error {
+	return consumeV2FetchPack(r, verbose, progressOut, func(packReader io.Reader) error {
+		if err := packfile.UpdateObjectStorage(store, packReader); err != nil {
+			return fmt.Errorf("update object storage: %w", err)
+		}
+		return nil
+	})
+}
+
+// consumeV2FetchPack walks a protocol v2 fetch response envelope
+// (acknowledgments / shallow-info / packfile sections) and hands the
+// demuxed packfile stream to consumer when one is present. Returns nil
+// for empty / no-pack responses without invoking consumer.
+func consumeV2FetchPack(
+	r io.Reader,
+	verbose bool,
+	progressOut io.Writer,
+	consumer func(io.Reader) error,
+) error {
 	reader := NewPacketReader(r)
 	expectPackfile := false
 	for {
@@ -279,10 +356,7 @@ func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool, progressOu
 			case "packfile\n":
 				demux := sideband.NewDemuxer(sideband.Sideband64k, reader.BufReader())
 				demux.Progress = progressSink(verbose, "source: ", progressOut)
-				if err := packfile.UpdateObjectStorage(store, demux); err != nil {
-					return fmt.Errorf("update object storage: %w", err)
-				}
-				return nil
+				return consumer(demux)
 			case "acknowledgments\n":
 				ready, err := skipV2Acknowledgments(reader)
 				if err != nil {
