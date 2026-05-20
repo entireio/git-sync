@@ -1,0 +1,59 @@
+Question: but the header is not written (or was written before our changes) on to the wire already?
+
+---
+
+yeah try 2
+
+---
+
+that did still send a content-length header:
+
+Content-Length: 59810768
+
+---
+
+worked with chunked
+
+---
+
+ok, now let's revisit all of the changes with these findings: anything to change?
+
+---
+
+can you give me the difference in behaviour compared to main?
+
+---
+
+> Materialized push now needs ephemeral disk space proportional
+
+why did this change with this PR?
+
+---
+
+Yeah but given that we found that the content-length wasn't the issue and more the time between headers and content, I wonder if we could go back here to how it was before and still fix the issue?
+
+---
+
+What's the reason go-git has this? Or what would be a fix there we could propose upstream?
+
+---
+
+can you give me a problem description (one or two sentences) and a highlevel (but technical) description what the change would look like, I can message one of the maintainers if that's a thing they would accept?
+
+---
+
+I'd rather we simply export deltaSelector on x/plumbing/format/packfile. So that you get the same result, with no impact on the public API.
+Paulo Gomes  [10:00 AM]
+Or even a new functional option that enables callers to inject their custom object selector.
+Paulo Gomes  [10:00 AM]
+I.e. WithObjectSelector(x)
+Paulo Gomes  [10:04 AM]
+On a separate topic, but somehow overlapping, I'm looking into ways that transport can detect that a Storer is capable of pack streaming based on reachability heuristics (post-negotiation). Then hand-off so that the Storer stream it as it produce the pack.
+
+---
+
+ok, ../../go-git is where go-git is checked out, so yeah maybe let's just open a PR as you understood it
+
+---
+
+/simplify
