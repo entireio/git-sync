@@ -1149,13 +1149,14 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) error {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				graphFetches++
 				if ref.SourceRef != mainRef {
 					t.Errorf("unexpected commit-graph fetch for %s; subsumed branch should have been skipped", ref.SourceRef)
 				}
+				store := memory.NewStorage()
 				writeLinearCommitChain(t, store, 3)
-				return nil
+				return parentsFromCommitChainStore(t, store), nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				packFetches++
@@ -1212,8 +1213,8 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 }
 
 type fakeBootstrapSource struct {
-	fetchPack        func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-	fetchCommitGraph func(context.Context, storer.Storer, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) error
+	fetchPack          func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
+	fetchCommitParents func(context.Context, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error)
 }
 
 func (f fakeBootstrapSource) FetchPack(
@@ -1225,20 +1226,45 @@ func (f fakeBootstrapSource) FetchPack(
 	return f.fetchPack(ctx, conn, desired, targetRefs)
 }
 
-func (f fakeBootstrapSource) FetchCommitGraph(
+func (f fakeBootstrapSource) FetchCommitParents(
 	ctx context.Context,
-	store storer.Storer,
 	conn gitproto.Conn,
 	ref gitproto.DesiredRef,
 	haves []plumbing.Hash,
-) error {
-	if f.fetchCommitGraph != nil {
-		return f.fetchCommitGraph(ctx, store, conn, ref, haves)
+) (map[plumbing.Hash][]plumbing.Hash, error) {
+	if f.fetchCommitParents != nil {
+		return f.fetchCommitParents(ctx, conn, ref, haves)
 	}
-	return nil
+	return map[plumbing.Hash][]plumbing.Hash{}, nil
 }
 
 func (fakeBootstrapSource) SupportsBootstrapBatch() bool { return true }
+
+// parentsFromCommitChainStore walks a store and returns the
+// (commit -> parents) map equivalent of what FetchCommitParents would
+// have produced for the commits in that store. Used by tests so they
+// can build commit graphs via the existing writeLinearCommitChain
+// helper and then expose them through the parents-map mock.
+func parentsFromCommitChainStore(tb testing.TB, store storer.Storer) map[plumbing.Hash][]plumbing.Hash {
+	tb.Helper()
+	iter, err := store.IterEncodedObjects(plumbing.CommitObject)
+	if err != nil {
+		tb.Fatalf("iter: %v", err)
+	}
+	defer iter.Close()
+	out := map[plumbing.Hash][]plumbing.Hash{}
+	if err := iter.ForEach(func(obj plumbing.EncodedObject) error {
+		commit := &object.Commit{}
+		if err := commit.Decode(obj); err != nil {
+			return fmt.Errorf("decode commit %s: %w", obj.Hash(), err)
+		}
+		out[obj.Hash()] = append([]plumbing.Hash(nil), commit.ParentHashes...)
+		return nil
+	}); err != nil {
+		tb.Fatalf("iter foreach: %v", err)
+	}
+	return out
+}
 
 type fakeBootstrapPusher struct {
 	pushPack     func(context.Context, []gitproto.PushCommand, io.ReadCloser) error
@@ -1411,9 +1437,10 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				store := memory.NewStorage()
 				writeLinearCommitChain(t, store, 1)
-				return nil
+				return parentsFromCommitChainStore(t, store), nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
@@ -1451,9 +1478,10 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitGraph: func(_ context.Context, store storer.Storer, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) error {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				store := memory.NewStorage()
 				writeLinearCommitChain(t, store, 1)
-				return nil
+				return parentsFromCommitChainStore(t, store), nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				return pack, nil
