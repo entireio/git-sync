@@ -1,0 +1,1 @@
+Add tests to ensure that source and target must not be the same repository

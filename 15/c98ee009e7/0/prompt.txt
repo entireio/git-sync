@@ -1,0 +1,14 @@
+git-sync on  soph/progress-indicators via 🐹 v1.26.2
+❯ go run cmd/git-sync/main.go
+# command-line-arguments
+cmd/git-sync/main.go:25:13: undefined: newRootCmd
+
+---
+
+❯ go run ./cmd/git-sync sync --progress https://github.com/entireio/cli.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-cli.git
+source: 14.2 KB @ 2.15 KB/sxame for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+source: 14.2 KB @ 1.45 KB/ssignal: interrupt55b07276caf3.artifacts.cloudflare.net':
+
+---
+
+I'm more concerned about the collision, we should fix that somehow

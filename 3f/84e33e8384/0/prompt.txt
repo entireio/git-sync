@@ -1,0 +1,13 @@
+can you rebase soph/progress-indicators onto soph/smart-subdivision
+
+---
+
+Subdivision skipped when factor ≤ remaining checkpoint count
+
+High Severity
+
+subdivideToFactor uses len(expanded) < targetCount as its loop guard, so when the remaining checkpoint count already meets or exceeds factor, it returns unchanged. The caller then checks len(expanded) > len(batch.Checkpoints[idx:]), which evaluates to false, turning a recoverable 413 into a hard failure. This is a regression from the old code, which always called subdivideCheckpoints at least once. When a reverse proxy cuts the connection at its body limit, sentBytes ≈ limit, so factor is always 2. The first rejection subdivides 1→2, but the second rejection sees 2 remaining ≥ factor 2, skips subdivision entirely, and fails.
+
+---
+
+you are on the branch already

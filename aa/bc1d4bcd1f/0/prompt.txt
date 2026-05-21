@@ -1,0 +1,421 @@
+❯ go run ./cmd/git-sync sync --verbose --branch entire/checkpoints/v1 --progress https://github.com/entireio/cli-checkpoints.git https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-bench1.git
+Username for 'https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net': x
+Password for 'https://x@8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net':
+time=2026-05-04T20:17:25.873+02:00 level=INFO msg="bootstrap fetching refs from source" ref_count=1
+time=2026-05-04T20:17:26.132+02:00 level=INFO msg="bootstrap pushing refs to target" ref_count=1
+source:
+Enumerating objects: 64686, done.
+source:
+Counting objects:   0% (1/426)
+source:
+Counting objects:   1% (5/426)
+source:
+Counting objects:   2% (9/426)
+source:
+Counting objects:   3% (13/426)
+source:
+Counting objects:   4% (18/426)
+source:
+Counting objects:   5% (22/426)
+source:
+Counting objects:   6% (26/426)
+source:
+Counting objects:   7% (30/426)
+source:
+Counting objects:   8% (35/426)
+source:
+Counting objects:   9% (39/426)
+source:
+Counting objects:  10% (43/426)
+source:
+Counting objects:  11% (47/426)
+source:
+Counting objects:  12% (52/426)
+source:
+Counting objects:  13% (56/426)
+source:
+Counting objects:  14% (60/426)
+source:
+Counting objects:  15% (64/426)
+source:
+Counting objects:  16% (69/426)
+source:
+Counting objects:  17% (73/426)
+source:
+Counting objects:  18% (77/426)
+source:
+Counting objects:  19% (81/426)
+source:
+Counting objects:  20% (86/426)
+source:
+Counting objects:  21% (90/426)
+source:
+Counting objects:  22% (94/426)
+source:
+Counting objects:  23% (98/426)
+source:
+Counting objects:  24% (103/426)
+source:
+Counting objects:  25% (107/426)
+source:
+Counting objects:  26% (111/426)
+source:
+Counting objects:  27% (116/426)
+source:
+Counting objects:  28% (120/426)
+source:
+Counting objects:  29% (124/426)
+source:
+Counting objects:  30% (128/426)
+source:
+Counting objects:  31% (133/426)
+source:
+Counting objects:  32% (137/426)
+source:
+Counting objects:  33% (141/426)
+source:
+Counting objects:  34% (145/426)
+source:
+Counting objects:  35% (150/426)
+source:
+Counting objects:  36% (154/426)
+source:
+Counting objects:  37% (158/426)
+source:
+Counting objects:  38% (162/4
+26)
+source:
+Counting objects:  39% (167/426)
+source:
+Counting objects:  40% (171/426)
+source:
+Counting objects:  41% (175/426)
+source:
+Counting objects:  42% (1
+79/426)
+source:
+Counting objects:  43% (184/426)
+source:
+Counting objects:  44% (188/426)
+source:
+Counting objects:  45% (192/426)
+source:
+Counting objects:  46% (196/426)
+source:
+Counting objects:  47% (201/426)
+source:
+Counting objects:  48% (205/426)
+source:
+Counting objects:  49% (209/426)
+source:
+Counting objects:  50% (213/426)
+source:
+Counting objects:  51% (218/426)
+source:
+Counting objects:  52% (222/426)
+source:
+Counting objects:  53% (226/426)
+source:
+Counting objects:  54% (231/426)
+source:
+Counting objects:  55% (235/426)
+source:
+Counting objects:  56% (239/426)
+source:
+Counting objects:  57% (243/426)
+source:
+Counting objects:  58% (248/426)
+source:
+Counting objects:  59% (252/426)
+source:
+Counting objects:  60% (256/426)
+source:
+Counting objects:  61% (260/426)
+source:
+Counting objects:  62% (265/426)
+source:
+Counting objects:  63% (269/426)
+source:
+Counting objects:  64% (273/426)
+source:
+Counting objects:  65% (277/426)
+source:
+Counting objects:  66% (282/426)
+source:
+Counting objects:  67% (286/426)
+source:
+Counting objects:  68% (290/426)
+source:
+Counting objects:  69% (294/426)
+source:
+Counting objects:  70% (299/426)
+source:
+Counting objects:  71% (303/426)
+source:
+Counting objects:  72% (307/426)
+source:
+Counting objects:  73% (311/426)
+source:
+Counting objects:  74% (316/426)
+source:
+Counting objects:  75% (320/426)
+source:
+Counting objects:  76% (324/426)
+source:
+Counting objects:  77% (329/426)
+source:
+Counting objects:  78% (333/426)
+source:
+Counting objects:  79% (337/426)
+source:
+Counting objects:  80% (341/426)
+source:
+Counting objects:  81% (346/426)
+source:
+Counting objects:  82% (350/4
+26)
+source:
+Counting objects:  83% (354/426)
+source:
+Counting objects:  84% (358/426)
+source:
+Counting objects:  85% (363/426)
+source:
+Counting objects:  86% (367/426)
+source:
+Counting objects:  87% (371/426)
+source:
+Counting objects:  88% (375/426)
+source:
+Counting objects:  89% (380/426)
+source:
+Counting objects:  90% (384/426)
+source:
+Counting objects:  91% (388/426)
+source:
+Counting objects:  92% (392/426)
+source:
+Counting objects:  93% (397/426)
+source:
+Counting objects:  94% (401/426)
+source:
+Counting objects:  95% (405/426)
+source:
+Counting objects:  96% (409/426)
+source:
+Counting objects:  97% (414/426)
+source:
+Counting objects:  98% (418/426)
+source:
+Counting objects:  99% (422/426)
+source:
+Counting objects: 100% (426/426)
+source:
+Counting objects: 100% (426/426), done.
+source:
+Compressing objects:   0% (1/295)
+source:
+Compressing objects:   1% (3/295)
+source:
+Compressing objects:   2% (6/295)
+source:
+Compressing objects:   3% (9/295)
+source:
+Compressing objects:   4% (12/295)
+source:
+Compressing objects:   5% (15/295)
+source:
+Compressing objects:   6% (18/295)
+source:
+Compressing objects:   7% (21/295)
+source:
+Compressing objects:   8% (24/295)
+source:
+Compressing objects:   9% (27/295)
+source:
+Compressing objects:  10% (30/295)
+source:
+Compressing objects:  11% (33/295)
+source:
+Compressing objects:  12% (36/295)
+source:
+Compressing objects:  13% (39/295)
+source:
+Compressing objects:  14% (42/295)
+source:
+Compressing objects:  15% (45/295)
+source:
+Compressing objects:  16% (48/295)
+source:
+Compressing objects:  17% (51/295)
+source:
+Compressing objects:  18% (54/295)
+source:
+Compressing objects:  19% (57/295)
+source:
+Compressing objects:  20% (59/295)
+source:
+Compressing objects:  21% (62/295)
+source:
+Compressing objects:  22% (65/295)
+source:
+Compressing objects:  23% (68/295)
+source:
+Compressing objects:  24% (71/295)
+source:
+Compressing objects:  25% (74/295)
+source:
+Compressing objects:  26% (77/295)
+source:
+Compressing objects:  27% (80/295)
+source:
+Compressing objects:  28% (83/295)
+source:
+Compressing objects:  29% (86/295)
+source:
+Compressing objects:  30% (89/295)
+source:
+Compressing objects:  31% (92/295)
+source:
+Compressing objects:  32% (95/295)
+source:
+Compressing objects:  33% (98/295)
+source:
+Compressing objects:  34% (101/295)
+source:
+Compressing objects:  35% (104/295)
+source:
+Compressing objects:  35% (105/295)
+source:
+Compressing objects:  36% (107/295)
+source:
+Compressing objects:  37% (110/295)
+source:
+Compressing objects:  38% (113/295)
+source:
+Compressing objects:  39% (116/295)
+source:
+Compressing objects:  40% (118/295)
+source:
+Compressing objects:
+  41% (121/295)
+source:
+Compressing objects:  42% (124/295)
+source:
+Compressing objects:  43% (127/295)
+source:
+Compressing objects:  44% (130/295)
+source:
+Compressing objects:  45% (133/295)
+source:
+Compressing objects:  46% (136/295)
+source:
+Compressing objects:  47% (139/295)
+source:
+Compressing objects:  48% (142/295)
+source:
+Compressing objects:  49% (145/295)
+source:
+Compressing objects:  50% (148/295)
+source:
+Compressing objects:  51% (151/295)
+source:
+Compressing objects:  52% (154/295)
+source:
+Compressing objects:  53% (157/295)
+source:
+Compressing objects:  54% (160/295)
+source:
+Compressing objects:  55% (163/295)
+source:
+Compressing objects:  56% (166/295)
+source:
+Compressing objects:  57% (169/295)
+source:
+Compressing objects:  58% (172/295)
+source:
+Compressing objects:  59% (175/295)
+source:
+Compressing objects:  60% (177/295)
+source:
+Compressing objects:  61% (180/295)
+source:
+Compressing objects:  62% (183/295)
+source:
+Compressing objects:  63% (186/295)
+source:
+Compressing objects:  64% (189/295)
+source:
+Compressing objects:  65% (192/295)
+source:
+Compressing objects:  66% (195/295)
+source:
+Compressing objects:  67% (198/295)
+source:
+Compressing objects:  68% (201/295)
+source:
+Compressing objects:  69% (204/295)
+source:
+Compressing objects:  70% (207/295)
+source:
+Compressing objects:  71% (210/295)
+source:
+Compressing objects:  72% (213/295)
+source:
+Compressing objects:  73% (216/295)
+source:
+Compressing objects:  74% (219/295)
+source:
+Compressing objects:  75% (222/295)
+source:
+Compressing objects:  76% (225/295)
+source:
+Compressing objects:  77% (228/295)
+source:
+Compressing objects:  78% (231/295)
+source:
+Compressing objects:  79% (234/295)
+source:
+Compressing objects:  80% (236/295)
+source:
+Compressing objects:  81% (239/295)
+source:
+Compressing objects:  82% (242/295)
+source:
+Compressing objects:  83% (245/295)
+source:
+Compressing objects:  84% (248/295)
+source:
+Compressing objects:  85% (251/295)
+source:
+Compressing objects:  86% (254/295)
+source:
+Compressing objects:  87% (257/295)
+source:
+Compressing objects:  88% (260/295)
+source:
+Compressing objects:  89% (263/295)
+source:
+Compressing objects:  90% (266/295)
+source:
+Compressing objects:  91% (269/295)
+source:
+Compressing objects:  92% (272/295)
+source:
+Compressing objects:  93% (275/295)
+source:
+Compressing objects:  94% (278/295)
+source:
+Compressing objects:  95% (281/295)
+source:
+Compressing objects:  96% (284/295)
+source:
+Compressing objects:  97% (287/295)
+source:
+Compressing objects:  98% (290/295)
+source:
+Compressing objects:  99% (293/295)
+source:
+Compressing objects: 100% (295/295)
+source:
+Compressing objects: 100% (295/295), done.

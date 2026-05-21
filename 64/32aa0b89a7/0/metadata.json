@@ -1,0 +1,37 @@
+{
+  "cli_version": "v0.6.1-dev-774ee21f1",
+  "checkpoint_id": "6432aa0b89a7",
+  "session_id": "3ee1ca7a-a436-44c1-906a-a912c6d33f96",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-13T11:47:08.364434Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/push.go"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "b6fff72cab82",
+  "token_usage": {
+    "input_tokens": 1353,
+    "cache_creation_tokens": 7409152,
+    "cache_read_tokens": 370026781,
+    "output_tokens": 701276,
+    "api_call_count": 929
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-13T11:47:08.052334Z",
+    "agent_lines": 21,
+    "agent_removed": 1,
+    "human_added": 38,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 59,
+    "total_lines_changed": 60,
+    "agent_percentage": 36.666666666666664,
+    "metric_version": 2
+  }
+}

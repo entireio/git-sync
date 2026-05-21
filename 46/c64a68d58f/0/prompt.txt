@@ -1,0 +1,5 @@
+I think saying "use sync instead" @internal/syncer/syncer.go:879-882 is a bit misleading. Not all the errors could be fixed with sync. Thoughts?
+
+---
+
+yes please

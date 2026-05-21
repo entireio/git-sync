@@ -1,0 +1,26 @@
+can you take a look at @../cli and how we structure the initial command help, can we do the same here? like if you run `git-sync` you see only the subcommands and then do `git-sync sync --help` for the help there? Also running with `--help` or no params/option should feel less like an error
+
+---
+
+yeah let's migrate to cobra (I was actually assuming we use this already)
+
+---
+
+but it means we don't have any changes in the "api" of the cli commands, right?
+
+---
+
+did we had any examples in the repo using "-source-url" or others?
+
+---
+
+can you take a look: 
+
+• 1. Medium: bare git-sync now exits successfully instead of failing for missing command. In the old entrypoint, run() returned a usage error when len(args) == 0, so the process
+     exited with status 1. After the Cobra refactor, the root command’s RunE just calls cmd.Help() and returns nil, and main() treats that as success. That is a user-visible contract
+     change for scripts that validate invocation or expect misuse to fail. See cmd/git-sync/root.go:26 and cmd/git-sync/main.go:27.
+  2. Low: unknown subcommand flags now print the root usage block instead of the subcommand usage, which makes the new error-handling path materially less helpful than intended. run()
+     always calls showUsage(cmd, err) on the root command object after ExecuteContext fails, so git-sync sync --bogus shows top-level usage rather than sync’s flags. I verified that
+     behavior locally. See cmd/git-sync/main.go:35 and cmd/git-sync/main.go:46.
+
+not sure about 1

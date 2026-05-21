@@ -1,0 +1,20 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "002f876fb8bb",
+  "session_id": "5b613073-e70b-48a1-b6ae-c6aaa99ec2b1",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-30T14:59:07.209043Z",
+  "branch": "soph/cover-image",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fc4a73f1f162",
+  "token_usage": {
+    "input_tokens": 712,
+    "cache_creation_tokens": 461913,
+    "cache_read_tokens": 8004840,
+    "output_tokens": 49919,
+    "api_call_count": 94
+  }
+}

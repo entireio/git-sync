@@ -1,0 +1,11 @@
+can we do: 
+
+github.com -> 168 MB @ 4.35 MB/s · 168 MB @ 4.35 MB/s -> 8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net
+
+basically take the host names from both sides?
+
+Maybe we can use something better then "·" in the middle? any ideas?
+
+---
+
+let's do the separator you suggested and the hostname thing

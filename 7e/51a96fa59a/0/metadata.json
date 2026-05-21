@@ -1,0 +1,35 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "7e51a96fa59a",
+  "session_id": "d0406407-d612-489d-b375-1372d062af82",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-11T19:51:38.841441Z",
+  "branch": "soph/head-symref-info",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "3703004736f5",
+  "token_usage": {
+    "input_tokens": 4596,
+    "cache_creation_tokens": 2309885,
+    "cache_read_tokens": 387341784,
+    "output_tokens": 475511,
+    "api_call_count": 916
+  },
+  "session_metrics": {
+    "turn_count": 35
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 42,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 42
+      }
+    }
+  ]
+}

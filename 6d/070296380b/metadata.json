@@ -1,0 +1,43 @@
+{
+  "cli_version": "v0.6.1-nightly.202605060704.2754b404-dev-2754b4044",
+  "checkpoint_id": "6d070296380b",
+  "strategy": "manual-commit",
+  "branch": "changes",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "internal/syncer/integration_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6d/070296380b/0/metadata.json",
+      "transcript": "/6d/070296380b/0/transcript.jsonl",
+      "content_hash": "/6d/070296380b/0/transcript_hash.txt",
+      "prompt": "/6d/070296380b/0/prompt.txt"
+    },
+    {
+      "metadata": "/6d/070296380b/1/metadata.json",
+      "transcript": "/6d/070296380b/1/transcript.jsonl",
+      "content_hash": "/6d/070296380b/1/transcript_hash.txt",
+      "prompt": "/6d/070296380b/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7833730,
+    "cache_creation_tokens": 267821,
+    "cache_read_tokens": 18030279,
+    "output_tokens": 77378,
+    "api_call_count": 138
+  },
+  "combined_attribution": {
+    "calculated_at": "2026-04-29T20:40:16.864545083Z",
+    "agent_lines": 167,
+    "agent_removed": 0,
+    "human_added": 159,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 326,
+    "total_lines_changed": 326,
+    "agent_percentage": 51.22699386503068,
+    "metric_version": 2
+  }
+}
