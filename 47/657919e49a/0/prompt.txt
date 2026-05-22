@@ -1,0 +1,5 @@
+Medium: streaming receive-pack pushes still cannot use helper fallback on servers that only challenge the real POST, not the probe GET. In internal/
+     gitproto/smarthttp.go:343, EnsureAuthForService only attaches helper creds when GET /<service> returns 401. If that probe returns something anonymous like
+     404 or 405, conn.Auth stays nil. Then the real non-seekable push body in internal/gitproto/push.go:158 goes through internal/gitproto/smarthttp.go:275,
+     gets a 401 on the actual POST, and cannot retry because the body is io.MultiReader. The code documents this limitation, but it is still a behavioral gap
+     for valid server layouts where auth is enforced only on POST /git-receive-pack.
