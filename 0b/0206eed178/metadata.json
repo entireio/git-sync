@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.6.2-dev-1802c9df1",
+  "checkpoint_id": "0b0206eed178",
+  "strategy": "manual-commit",
+  "branch": "soph/http-stale-pool-fix",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0b/0206eed178/0/metadata.json",
+      "transcript": "/0b/0206eed178/0/transcript.jsonl",
+      "content_hash": "/0b/0206eed178/0/transcript_hash.txt",
+      "prompt": "/0b/0206eed178/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2130,
+    "cache_creation_tokens": 1910230,
+    "cache_read_tokens": 53496244,
+    "output_tokens": 258148,
+    "api_call_count": 236
+  }
+}

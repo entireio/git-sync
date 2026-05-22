@@ -1,0 +1,33 @@
+can you look at the comments on the PR
+
+---
+
+can you rebase onto latest main and fix the conflict
+
+---
+
+can you now also do a rebase for soph/ssh-e2e-docker
+
+---
+
+how do I run the full docker test again?
+
+---
+
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:82: cleanup docker container: docker rm -f ebe681303772419569e0586265ad22688542534156dcaec3782c66ec04ba68c4 failed: context canceled
+    ssh_docker_test.go:70: cleanup docker image: docker image rm -f git-sync-ssh-e2e:5906157617516596622 failed: context canceled
+--- PASS: TestRun_SSHDockerSync (6.46s)
+PASS
+ok      entire.io/entire/git-sync/internal/syncer       (cached)
+
+---
+
+[test:ssh-docker] $ GITSYNC_E2E_SSH_DOCKER=1 go test ./internal/syncer -run TestRun_SSHDockerSync -v
+=== RUN   TestRun_SSHDockerSync
+    ssh_docker_test.go:82: cleanup docker container: docker rm -f 89bb5e5efd2c0eb3fc01283df21a072d0ebb8845a002439cbd7c6c142eec1f2b failed: context canceled
+    ssh_docker_test.go:70: cleanup docker image: docker image rm -f git-sync-ssh-e2e:3956721581956427359 failed: context canceled
+--- PASS: TestRun_SSHDockerSync (1.22s)
+PASS
+ok      entire.io/entire/git-sync/internal/syncer       1.487s

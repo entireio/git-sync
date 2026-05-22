@@ -1,0 +1,11 @@
+source: Total 10942 (delta 1224), reused 1279 (delta 1157), pack-reused 9552 (from 1)
+target: encoding pack: 6.3 KB, elapsed 50s
+github.com → 0 B @ 0 B/s  │  1.61 KB @ 491 B/s ✓ → 8b04592ed74a5cc…cloudflare.net
+
+source: Total 10942 (delta 1224), reused 1279 (delta 1157), pack-reused 9552 (from 1)
+target: encoding pack: 46.7 MB, elapsed 1m10s
+github.com → 0 B @ 0 B/s  │  1.61 KB @ 491 B/s ✓ → 8b04592ed74a5cc…cloudflare.net
+
+---
+
+where is the update-request header written too? can we do another progress on walking the object graph!?

@@ -1,0 +1,9 @@
+can you fix the linting error
+
+---
+
+can you also let me know what you think about this: 🤔 not a blocker, but I wonder if we could do a pass and handle these better. e.g. is this specific to github?
+
+---
+
+yeah, let's do the auto fallback with error join

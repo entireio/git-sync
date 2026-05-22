@@ -1,0 +1,1 @@
+yes, start implementing, make a new branch, make meaningful commits, and add tests as you go, when it makes sense create tests first

@@ -1,0 +1,9 @@
+but if relay is using chunked streaming: how does this work then if the chunked without length is the issue?
+
+---
+
+yeah it works, it takes a really long time to repack but then it's able to send it with the Content-Length and connection is not closed
+
+---
+
+yeah, can we maybe even add some kind of progress? Similar to what git shows when calculating deltas?

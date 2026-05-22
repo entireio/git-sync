@@ -1,0 +1,27 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "4dd13848aefc",
+  "strategy": "manual-commit",
+  "branch": "soph/ssh-transport",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/ssh.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/d13848aefc/0/metadata.json",
+      "transcript": "/4d/d13848aefc/0/transcript.jsonl",
+      "content_hash": "/4d/d13848aefc/0/transcript_hash.txt",
+      "prompt": "/4d/d13848aefc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 213505,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4807808,
+    "output_tokens": 7234,
+    "api_call_count": 31
+  }
+}

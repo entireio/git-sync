@@ -1,0 +1,8 @@
+[lint:go] internal/gitproto/refs.go:108:32: unnecessary conversion (unconvert)
+[lint:go]                       items = append(items, string(cap))
+[lint:go]                                                   ^
+[lint:go] internal/gitproto/refs.go:112:32: unnecessary conversion (unconvert)
+[lint:go]                       items = append(items, string(cap)+"="+value)
+[lint:go]                                                   ^
+[lint:go] 2 issues:
+[lint:go] * unconvert: 2

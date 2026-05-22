@@ -1,0 +1,25 @@
+{
+  "cli_version": "v0.5.7-nightly.202604300701.6368942b-dev-6368942b7",
+  "checkpoint_id": "d483810593fd",
+  "strategy": "manual-commit",
+  "branch": "soph/go-git-alpha3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/refs.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d4/83810593fd/0/metadata.json",
+      "transcript": "/d4/83810593fd/0/transcript.jsonl",
+      "content_hash": "/d4/83810593fd/0/transcript_hash.txt",
+      "prompt": "/d4/83810593fd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1884,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 257152,
+    "output_tokens": 335,
+    "api_call_count": 4
+  }
+}
