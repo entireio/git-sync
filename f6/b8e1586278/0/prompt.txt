@@ -1,0 +1,5 @@
+1. Medium: the new POST retry logic still does not cover the real receive-pack push path, because that body is built with io.MultiReader and is therefore not
+     rewindable. In internal/gitproto/smarthttp.go:279, helper retry only runs when body implements io.Seeker. But the actual push request in internal/
+     gitproto/push.go:153 constructs body = io.MultiReader(body, packData), which will not satisfy io.Seeker. So a target that allows anonymous receive-pack
+     discovery but requires auth on the POST will still fail on the first push attempt with no helper retry. The new tests exercise PostRPC(...,
+     []byte("0000"), ...), which is rewindable, but not the production push body shape.
