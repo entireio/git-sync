@@ -1,0 +1,28 @@
+can you take a look at https://github.com/entireio/git-sync/issues/63
+
+---
+
+I wonder if asking for credentials does not make sense if the anonymous auth wouldn't work, would that be still triggered?
+
+---
+
+yeah, I'd like to match gits behaviour here, sorry, let's do that from scratch then? can we do tests first?
+
+---
+
+One thing we could add here: Let's say I talked to a host that needs credentials and I enter the right ones, then it's saved in the helper, now if they expire the next time I run git-sync I get a 403. 
+
+  Where to wire it in git-sync
+
+  The 401 surfaces in httpError (internal/gitproto/smarthttp.go). But the auth provenance
+  lives up in internal/auth/auth.go. Cleanest plumbing:
+
+  - lookupGitCredential returns a func() error (the "reject closure") alongside the
+  username/password, capturing the input it sent to fill
+  - The session-level code wraps the AuthMethod with that closure
+  - On 401, the session calls the closure (which runs git credential reject for the same
+  input)
+
+---
+
+Can you explain that more with 403? what's the difference to 401?
