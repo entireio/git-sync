@@ -221,6 +221,18 @@ type HTTPConn struct {
 	// coordinated writer here so server-side progress lines don't
 	// clobber the in-place ticker frame.
 	ProgressOut io.Writer
+
+	// pendingHelperCreds tracks credentials supplied by the helper via
+	// EnsureAuthForService but not yet validated against a real operation.
+	// The next RequestInfoRefs/PostRPCStreamBody approves on 2xx or rejects
+	// on 401/403, ensuring helper state reflects the actual outcome rather
+	// than an ambiguous probe response.
+	pendingHelperCreds *helperCreds
+}
+
+type helperCreds struct {
+	user, pass string
+	url        *url.URL
 }
 
 // NewHTTPConn creates a new connection to the given endpoint.
@@ -316,6 +328,7 @@ func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProto
 	if err != nil {
 		return nil, err
 	}
+	c.resolvePendingHelperCreds(ctx, res)
 
 	defer res.Body.Close()
 	if err := httpError(res); err != nil {
@@ -414,6 +427,7 @@ func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body i
 			return nil, err
 		}
 	}
+	c.resolvePendingHelperCreds(ctx, res)
 	if err := httpError(res); err != nil {
 		_ = res.Body.Close()
 		return nil, err
@@ -462,20 +476,26 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 	_ = auth.Authorizer(req) //nolint:errcheck // BasicAuth and TokenAuth never error; future authorizers should surface 401s instead
 }
 
-// EnsureAuthForService resolves credentials via the helper before a non-
-// rewindable request body is committed. It's a no-op when no helper is
-// configured or Auth is already set.
+// EnsureAuthForService tentatively attaches helper credentials before a
+// non-rewindable request body is committed. It's a no-op when no helper
+// is configured or Auth is already set.
 //
-// Use this from push.go (and other streaming-body POST paths) where the
-// body is built from a live upstream stream (e.g. io.MultiReader over a
-// pack reader) and so can't be replayed on a mid-stream 401. The probe
-// is a GET to /<service>; servers that gate the service on auth return
-// 401 here, letting us resolve credentials before the real POST starts.
+// Used from push.go (and other streaming-body POST paths) where the body
+// is built from a live upstream stream (e.g. io.MultiReader over a pack
+// reader) and can't be replayed on a mid-stream 401. An anonymous GET
+// /<service> probe asks the server whether it requires auth here. If it
+// 401s, the helper is consulted and the returned credentials are stored
+// in c.Auth tentatively — the next real operation (PostRPCStreamBody or
+// RequestInfoRefs) then Approves them on 2xx or Rejects them on 401/403.
 //
-// Probe failures are non-fatal — the subsequent real request will
-// surface any actual problem. Servers that allow GET anonymously but
-// 401 on POST will still slip past this probe; for those, callers must
-// pass explicit credentials.
+// Approval is deliberately not done from the probe itself: many servers
+// return 405 Method Not Allowed for GET /git-receive-pack without ever
+// checking the Authorization header, so a 405 with credentials attached
+// proves nothing about credential validity. Letting the real operation
+// validate keeps helper state honest.
+//
+// Servers that allow anonymous GET but only 401 on POST will slip past
+// this probe; for those, callers must pass explicit credentials.
 func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	if c.Auth != nil || c.CredentialHelper == nil {
 		return
@@ -484,35 +504,39 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	if err != nil {
 		return
 	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
-		_ = res.Body.Close()
 		return
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
 	user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, challengeURL)
-	_ = res.Body.Close()
 	if lookupErr != nil || !ok {
 		return
 	}
-	retryAuth := &transporthttp.BasicAuth{Username: user, Password: pass}
-	res, err = c.doServiceProbe(ctx, service, retryAuth)
-	if err != nil {
-		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
+	c.Auth = &transporthttp.BasicAuth{Username: user, Password: pass}
+	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
+}
+
+// resolvePendingHelperCreds settles credentials that EnsureAuthForService
+// attached tentatively, based on the outcome of a real operation. Called
+// from RequestInfoRefs and PostRPCStreamBody. No-op if nothing pending.
+func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Response) {
+	if c.pendingHelperCreds == nil || c.CredentialHelper == nil {
 		return
 	}
-	defer res.Body.Close()
-	switch res.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
-	default:
-		// Anything else with credentials attached — 2xx, 405 Method Not
-		// Allowed (the common shape for GET /git-receive-pack), 404, etc.
-		// — means the server didn't reject the credentials. Trust them
-		// for the upcoming real POST; if they actually fail there, the
-		// caller surfaces that 401/403 directly.
-		c.Auth = retryAuth
-		c.CredentialHelper.Approve(ctx, challengeURL, user, pass)
+	creds := c.pendingHelperCreds
+	switch {
+	case res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices:
+		c.pendingHelperCreds = nil
+		c.CredentialHelper.Approve(ctx, creds.url, creds.user, creds.pass)
+	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+		c.pendingHelperCreds = nil
+		c.Auth = nil
+		c.CredentialHelper.Reject(ctx, creds.url, creds.user, creds.pass)
 	}
+	// Other status: leave pending. A later op on this conn may resolve;
+	// the conn is short-lived (one sync), so leftover pending state at
+	// end of life is harmless.
 }
 
 func (c *HTTPConn) doServiceProbe(ctx context.Context, service string, auth AuthMethod) (*http.Response, error) {

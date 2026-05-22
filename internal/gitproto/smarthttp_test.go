@@ -833,43 +833,37 @@ func TestPostRPC_OnUnauthorizedRetryStill401CallsReject(t *testing.T) {
 	}
 }
 
-// TestEnsureAuthForService_ResolvesAuthBeforePost simulates a server that
-// allows anonymous /info/refs but requires auth on the service endpoint
-// itself — the case where the streaming push body (io.MultiReader over
-// packData) can't trigger an on-the-fly 401 retry. The probe must
-// resolve credentials so the upcoming POST is pre-authenticated.
-func TestEnsureAuthForService_ResolvesAuthBeforePost(t *testing.T) {
+// TestEnsureAuthForService_TentativelyAttachesHelperCredsOnAnonymous401:
+// the anonymous probe gets 401, the helper supplies credentials, and they
+// are attached to the conn for the upcoming streaming POST — but NOT
+// approved yet. Approval is deferred until the real operation validates
+// them; otherwise a server that returns 405 to GET /git-receive-pack
+// without checking auth would bless stale creds.
+func TestEnsureAuthForService_TentativelyAttachesHelperCredsOnAnonymous401(t *testing.T) {
 	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
-	var methods []string
+	probes := 0
 	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		methods = append(methods, req.Method+" "+req.URL.Path+" auth="+req.Header.Get("Authorization"))
-		if req.Header.Get("Authorization") == "" {
-			return newUnauthorizedResponse(req), nil
-		}
-		// With creds: server happens to return 405 for GET on the
-		// receive-pack endpoint (the normal shape for smart-HTTP servers).
-		return &http.Response{
-			StatusCode: http.StatusMethodNotAllowed,
-			Request:    req,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader("")),
-		}, nil
+		probes++
+		return newUnauthorizedResponse(req), nil
 	}))
 	conn.CredentialHelper = helper
 
 	conn.EnsureAuthForService(context.Background(), "git-receive-pack")
 
 	if conn.Auth == nil {
-		t.Fatal("expected conn.Auth to be set after probe")
+		t.Fatal("expected conn.Auth to be tentatively set from helper")
 	}
 	if got := helper.count("lookup"); got != 1 {
 		t.Errorf("expected 1 helper lookup, got %d", got)
 	}
-	if got := helper.count("approve"); got != 1 {
-		t.Errorf("expected 1 approve call after non-auth-error retry, got %d", got)
+	if got := helper.count("approve"); got != 0 {
+		t.Errorf("probe must not Approve — let the real operation validate. got %d", got)
 	}
-	if len(methods) != 2 {
-		t.Errorf("expected 2 probe attempts (anon then authed), got %d: %v", len(methods), methods)
+	if got := helper.count("reject"); got != 0 {
+		t.Errorf("probe must not Reject either. got %d", got)
+	}
+	if probes != 1 {
+		t.Errorf("expected exactly 1 probe (no retry), got %d", probes)
 	}
 }
 
@@ -879,7 +873,6 @@ func TestEnsureAuthForService_NoHelperIsNoOp(t *testing.T) {
 		called = true
 		return newAdvertisementResponse(req), nil
 	}))
-	// No CredentialHelper, no Auth.
 
 	conn.EnsureAuthForService(context.Background(), "git-receive-pack")
 
@@ -894,7 +887,6 @@ func TestEnsureAuthForService_NoHelperIsNoOp(t *testing.T) {
 func TestEnsureAuthForService_AnonymousServiceLeavesAuthNil(t *testing.T) {
 	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
 	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		// Public server: probe succeeds without auth.
 		return &http.Response{
 			StatusCode: http.StatusMethodNotAllowed,
 			Request:    req,
@@ -914,23 +906,17 @@ func TestEnsureAuthForService_AnonymousServiceLeavesAuthNil(t *testing.T) {
 	}
 }
 
-// TestPostRPCStreamBody_NonSeekableBodyAfterProbeAuth covers the
-// production push shape: body is io.MultiReader (not seekable), so the
-// in-place retry path is skipped — but EnsureAuthForService having run
-// already means c.Auth is set on the first attempt.
-func TestPostRPCStreamBody_NonSeekableBodyAfterProbeAuth(t *testing.T) {
+// TestEnsureAuthForService_RealPostApprovesTentativeCreds covers the
+// production push shape: probe attaches helper creds tentatively; the
+// real POST succeeds, which is the actual proof creds are valid. Only
+// then do we Approve in the helper.
+func TestEnsureAuthForService_RealPostApprovesTentativeCreds(t *testing.T) {
 	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
 	var authHeaders []string
 	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		authHeaders = append(authHeaders, req.Header.Get("Authorization"))
 		if req.Header.Get("Authorization") == "" {
 			return newUnauthorizedResponse(req), nil
-		}
-		if req.Method == http.MethodGet {
-			return &http.Response{
-				StatusCode: http.StatusMethodNotAllowed, Request: req, Header: make(http.Header),
-				Body: io.NopCloser(strings.NewReader("")),
-			}, nil
 		}
 		res := &http.Response{
 			StatusCode: http.StatusOK, Request: req, Header: make(http.Header),
@@ -941,7 +927,6 @@ func TestPostRPCStreamBody_NonSeekableBodyAfterProbeAuth(t *testing.T) {
 	}))
 	conn.CredentialHelper = helper
 
-	// Simulate push.go: probe first, then stream a non-seekable body.
 	conn.EnsureAuthForService(context.Background(), "git-receive-pack")
 	body := io.MultiReader(strings.NewReader("0000"), strings.NewReader(""))
 	reader, err := PostRPCStreamBody(context.Background(), conn, "git-receive-pack", body, false, "phase")
@@ -950,15 +935,76 @@ func TestPostRPCStreamBody_NonSeekableBodyAfterProbeAuth(t *testing.T) {
 	}
 	_ = reader.Close()
 
-	// 3 requests: probe-anon (401), probe-authed (405), POST-authed (200).
-	if len(authHeaders) != 3 {
-		t.Fatalf("expected 3 requests, got %d: %v", len(authHeaders), authHeaders)
+	// 2 requests: probe-anon (401) + POST-authed (200). No second probe.
+	if len(authHeaders) != 2 {
+		t.Fatalf("expected 2 requests, got %d: %v", len(authHeaders), authHeaders)
 	}
 	if authHeaders[0] != "" {
-		t.Errorf("probe should start anonymous, got %q", authHeaders[0])
+		t.Errorf("probe should be anonymous, got %q", authHeaders[0])
 	}
-	if authHeaders[2] == "" {
-		t.Error("real POST should carry auth resolved by the probe")
+	if !strings.HasPrefix(authHeaders[1], "Basic ") {
+		t.Errorf("real POST should carry the helper creds, got %q", authHeaders[1])
+	}
+	if got := helper.count("approve"); got != 1 {
+		t.Errorf("expected 1 Approve after the real POST succeeded, got %d", got)
+	}
+}
+
+// TestEnsureAuthForService_RealPostRejectsTentativeCreds: helper supplied
+// stale credentials, the real POST 401s, which is the definitive signal
+// to reject them and clear c.Auth.
+func TestEnsureAuthForService_RealPostRejectsTentativeCreds(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "stale", ok: true}
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		// Every request 401s (helper creds are stale).
+		return newUnauthorizedResponse(req), nil
+	}))
+	conn.CredentialHelper = helper
+
+	conn.EnsureAuthForService(context.Background(), "git-receive-pack")
+	if conn.Auth == nil {
+		t.Fatal("expected conn.Auth to be tentatively set after probe 401")
+	}
+	body := io.MultiReader(strings.NewReader("0000"), strings.NewReader(""))
+	_, err := PostRPCStreamBody(context.Background(), conn, "git-receive-pack", body, false, "phase")
+	if err == nil {
+		t.Fatal("expected error from POST with stale creds")
+	}
+	if got := helper.count("reject"); got != 1 {
+		t.Errorf("expected 1 Reject after POST 401, got %d", got)
+	}
+	if got := helper.count("approve"); got != 0 {
+		t.Errorf("expected 0 Approve calls, got %d", got)
+	}
+	if conn.Auth != nil {
+		t.Error("expected conn.Auth to be cleared after rejecting bad creds")
+	}
+}
+
+// TestEnsureAuthForService_405ProbeWithCredsDoesNotPoisonHelper is the
+// specific regression: previously, a 405 to the authenticated probe was
+// interpreted as "creds accepted" and Approve was called — even though
+// the server may have rejected the method before reading Authorization.
+// The new contract never approves from a probe response at all.
+func TestEnsureAuthForService_405ProbeWithCredsDoesNotPoisonHelper(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "stale", ok: true}
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") == "" {
+			return newUnauthorizedResponse(req), nil
+		}
+		// Server returns 405 without checking auth.
+		return &http.Response{
+			StatusCode: http.StatusMethodNotAllowed,
+			Request:    req, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader("")),
+		}, nil
+	}))
+	conn.CredentialHelper = helper
+
+	conn.EnsureAuthForService(context.Background(), "git-receive-pack")
+
+	if got := helper.count("approve"); got != 0 {
+		t.Errorf("405 probe response must not Approve stale creds (got %d Approve calls)", got)
 	}
 }
 
