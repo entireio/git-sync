@@ -156,21 +156,6 @@ func sendReceivePack(
 	if packData != nil {
 		body = io.MultiReader(body, packData)
 	}
-	return postReceivePack(ctx, conn, req, body, verbose, onRejection)
-}
-
-// postReceivePack POSTs an already-built receive-pack request body and
-// decodes the response. Split from sendReceivePack so the materialized
-// push path can construct a spooled body (header + pack in one temp
-// file) and reuse the response handling.
-func postReceivePack(
-	ctx context.Context,
-	conn Conn,
-	req *packp.UpdateRequests,
-	body io.Reader,
-	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
-) error {
 	reader, err := PostRPCStreamBody(ctx, conn, transport.ReceivePackService, body, false, "receive-pack push")
 	if err != nil {
 		return fmt.Errorf("target receive-pack: %w", err)
@@ -217,10 +202,14 @@ func postReceivePack(
 
 // PushObjects pushes locally-materialized objects to the target.
 //
-// The encoded body (update-request + pack) is spooled to a temp file
-// before the POST so the upload streams without a mid-stream stall.
-// See SpooledBody for why this matters. Relay paths (PushPack) keep
-// streaming source bytes directly and don't need this.
+// Delta selection runs synchronously up front via
+// packfile.DeltaSelector. The selected objects are then handed back to
+// a packfile.Encoder behind a passthrough ObjectSelector, so the
+// encoder's write phase (Encode → encode(objects)) streams pack bytes
+// continuously into an io.Pipe to the HTTP request body. This avoids
+// the mid-stream stall that occurs when Encode runs selection itself —
+// CDN edges treat the resulting idle gap as a stalled upload and close
+// the connection. See go-git PR #2142 for the API hook.
 func PushObjects(
 	ctx context.Context,
 	conn Conn,
@@ -239,29 +228,51 @@ func PushObjects(
 		return sendReceivePack(ctx, conn, req, nil, verbose, onRejection)
 	}
 
+	progressDest := progressSink(verbose, "target: ", conn.ProgressWriter())
+
+	stopSelect := startSelectionProgress(progressDest)
+	objects, err := packfile.NewDeltaSelector(store).ObjectsToPack(hashes, 10)
+	stopSelect(len(objects))
+	if err != nil {
+		return fmt.Errorf("select objects to pack: %w", err)
+	}
+
 	useRefDeltas := !adv.Capabilities.Supports(capability.OFSDelta)
-	encodeProgress := progressSink(verbose, "target: ", conn.ProgressWriter())
-	spooled, cleanup, err := NewSpooledBody(func(w io.Writer) error {
-		cw := &countingWriter{w: w}
-		if err := req.Encode(cw); err != nil {
-			return fmt.Errorf("encode update-request: %w", err)
-		}
-		// Use the post-header byte count as the baseline so "pack size"
-		// numbers in the progress line reflect just the pack, not the
-		// preceding update-request bytes.
-		stopProgress := startPackEncodeProgress(cw, cw.Count(), encodeProgress)
-		defer stopProgress()
-		enc := packfile.NewEncoder(cw, store, useRefDeltas)
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		cw := &countingWriter{w: pw}
+		stopWrite := startPackWriteProgress(cw, progressDest)
+		defer stopWrite()
+		enc := packfile.NewEncoder(cw, store, useRefDeltas,
+			packfile.WithObjectSelector(precomputedSelector{objects: objects}))
 		if _, err := enc.Encode(hashes, 10); err != nil {
-			return fmt.Errorf("encode packfile: %w", err)
+			done <- pw.CloseWithError(fmt.Errorf("encode packfile: %w", err))
+			return
 		}
-		return nil
-	})
+		done <- pw.Close()
+	}()
+
+	err = sendReceivePack(ctx, conn, req, pr, verbose, onRejection)
+	_ = pr.Close()
+	encodeErr := <-done
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	return postReceivePack(ctx, conn, req, spooled, verbose, onRejection)
+	return encodeErr
+}
+
+// precomputedSelector is a packfile.ObjectSelector that returns a
+// fixed []*packfile.ObjectToPack, ignoring its arguments. It is the
+// passthrough used by PushObjects to feed pre-selected objects back
+// into packfile.Encoder via WithObjectSelector. Used exactly once per
+// PushObjects call and not exposed outside this package.
+type precomputedSelector struct {
+	objects []*packfile.ObjectToPack
+}
+
+func (p precomputedSelector) ObjectsToPack(_ []plumbing.Hash, _ uint) ([]*packfile.ObjectToPack, error) {
+	return p.objects, nil
 }
 
 // countingWriter wraps an io.Writer and tracks total bytes written.
@@ -280,29 +291,20 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 
 func (cw *countingWriter) Count() int64 { return cw.n.Load() }
 
-// startPackEncodeProgress emits in-place progress updates while
-// materialized push is spooling its body. The output distinguishes
-// two phases of go-git's encoder:
+// startSelectionProgress emits in-place "selecting deltas, elapsed X"
+// updates every 500ms during the synchronous delta-selection phase of
+// PushObjects. The returned stop function takes the number of selected
+// objects and finalizes the line with a permanent "selected N objects
+// in Y" summary. When dest is nil (non-verbose mode) returns a no-op
+// stop, so callers don't need to special-case verbosity.
 //
-//   - "selecting deltas, elapsed X" while the delta selector walks
-//     the object graph (no bytes flow during this phase)
-//   - "encoding pack: N MB, elapsed X" once the selector finishes and
-//     the encoder starts writing pack bytes
-//
-// Phase detection uses the 12-byte pack header as the boundary: any
-// post-baseline write beyond that means delta selection is done.
-// baseline is the byte count at the start of encoding (typically the
-// size of the update-request bytes already written to the same writer).
-//
-// Returns a stop function that finalizes the line with a permanent
-// "encoded pack" summary; safe to call exactly once, typically via
-// defer. When dest is nil (non-verbose mode) returns a no-op stop, so
-// callers don't need to special-case verbosity.
-func startPackEncodeProgress(cw *countingWriter, baseline int64, dest io.Writer) func() {
+// Selection has no observable byte progress — go-git's DeltaSelector
+// is opaque to the caller — so elapsed time is the only signal we can
+// surface to keep long selections from looking like a hang.
+func startSelectionProgress(dest io.Writer) func(objectCount int) {
 	if dest == nil {
-		return func() {}
+		return func(int) {}
 	}
-	const packHeaderSize = 12
 	start := time.Now()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	stop := make(chan struct{})
@@ -314,14 +316,47 @@ func startPackEncodeProgress(cw *countingWriter, baseline int64, dest io.Writer)
 			case <-stop:
 				return
 			case <-ticker.C:
-				packBytes := cw.Count() - baseline
-				elapsed := time.Since(start).Round(time.Second)
-				if packBytes <= packHeaderSize {
-					fmt.Fprintf(dest, "selecting deltas, elapsed %s\r", elapsed)
-				} else {
-					fmt.Fprintf(dest, "encoding pack: %s, elapsed %s\r",
-						humanizeBytes(packBytes), elapsed)
-				}
+				fmt.Fprintf(dest, "selecting deltas, elapsed %s\r",
+					time.Since(start).Round(time.Second))
+			}
+		}
+	}()
+	return func(objectCount int) {
+		ticker.Stop()
+		close(stop)
+		<-done
+		fmt.Fprintf(dest, "selected %d objects in %s\n",
+			objectCount, time.Since(start).Round(time.Second))
+	}
+}
+
+// startPackWriteProgress emits in-place "encoding pack: N MB, elapsed
+// X" updates every 500ms while the encoder writes pack bytes through
+// cw. The returned stop function finalizes the line with a permanent
+// "encoded pack" summary. Single-use, typically via defer. When dest
+// is nil returns a no-op stop.
+//
+// This is the second of two phases visible to a materialized push:
+// startSelectionProgress runs synchronously first, then
+// startPackWriteProgress takes over once selection has completed and
+// the encoder begins streaming bytes to the request body.
+func startPackWriteProgress(cw *countingWriter, dest io.Writer) func() {
+	if dest == nil {
+		return func() {}
+	}
+	start := time.Now()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				fmt.Fprintf(dest, "encoding pack: %s, elapsed %s\r",
+					humanizeBytes(cw.Count()), time.Since(start).Round(time.Second))
 			}
 		}
 	}()
@@ -330,7 +365,7 @@ func startPackEncodeProgress(cw *countingWriter, baseline int64, dest io.Writer)
 		close(stop)
 		<-done
 		fmt.Fprintf(dest, "encoded pack: %s in %s\n",
-			humanizeBytes(cw.Count()-baseline), time.Since(start).Round(time.Second))
+			humanizeBytes(cw.Count()), time.Since(start).Round(time.Second))
 	}
 }
 

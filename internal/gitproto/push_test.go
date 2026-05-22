@@ -230,9 +230,9 @@ func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
 
 // TestPushPackStartsHTTPBeforePackFullyRead asserts that PushPack — the
 // relay path — keeps streaming source pack bytes through to the target
-// with chunked encoding. The "streaming proxy" property is the whole
-// point of relay; spooling would erase it. Materialized push is the
-// path that buffers (see TestPushObjectsBuffersBody).
+// with chunked encoding. Materialized push (PushObjects) gets the same
+// property via precomputed delta selection; see
+// TestPushObjectsStreamsBody.
 func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -282,12 +282,13 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 	}
 }
 
-// TestPushObjectsBuffersBody asserts the materialized push path
-// (PushObjects) sends a non-chunked request with an explicit
-// Content-Length, by spooling the receive-pack body to a temp file
-// before the POST. This works around servers (e.g. Cloudflare's git
-// frontend) that close the connection on chunked receive-pack uploads.
-func TestPushObjectsBuffersBody(t *testing.T) {
+// TestPushObjectsStreamsBody asserts that PushObjects sends a chunked
+// receive-pack request — the streaming property is what avoids the
+// mid-stream stall (delta selection runs before the body opens, so
+// pack bytes flow continuously once writing starts). A request with
+// no Transfer-Encoding: chunked would mean we've regressed to
+// buffering the whole pack before sending.
+func TestPushObjectsStreamsBody(t *testing.T) {
 	type observation struct {
 		transferEncoding []string
 		contentLength    int64
@@ -329,14 +330,21 @@ func TestPushObjectsBuffersBody(t *testing.T) {
 		t.Fatal("server did not receive request")
 	}
 
-	if len(obs.transferEncoding) != 0 {
-		t.Errorf("Transfer-Encoding = %v, want empty (no chunked)", obs.transferEncoding)
+	chunked := false
+	for _, te := range obs.transferEncoding {
+		if te == "chunked" {
+			chunked = true
+			break
+		}
 	}
-	if obs.contentLength <= 0 {
-		t.Errorf("Content-Length = %d, want > 0", obs.contentLength)
+	if !chunked {
+		t.Errorf("Transfer-Encoding = %v, want to include \"chunked\"", obs.transferEncoding)
 	}
-	if obs.bodyLen != obs.contentLength {
-		t.Errorf("body length %d != Content-Length %d", obs.bodyLen, obs.contentLength)
+	if obs.contentLength != -1 {
+		t.Errorf("Content-Length = %d, want -1 (unknown for chunked)", obs.contentLength)
+	}
+	if obs.bodyLen <= 0 {
+		t.Errorf("bodyLen = %d, want > 0", obs.bodyLen)
 	}
 }
 

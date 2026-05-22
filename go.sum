@@ -24,8 +24,8 @@ github.com/go-git/go-billy/v6 v6.0.0-alpha.1 h1:xVjAR4oUvrKy7/Xuw/lLlV3gkxR3KO2H
 github.com/go-git/go-billy/v6 v6.0.0-alpha.1/go.mod h1:eaCUpHbedW7//EwcYmUDfJe2N6sJC9O12AT0OTqJR1E=
 github.com/go-git/go-git-fixtures/v6 v6.0.0-alpha.1 h1:gmqi2jvsreu0s8JMLylYDFq4sbjHwwlhktMw0DUg3mA=
 github.com/go-git/go-git-fixtures/v6 v6.0.0-alpha.1/go.mod h1:ECf1MqJlBdYpKggBrOXjo/0EnvRZx6D++I86UYjPgAQ=
-github.com/go-git/go-git/v6 v6.0.0-alpha.4 h1:aDTc2UGanmaE7FkGLSlBEB9nohMnQ+RKXcfq/D+esDQ=
-github.com/go-git/go-git/v6 v6.0.0-alpha.4/go.mod h1:4ODa/G7hPWrh4Y+7lmt59Ij3zW38IEfvRoAZxLYYBhc=
+github.com/go-git/go-git/v6 v6.0.0-alpha.4.0.20260521151600-590487407c38 h1:uA2L2RZQTkmvHjzBqMNMFR+UWdjicJBc0UqhCrgodZs=
+github.com/go-git/go-git/v6 v6.0.0-alpha.4.0.20260521151600-590487407c38/go.mod h1:4ODa/G7hPWrh4Y+7lmt59Ij3zW38IEfvRoAZxLYYBhc=
 github.com/godbus/dbus/v5 v5.2.2 h1:TUR3TgtSVDmjiXOgAAyaZbYmIeP3DPkld3jgKGV8mXQ=
 github.com/godbus/dbus/v5 v5.2.2/go.mod h1:3AAv2+hPq5rdnr5txxxRwiGjPXamgoIHgz9FPBfOp3c=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
