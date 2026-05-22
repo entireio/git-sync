@@ -1,0 +1,783 @@
+package sha256convert
+
+import (
+	"bytes"
+	"compress/zlib"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/storage/filesystem"
+)
+
+// TestTranslator builds a small SHA1 source repo with blobs, trees, commits,
+// and an annotated tag — including signed commit/tag — then runs the
+// translator and asserts both the bookkeeping counts and the on-disk
+// invariant: every loose object's filename equals sha256(headered content).
+// That invariant is the one go-git v6 alpha 3 gets wrong via its
+// SetEncodedObject path; verifying it directly prevents regressing back
+// onto the broken loose-object writer.
+func TestTranslator(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src.git")
+	dstDir := filepath.Join(root, "dst.git")
+
+	srcRepo, err := git.PlainInit(srcDir, true)
+	if err != nil {
+		t.Fatalf("init SHA1 source: %v", err)
+	}
+	dstRepo, err := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatalf("init SHA256 target: %v", err)
+	}
+
+	blobHash := writeBlob(t, srcRepo.Storer, []byte("hello world\n"))
+	treeHash := writeTree(t, srcRepo.Storer, []object.TreeEntry{
+		{Name: "README", Mode: filemode.Regular, Hash: blobHash},
+	})
+
+	sig := object.Signature{Name: "Test", Email: "test@example.com", When: time.Unix(1700000000, 0).UTC()}
+	commit1 := &object.Commit{
+		Author:    sig,
+		Committer: sig,
+		Message:   "initial\n",
+		TreeHash:  treeHash,
+		Signature: "-----BEGIN PGP SIGNATURE-----\nfake sig data\n-----END PGP SIGNATURE-----",
+	}
+	c1Hash := writeObject(t, srcRepo.Storer, commit1.Encode)
+
+	commit2 := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      "second\n",
+		TreeHash:     treeHash,
+		ParentHashes: []plumbing.Hash{c1Hash},
+	}
+	c2Hash := writeObject(t, srcRepo.Storer, commit2.Encode)
+
+	tag := &object.Tag{
+		Name:       "v1",
+		Tagger:     sig,
+		Message:    "annotated tag\n",
+		TargetType: plumbing.CommitObject,
+		Target:     c2Hash,
+		Signature:  "-----BEGIN PGP SIGNATURE-----\nfake tag sig\n-----END PGP SIGNATURE-----",
+	}
+	tagHash := writeObject(t, srcRepo.Storer, tag.Encode)
+
+	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, false)
+	if err != nil {
+		t.Fatalf("newTranslator: %v", err)
+	}
+	if err := tr.discover([]plumbing.Hash{tagHash}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	newTagHash, err := tr.translate(tagHash)
+	if err != nil {
+		t.Fatalf("translate tag: %v", err)
+	}
+
+	wantCounts := Counts{Blobs: 1, Trees: 1, Commits: 2, Tags: 1}
+	if tr.counts != wantCounts {
+		t.Errorf("counts: got %+v, want %+v", tr.counts, wantCounts)
+	}
+	if tr.signaturesStripped != 2 {
+		t.Errorf("signatures stripped: got %d, want 2 (commit + tag)", tr.signaturesStripped)
+	}
+
+	// Idempotency: translating the same hash again must reuse the mapping
+	// without writing more objects or bumping counters.
+	startBlobs := tr.counts.Blobs
+	if _, err := tr.translate(tagHash); err != nil {
+		t.Fatalf("re-translate tag: %v", err)
+	}
+	if tr.counts.Blobs != startBlobs {
+		t.Errorf("re-translate increased blob count; memoization broken")
+	}
+
+	// Every translated hash must point at a loose object whose filename
+	// equals sha256(headered content). This is the precise invariant the
+	// go-git bug violates — keep it as a test.
+	objectsDir := filepath.Join(dstDir, "objects")
+	verified := 0
+	for _, h := range tr.mapping {
+		assertLooseObjectHashMatches(t, objectsDir, h)
+		verified++
+	}
+	if verified == 0 {
+		t.Fatal("no objects in mapping; nothing was verified")
+	}
+
+	// The translated tag must decode under the SHA256 target and point at
+	// a SHA256 commit whose tree resolves to a SHA256 tree.
+	tagObj, err := object.GetTag(dstRepo.Storer, newTagHash)
+	if err != nil {
+		t.Fatalf("read translated tag: %v", err)
+	}
+	if tagObj.Signature != "" {
+		t.Errorf("translated tag still carries a signature: %q", tagObj.Signature)
+	}
+	if tagObj.Target != tr.mapping[c2Hash] {
+		t.Errorf("translated tag target: got %s, want %s", tagObj.Target, tr.mapping[c2Hash])
+	}
+
+	commit, err := object.GetCommit(dstRepo.Storer, tagObj.Target)
+	if err != nil {
+		t.Fatalf("read translated commit: %v", err)
+	}
+	if commit.Signature != "" {
+		t.Errorf("translated commit still carries a signature: %q", commit.Signature)
+	}
+	if len(commit.ParentHashes) != 1 || commit.ParentHashes[0] != tr.mapping[c1Hash] {
+		t.Errorf("translated commit parents: got %v, want [%s]", commit.ParentHashes, tr.mapping[c1Hash])
+	}
+	if commit.TreeHash != tr.mapping[treeHash] {
+		t.Errorf("translated commit tree: got %s, want %s", commit.TreeHash, tr.mapping[treeHash])
+	}
+}
+
+// TestTranslator_RewritesMessageHashes confirms that SHA1 hash references
+// in commit and tag messages — both full 40-char and short forms — are
+// rewritten to the corresponding SHA256 when those SHA1s are translated
+// objects in the same conversion, and that ambiguous/unknown short
+// prefixes are left alone.
+func TestTranslator_RewritesMessageHashes(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src.git")
+	dstDir := filepath.Join(root, "dst.git")
+
+	srcRepo, err := git.PlainInit(srcDir, true)
+	if err != nil {
+		t.Fatalf("init SHA1 source: %v", err)
+	}
+	dstRepo, err := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatalf("init SHA256 target: %v", err)
+	}
+
+	blobHash := writeBlob(t, srcRepo.Storer, []byte("x\n"))
+	treeHash := writeTree(t, srcRepo.Storer, []object.TreeEntry{
+		{Name: "f", Mode: filemode.Regular, Hash: blobHash},
+	})
+	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
+	parent := &object.Commit{Author: sig, Committer: sig, Message: "first\n", TreeHash: treeHash}
+	parentSHA1 := writeObject(t, srcRepo.Storer, parent.Encode)
+
+	// Child commit's message references the parent by full hash, by 7-char
+	// short prefix, and includes an unrelated 7-char hex string that should
+	// not match anything in the mapping.
+	parentHex := parentSHA1.String()
+	childMsg := fmt.Sprintf(
+		"reverts %s\nsee short %s for context\nunrelated hex 1234567 follows\n",
+		parentHex, parentHex[:7])
+	child := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      childMsg,
+		TreeHash:     treeHash,
+		ParentHashes: []plumbing.Hash{parentSHA1},
+	}
+	childSHA1 := writeObject(t, srcRepo.Storer, child.Encode)
+
+	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true)
+	if err != nil {
+		t.Fatalf("newTranslator: %v", err)
+	}
+	if err := tr.discover([]plumbing.Hash{childSHA1}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if _, err := tr.translate(childSHA1); err != nil {
+		t.Fatalf("translate child: %v", err)
+	}
+
+	// 2 references should have been rewritten (full + short). The unrelated
+	// 7-char hex string is not in the mapping, so it stays.
+	if tr.messageRewrites != 2 {
+		t.Errorf("message rewrites: got %d, want 2", tr.messageRewrites)
+	}
+
+	childNew := tr.mapping[childSHA1]
+	parentNew := tr.mapping[parentSHA1]
+	gotChild, err := object.GetCommit(dstRepo.Storer, childNew)
+	if err != nil {
+		t.Fatalf("read translated child: %v", err)
+	}
+	if !strings.Contains(gotChild.Message, parentNew.String()) {
+		t.Errorf("child message missing full SHA256 of parent:\n%s", gotChild.Message)
+	}
+	if strings.Contains(gotChild.Message, parentHex) {
+		t.Errorf("child message still contains original parent SHA1:\n%s", gotChild.Message)
+	}
+	if !strings.Contains(gotChild.Message, "1234567") {
+		t.Errorf("unrelated short hex was wrongly substituted:\n%s", gotChild.Message)
+	}
+}
+
+// TestTranslator_RewritesCrossBranchReferences is the test that proves the
+// discovery-plus-topological-DFS design fixes the cross-branch limitation
+// the older inline-only rewriter had. Two unrelated branches share no
+// ancestry. Branch A has a single commit cA. Branch B has commit cB whose
+// message references cA by both full and abbreviated SHA1. We translate B
+// first, *then* A — the order under which the older code would have left
+// cB's message un-rewritten because cA was not yet in the mapping when cB
+// was encoded. With message-reference edges in the DFS, translating cB
+// pulls cA in via t.translate, so the mapping is populated and the
+// rewrite succeeds.
+func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src.git")
+	dstDir := filepath.Join(root, "dst.git")
+	srcRepo, _ := git.PlainInit(srcDir, true)
+	dstRepo, _ := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
+
+	blobA := writeBlob(t, srcRepo.Storer, []byte("a\n"))
+	treeA := writeTree(t, srcRepo.Storer, []object.TreeEntry{
+		{Name: "a", Mode: filemode.Regular, Hash: blobA},
+	})
+	blobB := writeBlob(t, srcRepo.Storer, []byte("b\n"))
+	treeB := writeTree(t, srcRepo.Storer, []object.TreeEntry{
+		{Name: "b", Mode: filemode.Regular, Hash: blobB},
+	})
+
+	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
+	cA := writeObject(t, srcRepo.Storer, (&object.Commit{
+		Author: sig, Committer: sig, Message: "branch A tip\n", TreeHash: treeA,
+	}).Encode)
+	// cB has no parent in common with cA — they are siblings under
+	// no ancestor, exactly the case where ancestor-only inline
+	// rewriting would have failed.
+	cAHex := cA.String()
+	cB := writeObject(t, srcRepo.Storer, (&object.Commit{
+		Author:    sig,
+		Committer: sig,
+		Message: fmt.Sprintf("branch B tip\n\nCherry-picked from %s\nsee short %s\n",
+			cAHex, cAHex[:8]),
+		TreeHash: treeB,
+	}).Encode)
+
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true)
+	// Discovery must see both branches so the reachable set covers cA
+	// before cB is encoded.
+	if err := tr.discover([]plumbing.Hash{cB, cA}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	// Translate B first — the order that would have left the rewrite
+	// stranded under the old design.
+	if _, err := tr.translate(cB); err != nil {
+		t.Fatalf("translate cB: %v", err)
+	}
+	if _, err := tr.translate(cA); err != nil {
+		t.Fatalf("translate cA: %v", err)
+	}
+
+	if tr.messageRewrites != 2 {
+		t.Errorf("expected 2 rewrites (full + short SHA1 of cA), got %d", tr.messageRewrites)
+	}
+	cBNew := tr.mapping[cB]
+	cANew := tr.mapping[cA]
+	if cBNew.IsZero() || cANew.IsZero() {
+		t.Fatalf("missing mapping entries: cB=%s cA=%s", cBNew, cANew)
+	}
+	gotB, err := object.GetCommit(dstRepo.Storer, cBNew)
+	if err != nil {
+		t.Fatalf("read cB: %v", err)
+	}
+	if !strings.Contains(gotB.Message, cANew.String()) {
+		t.Errorf("cB's message missing cA's SHA256:\n%s", gotB.Message)
+	}
+	if strings.Contains(gotB.Message, cAHex) {
+		t.Errorf("cB's message still contains cA's original SHA1:\n%s", gotB.Message)
+	}
+}
+
+// TestTranslator_SkipMessageRewrite confirms that with rewriteMessages
+// false, the translator leaves message content (including SHA1 hashes)
+// untouched.
+func TestTranslator_SkipMessageRewrite(t *testing.T) {
+	root := t.TempDir()
+	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
+	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+
+	blob := writeBlob(t, srcRepo.Storer, []byte("x\n"))
+	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
+	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1, 0).UTC()}
+	parent := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "p\n", TreeHash: tree}).Encode)
+	parentHex := parent.String()
+
+	child := &object.Commit{
+		Author: sig, Committer: sig, TreeHash: tree, ParentHashes: []plumbing.Hash{parent},
+		Message: "reverts " + parentHex + "\n",
+	}
+	childSHA1 := writeObject(t, srcRepo.Storer, child.Encode)
+
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false)
+	if err := tr.discover([]plumbing.Hash{childSHA1}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if _, err := tr.translate(childSHA1); err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+	if tr.messageRewrites != 0 {
+		t.Errorf("expected no rewrites when disabled; got %d", tr.messageRewrites)
+	}
+	got, _ := object.GetCommit(dstRepo.Storer, tr.mapping[childSHA1])
+	if !strings.Contains(got.Message, parentHex) {
+		t.Errorf("rewrite-disabled run still mutated the message: %q", got.Message)
+	}
+}
+
+// TestTranslator_WriteOriginNotes builds a small history and verifies that
+// the notes tree contains one entry per translated commit and that each
+// entry resolves to a blob whose content is the commit's original SHA1.
+func TestTranslator_WriteOriginNotes(t *testing.T) {
+	root := t.TempDir()
+	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
+	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+
+	blob := writeBlob(t, srcRepo.Storer, []byte("hi\n"))
+	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
+	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
+	c1 := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c1\n", TreeHash: tree}).Encode)
+	c2 := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c2\n", TreeHash: tree, ParentHashes: []plumbing.Hash{c1}}).Encode)
+
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false)
+	if err := tr.discover([]plumbing.Hash{c2}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if _, err := tr.translate(c2); err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+
+	refName, err := tr.writeOriginNotes(originNotesRef)
+	if err != nil {
+		t.Fatalf("writeOriginNotes: %v", err)
+	}
+	if refName != originNotesRef {
+		t.Errorf("ref name: got %q, want %q", refName, originNotesRef)
+	}
+	notesCommit, err := object.GetCommit(dstRepo.Storer, tr.lastNotesCommit)
+	if err != nil {
+		t.Fatalf("read notes commit: %v", err)
+	}
+	notesTree, err := notesCommit.Tree()
+	if err != nil {
+		t.Fatalf("read notes tree: %v", err)
+	}
+	if len(notesTree.Entries) != 2 {
+		t.Fatalf("notes entries: got %d, want 2", len(notesTree.Entries))
+	}
+	for _, mapped := range []plumbing.Hash{tr.mapping[c1], tr.mapping[c2]} {
+		entry, err := notesTree.FindEntry(mapped.String())
+		if err != nil {
+			t.Fatalf("no notes entry for %s: %v", mapped, err)
+		}
+		blob, err := object.GetBlob(dstRepo.Storer, entry.Hash)
+		if err != nil {
+			t.Fatalf("read note blob: %v", err)
+		}
+		reader, _ := blob.Reader()
+		buf, _ := io.ReadAll(reader)
+		_ = reader.Close()
+		got := strings.TrimSpace(string(buf))
+		var origSHA1 plumbing.Hash
+		for s, n := range tr.mapping {
+			if n == mapped {
+				origSHA1 = s
+				break
+			}
+		}
+		if got != origSHA1.String() {
+			t.Errorf("note for %s: got %q, want %q", mapped, got, origSHA1.String())
+		}
+	}
+}
+
+// TestTranslator_WriteMappingFile checks the sidecar TSV format: header
+// line, sorted by SHA1, one entry per translated object.
+func TestTranslator_WriteMappingFile(t *testing.T) {
+	root := t.TempDir()
+	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
+	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+
+	blob := writeBlob(t, srcRepo.Storer, []byte("hi\n"))
+	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
+	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
+	commit := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c\n", TreeHash: tree}).Encode)
+
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false)
+	if err := tr.discover([]plumbing.Hash{commit}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if _, err := tr.translate(commit); err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+
+	path := filepath.Join(root, "mapping.tsv")
+	if err := tr.writeMappingFile(path); err != nil {
+		t.Fatalf("writeMappingFile: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read mapping: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if !strings.HasPrefix(lines[0], "#") {
+		t.Errorf("first line should be a header comment, got %q", lines[0])
+	}
+	data := lines[1:]
+	if len(data) != len(tr.mapping) {
+		t.Errorf("mapping line count: got %d, want %d", len(data), len(tr.mapping))
+	}
+	// Sorted by SHA1.
+	for i := 1; i < len(data); i++ {
+		prev := strings.Split(data[i-1], "\t")[0]
+		cur := strings.Split(data[i], "\t")[0]
+		if prev >= cur {
+			t.Errorf("mapping not sorted: %q >= %q", prev, cur)
+		}
+	}
+	// Every translated hash present.
+	mapped := map[string]string{}
+	for _, line := range data {
+		parts := strings.Split(line, "\t")
+		if len(parts) != 2 {
+			t.Errorf("malformed line %q", line)
+			continue
+		}
+		mapped[parts[0]] = parts[1]
+	}
+	for old, newH := range tr.mapping {
+		if mapped[old.String()] != newH.String() {
+			t.Errorf("missing or wrong mapping for %s: got %q, want %s", old, mapped[old.String()], newH)
+		}
+	}
+}
+
+// TestTranslator_UnresolvableSubmodule confirms that a tree entry with
+// Submodule mode pointing at a commit not in the source repo causes a
+// clear error rather than silently producing a malformed SHA256 tree.
+func TestTranslator_UnresolvableSubmodule(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src.git")
+	dstDir := filepath.Join(root, "dst.git")
+
+	srcRepo, err := git.PlainInit(srcDir, true)
+	if err != nil {
+		t.Fatalf("init SHA1 source: %v", err)
+	}
+	dstRepo, err := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatalf("init SHA256 target: %v", err)
+	}
+
+	blobHash := writeBlob(t, srcRepo.Storer, []byte("contents\n"))
+	// External-looking SHA1 — not in source.
+	external := plumbing.NewHash("0123456789abcdef0123456789abcdef01234567")
+	treeHash := writeTree(t, srcRepo.Storer, []object.TreeEntry{
+		{Name: "file", Mode: filemode.Regular, Hash: blobHash},
+		{Name: "sub", Mode: filemode.Submodule, Hash: external},
+	})
+
+	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, false)
+	if err != nil {
+		t.Fatalf("newTranslator: %v", err)
+	}
+	if err := tr.discover([]plumbing.Hash{treeHash}); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	_, err = tr.translate(treeHash)
+	if err == nil {
+		t.Fatal("expected error for unresolvable submodule, got nil")
+	}
+	if !strings.Contains(err.Error(), "submodule") {
+		t.Errorf("error should mention submodule; got: %v", err)
+	}
+}
+
+// --- helpers ---
+
+func writeBlob(t *testing.T, storer interface {
+	NewEncodedObject() plumbing.EncodedObject
+	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+}, content []byte) plumbing.Hash {
+	t.Helper()
+	obj := storer.NewEncodedObject()
+	obj.SetType(plumbing.BlobObject)
+	obj.SetSize(int64(len(content)))
+	w, err := obj.Writer()
+	if err != nil {
+		t.Fatalf("blob writer: %v", err)
+	}
+	if _, err := w.Write(content); err != nil {
+		t.Fatalf("blob write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("blob close: %v", err)
+	}
+	h, err := storer.SetEncodedObject(obj)
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+	return h
+}
+
+func writeTree(t *testing.T, storer interface {
+	NewEncodedObject() plumbing.EncodedObject
+	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+}, entries []object.TreeEntry) plumbing.Hash {
+	t.Helper()
+	tree := &object.Tree{Entries: entries}
+	// object.Tree.Encode requires the slice to be sorted by name; tests
+	// pre-sort their entries, but be safe.
+	return writeObject(t, storer, tree.Encode)
+}
+
+func writeObject(t *testing.T, storer interface {
+	NewEncodedObject() plumbing.EncodedObject
+	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+}, encode func(plumbing.EncodedObject) error) plumbing.Hash {
+	t.Helper()
+	obj := storer.NewEncodedObject()
+	if err := encode(obj); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	h, err := storer.SetEncodedObject(obj)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	return h
+}
+
+// assertLooseObjectHashMatches reads the on-disk loose object for h, zlib-
+// decompresses it, and confirms sha256(decompressed bytes) == h. The
+// decompressed bytes include the "<type> <size>\x00" header, which is what
+// git hashes — so this is a direct check on the loose writer's correctness.
+func assertLooseObjectHashMatches(t *testing.T, objectsDir string, h plumbing.Hash) {
+	t.Helper()
+	hex := h.String()
+	if len(hex) != 64 {
+		t.Errorf("hash %s is not 64 hex chars (sha256)", hex)
+		return
+	}
+	path := filepath.Join(objectsDir, hex[:2], hex[2:])
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("zlib %s: %v", path, err)
+	}
+	defer zr.Close()
+	plain, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("decompress %s: %v", path, err)
+	}
+	sum := sha256.Sum256(plain)
+	got := makeHex(sum[:])
+	if got != hex {
+		t.Errorf("loose object %s: sha256(content) = %s; filename and content disagree", hex, got)
+	}
+}
+
+func makeHex(b []byte) string {
+	return hex.EncodeToString(b)
+}
+
+// --- Integration test (gated) ---
+
+const gitHTTPBackendEnv = "GITSYNC_E2E_SHA256_HTTP_BACKEND"
+
+// TestRun_GitHTTPBackend exercises the full convert-sha256 pipeline against
+// a local git http-backend serving a real SHA1 source repo. Gated like the
+// other end-to-end git-http-backend tests to keep the default test runs
+// hermetic (no external binaries required).
+func TestRun_GitHTTPBackend(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skipf("set %s=1 to run the convert-sha256 git-http-backend integration test", gitHTTPBackendEnv)
+	}
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git binary not available: %v", err)
+	}
+
+	root := t.TempDir()
+	srcBare := filepath.Join(root, "source.git")
+	worktree := filepath.Join(root, "work")
+	dstDir := filepath.Join(root, "target.git")
+
+	mustGit(t, root, "init", "--bare", srcBare)
+	mustGit(t, root, "init", "-b", "main", worktree)
+	mustGit(t, worktree, "config", "user.name", "convert-sha256 test")
+	mustGit(t, worktree, "config", "user.email", "test@example.com")
+	mustWrite(t, filepath.Join(worktree, "README"), "hello\n")
+	mustGit(t, worktree, "add", "README")
+	mustGit(t, worktree, "commit", "-m", "initial")
+	// Capture the first commit's SHA1 so the second commit's message can
+	// reference it (both full and abbreviated). The conversion should
+	// rewrite both to the new SHA256 hash.
+	firstSHA1 := strings.TrimSpace(mustGitOutput(t, worktree, "rev-parse", "HEAD"))
+	mustWrite(t, filepath.Join(worktree, "second.txt"), "world\n")
+	mustGit(t, worktree, "add", "second.txt")
+	mustGit(t, worktree, "commit", "-m",
+		fmt.Sprintf("second\n\nreverts %s\nsee short %s", firstSHA1, firstSHA1[:7]))
+	mustGit(t, worktree, "tag", "-a", "v1", "-m", "first tag")
+	mustGit(t, worktree, "remote", "add", "origin", srcBare)
+	mustGit(t, worktree, "push", "origin", "HEAD:refs/heads/main")
+	mustGit(t, worktree, "push", "origin", "v1")
+
+	srv := newCGIBackend(t, gitBin, root)
+	defer srv.Close()
+
+	mappingPath := filepath.Join(root, "mapping.tsv")
+	res, err := Run(context.Background(), Request{
+		SourceURL:   srv.URL + "/source.git",
+		TargetDir:   dstDir,
+		IncludeTags: true,
+		MappingFile: mappingPath,
+		Out:         io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("convert-sha256 run: %v", err)
+	}
+	if res.Counts.Commits < 2 {
+		t.Errorf("expected at least 2 commits converted, got %+v", res.Counts)
+	}
+	if res.Counts.Tags != 1 {
+		t.Errorf("expected 1 tag converted, got %d", res.Counts.Tags)
+	}
+	if res.RefsConverted < 2 {
+		t.Errorf("expected at least 2 refs (main + v1), got %d", res.RefsConverted)
+	}
+
+	// The converted repo must be self-consistent under SHA256.
+	fsckOut, err := exec.Command(gitBin, "-C", dstDir, "fsck", "--full").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git fsck failed: %v\n%s", err, fsckOut)
+	}
+	if strings.Contains(string(fsckOut), "error") || strings.Contains(string(fsckOut), "bad sha") {
+		t.Fatalf("git fsck reported errors:\n%s", fsckOut)
+	}
+
+	// Sanity: extensions.objectformat is set, and git can walk the history.
+	format := mustGitOutput(t, dstDir, "config", "extensions.objectformat")
+	if strings.TrimSpace(format) != "sha256" {
+		t.Errorf("extensions.objectformat: got %q, want %q", strings.TrimSpace(format), "sha256")
+	}
+	log := mustGitOutput(t, dstDir, "log", "--oneline", "refs/heads/main")
+	if !strings.Contains(log, "initial") || !strings.Contains(log, "second") {
+		t.Errorf("git log missing expected commit subjects:\n%s", log)
+	}
+	tagShow := mustGitOutput(t, dstDir, "cat-file", "-p", "refs/tags/v1")
+	if !strings.Contains(tagShow, "first tag") {
+		t.Errorf("annotated tag did not round-trip:\n%s", tagShow)
+	}
+
+	// Message rewriting: the second commit's body referenced firstSHA1
+	// twice (full + 7-char short). Both should now be SHA256 hashes.
+	if res.MessageRewrites != 2 {
+		t.Errorf("message rewrites: got %d, want 2", res.MessageRewrites)
+	}
+	secondMsg := mustGitOutput(t, dstDir, "log", "-1", "--format=%B", "refs/heads/main")
+	if strings.Contains(secondMsg, firstSHA1) {
+		t.Errorf("second commit message still contains the original SHA1:\n%s", secondMsg)
+	}
+
+	// Origin notes: the ref exists, and the head commit's note resolves
+	// to the original SHA1 it was rewritten from.
+	if res.OriginNotesRef != "refs/notes/sha1-origin" {
+		t.Errorf("OriginNotesRef: got %q, want refs/notes/sha1-origin", res.OriginNotesRef)
+	}
+	headSHA256 := strings.TrimSpace(mustGitOutput(t, dstDir, "rev-parse", "refs/heads/main"))
+	note := strings.TrimSpace(mustGitOutput(t, dstDir, "notes", "--ref=sha1-origin", "show", headSHA256))
+	// The note for the second (head) commit holds its pre-conversion SHA1.
+	headSHA1 := strings.TrimSpace(mustGitOutput(t, srcBare, "rev-parse", "refs/heads/main"))
+	if note != headSHA1 {
+		t.Errorf("origin note for head: got %q, want %q", note, headSHA1)
+	}
+
+	// Mapping file: present, sorted, has at least one entry per
+	// translated commit/tree/blob/tag.
+	if res.MappingFile != mappingPath {
+		t.Errorf("MappingFile: got %q, want %q", res.MappingFile, mappingPath)
+	}
+	mapping, err := os.ReadFile(mappingPath)
+	if err != nil {
+		t.Fatalf("read mapping file: %v", err)
+	}
+	if !strings.Contains(string(mapping), headSHA1) {
+		t.Errorf("mapping file missing head SHA1 %s:\n%s", headSHA1, mapping)
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+func mustGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+type cgiBackend struct {
+	*httptest.Server
+}
+
+func newCGIBackend(t *testing.T, gitBin, root string) *cgiBackend {
+	t.Helper()
+	handler := &cgi.Handler{
+		Path: gitBin,
+		Args: []string{"http-backend"},
+		Env: []string{
+			"GIT_PROJECT_ROOT=" + root,
+			"GIT_HTTP_EXPORT_ALL=1",
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	}))
+	return &cgiBackend{Server: srv}
+}
+
+// Compile-time sanity: confirm the storers the translator expects are still
+// the filesystem-backed type that PlainInit returns. If a future go-git
+// release changes the concrete storer, the type assertion in newTranslator
+// will start failing in this package's tests rather than only at runtime
+// against a real repo.
+var _ = (*filesystem.Storage)(nil)

@@ -36,6 +36,7 @@ seed an empty target (bootstrap), or inspect either side (probe, fetch).`,
 	cmd.AddCommand(newBootstrapCmd())
 	cmd.AddCommand(newProbeCmd())
 	cmd.AddCommand(newFetchCmd())
+	cmd.AddCommand(newConvertSHA256Cmd())
 	cmd.AddCommand(newVersionCmd())
 
 	return cmd
