@@ -462,6 +462,75 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 	_ = auth.Authorizer(req) //nolint:errcheck // BasicAuth and TokenAuth never error; future authorizers should surface 401s instead
 }
 
+// EnsureAuthForService resolves credentials via the helper before a non-
+// rewindable request body is committed. It's a no-op when no helper is
+// configured or Auth is already set.
+//
+// Use this from push.go (and other streaming-body POST paths) where the
+// body is built from a live upstream stream (e.g. io.MultiReader over a
+// pack reader) and so can't be replayed on a mid-stream 401. The probe
+// is a GET to /<service>; servers that gate the service on auth return
+// 401 here, letting us resolve credentials before the real POST starts.
+//
+// Probe failures are non-fatal — the subsequent real request will
+// surface any actual problem. Servers that allow GET anonymously but
+// 401 on POST will still slip past this probe; for those, callers must
+// pass explicit credentials.
+func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
+	if c.Auth != nil || c.CredentialHelper == nil {
+		return
+	}
+	res, err := c.doServiceProbe(ctx, service, nil)
+	if err != nil {
+		return
+	}
+	if res.StatusCode != http.StatusUnauthorized {
+		_ = res.Body.Close()
+		return
+	}
+	challengeURL := challengeURLFor(c.EndpointURL, res)
+	user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, challengeURL)
+	_ = res.Body.Close()
+	if lookupErr != nil || !ok {
+		return
+	}
+	retryAuth := &transporthttp.BasicAuth{Username: user, Password: pass}
+	res, err = c.doServiceProbe(ctx, service, retryAuth)
+	if err != nil {
+		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
+		return
+	}
+	defer res.Body.Close()
+	switch res.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
+	default:
+		// Anything else with credentials attached — 2xx, 405 Method Not
+		// Allowed (the common shape for GET /git-receive-pack), 404, etc.
+		// — means the server didn't reject the credentials. Trust them
+		// for the upcoming real POST; if they actually fail there, the
+		// caller surfaces that 401/403 directly.
+		c.Auth = retryAuth
+		c.CredentialHelper.Approve(ctx, challengeURL, user, pass)
+	}
+}
+
+func (c *HTTPConn) doServiceProbe(ctx context.Context, service string, auth AuthMethod) (*http.Response, error) {
+	reqURL := fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create auth-probe request: %w", err)
+	}
+	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set(StatsPhaseHeader, service+" auth-probe")
+	ApplyAuth(req, auth)
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("auth-probe request: %w", err)
+	}
+	return res, nil
+}
+
 // tryHelperRetry handles the 401 → lookup → retry → approve/reject lifecycle
 // when a CredentialHelper is configured and no explicit Auth was set up front
 // (explicit auth must surface its own failures rather than be quietly papered
