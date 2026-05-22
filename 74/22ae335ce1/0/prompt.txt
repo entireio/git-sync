@@ -1,0 +1,1 @@
+lint is failing on https://github.com/entireio/git-sync/pull/64 and can you look at the two comments on the pr

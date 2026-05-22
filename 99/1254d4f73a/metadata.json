@@ -1,0 +1,26 @@
+{
+  "cli_version": "v0.6.3-nightly.202605210728.73db6f8c-dev-944f9b3db",
+  "checkpoint_id": "991254d4f73a",
+  "strategy": "manual-commit",
+  "branch": "soph/issue-63-deferred-credential-helper",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/99/1254d4f73a/0/metadata.json",
+      "transcript": "/99/1254d4f73a/0/transcript.jsonl",
+      "content_hash": "/99/1254d4f73a/0/transcript_hash.txt",
+      "prompt": "/99/1254d4f73a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 35,
+    "cache_creation_tokens": 36183,
+    "cache_read_tokens": 9909098,
+    "output_tokens": 28196,
+    "api_call_count": 30
+  }
+}

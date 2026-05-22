@@ -1,0 +1,56 @@
+{
+  "cli_version": "v0.6.3-nightly.202605210728.73db6f8c-dev-944f9b3db",
+  "checkpoint_id": "4f0fc9b99fdc",
+  "session_id": "9c38fcfa-92c9-437b-a244-5fa0b1dda745",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-22T15:41:42.322154Z",
+  "branch": "soph/issue-63-deferred-credential-helper",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "1efeecc7ec66",
+  "checkpoint_transcript_start": 144,
+  "token_usage": {
+    "input_tokens": 77,
+    "cache_creation_tokens": 306893,
+    "cache_read_tokens": 17737135,
+    "output_tokens": 37204,
+    "api_call_count": 68
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-22T15:41:42.265374Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 210,
+    "human_removed": 81,
+    "total_committed": 0,
+    "total_lines_changed": 291,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 39,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 39
+      }
+    }
+  ]
+}

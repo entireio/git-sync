@@ -1,0 +1,121 @@
+Question: but the header is not written (or was written before our changes) on to the wire already?
+
+---
+
+yeah try 2
+
+---
+
+that did still send a content-length header:
+
+Content-Length: 59810768
+
+---
+
+worked with chunked
+
+---
+
+ok, now let's revisit all of the changes with these findings: anything to change?
+
+---
+
+can you give me the difference in behaviour compared to main?
+
+---
+
+> Materialized push now needs ephemeral disk space proportional
+
+why did this change with this PR?
+
+---
+
+Yeah but given that we found that the content-length wasn't the issue and more the time between headers and content, I wonder if we could go back here to how it was before and still fix the issue?
+
+---
+
+What's the reason go-git has this? Or what would be a fix there we could propose upstream?
+
+---
+
+can you give me a problem description (one or two sentences) and a highlevel (but technical) description what the change would look like, I can message one of the maintainers if that's a thing they would accept?
+
+---
+
+I'd rather we simply export deltaSelector on x/plumbing/format/packfile. So that you get the same result, with no impact on the public API.
+Paulo Gomes  [10:00 AM]
+Or even a new functional option that enables callers to inject their custom object selector.
+Paulo Gomes  [10:00 AM]
+I.e. WithObjectSelector(x)
+Paulo Gomes  [10:04 AM]
+On a separate topic, but somehow overlapping, I'm looking into ways that transport can detect that a Storer is capable of pack streaming based on reachability heuristics (post-negotiation). Then hand-off so that the Storer stream it as it produce the pack.
+
+---
+
+ok, ../../go-git is where go-git is checked out, so yeah maybe let's just open a PR as you understood it
+
+---
+
+/simplify
+
+---
+
+can you check the commit messages are inline with the linting rules for commit messages
+
+---
+
+only do the rewording
+
+---
+
+- High: PrecomputedSelector is not safely reusable, but the new API/docs present it as a
+    normal ObjectSelector. plumbing/format/packfile/encoder.go:66 returns the same
+    []*ObjectToPack on every call, and Encode mutates those objects while writing by
+    setting Offset/WantWrite and sometimes changing object state (plumbing/format/packfile/
+    encoder.go:170, plumbing/format/packfile/object_pack.go:65). On the second use, entry
+    treats the objects as already written and silently skips them, so you get a pack
+    header/footer with missing bodies and a different hash, without an error. I reproduced
+    this with two fresh encoders sharing one PrecomputedSelector: first pack was 94 bytes,
+    second was 32 bytes, and the hashes differed. This is a correctness bug for retries/
+    reuse and needs either cloning/resetting the ObjectToPacks per call or documenting and
+    enforcing one-shot semantics.
+
+---
+
+can you also look at the comments on the PR?
+
+---
+
+go this feedback: 
+
+I'm not sure we need PrecomputedSelector in go-git, couldn't that be in git-sync and injected on encoder construction?
+[11:54 AM]The fallback into the default makes this change awkward.
+[11:57 AM]Wouldn't we get the same result if, DeltaSelector becomes publicly exposed (as per current PR), then we used it to then call the Encoder (as is) with a subset of the hashes returned from the DeltaSelector?
+
+---
+
+I think all lines point just at PrecomputedSelector
+
+---
+
+can you just squash all commits into one?
+
+---
+
+ok, that PR is merged we could now go back to the git-sync work?
+
+---
+
+yes, do option 1
+
+---
+
+I now have the issue again, that the auth failed because the token expired but the git helper has it stored. I can't enter a new one, what's the official way to surface it up to the git helper that the token/credential is invalid now?
+
+---
+
+ok, fix works
+
+---
+
+yes to 1+2, and yes 3 as a next thing new based of main
