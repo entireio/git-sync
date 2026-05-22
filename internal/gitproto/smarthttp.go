@@ -310,34 +310,11 @@ func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProto
 	if err != nil {
 		return nil, err
 	}
-
-	// On 401, fall back to the credential helper — but only when no
-	// explicit auth was configured. Explicit auth that fails is a real
-	// error the user needs to see.
-	if res.StatusCode == http.StatusUnauthorized && c.Auth == nil && c.CredentialHelper != nil {
-		user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, c.EndpointURL)
-		if lookupErr != nil {
-			_ = res.Body.Close()
-			return nil, fmt.Errorf("look up credentials: %w", lookupErr)
-		}
-		if ok {
-			_ = res.Body.Close()
-			retryAuth := &transporthttp.BasicAuth{Username: user, Password: pass}
-			res, err = c.doInfoRefsRequest(ctx, service, gitProtocol, retryAuth)
-			if err != nil {
-				c.CredentialHelper.Reject(ctx, c.EndpointURL, user, pass)
-				return nil, err
-			}
-			switch {
-			case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
-				// 403 included because some token services (e.g. Cloudflare)
-				// surface "Invalid or expired token" as 403 rather than 401.
-				c.CredentialHelper.Reject(ctx, c.EndpointURL, user, pass)
-			case res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices:
-				c.Auth = retryAuth
-				c.CredentialHelper.Approve(ctx, c.EndpointURL, user, pass)
-			}
-		}
+	res, err = c.tryHelperRetry(ctx, res, func(auth AuthMethod) (*http.Response, error) {
+		return c.doInfoRefsRequest(ctx, service, gitProtocol, auth)
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	defer res.Body.Close()
@@ -415,7 +392,37 @@ func PostRPCStreamBody(ctx context.Context, conn Conn, service string, body io.R
 // Caller must close the returned ReadCloser.
 //
 // The body is sent as-is — streaming readers produce a chunked request.
+//
+// On a 401 we consult the credential helper and retry, mirroring git's
+// own behaviour for servers that allow anonymous /info/refs but gate the
+// actual upload-pack/receive-pack POST behind auth. Retry is only possible
+// when body is an io.Seeker (so we can rewind it); callers that pass a raw
+// non-seekable Reader will see the 401 surface as-is.
 func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
+	res, err := c.doPostRPCRequest(ctx, service, body, v2, phase, c.Auth)
+	if err != nil {
+		return nil, err
+	}
+	if seeker, ok := body.(io.Seeker); ok {
+		res, err = c.tryHelperRetry(ctx, res, func(auth AuthMethod) (*http.Response, error) {
+			if _, seekErr := seeker.Seek(0, io.SeekStart); seekErr != nil {
+				return nil, fmt.Errorf("rewind RPC body for credential-helper retry: %w", seekErr)
+			}
+			return c.doPostRPCRequest(ctx, service, body, v2, phase, auth)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := httpError(res); err != nil {
+		_ = res.Body.Close()
+		return nil, err
+	}
+	return res.Body, nil
+}
+
+// doPostRPCRequest issues a single POST to /<service>. Caller closes res.Body.
+func (c *HTTPConn) doPostRPCRequest(ctx context.Context, service string, body io.Reader, v2 bool, phase string, auth AuthMethod) (*http.Response, error) {
 	reqURL := fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
 	ctx = withHTTPTrace(ctx, "POST "+service)
 
@@ -430,21 +437,18 @@ func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body i
 	if v2 {
 		req.Header.Set("Git-Protocol", GitProtocolV2)
 	}
-	ApplyAuth(req, c.Auth)
+	ApplyAuth(req, auth)
 
 	if httpTraceEnabled() {
 		dumpOutgoingRequest(req, "POST "+service)
 	}
 
+
 	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("post RPC: %w", err)
 	}
-	if err := httpError(res); err != nil {
-		_ = res.Body.Close()
-		return nil, err
-	}
-	return res.Body, nil
+	return res, nil
 }
 
 // ApplyAuth applies the given auth method to an HTTP request. Errors from
@@ -456,6 +460,69 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 		return
 	}
 	_ = auth.Authorizer(req) //nolint:errcheck // BasicAuth and TokenAuth never error; future authorizers should surface 401s instead
+}
+
+// tryHelperRetry handles the 401 → lookup → retry → approve/reject lifecycle
+// when a CredentialHelper is configured and no explicit Auth was set up front
+// (explicit auth must surface its own failures rather than be quietly papered
+// over). retry attempts the same request with helper-supplied credentials.
+//
+// On retry success the credentials are stored on c.Auth so follow-up calls
+// on the same connection reuse them. On retry failure (401, 403, or transport
+// error) the helper is told to reject the credentials so a stale stored token
+// self-heals on the next run.
+//
+// Caller is responsible for closing the returned response body.
+func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry func(AuthMethod) (*http.Response, error)) (*http.Response, error) {
+	if res.StatusCode != http.StatusUnauthorized || c.Auth != nil || c.CredentialHelper == nil {
+		return res, nil
+	}
+	challengeURL := challengeURLFor(c.EndpointURL, res)
+	user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, challengeURL)
+	if lookupErr != nil {
+		_ = res.Body.Close()
+		return nil, fmt.Errorf("look up credentials: %w", lookupErr)
+	}
+	if !ok {
+		return res, nil
+	}
+	_ = res.Body.Close()
+	retryAuth := &transporthttp.BasicAuth{Username: user, Password: pass}
+	res, err := retry(retryAuth)
+	if err != nil {
+		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
+		return nil, err
+	}
+	switch {
+	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+		// 403 included because some token services (e.g. Cloudflare)
+		// surface "Invalid or expired token" as 403 rather than 401.
+		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
+	case res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices:
+		c.Auth = retryAuth
+		c.CredentialHelper.Approve(ctx, challengeURL, user, pass)
+	}
+	return res, nil
+}
+
+// challengeURLFor returns the URL key used to query the credential helper
+// for an auth challenge. After a 3xx the actually-challenged host is in
+// res.Request.URL, which may differ from c.EndpointURL — using the wrong
+// one would query (and possibly approve/reject) credentials under the
+// wrong helper key. The original repo path is preserved so the key still
+// matches what the user configured.
+func challengeURLFor(orig *url.URL, res *http.Response) *url.URL {
+	if res == nil || res.Request == nil || res.Request.URL == nil {
+		return orig
+	}
+	final := res.Request.URL
+	if final.Host == orig.Host && final.Scheme == orig.Scheme {
+		return orig
+	}
+	out := *orig
+	out.Scheme = final.Scheme
+	out.Host = final.Host
+	return &out
 }
 
 // doInfoRefsRequest issues a single /info/refs GET. Caller closes res.Body.

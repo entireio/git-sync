@@ -460,14 +460,14 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func newAdvertisementResponse(req *http.Request, service string) *http.Response {
+func newAdvertisementResponse(req *http.Request) *http.Response {
 	res := &http.Response{
 		StatusCode: http.StatusOK,
 		Request:    req,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader("0000")),
 	}
-	res.Header.Set("Content-Type", "application/x-"+service+"-advertisement")
+	res.Header.Set("Content-Type", "application/x-git-upload-pack-advertisement")
 	return res
 }
 
@@ -494,7 +494,7 @@ func TestRequestInfoRefs_AnonymousSucceedsWithoutConsultingHelper(t *testing.T) 
 	var authHeaders []string
 	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		authHeaders = append(authHeaders, req.Header.Get("Authorization"))
-		return newAdvertisementResponse(req, "git-upload-pack"), nil
+		return newAdvertisementResponse(req), nil
 	}))
 	conn.CredentialHelper = helper
 
@@ -520,7 +520,7 @@ func TestRequestInfoRefs_OnUnauthorizedRetriesWithHelperCredentials(t *testing.T
 		if attempts == 1 {
 			return newUnauthorizedResponse(req), nil
 		}
-		return newAdvertisementResponse(req, "git-upload-pack"), nil
+		return newAdvertisementResponse(req), nil
 	}))
 	conn.CredentialHelper = helper
 
@@ -566,7 +566,7 @@ func TestRequestInfoRefs_OnUnauthorizedReusesStoredAuthOnNextCall(t *testing.T) 
 			return newUnauthorizedResponse(req), nil
 		}
 		if req.Method == http.MethodGet {
-			return newAdvertisementResponse(req, "git-upload-pack"), nil
+			return newAdvertisementResponse(req), nil
 		}
 		res := &http.Response{
 			StatusCode: http.StatusOK,
@@ -713,10 +713,131 @@ func TestRequestInfoRefs_DoesNotRetryWhenConnAlreadyAuthenticated(t *testing.T) 
 	}
 }
 
+// TestRequestInfoRefs_OnUnauthorizedAfterRedirectKeysHelperOnFinalHost
+// covers the case where /info/refs is 307'd to a different host and the
+// replica returns 401: the helper must be queried for the host that
+// actually challenged us, not the original endpoint.
+func TestRequestInfoRefs_OnUnauthorizedAfterRedirectKeysHelperOnFinalHost(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+	attempts := 0
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			// Simulate that Go's HTTP client followed a 3xx to replica.example
+			// before getting the 401 — res.Request.URL is the post-redirect URL.
+			res := newUnauthorizedResponse(req)
+			res.Request = &http.Request{URL: &url.URL{
+				Scheme: "https", Host: "replica.example", Path: "/repo.git/info/refs",
+			}}
+			return res, nil
+		}
+		return newAdvertisementResponse(req), nil
+	}))
+	conn.CredentialHelper = helper
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	lookup := helper.last("lookup")
+	if lookup == nil {
+		t.Fatal("expected helper lookup")
+	}
+	if !strings.Contains(lookup.url, "replica.example") {
+		t.Errorf("helper Lookup keyed on %q, want replica.example", lookup.url)
+	}
+	if strings.Contains(lookup.url, "/info/refs") {
+		t.Errorf("helper Lookup URL should carry the repo path, not /info/refs: %q", lookup.url)
+	}
+	approve := helper.last("approve")
+	if approve == nil || !strings.Contains(approve.url, "replica.example") {
+		t.Errorf("helper Approve keyed on wrong URL: %+v", approve)
+	}
+}
+
+func TestPostRPC_OnUnauthorizedRetriesWithHelperCredentials(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+	var authHeaders []string
+	attempts := 0
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		authHeaders = append(authHeaders, req.Header.Get("Authorization"))
+		attempts++
+		if attempts == 1 {
+			return newUnauthorizedResponse(req), nil
+		}
+		res := &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+		}
+		res.Header.Set("Content-Type", "application/x-git-upload-pack-result")
+		return res, nil
+	}))
+	conn.CredentialHelper = helper
+
+	if _, err := PostRPC(context.Background(), conn, "git-upload-pack", []byte("0000"), false, "phase"); err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+
+	if got := helper.count("lookup"); got != 1 {
+		t.Errorf("expected 1 helper lookup, got %d", got)
+	}
+	if got := helper.count("approve"); got != 1 {
+		t.Errorf("expected 1 approve call, got %d", got)
+	}
+	if len(authHeaders) != 2 {
+		t.Fatalf("expected 2 requests (anon then auth), got %d: %v", len(authHeaders), authHeaders)
+	}
+	if authHeaders[0] != "" {
+		t.Errorf("first POST should be anonymous, got %q", authHeaders[0])
+	}
+	if !strings.HasPrefix(authHeaders[1], "Basic ") {
+		t.Errorf("retry POST should have Basic auth, got %q", authHeaders[1])
+	}
+	if conn.Auth == nil {
+		t.Error("expected conn.Auth to be stored after successful POST retry")
+	}
+}
+
+func TestPostRPC_OnUnauthorizedSurfaces401WithoutHelper(t *testing.T) {
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return newUnauthorizedResponse(req), nil
+	}))
+
+	_, err := PostRPC(context.Background(), conn, "git-upload-pack", []byte("0000"), false, "phase")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 error, got %v", err)
+	}
+}
+
+func TestPostRPC_OnUnauthorizedRetryStill401CallsReject(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "bad", ok: true}
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return newUnauthorizedResponse(req), nil
+	}))
+	conn.CredentialHelper = helper
+
+	_, err := PostRPC(context.Background(), conn, "git-upload-pack", []byte("0000"), false, "phase")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := helper.count("reject"); got != 1 {
+		t.Errorf("expected 1 reject call, got %d", got)
+	}
+	if got := helper.count("approve"); got != 0 {
+		t.Errorf("expected 0 approve calls, got %d", got)
+	}
+}
+
 type credCall struct {
 	op   string // "lookup", "approve", "reject"
 	user string
 	pass string
+	url  string // the *url.URL passed to the helper, stringified
 }
 
 // fakeCredentialHelper is a test CredentialHelper. Set user/pass/ok/err to
@@ -729,17 +850,17 @@ type fakeCredentialHelper struct {
 	calls []credCall
 }
 
-func (h *fakeCredentialHelper) Lookup(_ context.Context, _ *url.URL) (string, string, bool, error) {
-	h.calls = append(h.calls, credCall{op: "lookup"})
+func (h *fakeCredentialHelper) Lookup(_ context.Context, ep *url.URL) (string, string, bool, error) {
+	h.calls = append(h.calls, credCall{op: "lookup", url: ep.String()})
 	return h.user, h.pass, h.ok, h.err
 }
 
-func (h *fakeCredentialHelper) Approve(_ context.Context, _ *url.URL, user, pass string) {
-	h.calls = append(h.calls, credCall{op: "approve", user: user, pass: pass})
+func (h *fakeCredentialHelper) Approve(_ context.Context, ep *url.URL, user, pass string) {
+	h.calls = append(h.calls, credCall{op: "approve", user: user, pass: pass, url: ep.String()})
 }
 
-func (h *fakeCredentialHelper) Reject(_ context.Context, _ *url.URL, user, pass string) {
-	h.calls = append(h.calls, credCall{op: "reject", user: user, pass: pass})
+func (h *fakeCredentialHelper) Reject(_ context.Context, ep *url.URL, user, pass string) {
+	h.calls = append(h.calls, credCall{op: "reject", user: user, pass: pass, url: ep.String()})
 }
 
 func (h *fakeCredentialHelper) count(op string) int {
