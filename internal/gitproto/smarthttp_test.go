@@ -460,6 +460,341 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+// newAdvertisementResponse returns a 200 response shaped like a smart-HTTP
+// /info/refs advertisement, suitable for round-tripper fakes.
+func newAdvertisementResponse(req *http.Request, service string) *http.Response {
+	res := &http.Response{
+		StatusCode: http.StatusOK,
+		Request:    req,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("0000")),
+	}
+	res.Header.Set("Content-Type", "application/x-"+service+"-advertisement")
+	return res
+}
+
+func newUnauthorizedResponse(req *http.Request) *http.Response {
+	res := &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Request:    req,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("authentication required")),
+	}
+	res.Header.Set("WWW-Authenticate", `Basic realm="git"`)
+	return res
+}
+
+// TestRequestInfoRefs_AnonymousSucceedsWithoutConsultingHelper verifies the
+// happy path: when the server accepts an unauthenticated request, we never
+// touch the credential helper.
+func TestRequestInfoRefs_AnonymousSucceedsWithoutConsultingHelper(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupOK: true, lookupUser: "x", lookupPass: "y"}
+	var authHeaders []string
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			authHeaders = append(authHeaders, req.Header.Get("Authorization"))
+			return newAdvertisementResponse(req, "git-upload-pack"), nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if helper.lookupCalls != 0 {
+		t.Errorf("expected 0 helper lookups on anonymous success, got %d", helper.lookupCalls)
+	}
+	if len(authHeaders) != 1 || authHeaders[0] != "" {
+		t.Errorf("expected exactly one anonymous request, got headers %v", authHeaders)
+	}
+}
+
+// TestRequestInfoRefs_OnUnauthorizedRetriesWithHelperCredentials verifies
+// the core fix: a 401 triggers a helper lookup, the request is retried with
+// those credentials, the helper is told the creds worked, and the conn
+// remembers the credentials for subsequent calls.
+func TestRequestInfoRefs_OnUnauthorizedRetriesWithHelperCredentials(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupUser: "alice", lookupPass: "s3cret", lookupOK: true}
+
+	var authHeaders []string
+	attempts := 0
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			authHeaders = append(authHeaders, req.Header.Get("Authorization"))
+			attempts++
+			if attempts == 1 {
+				return newUnauthorizedResponse(req), nil
+			}
+			return newAdvertisementResponse(req, "git-upload-pack"), nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	if helper.lookupCalls != 1 {
+		t.Errorf("expected 1 helper lookup, got %d", helper.lookupCalls)
+	}
+	if helper.approveCalls != 1 {
+		t.Errorf("expected 1 approve call on retry success, got %d", helper.approveCalls)
+	}
+	if helper.rejectCalls != 0 {
+		t.Errorf("expected 0 reject calls on retry success, got %d", helper.rejectCalls)
+	}
+	if helper.lastApproveUser != "alice" || helper.lastApprovePass != "s3cret" {
+		t.Errorf("approve called with wrong creds: user=%q pass=%q", helper.lastApproveUser, helper.lastApprovePass)
+	}
+	if len(authHeaders) != 2 {
+		t.Fatalf("expected 2 requests (anon then auth retry), got %d: %v", len(authHeaders), authHeaders)
+	}
+	if authHeaders[0] != "" {
+		t.Errorf("first request should be anonymous, got Authorization=%q", authHeaders[0])
+	}
+	if !strings.HasPrefix(authHeaders[1], "Basic ") {
+		t.Errorf("retry should have Basic auth header, got %q", authHeaders[1])
+	}
+	if conn.Auth == nil {
+		t.Error("expected conn.Auth to be stored after successful auth retry")
+	}
+}
+
+// TestRequestInfoRefs_OnUnauthorizedReusesStoredAuthOnNextCall confirms that
+// once a 401 retry succeeds, subsequent requests on the same connection use
+// the stored auth instead of going through anonymous → 401 → retry again.
+func TestRequestInfoRefs_OnUnauthorizedReusesStoredAuthOnNextCall(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupUser: "alice", lookupPass: "s3cret", lookupOK: true}
+
+	var authHeaders []string
+	attempts := 0
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			authHeaders = append(authHeaders, req.Header.Get("Authorization"))
+			attempts++
+			if attempts == 1 {
+				return newUnauthorizedResponse(req), nil
+			}
+			if req.Method == http.MethodGet {
+				return newAdvertisementResponse(req, "git-upload-pack"), nil
+			}
+			res := &http.Response{
+				StatusCode: http.StatusOK,
+				Request:    req,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+			res.Header.Set("Content-Type", "application/x-git-upload-pack-result")
+			return res, nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if _, err := PostRPC(context.Background(), conn, "git-upload-pack", []byte("0000"), false, "phase"); err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+
+	if helper.lookupCalls != 1 {
+		t.Errorf("expected only 1 helper lookup across both requests, got %d", helper.lookupCalls)
+	}
+	if len(authHeaders) != 3 {
+		t.Fatalf("expected 3 requests, got %d: %v", len(authHeaders), authHeaders)
+	}
+	if authHeaders[1] == "" || authHeaders[2] == "" {
+		t.Errorf("retry GET and follow-up POST should both carry auth: %v", authHeaders)
+	}
+}
+
+// TestRequestInfoRefs_OnUnauthorizedSurfaces401WithoutHelper verifies that
+// a 401 without a configured credential helper just returns the error.
+func TestRequestInfoRefs_OnUnauthorizedSurfaces401WithoutHelper(t *testing.T) {
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return newUnauthorizedResponse(req), nil
+		}),
+	)
+
+	_, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 error, got %v", err)
+	}
+}
+
+// TestRequestInfoRefs_OnUnauthorizedSurfaces401WhenHelperHasNoCredentials
+// verifies that an opaque "helper has nothing" response (ok=false) surfaces
+// the 401 cleanly — no retry, no approve, no reject.
+func TestRequestInfoRefs_OnUnauthorizedSurfaces401WhenHelperHasNoCredentials(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupOK: false}
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return newUnauthorizedResponse(req), nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	_, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 error, got %v", err)
+	}
+	if helper.lookupCalls != 1 {
+		t.Errorf("expected 1 lookup attempt, got %d", helper.lookupCalls)
+	}
+	if helper.approveCalls != 0 || helper.rejectCalls != 0 {
+		t.Errorf("expected no approve/reject when helper had no creds, got approve=%d reject=%d",
+			helper.approveCalls, helper.rejectCalls)
+	}
+}
+
+// TestRequestInfoRefs_OnUnauthorizedRetryStill401CallsReject verifies that
+// when the helper-supplied credentials are themselves rejected by the
+// server, we tell the helper so it can forget them.
+func TestRequestInfoRefs_OnUnauthorizedRetryStill401CallsReject(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupUser: "alice", lookupPass: "bad", lookupOK: true}
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return newUnauthorizedResponse(req), nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	_, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if helper.rejectCalls != 1 {
+		t.Errorf("expected 1 reject call, got %d", helper.rejectCalls)
+	}
+	if helper.approveCalls != 0 {
+		t.Errorf("expected 0 approve calls, got %d", helper.approveCalls)
+	}
+	if helper.lastRejectUser != "alice" || helper.lastRejectPass != "bad" {
+		t.Errorf("reject called with wrong creds: user=%q pass=%q", helper.lastRejectUser, helper.lastRejectPass)
+	}
+}
+
+// TestRequestInfoRefs_OnUnauthorizedRetry403CallsReject verifies that some
+// token services (notably Cloudflare) return 403 "Invalid or expired token"
+// instead of 401 when stored credentials have expired. Since we only reach
+// the retry path when the initial response was 401 (server required auth),
+// a 403 on retry indicates the helper's credentials themselves didn't
+// validate — reject them so the next run starts clean.
+func TestRequestInfoRefs_OnUnauthorizedRetry403CallsReject(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupUser: "user", lookupPass: "expired-token", lookupOK: true}
+	attempts := 0
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", nil,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return newUnauthorizedResponse(req), nil
+			}
+			// Retry with helper creds — server says 403, expired token.
+			res := &http.Response{
+				StatusCode: http.StatusForbidden,
+				Request:    req,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("Invalid or expired token")),
+			}
+			return res, nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	_, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if helper.rejectCalls != 1 {
+		t.Errorf("expected 1 reject call on retry 403, got %d", helper.rejectCalls)
+	}
+	if helper.approveCalls != 0 {
+		t.Errorf("expected 0 approve calls, got %d", helper.approveCalls)
+	}
+	if helper.lastRejectUser != "user" || helper.lastRejectPass != "expired-token" {
+		t.Errorf("reject called with wrong creds: user=%q pass=%q", helper.lastRejectUser, helper.lastRejectPass)
+	}
+}
+
+// TestRequestInfoRefs_DoesNotRetryWhenConnAlreadyAuthenticated verifies
+// that if the caller explicitly configured auth (via Resolve), we don't
+// override it with helper credentials on 401 — that's the caller's
+// problem to debug, not ours to silently paper over.
+func TestRequestInfoRefs_DoesNotRetryWhenConnAlreadyAuthenticated(t *testing.T) {
+	helper := &fakeCredentialHelper{lookupUser: "alice", lookupPass: "s3cret", lookupOK: true}
+	initialAuth := &transporthttp.BasicAuth{Username: "explicit", Password: "tok"}
+
+	conn := NewHTTPConn(
+		&url.URL{Scheme: "https", Host: "example.com", Path: "/repo.git"},
+		"src", initialAuth,
+		roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return newUnauthorizedResponse(req), nil
+		}),
+	)
+	conn.CredentialHelper = helper
+
+	_, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if helper.lookupCalls != 0 {
+		t.Errorf("expected 0 helper lookups when auth was preconfigured, got %d", helper.lookupCalls)
+	}
+}
+
+// fakeCredentialHelper is a CredentialHelper used in tests. Configure lookup
+// behaviour via lookupUser/lookupPass/lookupOK/lookupErr; the call counters
+// let tests assert the helper's Approve/Reject lifecycle was driven correctly.
+type fakeCredentialHelper struct {
+	lookupUser string
+	lookupPass string
+	lookupOK   bool
+	lookupErr  error
+
+	lookupCalls  int
+	approveCalls int
+	rejectCalls  int
+
+	lastApproveUser, lastApprovePass string
+	lastRejectUser, lastRejectPass   string
+}
+
+func (h *fakeCredentialHelper) Lookup(_ context.Context, _ *url.URL) (string, string, bool, error) {
+	h.lookupCalls++
+	return h.lookupUser, h.lookupPass, h.lookupOK, h.lookupErr
+}
+
+func (h *fakeCredentialHelper) Approve(_ context.Context, _ *url.URL, user, pass string) {
+	h.approveCalls++
+	h.lastApproveUser, h.lastApprovePass = user, pass
+}
+
+func (h *fakeCredentialHelper) Reject(_ context.Context, _ *url.URL, user, pass string) {
+	h.rejectCalls++
+	h.lastRejectUser, h.lastRejectPass = user, pass
+}
+
 type roundTripReader struct {
 	remaining int
 }

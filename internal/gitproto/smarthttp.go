@@ -178,12 +178,36 @@ type AuthMethod interface {
 	Authorizer(req *http.Request) error
 }
 
+// CredentialHelper provides on-demand credentials when an HTTP request is
+// rejected with 401. Implementations typically wrap git's credential helper
+// protocol; see auth.GitCredentialHelper.
+//
+// Lookup must not block on user interaction — if no credentials are
+// available, return ok=false so the surrounding sync can surface a clean
+// 401 rather than hang.
+//
+// Approve and Reject are advisory signals the helper uses to persist or
+// forget credentials. Errors are intentionally not returned: failures here
+// must not poison the outer request flow.
+type CredentialHelper interface {
+	Lookup(ctx context.Context, ep *url.URL) (username, password string, ok bool, err error)
+	Approve(ctx context.Context, ep *url.URL, username, password string)
+	Reject(ctx context.Context, ep *url.URL, username, password string)
+}
+
 // HTTPConn represents a connection to a remote Git HTTP endpoint.
 type HTTPConn struct {
 	Label       string
 	EndpointURL *url.URL
 	HTTP        *http.Client
 	Auth        AuthMethod
+
+	// CredentialHelper, if set, is consulted on a 401 response when no
+	// initial Auth was configured. The retry happens once on /info/refs;
+	// on success the resolved credentials are stored in Auth for the
+	// remaining requests on this connection. Setting Auth up front
+	// disables the helper fallback — explicit auth wins.
+	CredentialHelper CredentialHelper
 
 	// FollowInfoRefsRedirect, when true, rewrites Endpoint.Scheme and
 	// Endpoint.Host to the final URL returned by RequestInfoRefs after
@@ -287,24 +311,45 @@ func RequestInfoRefs(ctx context.Context, conn Conn, service string, gitProtocol
 
 // RequestInfoRefs fetches /info/refs for the given service.
 func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProtocol string) ([]byte, error) {
-	reqURL := fmt.Sprintf("%s/info/refs?service=%s", c.EndpointURL.String(), service)
-	ctx = withHTTPTrace(ctx, "GET "+service+"/info/refs")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	res, err := c.doInfoRefsRequest(ctx, service, gitProtocol, c.Auth)
 	if err != nil {
-		return nil, fmt.Errorf("create info-refs request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", capability.DefaultAgent())
-	req.Header.Set(StatsPhaseHeader, service+" info-refs")
-	if gitProtocol != "" {
-		req.Header.Set("Git-Protocol", gitProtocol)
-	}
-	ApplyAuth(req, c.Auth)
 
-	res, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request info-refs: %w", err)
+	// On 401, consult the credential helper as a fallback — but only when
+	// no explicit auth was configured up front. Explicit auth that fails
+	// is a real error the user needs to see, not something to paper over.
+	if res.StatusCode == http.StatusUnauthorized && c.Auth == nil && c.CredentialHelper != nil {
+		user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, c.EndpointURL)
+		if lookupErr != nil {
+			_ = res.Body.Close()
+			return nil, fmt.Errorf("look up credentials: %w", lookupErr)
+		}
+		if ok {
+			_ = res.Body.Close()
+			retryAuth := basicAuth{username: user, password: pass}
+			res, err = c.doInfoRefsRequest(ctx, service, gitProtocol, retryAuth)
+			if err != nil {
+				c.CredentialHelper.Reject(ctx, c.EndpointURL, user, pass)
+				return nil, err
+			}
+			switch {
+			case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+				// 401: server rejected the credentials.
+				// 403: some token services (e.g. Cloudflare) return
+				// "Invalid or expired token" as 403 rather than 401.
+				// Since we only reach this branch when the initial
+				// response was 401 (so the server requires auth),
+				// a 403 on retry means the credentials themselves
+				// didn't validate — reject them.
+				c.CredentialHelper.Reject(ctx, c.EndpointURL, user, pass)
+			case res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices:
+				c.Auth = retryAuth
+				c.CredentialHelper.Approve(ctx, c.EndpointURL, user, pass)
+			}
+		}
 	}
+
 	defer res.Body.Close()
 	if err := httpError(res); err != nil {
 		return nil, err
@@ -421,4 +466,40 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 		return
 	}
 	_ = auth.Authorizer(req) //nolint:errcheck // BasicAuth and TokenAuth never error; future authorizers should surface 401s instead
+}
+
+// doInfoRefsRequest issues a single /info/refs GET and returns the raw
+// response. Caller is responsible for closing the body. Extracted so the
+// 401-retry path can reissue the same request with different auth.
+func (c *HTTPConn) doInfoRefsRequest(ctx context.Context, service, gitProtocol string, auth AuthMethod) (*http.Response, error) {
+	reqURL := fmt.Sprintf("%s/info/refs?service=%s", c.EndpointURL.String(), service)
+	ctx = withHTTPTrace(ctx, "GET "+service+"/info/refs")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create info-refs request: %w", err)
+	}
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set(StatsPhaseHeader, service+" info-refs")
+	if gitProtocol != "" {
+		req.Header.Set("Git-Protocol", gitProtocol)
+	}
+	ApplyAuth(req, auth)
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request info-refs: %w", err)
+	}
+	return res, nil
+}
+
+// basicAuth is an internal AuthMethod that injects a username/password via
+// HTTP Basic auth. Used to wrap credential-helper output for the 401-retry
+// path without taking a dependency on go-git's transporthttp package.
+type basicAuth struct {
+	username, password string
+}
+
+func (b basicAuth) Authorizer(req *http.Request) error {
+	req.SetBasicAuth(b.username, b.password)
+	return nil
 }

@@ -377,6 +377,12 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	client := instrumentHTTPClient(httpClient, raw.SkipTLSVerify, label, stats)
 	conn := gitproto.NewHTTPConnWithClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
+	// When no explicit auth is configured, wire up the git credential helper
+	// as a fallback that fires only on a 401 response. This matches git's
+	// own behaviour and avoids leaking stored credentials to public repos.
+	if authMethod == nil {
+		conn.CredentialHelper = auth.GitCredentialHelper{}
+	}
 	return conn, nil
 }
 

@@ -1700,11 +1700,11 @@ func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	originalFill := auth.GitCredentialFillCommand
+	originalCred := auth.GitCredentialCommand
 	t.Cleanup(func() {
-		auth.GitCredentialFillCommand = originalFill
+		auth.GitCredentialCommand = originalCred
 	})
-	auth.GitCredentialFillCommand = func(_ context.Context, input string) ([]byte, error) {
+	auth.GitCredentialCommand = func(_ context.Context, op, input string) ([]byte, error) {
 		if !strings.Contains(input, "protocol=http\n") {
 			t.Fatalf("expected protocol in credential input, got %q", input)
 		}
@@ -1714,7 +1714,16 @@ func TestRun_IntegrationUsesGitCredentialHelperFallback(t *testing.T) {
 		if !strings.Contains(input, "path=repo.git\n") {
 			t.Fatalf("expected repo path in credential input, got %q", input)
 		}
-		return []byte("username=" + username + "\npassword=" + password + "\n\n"), nil
+		switch op {
+		case "fill":
+			return []byte("username=" + username + "\npassword=" + password + "\n\n"), nil
+		case "approve", "reject":
+			// Best-effort signaling — accept and return empty.
+			return nil, nil
+		default:
+			t.Fatalf("unexpected git credential op %q", op)
+			return nil, nil
+		}
 	}
 
 	result, err := Run(context.Background(), Config{

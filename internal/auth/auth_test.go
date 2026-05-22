@@ -119,7 +119,7 @@ func TestTokenExpiredOrExpiring(t *testing.T) {
 	}
 }
 
-func TestCredentialFillInput(t *testing.T) {
+func TestCredentialInput_FillQueryWithEmbeddedUser(t *testing.T) {
 	ep := &url.URL{
 		Scheme: "https",
 		Host:   "github.com",
@@ -127,38 +127,66 @@ func TestCredentialFillInput(t *testing.T) {
 		User:   url.User("myuser"),
 	}
 
-	got := credentialFillInput(ep)
+	got := credentialInput(ep, "", "")
 	want := "protocol=https\nhost=github.com\npath=owner/repo.git\nusername=myuser\n\n"
 	if got != want {
-		t.Errorf("credentialFillInput returned:\n%q\nwant:\n%q", got, want)
+		t.Errorf("credentialInput returned:\n%q\nwant:\n%q", got, want)
 	}
 }
 
-func TestCredentialFillInputNilEndpoint(t *testing.T) {
-	got := credentialFillInput(nil)
+func TestCredentialInput_NilEndpoint(t *testing.T) {
+	got := credentialInput(nil, "", "")
 	if got != "" {
 		t.Errorf("expected empty string for nil endpoint, got %q", got)
 	}
 }
 
-func TestCredentialFillInputEmptyHost(t *testing.T) {
+func TestCredentialInput_EmptyHost(t *testing.T) {
 	ep := &url.URL{Scheme: "https"}
-	got := credentialFillInput(ep)
+	got := credentialInput(ep, "", "")
 	if got != "" {
 		t.Errorf("expected empty string for empty host, got %q", got)
 	}
 }
 
-func TestCredentialFillInputNoUser(t *testing.T) {
+func TestCredentialInput_FillQueryNoUser(t *testing.T) {
 	ep := &url.URL{
 		Scheme: "https",
 		Host:   "example.com",
 		Path:   "/repo.git",
 	}
-	got := credentialFillInput(ep)
+	got := credentialInput(ep, "", "")
 	want := "protocol=https\nhost=example.com\npath=repo.git\n\n"
 	if got != want {
-		t.Errorf("credentialFillInput returned:\n%q\nwant:\n%q", got, want)
+		t.Errorf("credentialInput returned:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestCredentialInput_ApproveRejectFormatIncludesUserAndPassword(t *testing.T) {
+	ep := &url.URL{
+		Scheme: "https",
+		Host:   "example.com",
+		Path:   "/owner/repo.git",
+	}
+	got := credentialInput(ep, "alice", "s3cret")
+	want := "protocol=https\nhost=example.com\npath=owner/repo.git\nusername=alice\npassword=s3cret\n\n"
+	if got != want {
+		t.Errorf("credentialInput returned:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestCredentialInput_ExplicitUserOverridesURLUser(t *testing.T) {
+	ep := &url.URL{
+		Scheme: "https",
+		Host:   "example.com",
+		User:   url.User("from-url"),
+	}
+	got := credentialInput(ep, "explicit", "")
+	if !strings.Contains(got, "username=explicit\n") {
+		t.Errorf("expected explicit username to win, got:\n%q", got)
+	}
+	if strings.Contains(got, "username=from-url") {
+		t.Errorf("URL-embedded username should be overridden, got:\n%q", got)
 	}
 }
 
@@ -234,7 +262,6 @@ func TestResolve(t *testing.T) {
 		name     string
 		raw      Endpoint
 		ep       *url.URL
-		mockCred func(ctx context.Context, input string) ([]byte, error)
 		wantType string // "token", "basic", "nil"
 		wantUser string
 		wantPass string
@@ -270,29 +297,23 @@ func TestResolve(t *testing.T) {
 			wantType: "nil",
 		},
 		{
-			name: "nothing set HTTP endpoint no credential helper returns nil",
-			raw:  Endpoint{},
-			ep:   ep,
-			mockCred: func(_ context.Context, _ string) ([]byte, error) {
-				return nil, errors.New("no helper")
-			},
+			name:     "nothing set HTTP endpoint returns nil (defer to helper on 401)",
+			raw:      Endpoint{},
+			ep:       ep,
 			wantType: "nil",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Save and restore GitCredentialFillCommand.
-			origCmd := GitCredentialFillCommand
-			defer func() { GitCredentialFillCommand = origCmd }()
-
-			if tt.mockCred != nil {
-				GitCredentialFillCommand = tt.mockCred
-			} else {
-				// Default mock: no credential helper.
-				GitCredentialFillCommand = func(_ context.Context, _ string) ([]byte, error) {
-					return nil, errors.New("no helper")
-				}
+			// Resolve must never consult the git credential helper —
+			// that lookup is deferred to a 401 response. If anything
+			// here invokes the helper, fail loudly.
+			origCmd := GitCredentialCommand
+			defer func() { GitCredentialCommand = origCmd }()
+			GitCredentialCommand = func(_ context.Context, op, input string) ([]byte, error) {
+				t.Fatalf("unexpected GitCredentialCommand(%q, %q) call during Resolve", op, input)
+				return nil, nil
 			}
 
 			// Also ensure ENTIRE_CONFIG_DIR points nowhere so EntireDB lookup
@@ -404,6 +425,184 @@ func TestExplicitAuth(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// recordedCredCall captures one invocation of GitCredentialCommand for assertion.
+type recordedCredCall struct {
+	op    string
+	input string
+}
+
+// withRecordingHelper replaces GitCredentialCommand with one that appends
+// each call to calls and delegates to handler for the response.
+func withRecordingHelper(t *testing.T, calls *[]recordedCredCall, handler func(op, input string) ([]byte, error)) {
+	t.Helper()
+	orig := GitCredentialCommand
+	t.Cleanup(func() { GitCredentialCommand = orig })
+	GitCredentialCommand = func(_ context.Context, op, input string) ([]byte, error) {
+		*calls = append(*calls, recordedCredCall{op: op, input: input})
+		if handler == nil {
+			return nil, nil
+		}
+		return handler(op, input)
+	}
+}
+
+func TestGitCredentialHelper_Lookup_ReturnsCredentials(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com", Path: "/owner/repo.git"}
+	var calls []recordedCredCall
+	withRecordingHelper(t, &calls, func(op, _ string) ([]byte, error) {
+		if op != "fill" {
+			t.Fatalf("expected fill, got %q", op)
+		}
+		return []byte("username=alice\npassword=s3cret\n"), nil
+	})
+
+	user, pass, ok, err := GitCredentialHelper{}.Lookup(context.Background(), ep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if user != "alice" || pass != "s3cret" {
+		t.Errorf("got user=%q pass=%q, want alice/s3cret", user, pass)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 helper call, got %d", len(calls))
+	}
+	if !strings.Contains(calls[0].input, "protocol=https\nhost=example.com\n") {
+		t.Errorf("fill input missing host/protocol:\n%q", calls[0].input)
+	}
+}
+
+func TestGitCredentialHelper_Lookup_HelperFailsReturnsNotFound(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com"}
+	withRecordingHelper(t, new([]recordedCredCall), func(_, _ string) ([]byte, error) {
+		return nil, errors.New("no helper")
+	})
+
+	_, _, ok, err := GitCredentialHelper{}.Lookup(context.Background(), ep)
+	if err != nil {
+		t.Errorf("expected no error when helper has no credentials, got %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false when helper fails")
+	}
+}
+
+func TestGitCredentialHelper_Lookup_EmptyPasswordReturnsNotFound(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com"}
+	withRecordingHelper(t, new([]recordedCredCall), func(_, _ string) ([]byte, error) {
+		return []byte("username=alice\n"), nil
+	})
+
+	_, _, ok, err := GitCredentialHelper{}.Lookup(context.Background(), ep)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false when password is empty")
+	}
+}
+
+func TestGitCredentialHelper_Lookup_UsernameFallsBackToGit(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com"}
+	withRecordingHelper(t, new([]recordedCredCall), func(_, _ string) ([]byte, error) {
+		return []byte("password=tok\n"), nil
+	})
+
+	user, _, ok, err := GitCredentialHelper{}.Lookup(context.Background(), ep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if user != "git" {
+		t.Errorf("expected username fallback to 'git', got %q", user)
+	}
+}
+
+func TestGitCredentialHelper_Lookup_NonHTTPEndpointReturnsNotFound(t *testing.T) {
+	ep := &url.URL{Scheme: "ssh", Host: "example.com"}
+	calls := new([]recordedCredCall)
+	withRecordingHelper(t, calls, func(_, _ string) ([]byte, error) {
+		return []byte("password=tok\n"), nil
+	})
+
+	_, _, ok, err := GitCredentialHelper{}.Lookup(context.Background(), ep)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false for SSH endpoint — credential helper protocol is HTTP-only")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no helper call for SSH endpoint, got %d", len(*calls))
+	}
+}
+
+func TestGitCredentialHelper_Approve_SendsCredentialsToHelper(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com", Path: "/owner/repo.git"}
+	var calls []recordedCredCall
+	withRecordingHelper(t, &calls, nil)
+
+	GitCredentialHelper{}.Approve(context.Background(), ep, "alice", "s3cret")
+
+	if len(calls) != 1 || calls[0].op != "approve" {
+		t.Fatalf("expected one 'approve' call, got %+v", calls)
+	}
+	want := "protocol=https\nhost=example.com\npath=owner/repo.git\nusername=alice\npassword=s3cret\n\n"
+	if calls[0].input != want {
+		t.Errorf("approve input:\n%q\nwant:\n%q", calls[0].input, want)
+	}
+}
+
+func TestGitCredentialHelper_Reject_SendsCredentialsToHelper(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com"}
+	var calls []recordedCredCall
+	withRecordingHelper(t, &calls, nil)
+
+	GitCredentialHelper{}.Reject(context.Background(), ep, "alice", "bad")
+
+	if len(calls) != 1 || calls[0].op != "reject" {
+		t.Fatalf("expected one 'reject' call, got %+v", calls)
+	}
+	if !strings.Contains(calls[0].input, "username=alice\npassword=bad\n") {
+		t.Errorf("reject input missing creds:\n%q", calls[0].input)
+	}
+}
+
+func TestGitCredentialHelper_ApproveRejectSwallowHelperErrors(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com"}
+	withRecordingHelper(t, new([]recordedCredCall), func(_, _ string) ([]byte, error) {
+		return nil, errors.New("helper unavailable")
+	})
+
+	// Best-effort: helper unavailability must not panic or propagate
+	// (logged at most). The signal-to-helper step is advisory.
+	GitCredentialHelper{}.Approve(context.Background(), ep, "u", "p")
+	GitCredentialHelper{}.Reject(context.Background(), ep, "u", "p")
+}
+
+// TestGitCredentialCmdDisablesTerminalPrompt verifies that the real
+// `git credential` invocation sets GIT_TERMINAL_PROMPT=0 so it never
+// drops into an interactive username/password prompt when no helper
+// has credentials. Regression test for issue #63.
+func TestGitCredentialCmdDisablesTerminalPrompt(t *testing.T) {
+	cmd := newGitCredentialCmd(context.Background(), "fill", "protocol=https\nhost=example.com\n\n")
+
+	var found bool
+	for _, kv := range cmd.Env {
+		if kv == "GIT_TERMINAL_PROMPT=0" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected GIT_TERMINAL_PROMPT=0 in cmd.Env, got %v", cmd.Env)
 	}
 }
 

@@ -24,10 +24,10 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 		t.Fatalf("new endpoint: %v", err)
 	}
 
-	originalFill := auth.GitCredentialFillCommand
-	t.Cleanup(func() { auth.GitCredentialFillCommand = originalFill })
-	auth.GitCredentialFillCommand = func(_ context.Context, input string) ([]byte, error) {
-		t.Fatalf("unexpected git credential fill call with input %q", input)
+	originalCred := auth.GitCredentialCommand
+	t.Cleanup(func() { auth.GitCredentialCommand = originalCred })
+	auth.GitCredentialCommand = func(_ context.Context, op, input string) ([]byte, error) {
+		t.Fatalf("unexpected git credential %s call with input %q", op, input)
 		return nil, nil
 	}
 
@@ -118,10 +118,10 @@ func TestResolveAuthMethodUsesEntireDBStoredToken(t *testing.T) {
 		t.Fatalf("write token: %v", err)
 	}
 
-	originalFill := auth.GitCredentialFillCommand
-	t.Cleanup(func() { auth.GitCredentialFillCommand = originalFill })
-	auth.GitCredentialFillCommand = func(_ context.Context, input string) ([]byte, error) {
-		t.Fatalf("unexpected git credential fill call with input %q", input)
+	originalCred := auth.GitCredentialCommand
+	t.Cleanup(func() { auth.GitCredentialCommand = originalCred })
+	auth.GitCredentialCommand = func(_ context.Context, op, input string) ([]byte, error) {
+		t.Fatalf("unexpected git credential %s call with input %q", op, input)
 		return nil, nil
 	}
 
