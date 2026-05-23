@@ -81,12 +81,13 @@ func TestTranslator(t *testing.T) {
 	}
 	tagHash := writeObject(t, srcRepo.Storer, tag.Encode)
 
-	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, false)
+	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{tagHash})
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
+	}
+	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, false, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
-	}
-	if err := tr.discover([]plumbing.Hash{tagHash}); err != nil {
-		t.Fatalf("discover: %v", err)
 	}
 	newTagHash, err := tr.translate(tagHash)
 	if err != nil {
@@ -195,12 +196,13 @@ func TestTranslator_RewritesMessageHashes(t *testing.T) {
 	}
 	childSHA1 := writeObject(t, srcRepo.Storer, child.Encode)
 
-	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true)
+	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{childSHA1})
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
+	}
+	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
-	}
-	if err := tr.discover([]plumbing.Hash{childSHA1}); err != nil {
-		t.Fatalf("discover: %v", err)
 	}
 	if _, err := tr.translate(childSHA1); err != nil {
 		t.Fatalf("translate child: %v", err)
@@ -271,12 +273,13 @@ func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
 		TreeHash: treeB,
 	}).Encode)
 
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true)
 	// Discovery must see both branches so the reachable set covers cA
 	// before cB is encoded.
-	if err := tr.discover([]plumbing.Hash{cB, cA}); err != nil {
-		t.Fatalf("discover: %v", err)
+	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{cB, cA})
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
 	}
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
 	// Translate B first — the order that would have left the rewrite
 	// stranded under the old design.
 	if _, err := tr.translate(cB); err != nil {
@@ -326,10 +329,11 @@ func TestTranslator_SkipMessageRewrite(t *testing.T) {
 	}
 	childSHA1 := writeObject(t, srcRepo.Storer, child.Encode)
 
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false)
-	if err := tr.discover([]plumbing.Hash{childSHA1}); err != nil {
-		t.Fatalf("discover: %v", err)
+	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{childSHA1})
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
 	}
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
 	if _, err := tr.translate(childSHA1); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -356,10 +360,11 @@ func TestTranslator_WriteOriginNotes(t *testing.T) {
 	c1 := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c1\n", TreeHash: tree}).Encode)
 	c2 := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c2\n", TreeHash: tree, ParentHashes: []plumbing.Hash{c1}}).Encode)
 
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false)
-	if err := tr.discover([]plumbing.Hash{c2}); err != nil {
-		t.Fatalf("discover: %v", err)
+	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{c2})
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
 	}
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
 	if _, err := tr.translate(c2); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -420,10 +425,11 @@ func TestTranslator_WriteMappingFile(t *testing.T) {
 	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
 	commit := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c\n", TreeHash: tree}).Encode)
 
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false)
-	if err := tr.discover([]plumbing.Hash{commit}); err != nil {
-		t.Fatalf("discover: %v", err)
+	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{commit})
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
 	}
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
 	if _, err := tr.translate(commit); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -469,21 +475,52 @@ func TestTranslator_WriteMappingFile(t *testing.T) {
 	}
 }
 
+// TestTranslator_AmbiguousMessageRefWarning verifies that when an
+// abbreviated SHA1 prefix in a commit message matches more than one
+// in-scope commit, the prefix is left unrewritten and recorded in
+// t.ambiguousMessageRefs so the caller can surface a warning.
+//
+// We can't easily force a real SHA1 prefix collision in a test, so
+// we install two synthetic entries in the reachable map after the
+// translator is constructed and then run rewriteHashesInMessage
+// directly. This exercises the same code path the production
+// pipeline takes.
+func TestTranslator_AmbiguousMessageRefWarning(t *testing.T) {
+	root := t.TempDir()
+	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
+	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), true, nil)
+
+	// Two real-looking SHA1 hashes that share the prefix "deadbee".
+	one := plumbing.NewHash("deadbee100000000000000000000000000000001")
+	two := plumbing.NewHash("deadbee200000000000000000000000000000002")
+	tr.reachable[one] = plumbing.CommitObject
+	tr.reachable[two] = plumbing.CommitObject
+
+	out, count := tr.rewriteHashesInMessage("see commit deadbee for details\n")
+	if count != 0 {
+		t.Errorf("ambiguous prefix should not be rewritten; got count=%d", count)
+	}
+	if !strings.Contains(out, "deadbee") {
+		t.Errorf("ambiguous prefix should be left in message; got %q", out)
+	}
+	if _, recorded := tr.ambiguousMessageRefs["deadbee"]; !recorded {
+		t.Errorf("expected %q to be recorded in ambiguousMessageRefs, got %v",
+			"deadbee", tr.ambiguousMessageRefs)
+	}
+}
+
 // TestTranslator_UnresolvableSubmodule confirms that a tree entry with
-// Submodule mode pointing at a commit not in the source repo causes a
-// clear error rather than silently producing a malformed SHA256 tree.
+// Submodule mode pointing at a commit not in the source repo is
+// rejected during discovery (fail-fast), before any object is written
+// to the target.
 func TestTranslator_UnresolvableSubmodule(t *testing.T) {
 	root := t.TempDir()
 	srcDir := filepath.Join(root, "src.git")
-	dstDir := filepath.Join(root, "dst.git")
 
 	srcRepo, err := git.PlainInit(srcDir, true)
 	if err != nil {
 		t.Fatalf("init SHA1 source: %v", err)
-	}
-	dstRepo, err := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
-	if err != nil {
-		t.Fatalf("init SHA256 target: %v", err)
 	}
 
 	blobHash := writeBlob(t, srcRepo.Storer, []byte("contents\n"))
@@ -494,16 +531,9 @@ func TestTranslator_UnresolvableSubmodule(t *testing.T) {
 		{Name: "sub", Mode: filemode.Submodule, Hash: external},
 	})
 
-	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, false)
-	if err != nil {
-		t.Fatalf("newTranslator: %v", err)
-	}
-	if err := tr.discover([]plumbing.Hash{treeHash}); err != nil {
-		t.Fatalf("discover: %v", err)
-	}
-	_, err = tr.translate(treeHash)
+	_, err = discoverReachable(srcRepo.Storer, []plumbing.Hash{treeHash})
 	if err == nil {
-		t.Fatal("expected error for unresolvable submodule, got nil")
+		t.Fatal("expected discoverReachable to fail on unresolvable submodule, got nil")
 	}
 	if !strings.Contains(err.Error(), "submodule") {
 		t.Errorf("error should mention submodule; got: %v", err)
@@ -649,7 +679,6 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 	res, err := Run(context.Background(), Request{
 		SourceURL:   srv.URL + "/source.git",
 		TargetDir:   dstDir,
-		IncludeTags: true,
 		MappingFile: mappingPath,
 		Out:         io.Discard,
 	})

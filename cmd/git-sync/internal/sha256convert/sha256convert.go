@@ -49,17 +49,20 @@ import (
 )
 
 // Request describes a single SHA1 → SHA256 conversion.
+//
+// Scope is intentionally fixed: every branch and every annotated/lightweight
+// tag on the source is always converted. Partial scope risks stranding
+// cross-branch references in commit messages, which defeats the point of a
+// one-off cutover. AllRefs additionally pulls in refs/notes, refs/pull, and
+// other custom namespaces; ExcludeRefPrefixes subtracts from that.
 type Request struct {
 	SourceURL                    string
 	SourceAuth                   gitsync.EndpointAuth
 	SourceFollowInfoRefsRedirect bool
 	TargetDir                    string
 
-	Branches           []string
-	IncludeTags        bool
 	AllRefs            bool
 	ExcludeRefPrefixes []string
-	Mappings           []gitsync.RefMapping
 
 	ProtocolMode      gitsync.ProtocolMode
 	Verbose           bool
@@ -93,16 +96,17 @@ type Counts struct {
 
 // Result is the conversion summary, suitable for JSON output.
 type Result struct {
-	SourceURL          string `json:"sourceUrl"`
-	TargetDir          string `json:"targetDir"`
-	Protocol           string `json:"protocol"`
-	RefsConverted      int    `json:"refsConverted"`
-	Counts             Counts `json:"counts"`
-	SignaturesStripped int    `json:"signaturesStripped"`
-	MessageRewrites    int    `json:"messageRewrites"`
-	OriginNotesRef     string `json:"originNotesRef,omitempty"`
-	MappingFile        string `json:"mappingFile,omitempty"`
-	TempDir            string `json:"tempDir,omitempty"`
+	SourceURL            string   `json:"sourceUrl"`
+	TargetDir            string   `json:"targetDir"`
+	Protocol             string   `json:"protocol"`
+	RefsConverted        int      `json:"refsConverted"`
+	Counts               Counts   `json:"counts"`
+	SignaturesStripped   int      `json:"signaturesStripped"`
+	MessageRewrites      int      `json:"messageRewrites"`
+	AmbiguousMessageRefs []string `json:"ambiguousMessageRefs,omitempty"`
+	OriginNotesRef       string   `json:"originNotesRef,omitempty"`
+	MappingFile          string   `json:"mappingFile,omitempty"`
+	TempDir              string   `json:"tempDir,omitempty"`
 }
 
 // Lines satisfies the human-readable output contract used by other git-sync subcommands.
@@ -119,6 +123,21 @@ func (r Result) Lines() []string {
 	}
 	if r.MessageRewrites > 0 {
 		lines = append(lines, fmt.Sprintf("rewrote %d SHA1 hash reference(s) in commit/tag messages", r.MessageRewrites))
+	}
+	if n := len(r.AmbiguousMessageRefs); n > 0 {
+		preview := r.AmbiguousMessageRefs
+		const max = 5
+		extra := 0
+		if len(preview) > max {
+			extra = len(preview) - max
+			preview = preview[:max]
+		}
+		line := fmt.Sprintf("warning: %d ambiguous SHA1 hex prefix(es) in messages left unrewritten (look up via the mapping file): %s",
+			n, strings.Join(preview, ", "))
+		if extra > 0 {
+			line += fmt.Sprintf(", ... (%d more)", extra)
+		}
+		lines = append(lines, line)
 	}
 	if r.OriginNotesRef != "" {
 		lines = append(lines, fmt.Sprintf("origin notes ref: %s (use `git notes --ref=%s show <sha256>` to recover old SHA1)",
@@ -166,16 +185,12 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("init temporary SHA1 store: %w", err)
 	}
 
-	dstRepo, err := git.PlainInit(req.TargetDir, true, git.WithObjectFormat(formatcfg.SHA256))
-	if err != nil {
-		return Result{}, fmt.Errorf("init SHA256 target at %s: %w", req.TargetDir, err)
-	}
-
 	// Source connection + ref discovery -----------------------------------
+	// Scope is fixed: always include every branch and every tag. AllRefs
+	// extends to refs/notes/*, refs/pull/*, and other namespaces;
+	// ExcludeRefPrefixes can subtract from that under AllRefs.
 	planCfg := planner.PlanConfig{
-		Branches:           append([]string(nil), req.Branches...),
-		Mappings:           toPlannerMappings(req.Mappings),
-		IncludeTags:        req.IncludeTags,
+		IncludeTags:        true,
 		AllRefs:            req.AllRefs,
 		ExcludeRefPrefixes: append([]string(nil), req.ExcludeRefPrefixes...),
 	}
@@ -203,18 +218,29 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("fetch source pack: %w", err)
 	}
 
-	// Discover + translate ------------------------------------------------
-	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, req.TargetDir, !req.SkipMessageRewrite)
-	if err != nil {
-		return Result{}, err
-	}
+	// Discover reachable set before initing the target. Submodule
+	// errors surface here, so a failed run leaves the target dir
+	// untouched (it was only ensured-empty so far) rather than half
+	// converted.
 	rootSHA1s := make([]plumbing.Hash, 0, len(desired))
 	for _, d := range desired {
 		rootSHA1s = append(rootSHA1s, d.SourceHash)
 	}
 	fmt.Fprintln(out, "discovering reachable objects ...")
-	if err := tr.discover(rootSHA1s); err != nil {
+	reachable, err := discoverReachable(srcRepo.Storer, rootSHA1s)
+	if err != nil {
 		return Result{}, fmt.Errorf("discover reachable: %w", err)
+	}
+
+	// Discovery succeeded — safe to materialize the SHA256 target.
+	dstRepo, err := git.PlainInit(req.TargetDir, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		return Result{}, fmt.Errorf("init SHA256 target at %s: %w", req.TargetDir, err)
+	}
+
+	tr, err := newTranslator(srcRepo.Storer, dstRepo.Storer, req.TargetDir, !req.SkipMessageRewrite, reachable)
+	if err != nil {
+		return Result{}, err
 	}
 	fmt.Fprintln(out, "translating objects to sha256 ...")
 	for _, d := range desired {
@@ -249,6 +275,14 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		Counts:             tr.counts,
 		SignaturesStripped: tr.signaturesStripped,
 		MessageRewrites:    tr.messageRewrites,
+	}
+	if len(tr.ambiguousMessageRefs) > 0 {
+		amb := make([]string, 0, len(tr.ambiguousMessageRefs))
+		for s := range tr.ambiguousMessageRefs {
+			amb = append(amb, s)
+		}
+		sort.Strings(amb)
+		res.AmbiguousMessageRefs = amb
 	}
 
 	if !req.SkipOriginNotes && len(tr.commits) > 0 {
@@ -350,14 +384,6 @@ type authAdapter struct{ m auth.Method }
 
 func (a authAdapter) Authorizer(req *http.Request) error { return a.m.Authorizer(req) }
 
-func toPlannerMappings(in []gitsync.RefMapping) []planner.RefMapping {
-	out := make([]planner.RefMapping, 0, len(in))
-	for _, m := range in {
-		out = append(out, planner.RefMapping{Source: m.Source, Target: m.Target})
-	}
-	return out
-}
-
 // translator walks the SHA1 source store, rewrites object content with
 // SHA256-mapped hashes, and writes the result as loose objects under the
 // target bare repo. Loose object writing is done by hand because go-git
@@ -369,7 +395,7 @@ type translator struct {
 	dst        *filesystem.Storage
 	objectsDir string
 	// reachable holds every in-scope SHA1 with its object type, built up
-	// front by a discovery pass that walks tree/commit/tag dependencies
+	// front by discoverReachable, which walks tree/commit/tag dependencies
 	// from the desired ref tips. It is the authoritative "what's in
 	// scope" set: abbreviated SHA1 prefixes in commit/tag messages are
 	// resolved against this set so a unique match is fixed before any
@@ -386,15 +412,21 @@ type translator struct {
 	// commits records every translated commit's old SHA1, in DFS order,
 	// for use by writeOriginNotes. We track separately rather than walking
 	// the full mapping because notes only attach meaningfully to commits.
-	commits            []plumbing.Hash
-	counts             Counts
-	signaturesStripped int
-	messageRewrites    int
-	rewriteMessages    bool
-	lastNotesCommit    plumbing.Hash
+	commits []plumbing.Hash
+	// ambiguousMessageRefs collects every hex prefix in a commit/tag
+	// message that matched more than one in-scope SHA1 and was
+	// therefore left unrewritten. Surfaced to the user as a warning
+	// so they know which references to investigate via the mapping
+	// file.
+	ambiguousMessageRefs map[string]struct{}
+	counts               Counts
+	signaturesStripped   int
+	messageRewrites      int
+	rewriteMessages      bool
+	lastNotesCommit      plumbing.Hash
 }
 
-func newTranslator(src, dst storer.Storer, targetDir string, rewriteMessages bool) (*translator, error) {
+func newTranslator(src, dst storer.Storer, targetDir string, rewriteMessages bool, reachable map[plumbing.Hash]plumbing.ObjectType) (*translator, error) {
 	srcFS, ok := src.(*filesystem.Storage)
 	if !ok {
 		return nil, fmt.Errorf("source storage is not filesystem-backed (%T)", src)
@@ -403,85 +435,106 @@ func newTranslator(src, dst storer.Storer, targetDir string, rewriteMessages boo
 	if !ok {
 		return nil, fmt.Errorf("target storage is not filesystem-backed (%T)", dst)
 	}
+	if reachable == nil {
+		reachable = make(map[plumbing.Hash]plumbing.ObjectType)
+	}
 	return &translator{
-		src:             srcFS,
-		dst:             dstFS,
-		objectsDir:      filepath.Join(targetDir, "objects"),
-		reachable:       make(map[plumbing.Hash]plumbing.ObjectType),
-		mapping:         make(map[plumbing.Hash]plumbing.Hash),
-		inProgress:      make(map[plumbing.Hash]struct{}),
-		rewriteMessages: rewriteMessages,
+		src:                  srcFS,
+		dst:                  dstFS,
+		objectsDir:           filepath.Join(targetDir, "objects"),
+		reachable:            reachable,
+		mapping:              make(map[plumbing.Hash]plumbing.Hash),
+		inProgress:           make(map[plumbing.Hash]struct{}),
+		ambiguousMessageRefs: make(map[string]struct{}),
+		rewriteMessages:      rewriteMessages,
 	}, nil
 }
 
-// discover walks every object reachable from roots (via tree entries,
-// commit tree+parent links, and tag targets) and records each one in
-// t.reachable with its object type. Submodule gitlinks are followed
-// only when the referenced commit exists in the same source store, to
-// stay consistent with translateTree's handling. Message-reference
-// edges are not part of this pass — those are added during translation.
-func (t *translator) discover(roots []plumbing.Hash) error {
-	for _, root := range roots {
-		if err := t.visit(root); err != nil {
-			return err
+// discoverReachable walks every object reachable from roots (via tree
+// entries, commit tree+parent links, and tag targets) and returns a
+// (SHA1 → object type) map covering the full in-scope set.
+//
+// Submodule gitlinks: a tree entry with mode 160000 points at a commit
+// in another repository, and a SHA1 hash cannot be embedded in a
+// SHA256 tree. If the referenced commit happens to live in this
+// source store (rare; vendored modules), it is recursively visited
+// like any other commit. Otherwise discovery returns an error here,
+// before the target bare repo is initialized — failing fast keeps
+// half-converted state off disk.
+//
+// Message-reference edges are not part of this pass; those are added
+// during translation, where the partial mapping is updated as we go.
+func discoverReachable(src storer.Storer, roots []plumbing.Hash) (map[plumbing.Hash]plumbing.ObjectType, error) {
+	srcFS, ok := src.(*filesystem.Storage)
+	if !ok {
+		return nil, fmt.Errorf("source storage is not filesystem-backed (%T)", src)
+	}
+	reachable := make(map[plumbing.Hash]plumbing.ObjectType)
+	var visit func(plumbing.Hash) error
+	visit = func(sha1 plumbing.Hash) error {
+		if _, seen := reachable[sha1]; seen {
+			return nil
 		}
-	}
-	return nil
-}
-
-func (t *translator) visit(sha1 plumbing.Hash) error {
-	if _, seen := t.reachable[sha1]; seen {
-		return nil
-	}
-	obj, err := t.src.EncodedObject(plumbing.AnyObject, sha1)
-	if err != nil {
-		return fmt.Errorf("discover %s: %w", sha1, err)
-	}
-	t.reachable[sha1] = obj.Type()
-	switch obj.Type() {
-	case plumbing.BlobObject:
-		return nil
-	case plumbing.TreeObject:
-		tree := &object.Tree{}
-		if err := tree.Decode(obj); err != nil {
-			return fmt.Errorf("discover decode tree %s: %w", sha1, err)
+		obj, err := srcFS.EncodedObject(plumbing.AnyObject, sha1)
+		if err != nil {
+			return fmt.Errorf("discover %s: %w", sha1, err)
 		}
-		for _, e := range tree.Entries {
-			if e.Mode == filemode.Submodule {
-				if _, err := t.src.EncodedObject(plumbing.CommitObject, e.Hash); err == nil {
-					if err := t.visit(e.Hash); err != nil {
-						return err
+		reachable[sha1] = obj.Type()
+		switch obj.Type() {
+		case plumbing.BlobObject:
+			return nil
+		case plumbing.TreeObject:
+			tree := &object.Tree{}
+			if err := tree.Decode(obj); err != nil {
+				return fmt.Errorf("discover decode tree %s: %w", sha1, err)
+			}
+			for _, e := range tree.Entries {
+				if e.Mode == filemode.Submodule {
+					if _, err := srcFS.EncodedObject(plumbing.CommitObject, e.Hash); err == nil {
+						if err := visit(e.Hash); err != nil {
+							return err
+						}
+						continue
 					}
+					return fmt.Errorf(
+						"tree %s contains a submodule gitlink %q at %s that is not present in the source repo; "+
+							"convert the submodule repository first so its commit hashes are available in SHA256",
+						sha1, e.Name, e.Hash)
 				}
-				continue
+				if err := visit(e.Hash); err != nil {
+					return err
+				}
 			}
-			if err := t.visit(e.Hash); err != nil {
+		case plumbing.CommitObject:
+			c := &object.Commit{}
+			if err := c.Decode(obj); err != nil {
+				return fmt.Errorf("discover decode commit %s: %w", sha1, err)
+			}
+			if err := visit(c.TreeHash); err != nil {
+				return err
+			}
+			for _, p := range c.ParentHashes {
+				if err := visit(p); err != nil {
+					return err
+				}
+			}
+		case plumbing.TagObject:
+			tag := &object.Tag{}
+			if err := tag.Decode(obj); err != nil {
+				return fmt.Errorf("discover decode tag %s: %w", sha1, err)
+			}
+			if err := visit(tag.Target); err != nil {
 				return err
 			}
 		}
-	case plumbing.CommitObject:
-		c := &object.Commit{}
-		if err := c.Decode(obj); err != nil {
-			return fmt.Errorf("discover decode commit %s: %w", sha1, err)
-		}
-		if err := t.visit(c.TreeHash); err != nil {
-			return err
-		}
-		for _, p := range c.ParentHashes {
-			if err := t.visit(p); err != nil {
-				return err
-			}
-		}
-	case plumbing.TagObject:
-		tag := &object.Tag{}
-		if err := tag.Decode(obj); err != nil {
-			return fmt.Errorf("discover decode tag %s: %w", sha1, err)
-		}
-		if err := t.visit(tag.Target); err != nil {
-			return err
+		return nil
+	}
+	for _, r := range roots {
+		if err := visit(r); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return reachable, nil
 }
 
 func (t *translator) translate(sha1 plumbing.Hash) (plumbing.Hash, error) {
@@ -788,10 +841,25 @@ func (t *translator) writeLoose(typ plumbing.ObjectType, body []byte) (plumbing.
 // real source SHA1).
 var hashPattern = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
 
+// matchResult is the 3-state outcome of resolving a hex prefix in a
+// commit/tag message against the reachable set. We distinguish
+// "ambiguous" from "no match" so the caller can warn the user about
+// prefixes that *could* be rewritten if they were a couple of chars
+// longer.
+type matchResult int
+
+const (
+	matchNone matchResult = iota
+	matchUnique
+	matchAmbiguous
+)
+
 // rewriteHashesInMessage scans msg for short and full SHA1 hashes,
 // replacing any that uniquely identify a commit or tag in t.reachable
 // with the corresponding full SHA256 hex from t.mapping. Returns the
-// rewritten message and the number of substitutions made.
+// rewritten message and the number of substitutions made. Ambiguous
+// prefixes are recorded in t.ambiguousMessageRefs so the caller can
+// surface a warning at the end of the run.
 //
 // Uniqueness is decided against t.reachable rather than t.mapping so
 // that abbreviated prefixes get the same verdict during translation as
@@ -805,44 +873,50 @@ var hashPattern = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
 func (t *translator) rewriteHashesInMessage(msg string) (string, int) {
 	count := 0
 	out := hashPattern.ReplaceAllStringFunc(msg, func(s string) string {
-		sha1, ok := t.resolveMessageRef(s)
-		if !ok {
+		sha1, result := t.resolveMessageRef(s)
+		switch result {
+		case matchAmbiguous:
+			t.ambiguousMessageRefs[s] = struct{}{}
+			return s
+		case matchUnique:
+			newHash, ok := t.mapping[sha1]
+			if !ok {
+				// The reachable set says this SHA1 is in scope, but
+				// the translation DFS hasn't placed it yet. Shouldn't
+				// happen because translateCommit/translateTag add
+				// message-reference edges before encoding — leave the
+				// hex untouched if it somehow does.
+				return s
+			}
+			count++
+			return newHash.String()
+		default:
 			return s
 		}
-		newHash, ok := t.mapping[sha1]
-		if !ok {
-			// The reachable set says this SHA1 is in scope, but the
-			// translation DFS hasn't placed it yet. Shouldn't happen
-			// because translateCommit/translateTag add message-reference
-			// edges before encoding — leave the hex untouched if it
-			// somehow does.
-			return s
-		}
-		count++
-		return newHash.String()
 	})
 	return out, count
 }
 
-// resolveMessageRef returns the unique commit/tag SHA1 in t.reachable
-// that matches the given hex prefix. Returns (zero, false) for no
-// match, an ambiguous prefix, or a match that is not a commit or tag
-// (incidental hex strings that happen to collide with a blob or tree
-// hash are not rewritten).
-func (t *translator) resolveMessageRef(prefix string) (plumbing.Hash, bool) {
+// resolveMessageRef classifies a hex prefix against the reachable set.
+// Returns matchUnique with the resolved SHA1 when exactly one commit
+// or tag in scope matches; matchAmbiguous when more than one does;
+// matchNone otherwise (no match, or the match is a blob/tree — those
+// are filtered so incidental hex collisions on content hashes aren't
+// rewritten).
+func (t *translator) resolveMessageRef(prefix string) (plumbing.Hash, matchResult) {
 	if len(prefix) == 40 {
 		sha1, ok := plumbing.FromHex(prefix)
 		if !ok {
-			return plumbing.ZeroHash, false
+			return plumbing.ZeroHash, matchNone
 		}
 		typ, in := t.reachable[sha1]
 		if !in {
-			return plumbing.ZeroHash, false
+			return plumbing.ZeroHash, matchNone
 		}
 		if typ != plumbing.CommitObject && typ != plumbing.TagObject {
-			return plumbing.ZeroHash, false
+			return plumbing.ZeroHash, matchNone
 		}
-		return sha1, true
+		return sha1, matchUnique
 	}
 	var match plumbing.Hash
 	matches := 0
@@ -853,27 +927,28 @@ func (t *translator) resolveMessageRef(prefix string) (plumbing.Hash, bool) {
 		if strings.HasPrefix(sha1.String(), prefix) {
 			matches++
 			if matches > 1 {
-				return plumbing.ZeroHash, false
+				return plumbing.ZeroHash, matchAmbiguous
 			}
 			match = sha1
 		}
 	}
-	if matches != 1 {
-		return plumbing.ZeroHash, false
+	if matches == 1 {
+		return match, matchUnique
 	}
-	return match, true
+	return plumbing.ZeroHash, matchNone
 }
 
 // extractMessageReferences returns the unique commit/tag SHA1s mentioned
 // by hex prefix in msg. Used by translateCommit/translateTag to add
 // message-reference edges to the translation DFS so the mapping is
-// fully populated by the time the message is rewritten.
+// fully populated by the time the message is rewritten. Ambiguous
+// prefixes generate no edge — they cannot be rewritten anyway.
 func (t *translator) extractMessageReferences(msg string) []plumbing.Hash {
 	seen := make(map[plumbing.Hash]struct{})
 	var out []plumbing.Hash
 	for _, match := range hashPattern.FindAllString(msg, -1) {
-		sha1, ok := t.resolveMessageRef(match)
-		if !ok {
+		sha1, result := t.resolveMessageRef(match)
+		if result != matchUnique {
 			continue
 		}
 		if _, dup := seen[sha1]; dup {
