@@ -1,0 +1,64 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "fb6dc8f73ee0",
+  "session_id": "3e7ba5c7-040a-43bd-b371-4b264c81bbff",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-23T12:35:47.632869Z",
+  "branch": "nodo/convert-sha256",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/git-sync/convert_sha256.go",
+    "cmd/git-sync/internal/sha256convert/sha256convert.go",
+    "cmd/git-sync/internal/sha256convert/sha256convert_test.go",
+    "docs/convert-sha256.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "6f7d2dba97f7",
+  "checkpoint_transcript_start": 405,
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 44296,
+    "cache_read_tokens": 21901471,
+    "output_tokens": 29454,
+    "api_call_count": 42
+  },
+  "session_metrics": {
+    "turn_count": 32
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-23T12:35:47.560116Z",
+    "agent_lines": 128,
+    "agent_removed": 23,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 128,
+    "total_lines_changed": 151,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 128,
+      "agent_lines_removed": 23
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 128,
+      "agent_lines_removed": 23
+    }
+  ]
+}
