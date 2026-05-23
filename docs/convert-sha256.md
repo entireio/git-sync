@@ -147,6 +147,7 @@ system that holds frozen SHA1 references.
 --write-mapping                    write SHA1 → SHA256 TSV to this path
 --no-rewrite-messages              skip inline hash rewrites in messages
 --no-origin-notes                  skip refs/notes/sha1-origin
+--check                            verify the output (config, HEAD, refs, git fsck)
 --keep-source-objects              leave the temp SHA1 store on disk
 --progress                         live per-phase object counts (TTY only)
 --json                             machine-readable output
@@ -221,9 +222,37 @@ it O(log N), an easy optimization if someone hits the wall.
 
 ## Verifying the Output
 
-Standard git tooling works against the converted repo without
-additional flags — the `extensions.objectformat` setting in the local
-config is enough for git to switch hashing:
+Pass `--check` and the command runs four sanity checks against the
+converted repo at the end of the run, printing one line each:
+
+```
+verifying output ...
+  ✓ config: extensions.objectformat = sha256
+  ✓ HEAD: ffe9fff421b77f2dcc049a95b3b8ba7b9da8976dd61bcf35e9fe2d993babc470
+  ✓ refs: 37 / 37 resolve to objects
+  ✓ git fsck --full: clean
+```
+
+The checks are:
+
+1. **config** — `extensions.objectformat = sha256` is present in
+   `<target>/config`.
+2. **HEAD** — resolves to a non-zero hash and that object exists in
+   the store.
+3. **refs** — every written ref (except `refs/notes/sha1-origin`,
+   counted separately) resolves to an object in the store. The count
+   matches `RefsConverted`.
+4. **git fsck --full** — the external `git` binary runs a full
+   integrity check. Skipped (and reported as such) when `git` isn't
+   on `PATH`; the conversion still succeeds.
+
+If any check fails the command exits non-zero. The full per-check
+results are also in `--json`'s `checks` array. Without `--check` no
+verification runs and the run completes as soon as the conversion
+itself finishes.
+
+You can also run the checks by hand on a converted repo, with or
+without `--check`:
 
 ```bash
 git -C /path/to/out.git fsck --full                     # zero errors expected

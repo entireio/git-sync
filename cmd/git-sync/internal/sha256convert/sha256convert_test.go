@@ -680,6 +680,7 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 		SourceURL:   srv.URL + "/source.git",
 		TargetDir:   dstDir,
 		MappingFile: mappingPath,
+		Check:       true,
 		Out:         io.Discard,
 	})
 	if err != nil {
@@ -752,6 +753,27 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 	}
 	if !strings.Contains(string(mapping), headSHA1) {
 		t.Errorf("mapping file missing head SHA1 %s:\n%s", headSHA1, mapping)
+	}
+
+	// --check: every step should pass against a freshly-converted repo,
+	// including git fsck --full (available since we already need the
+	// git binary to drive the source side of this test).
+	if len(res.Checks) == 0 {
+		t.Fatal("expected Checks to be populated when --check is enabled")
+	}
+	for _, c := range res.Checks {
+		if !c.OK {
+			t.Errorf("check %q failed: %s", c.Name, c.Detail)
+		}
+	}
+	expected := map[string]bool{"config": false, "HEAD": false, "refs": false, "git fsck --full": false}
+	for _, c := range res.Checks {
+		expected[c.Name] = true
+	}
+	for name, present := range expected {
+		if !present {
+			t.Errorf("--check did not run %q step", name)
+		}
 	}
 }
 

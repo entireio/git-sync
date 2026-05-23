@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -68,6 +69,7 @@ type Request struct {
 	ProtocolMode      gitsync.ProtocolMode
 	Verbose           bool
 	Progress          bool
+	Check             bool
 	KeepSourceObjects bool
 
 	// MappingFile, when non-empty, is a path to which a TSV of every
@@ -108,7 +110,16 @@ type Result struct {
 	AmbiguousMessageRefs []string `json:"ambiguousMessageRefs,omitempty"`
 	OriginNotesRef       string   `json:"originNotesRef,omitempty"`
 	MappingFile          string   `json:"mappingFile,omitempty"`
+	Checks               []Check  `json:"checks,omitempty"`
 	TempDir              string   `json:"tempDir,omitempty"`
+}
+
+// Check is one named verification step from --check, with the result
+// and a short detail string suitable for logging/JSON output.
+type Check struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // Lines satisfies the human-readable output contract used by other git-sync subcommands.
@@ -335,7 +346,110 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		cleanupTemp = false
 		res.TempDir = tempDir
 	}
+
+	if req.Check {
+		fmt.Fprintln(out, "verifying output ...")
+		res.Checks = runChecks(req.TargetDir, dstRepo, refsWritten)
+		for _, c := range res.Checks {
+			mark := "✓"
+			if !c.OK {
+				mark = "✗"
+			}
+			fmt.Fprintf(out, "  %s %s: %s\n", mark, c.Name, c.Detail)
+		}
+		for _, c := range res.Checks {
+			if !c.OK {
+				return res, fmt.Errorf("check %q failed: %s", c.Name, c.Detail)
+			}
+		}
+	}
+
 	return res, nil
+}
+
+// runChecks performs lightweight verification of the converted repo.
+// Returns one Check per step. Callers print and/or fail-on-error based
+// on these. No early return so users see the full picture even when an
+// earlier check fails.
+func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check {
+	checks := []Check{}
+
+	// 1. Config: extensions.objectformat = sha256.
+	cfgBytes, err := os.ReadFile(filepath.Join(targetDir, "config"))
+	switch {
+	case err != nil:
+		checks = append(checks, Check{Name: "config", OK: false, Detail: err.Error()})
+	case !bytes.Contains(cfgBytes, []byte("objectformat = sha256")):
+		checks = append(checks, Check{Name: "config", OK: false, Detail: "extensions.objectformat = sha256 not set"})
+	default:
+		checks = append(checks, Check{Name: "config", OK: true, Detail: "extensions.objectformat = sha256"})
+	}
+
+	// 2. HEAD resolves to an existing object.
+	head, err := repo.Reference(plumbing.HEAD, true)
+	switch {
+	case err != nil:
+		checks = append(checks, Check{Name: "HEAD", OK: false, Detail: err.Error()})
+	case head.Hash().IsZero():
+		checks = append(checks, Check{Name: "HEAD", OK: false, Detail: "resolves to zero hash"})
+	default:
+		if _, err := repo.Storer.EncodedObject(plumbing.AnyObject, head.Hash()); err != nil {
+			checks = append(checks, Check{Name: "HEAD", OK: false, Detail: fmt.Sprintf("%s: %v", head.Hash(), err)})
+		} else {
+			checks = append(checks, Check{Name: "HEAD", OK: true, Detail: head.Hash().String()})
+		}
+	}
+
+	// 3. Every written ref resolves to an existing object.
+	resolved := 0
+	missing := ""
+	refs, err := repo.References()
+	if err != nil {
+		checks = append(checks, Check{Name: "refs", OK: false, Detail: err.Error()})
+	} else {
+		_ = refs.ForEach(func(r *plumbing.Reference) error {
+			if r.Type() != plumbing.HashReference {
+				return nil
+			}
+			if r.Name() == plumbing.ReferenceName(originNotesRef) {
+				// Counted separately below; not in the refsExpected total.
+				return nil
+			}
+			if _, err := repo.Storer.EncodedObject(plumbing.AnyObject, r.Hash()); err != nil {
+				if missing == "" {
+					missing = fmt.Sprintf("%s → %s: %v", r.Name(), r.Hash(), err)
+				}
+				return nil
+			}
+			resolved++
+			return nil
+		})
+		if missing != "" {
+			checks = append(checks, Check{Name: "refs", OK: false, Detail: missing})
+		} else if resolved < refsExpected {
+			checks = append(checks, Check{Name: "refs", OK: false, Detail: fmt.Sprintf("only %d / %d refs resolved", resolved, refsExpected)})
+		} else {
+			checks = append(checks, Check{Name: "refs", OK: true, Detail: fmt.Sprintf("%d / %d resolve to objects", resolved, refsExpected)})
+		}
+	}
+
+	// 4. git fsck --full (if git is on PATH).
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		checks = append(checks, Check{Name: "git fsck --full", OK: true, Detail: "skipped (git not in PATH)"})
+		return checks
+	}
+	cmd := exec.Command(gitBin, "-C", targetDir, "fsck", "--full")
+	fsckOut, err := cmd.CombinedOutput()
+	switch {
+	case err != nil:
+		checks = append(checks, Check{Name: "git fsck --full", OK: false, Detail: fmt.Sprintf("%v\n%s", err, fsckOut)})
+	case bytes.Contains(fsckOut, []byte("error")) || bytes.Contains(fsckOut, []byte("bad sha")):
+		checks = append(checks, Check{Name: "git fsck --full", OK: false, Detail: strings.TrimSpace(string(fsckOut))})
+	default:
+		checks = append(checks, Check{Name: "git fsck --full", OK: true, Detail: "clean"})
+	}
+	return checks
 }
 
 const originNotesRef = "refs/notes/sha1-origin"

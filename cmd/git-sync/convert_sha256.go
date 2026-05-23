@@ -80,6 +80,8 @@ any so the caller can convert the submodule repository first.`,
 	cmd.Flags().BoolVarP(&req.Verbose, "verbose", "v", false, "verbose logging")
 	cmd.Flags().BoolVar(&req.Progress, "progress", false,
 		"show live per-phase object counts on stderr (TTY only)")
+	cmd.Flags().BoolVar(&req.Check, "check", false,
+		"verify the output after conversion (config, HEAD, refs, git fsck --full)")
 	cmd.Flags().BoolVar(&req.KeepSourceObjects, "keep-source-objects", false,
 		"keep the temporary SHA1 store on disk after conversion (for debugging)")
 	cmd.Flags().StringVar(&req.MappingFile, "write-mapping", "",
