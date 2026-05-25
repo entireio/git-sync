@@ -132,10 +132,15 @@ type Check struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// previewMax caps how many items from a potentially-long list (ambiguous
+// prefixes, signed tags) are inlined into a Lines() summary before
+// switching to a "(N more)" suffix.
+const previewMax = 5
+
 // Lines satisfies the human-readable output contract used by other git-sync subcommands.
 func (r Result) Lines() []string {
 	lines := []string{
-		fmt.Sprintf("sha256 bare repo: %s", r.TargetDir),
+		"sha256 bare repo: " + r.TargetDir,
 		fmt.Sprintf("source: %s (%s)", r.SourceURL, r.Protocol),
 		fmt.Sprintf("converted: %d blobs, %d trees, %d commits, %d tags",
 			r.Counts.Blobs, r.Counts.Trees, r.Counts.Commits, r.Counts.Tags),
@@ -149,11 +154,10 @@ func (r Result) Lines() []string {
 	}
 	if n := len(r.AmbiguousMessageRefs); n > 0 {
 		preview := r.AmbiguousMessageRefs
-		const max = 5
 		extra := 0
-		if len(preview) > max {
-			extra = len(preview) - max
-			preview = preview[:max]
+		if len(preview) > previewMax {
+			extra = len(preview) - previewMax
+			preview = preview[:previewMax]
 		}
 		line := fmt.Sprintf("warning: %d ambiguous SHA1 hex prefix(es) in messages left unrewritten (look up via the mapping file): %s",
 			n, strings.Join(preview, ", "))
@@ -167,15 +171,14 @@ func (r Result) Lines() []string {
 			r.OriginNotesRef, strings.TrimPrefix(r.OriginNotesRef, "refs/notes/")))
 	}
 	if r.MappingFile != "" {
-		lines = append(lines, fmt.Sprintf("mapping written to: %s", r.MappingFile))
+		lines = append(lines, "mapping written to: "+r.MappingFile)
 	}
 	if n := len(r.SignedTags); n > 0 {
 		preview := r.SignedTags
-		const max = 5
 		extra := 0
-		if len(preview) > max {
-			extra = len(preview) - max
-			preview = preview[:max]
+		if len(preview) > previewMax {
+			extra = len(preview) - previewMax
+			preview = preview[:previewMax]
 		}
 		line := fmt.Sprintf("signed %d branch attestation tag(s): %s",
 			n, strings.Join(preview, ", "))
@@ -185,12 +188,14 @@ func (r Result) Lines() []string {
 		lines = append(lines, line)
 	}
 	if r.TempDir != "" {
-		lines = append(lines, fmt.Sprintf("kept source objects: %s", r.TempDir))
+		lines = append(lines, "kept source objects: "+r.TempDir)
 	}
 	return lines
 }
 
 // Run performs the conversion described by req.
+//
+//nolint:maintidx // Run is a linear orchestrator over distinct phases (fetch → discover → init → translate → refs → notes → mapping → sign → check); each phase is short and isolated. Splitting into helpers would obscure the pipeline rather than clarify it.
 func Run(ctx context.Context, req Request) (Result, error) {
 	if req.SourceURL == "" {
 		return Result{}, errors.New("convert-sha256 requires --source-url")
@@ -368,7 +373,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	if req.Sign {
-		signed, err := signBranchTips(out, req.TargetDir, req.SignKey, req.SourceURL, desired)
+		signed, err := signBranchTips(ctx, out, req.TargetDir, req.SignKey, req.SourceURL, desired)
 		if err != nil {
 			return res, fmt.Errorf("sign: %w", err)
 		}
@@ -382,7 +387,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 
 	if req.Check {
 		fmt.Fprintln(out, "verifying output ...")
-		res.Checks = runChecks(req.TargetDir, dstRepo, refsWritten)
+		res.Checks = runChecks(ctx, req.TargetDir, dstRepo, refsWritten)
 		for _, c := range res.Checks {
 			mark := "✓"
 			if !c.OK {
@@ -409,7 +414,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 // stdin/stderr are inherited so gpg/ssh-agent prompts work
 // interactively. A failure short-circuits the run; tags signed before
 // the failure stay in the target repo.
-func signBranchTips(out io.Writer, targetDir, signKey, sourceURL string, desired map[plumbing.ReferenceName]planner.DesiredRef) ([]string, error) {
+func signBranchTips(ctx context.Context, out io.Writer, targetDir, signKey, sourceURL string, desired map[plumbing.ReferenceName]planner.DesiredRef) ([]string, error) {
 	gitBin, err := exec.LookPath("git")
 	if err != nil {
 		return nil, fmt.Errorf("git binary required to sign: %w", err)
@@ -441,7 +446,7 @@ func signBranchTips(out io.Writer, targetDir, signKey, sourceURL string, desired
 		}
 		args = append(args, tagName, refName)
 
-		cmd := exec.Command(gitBin, args...)
+		cmd := exec.CommandContext(ctx, gitBin, args...)
 		// Inherit stdio so gpg/ssh-agent passphrase prompts work. We
 		// intentionally do not capture stdout/stderr — the user needs
 		// to see them when authenticating.
@@ -460,7 +465,7 @@ func signBranchTips(out io.Writer, targetDir, signKey, sourceURL string, desired
 // Returns one Check per step. Callers print and/or fail-on-error based
 // on these. No early return so users see the full picture even when an
 // earlier check fails.
-func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check {
+func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refsExpected int) []Check {
 	checks := []Check{}
 
 	// 1. Config: extensions.objectformat = sha256.
@@ -500,7 +505,7 @@ func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check
 	if err != nil {
 		checks = append(checks, Check{Name: "refs", OK: false, Detail: err.Error()})
 	} else {
-		_ = refs.ForEach(func(r *plumbing.Reference) error {
+		walkErr := refs.ForEach(func(r *plumbing.Reference) error {
 			if r.Type() != plumbing.HashReference {
 				return nil
 			}
@@ -520,11 +525,14 @@ func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check
 			resolved++
 			return nil
 		})
-		if missing != "" {
+		switch {
+		case walkErr != nil:
+			checks = append(checks, Check{Name: "refs", OK: false, Detail: walkErr.Error()})
+		case missing != "":
 			checks = append(checks, Check{Name: "refs", OK: false, Detail: missing})
-		} else if resolved < refsExpected {
+		case resolved < refsExpected:
 			checks = append(checks, Check{Name: "refs", OK: false, Detail: fmt.Sprintf("only %d / %d refs resolved", resolved, refsExpected)})
-		} else {
+		default:
 			checks = append(checks, Check{Name: "refs", OK: true, Detail: fmt.Sprintf("%d / %d resolve to objects", resolved, refsExpected)})
 		}
 	}
@@ -535,7 +543,7 @@ func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check
 		checks = append(checks, Check{Name: "git fsck --full", OK: true, Detail: "skipped (git not in PATH)"})
 		return checks
 	}
-	cmd := exec.Command(gitBin, "-C", targetDir, "fsck", "--full")
+	cmd := exec.CommandContext(ctx, gitBin, "-C", targetDir, "fsck", "--full")
 	fsckOut, err := cmd.CombinedOutput()
 	switch {
 	case err != nil:
@@ -572,6 +580,7 @@ func ensureEmptyTarget(path string) error {
 	return nil
 }
 
+//nolint:ireturn // gitproto.Conn is the shared transport interface; returning it directly mirrors the rest of git-sync.
 func openSource(ctx context.Context, req Request, planCfg planner.PlanConfig) (gitproto.Conn, *gitproto.RefService, []*plumbing.Reference, error) {
 	ep, err := url.Parse(req.SourceURL)
 	if err != nil {
@@ -606,6 +615,7 @@ func openSource(ctx context.Context, req Request, planCfg planner.PlanConfig) (g
 	return conn, svc, refs, nil
 }
 
+//nolint:ireturn // gitproto.AuthMethod is the shared signing interface; returning it lets callers pass it straight through.
 func normalizeAuth(m auth.Method) gitproto.AuthMethod {
 	if m == nil {
 		return nil
@@ -623,7 +633,12 @@ func normalizeAuth(m auth.Method) gitproto.AuthMethod {
 
 type authAdapter struct{ m auth.Method }
 
-func (a authAdapter) Authorizer(req *http.Request) error { return a.m.Authorizer(req) }
+func (a authAdapter) Authorizer(req *http.Request) error {
+	if err := a.m.Authorizer(req); err != nil {
+		return fmt.Errorf("authorize request: %w", err)
+	}
+	return nil
+}
 
 // translator walks the SHA1 source store, rewrites object content with
 // SHA256-mapped hashes, and writes the result as loose objects under the
@@ -742,7 +757,7 @@ func discoverReachable(src storer.Storer, roots []plumbing.Hash, progress *atomi
 		if progress != nil {
 			progress.Add(1)
 		}
-		switch obj.Type() {
+		switch obj.Type() { //nolint:exhaustive // OFSDelta/REFDelta/AnyObject/InvalidObject cannot reach a resolved storage.
 		case plumbing.BlobObject:
 			return nil
 		case plumbing.TreeObject:
@@ -788,6 +803,8 @@ func discoverReachable(src storer.Storer, roots []plumbing.Hash, progress *atomi
 			if err := visit(tag.Target); err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("unexpected object type %v for %s during discovery", obj.Type(), sha1)
 		}
 		return nil
 	}
@@ -820,7 +837,7 @@ func (t *translator) translate(sha1 plumbing.Hash) (plumbing.Hash, error) {
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("lookup %s: %w", sha1, err)
 	}
-	switch obj.Type() {
+	switch obj.Type() { //nolint:exhaustive // OFSDelta/REFDelta/AnyObject/InvalidObject cannot reach a resolved storage.
 	case plumbing.BlobObject:
 		return t.translateBlob(sha1, obj)
 	case plumbing.TreeObject:
@@ -1029,10 +1046,14 @@ func encodeBody(typ plumbing.ObjectType, encode func(plumbing.EncodedObject) err
 	}
 	r, err := scratch.Reader()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scratch reader: %w", err)
 	}
 	defer r.Close()
-	return io.ReadAll(r)
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("read encoded body: %w", err)
+	}
+	return body, nil
 }
 
 // writeLoose writes a single object as a SHA256-named loose object under
@@ -1137,6 +1158,8 @@ func (t *translator) rewriteHashesInMessage(msg string) (string, int) {
 	out := hashPattern.ReplaceAllStringFunc(msg, func(s string) string {
 		sha1, result := t.resolveMessageRef(s)
 		switch result {
+		case matchNone:
+			return s
 		case matchAmbiguous:
 			t.ambiguousMessageRefs[s] = struct{}{}
 			return s
@@ -1238,8 +1261,8 @@ func (t *translator) writeOriginNotes(refName string) (string, error) {
 	// We collect (sha256-of-new-commit → blob hash) pairs so the tree entry
 	// path is the commit's new hash.
 	type entry struct {
-		key   plumbing.Hash
-		blob  plumbing.Hash
+		key  plumbing.Hash
+		blob plumbing.Hash
 	}
 	entries := make([]entry, 0, len(t.commits))
 	for _, oldSHA1 := range t.commits {
@@ -1375,14 +1398,17 @@ func (t *translator) writeMappingFile(path string) error {
 	defer f.Close()
 	w := bufio.NewWriter(f)
 	if _, err := fmt.Fprintln(w, "# sha1\tsha256"); err != nil {
-		return err
+		return fmt.Errorf("write mapping header: %w", err)
 	}
 	for _, p := range pairs {
 		if _, err := fmt.Fprintf(w, "%s\t%s\n", p.sha1, p.sha256); err != nil {
-			return err
+			return fmt.Errorf("write mapping line: %w", err)
 		}
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush mapping file: %w", err)
+	}
+	return nil
 }
 
 func writeRefs(
@@ -1403,4 +1429,3 @@ func writeRefs(
 	}
 	return written, nil
 }
-

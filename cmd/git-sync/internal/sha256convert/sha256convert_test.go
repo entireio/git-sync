@@ -23,6 +23,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	gogitstorer "github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/filesystem"
 )
 
@@ -245,8 +246,8 @@ func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
 	root := t.TempDir()
 	srcDir := filepath.Join(root, "src.git")
 	dstDir := filepath.Join(root, "dst.git")
-	srcRepo, _ := git.PlainInit(srcDir, true)
-	dstRepo, _ := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
+	srcRepo := initSHA1(t, srcDir)
+	dstRepo := initSHA256(t, dstDir)
 
 	blobA := writeBlob(t, srcRepo.Storer, []byte("a\n"))
 	treeA := writeTree(t, srcRepo.Storer, []object.TreeEntry{
@@ -279,7 +280,7 @@ func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
 	// Translate B first — the order that would have left the rewrite
 	// stranded under the old design.
 	if _, err := tr.translate(cB); err != nil {
@@ -314,8 +315,8 @@ func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
 // untouched.
 func TestTranslator_SkipMessageRewrite(t *testing.T) {
 	root := t.TempDir()
-	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
-	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+	srcRepo := initSHA1(t, filepath.Join(root, "src.git"))
+	dstRepo := initSHA256(t, filepath.Join(root, "dst.git"))
 
 	blob := writeBlob(t, srcRepo.Storer, []byte("x\n"))
 	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
@@ -333,14 +334,17 @@ func TestTranslator_SkipMessageRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
 	if _, err := tr.translate(childSHA1); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
 	if tr.messageRewrites != 0 {
 		t.Errorf("expected no rewrites when disabled; got %d", tr.messageRewrites)
 	}
-	got, _ := object.GetCommit(dstRepo.Storer, tr.mapping[childSHA1])
+	got, err := object.GetCommit(dstRepo.Storer, tr.mapping[childSHA1])
+	if err != nil {
+		t.Fatalf("read translated child: %v", err)
+	}
 	if !strings.Contains(got.Message, parentHex) {
 		t.Errorf("rewrite-disabled run still mutated the message: %q", got.Message)
 	}
@@ -351,8 +355,8 @@ func TestTranslator_SkipMessageRewrite(t *testing.T) {
 // entry resolves to a blob whose content is the commit's original SHA1.
 func TestTranslator_WriteOriginNotes(t *testing.T) {
 	root := t.TempDir()
-	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
-	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+	srcRepo := initSHA1(t, filepath.Join(root, "src.git"))
+	dstRepo := initSHA256(t, filepath.Join(root, "dst.git"))
 
 	blob := writeBlob(t, srcRepo.Storer, []byte("hi\n"))
 	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
@@ -364,7 +368,7 @@ func TestTranslator_WriteOriginNotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
 	if _, err := tr.translate(c2); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -396,8 +400,15 @@ func TestTranslator_WriteOriginNotes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read note blob: %v", err)
 		}
-		reader, _ := blob.Reader()
-		buf, _ := io.ReadAll(reader)
+		reader, err := blob.Reader()
+		if err != nil {
+			t.Fatalf("open note blob: %v", err)
+		}
+		buf, err := io.ReadAll(reader)
+		if err != nil {
+			_ = reader.Close()
+			t.Fatalf("read note blob: %v", err)
+		}
 		_ = reader.Close()
 		got := strings.TrimSpace(string(buf))
 		var origSHA1 plumbing.Hash
@@ -417,8 +428,8 @@ func TestTranslator_WriteOriginNotes(t *testing.T) {
 // line, sorted by SHA1, one entry per translated object.
 func TestTranslator_WriteMappingFile(t *testing.T) {
 	root := t.TempDir()
-	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
-	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+	srcRepo := initSHA1(t, filepath.Join(root, "src.git"))
+	dstRepo := initSHA256(t, filepath.Join(root, "dst.git"))
 
 	blob := writeBlob(t, srcRepo.Storer, []byte("hi\n"))
 	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
@@ -429,7 +440,7 @@ func TestTranslator_WriteMappingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
 	if _, err := tr.translate(commit); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -487,9 +498,9 @@ func TestTranslator_WriteMappingFile(t *testing.T) {
 // pipeline takes.
 func TestTranslator_AmbiguousMessageRefWarning(t *testing.T) {
 	root := t.TempDir()
-	srcRepo, _ := git.PlainInit(filepath.Join(root, "src.git"), true)
-	dstRepo, _ := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
-	tr, _ := newTranslator(srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), true, nil)
+	srcRepo := initSHA1(t, filepath.Join(root, "src.git"))
+	dstRepo := initSHA256(t, filepath.Join(root, "dst.git"))
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), true, nil)
 
 	// Two real-looking SHA1 hashes that share the prefix "deadbee".
 	one := plumbing.NewHash("deadbee100000000000000000000000000000001")
@@ -542,9 +553,39 @@ func TestTranslator_UnresolvableSubmodule(t *testing.T) {
 
 // --- helpers ---
 
+// initSHA1 and initSHA256 are t.Fatalf-wrapping `git.PlainInit` shortcuts
+// used to keep test bodies focused on the translator logic rather than
+// error-handling boilerplate.
+func initSHA1(t *testing.T, path string) *git.Repository {
+	t.Helper()
+	r, err := git.PlainInit(path, true)
+	if err != nil {
+		t.Fatalf("init SHA1 source at %s: %v", path, err)
+	}
+	return r
+}
+
+func initSHA256(t *testing.T, path string) *git.Repository {
+	t.Helper()
+	r, err := git.PlainInit(path, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatalf("init SHA256 target at %s: %v", path, err)
+	}
+	return r
+}
+
+func mustTranslator(t *testing.T, src, dst gogitstorer.Storer, dir string, rewrite bool, reachable map[plumbing.Hash]plumbing.ObjectType) *translator {
+	t.Helper()
+	tr, err := newTranslator(src, dst, dir, rewrite, reachable)
+	if err != nil {
+		t.Fatalf("newTranslator: %v", err)
+	}
+	return tr
+}
+
 func writeBlob(t *testing.T, storer interface {
 	NewEncodedObject() plumbing.EncodedObject
-	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+	SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error)
 }, content []byte) plumbing.Hash {
 	t.Helper()
 	obj := storer.NewEncodedObject()
@@ -569,7 +610,7 @@ func writeBlob(t *testing.T, storer interface {
 
 func writeTree(t *testing.T, storer interface {
 	NewEncodedObject() plumbing.EncodedObject
-	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+	SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error)
 }, entries []object.TreeEntry) plumbing.Hash {
 	t.Helper()
 	tree := &object.Tree{Entries: entries}
@@ -580,7 +621,7 @@ func writeTree(t *testing.T, storer interface {
 
 func writeObject(t *testing.T, storer interface {
 	NewEncodedObject() plumbing.EncodedObject
-	SetEncodedObject(plumbing.EncodedObject) (plumbing.Hash, error)
+	SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, error)
 }, encode func(plumbing.EncodedObject) error) plumbing.Hash {
 	t.Helper()
 	obj := storer.NewEncodedObject()
@@ -697,7 +738,7 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 	}
 
 	// The converted repo must be self-consistent under SHA256.
-	fsckOut, err := exec.Command(gitBin, "-C", dstDir, "fsck", "--full").CombinedOutput()
+	fsckOut, err := exec.CommandContext(t.Context(), gitBin, "-C", dstDir, "fsck", "--full").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git fsck failed: %v\n%s", err, fsckOut)
 	}
@@ -810,7 +851,7 @@ func TestRun_GitHTTPBackend_Sign(t *testing.T) {
 
 	// Generate an ephemeral ed25519 SSH key for signing.
 	keyPath := filepath.Join(root, "signkey")
-	keygen := exec.Command(sshKeygenBin, "-q", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "test@example.com")
+	keygen := exec.CommandContext(t.Context(), sshKeygenBin, "-q", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "test@example.com")
 	if out, err := keygen.CombinedOutput(); err != nil {
 		t.Fatalf("ssh-keygen: %v\n%s", err, out)
 	}
@@ -874,7 +915,7 @@ func TestRun_GitHTTPBackend_Sign(t *testing.T) {
 
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -884,7 +925,7 @@ func mustGit(t *testing.T, dir string, args ...string) {
 
 func mustGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
