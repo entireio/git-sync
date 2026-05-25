@@ -777,6 +777,101 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 	}
 }
 
+// TestRun_GitHTTPBackend_Sign verifies the --sign path end-to-end. SSH
+// signing is used (not GPG) because it can be set up from scratch in the
+// test with just ssh-keygen, no agent required.
+func TestRun_GitHTTPBackend_Sign(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skipf("set %s=1 to run the convert-sha256 git-http-backend integration test", gitHTTPBackendEnv)
+	}
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git binary not available: %v", err)
+	}
+	sshKeygenBin, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		t.Skipf("ssh-keygen not available: %v", err)
+	}
+
+	root := t.TempDir()
+	srcBare := filepath.Join(root, "source.git")
+	worktree := filepath.Join(root, "work")
+	dstDir := filepath.Join(root, "target.git")
+
+	mustGit(t, root, "init", "--bare", srcBare)
+	mustGit(t, root, "init", "-b", "main", worktree)
+	mustGit(t, worktree, "config", "user.name", "convert-sha256 test")
+	mustGit(t, worktree, "config", "user.email", "test@example.com")
+	mustWrite(t, filepath.Join(worktree, "README"), "hello\n")
+	mustGit(t, worktree, "add", "README")
+	mustGit(t, worktree, "commit", "-m", "initial")
+	mustGit(t, worktree, "remote", "add", "origin", srcBare)
+	mustGit(t, worktree, "push", "origin", "HEAD:refs/heads/main")
+
+	// Generate an ephemeral ed25519 SSH key for signing.
+	keyPath := filepath.Join(root, "signkey")
+	keygen := exec.Command(sshKeygenBin, "-q", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "test@example.com")
+	if out, err := keygen.CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+
+	// Write a global gitconfig that points git at SSH signing using the
+	// ephemeral key, and route GIT_CONFIG_GLOBAL at it so signBranchTips'
+	// subprocess inherits the config.
+	globalCfg := filepath.Join(root, "global.gitconfig")
+	if err := os.WriteFile(globalCfg, []byte(fmt.Sprintf(`
+[user]
+	name = Conversion Test
+	email = test@example.com
+	signingkey = %s
+[gpg]
+	format = ssh
+`, keyPath)), 0o600); err != nil {
+		t.Fatalf("write global gitconfig: %v", err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", globalCfg)
+	// Disable any system gitconfig so the test isn't influenced by host
+	// signing config.
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+
+	srv := newCGIBackend(t, gitBin, root)
+	defer srv.Close()
+
+	res, err := Run(context.Background(), Request{
+		SourceURL: srv.URL + "/source.git",
+		TargetDir: dstDir,
+		Sign:      true,
+		Out:       io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("convert-sha256 run: %v", err)
+	}
+
+	wantTag := "refs/tags/converted/main"
+	if len(res.SignedTags) != 1 || res.SignedTags[0] != wantTag {
+		t.Errorf("SignedTags: got %v, want [%s]", res.SignedTags, wantTag)
+	}
+
+	// The tag exists in the target and is an annotated, signed tag (the
+	// body contains a SSH SIGNATURE block; cat-file -p shows the tag
+	// object including the signature).
+	tagShow := mustGitOutput(t, dstDir, "cat-file", "-p", wantTag)
+	if !strings.Contains(tagShow, "BEGIN SSH SIGNATURE") {
+		t.Errorf("expected signed tag to contain an SSH SIGNATURE block:\n%s", tagShow)
+	}
+	if !strings.Contains(tagShow, "SHA1 → SHA256 conversion attestation") {
+		t.Errorf("expected signed tag message to contain attestation text:\n%s", tagShow)
+	}
+
+	// Tag's target should be the branch tip (the SHA256 hash of the
+	// converted main).
+	mainTip := strings.TrimSpace(mustGitOutput(t, dstDir, "rev-parse", "refs/heads/main"))
+	tagTarget := strings.TrimSpace(mustGitOutput(t, dstDir, "rev-list", "-n", "1", wantTag))
+	if tagTarget != mainTip {
+		t.Errorf("signed tag target: got %s, want %s (main tip)", tagTarget, mainTip)
+	}
+}
+
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

@@ -66,10 +66,19 @@ type Request struct {
 	AllRefs            bool
 	ExcludeRefPrefixes []string
 
-	ProtocolMode      gitsync.ProtocolMode
-	Verbose           bool
-	Progress          bool
-	Check             bool
+	ProtocolMode gitsync.ProtocolMode
+	Verbose      bool
+	Progress     bool
+	Check        bool
+
+	// Sign, when true, runs `git tag -s converted/<branch> <tip>` for
+	// every converted branch after the conversion completes, attesting
+	// the entire reachable history of each branch via its tip's parent
+	// chain. SignKey is passed to git as `-u <SignKey>`; leave empty to
+	// use the repo's default signing identity.
+	Sign    bool
+	SignKey string
+
 	KeepSourceObjects bool
 
 	// MappingFile, when non-empty, is a path to which a TSV of every
@@ -110,6 +119,7 @@ type Result struct {
 	AmbiguousMessageRefs []string `json:"ambiguousMessageRefs,omitempty"`
 	OriginNotesRef       string   `json:"originNotesRef,omitempty"`
 	MappingFile          string   `json:"mappingFile,omitempty"`
+	SignedTags           []string `json:"signedTags,omitempty"`
 	Checks               []Check  `json:"checks,omitempty"`
 	TempDir              string   `json:"tempDir,omitempty"`
 }
@@ -158,6 +168,21 @@ func (r Result) Lines() []string {
 	}
 	if r.MappingFile != "" {
 		lines = append(lines, fmt.Sprintf("mapping written to: %s", r.MappingFile))
+	}
+	if n := len(r.SignedTags); n > 0 {
+		preview := r.SignedTags
+		const max = 5
+		extra := 0
+		if len(preview) > max {
+			extra = len(preview) - max
+			preview = preview[:max]
+		}
+		line := fmt.Sprintf("signed %d branch attestation tag(s): %s",
+			n, strings.Join(preview, ", "))
+		if extra > 0 {
+			line += fmt.Sprintf(", ... (%d more; full list in --json)", extra)
+		}
+		lines = append(lines, line)
 	}
 	if r.TempDir != "" {
 		lines = append(lines, fmt.Sprintf("kept source objects: %s", r.TempDir))
@@ -342,6 +367,14 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.MappingFile = req.MappingFile
 	}
 
+	if req.Sign {
+		signed, err := signBranchTips(out, req.TargetDir, req.SignKey, req.SourceURL, desired)
+		if err != nil {
+			return res, fmt.Errorf("sign: %w", err)
+		}
+		res.SignedTags = signed
+	}
+
 	if req.KeepSourceObjects {
 		cleanupTemp = false
 		res.TempDir = tempDir
@@ -365,6 +398,62 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	return res, nil
+}
+
+// signBranchTips runs `git tag -s converted/<branch> <branch>` for every
+// branch in the desired set. The converter's signing identity (whatever
+// `user.signingkey` / `gpg.format` is set to in the target repo, or the
+// caller-supplied signKey) attests each branch's full reachable history
+// via the parent chain encoded in the tip commit's bytes.
+//
+// stdin/stderr are inherited so gpg/ssh-agent prompts work
+// interactively. A failure short-circuits the run; tags signed before
+// the failure stay in the target repo.
+func signBranchTips(out io.Writer, targetDir, signKey, sourceURL string, desired map[plumbing.ReferenceName]planner.DesiredRef) ([]string, error) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		return nil, fmt.Errorf("git binary required to sign: %w", err)
+	}
+	// Iterate in a deterministic order so re-runs over the same source
+	// produce the same sequence of tags (modulo the signature payload,
+	// which carries the signer's timestamp).
+	branchNames := make([]string, 0, len(desired))
+	for name := range desired {
+		if name.IsBranch() {
+			branchNames = append(branchNames, string(name))
+		}
+	}
+	sort.Strings(branchNames)
+
+	var signed []string
+	for _, refName := range branchNames {
+		shortName := plumbing.ReferenceName(refName).Short()
+		tagName := strings.TrimPrefix(attestationTagPrefix, "refs/tags/") + shortName
+		fmt.Fprintf(out, "signing %s ...\n", "refs/tags/"+tagName)
+
+		msg := fmt.Sprintf(
+			"SHA1 → SHA256 conversion attestation for %s.\n\n"+
+				"Source: %s\nProduced by git-sync convert-sha256.\n",
+			refName, sourceURL)
+		args := []string{"-C", targetDir, "tag", "-s", "-m", msg}
+		if signKey != "" {
+			args = append(args, "-u", signKey)
+		}
+		args = append(args, tagName, refName)
+
+		cmd := exec.Command(gitBin, args...)
+		// Inherit stdio so gpg/ssh-agent passphrase prompts work. We
+		// intentionally do not capture stdout/stderr — the user needs
+		// to see them when authenticating.
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stderr // git tag -s is usually quiet on success
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return signed, fmt.Errorf("git tag -s %s: %w", tagName, err)
+		}
+		signed = append(signed, "refs/tags/"+tagName)
+	}
+	return signed, nil
 }
 
 // runChecks performs lightweight verification of the converted repo.
@@ -400,7 +489,11 @@ func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check
 		}
 	}
 
-	// 3. Every written ref resolves to an existing object.
+	// 3. Every written ref resolves to an existing object. Skip refs we
+	// add as side outputs (the origin-notes ref and any
+	// refs/tags/converted/* attestation tags from --sign), since they
+	// are accounted for in their own Result fields and would otherwise
+	// make the displayed fraction misleading.
 	resolved := 0
 	missing := ""
 	refs, err := repo.References()
@@ -411,13 +504,16 @@ func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check
 			if r.Type() != plumbing.HashReference {
 				return nil
 			}
-			if r.Name() == plumbing.ReferenceName(originNotesRef) {
-				// Counted separately below; not in the refsExpected total.
+			name := r.Name()
+			if name == plumbing.ReferenceName(originNotesRef) {
+				return nil
+			}
+			if strings.HasPrefix(string(name), attestationTagPrefix) {
 				return nil
 			}
 			if _, err := repo.Storer.EncodedObject(plumbing.AnyObject, r.Hash()); err != nil {
 				if missing == "" {
-					missing = fmt.Sprintf("%s → %s: %v", r.Name(), r.Hash(), err)
+					missing = fmt.Sprintf("%s → %s: %v", name, r.Hash(), err)
 				}
 				return nil
 			}
@@ -452,7 +548,10 @@ func runChecks(targetDir string, repo *git.Repository, refsExpected int) []Check
 	return checks
 }
 
-const originNotesRef = "refs/notes/sha1-origin"
+const (
+	originNotesRef       = "refs/notes/sha1-origin"
+	attestationTagPrefix = "refs/tags/converted/"
+)
 
 // ensureEmptyTarget refuses to init into a non-empty directory so the user
 // doesn't quietly accumulate objects into an existing repo.

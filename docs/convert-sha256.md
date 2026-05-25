@@ -128,6 +128,41 @@ Useful for bulk rewriting external systems: feed the file to a script
 that walks Jira tickets, PR bodies, deploy manifests, or any other
 system that holds frozen SHA1 references.
 
+### Branch-tip attestation tags (opt in via `--sign`)
+
+`--sign` shells out to `git tag -s converted/<branch> <tip>` for every
+converted branch after the conversion completes. Each resulting
+signed annotated tag is a cryptographic attestation by the converter
+that the entire reachable history of that branch — every parent, tree,
+and blob — is what the converter saw at conversion time. Anyone can
+verify the chain afterwards with `git verify-tag refs/tags/converted/<branch>`.
+
+The mechanism is the standard one: parent hashes are part of each
+commit's bytes, so the tip's hash transitively commits to the whole
+history. Signing the tip attests every ancestor.
+
+Important nuance: the signature is by the *converter*, not by the
+original authors (whose own signatures are necessarily lost — see
+"GPG signatures are stripped" under Sharp Edges). The attestation
+chain becomes "*X attests this is the conversion they produced*"
+rather than "*the original authors wrote this commit*". For internal
+mirrors or single-identity repos that's a strict improvement over
+unsigned-everywhere; for broad public repos it is weaker than the
+pre-conversion chain.
+
+Signing uses the target repo's git signing config (`user.signingkey`,
+`gpg.format`) by default — same as `git commit -S` or a normal
+`git tag -s`. Override with `--sign-key <id>`, which is passed to
+`git tag -s -u <id>`. SSH signing (`gpg.format = ssh`) and OpenPGP
+both work because we shell out to `git`.
+
+Requires the `git` binary on `PATH`. Signing failures (no key
+configured, gpg/ssh-agent unavailable, etc.) abort the run after the
+conversion has already completed — the target repo is left in a
+valid converted state, just without the attestation tags. Re-run
+`git tag -s converted/<branch> <tip>` manually once the signing
+identity is set up.
+
 ## Flags
 
 ```
@@ -148,6 +183,8 @@ system that holds frozen SHA1 references.
 --no-rewrite-messages              skip inline hash rewrites in messages
 --no-origin-notes                  skip refs/notes/sha1-origin
 --check                            verify the output (config, HEAD, refs, git fsck)
+--sign                             sign each branch tip via `git tag -s converted/<branch>`
+--sign-key                         signing key id passed to `git tag -s -u <key>`
 --keep-source-objects              leave the temp SHA1 store on disk
 --progress                         live per-phase object counts (TTY only)
 --json                             machine-readable output
