@@ -147,7 +147,10 @@ func (r Result) Lines() []string {
 		fmt.Sprintf("refs written: %d", r.RefsConverted),
 	}
 	if r.SignaturesStripped > 0 {
-		lines = append(lines, fmt.Sprintf("warning: stripped %d GPG signature(s); they no longer match the rewritten object content", r.SignaturesStripped))
+		// Mixes commit/tag signatures (GPG/SSH/X.509) and embedded
+		// mergetag headers — each counts as one signed artifact whose
+		// signature became invalid post-rewrite.
+		lines = append(lines, fmt.Sprintf("warning: stripped %d signature(s) / mergetag header(s); they no longer match the rewritten object content", r.SignaturesStripped))
 	}
 	if r.MessageRewrites > 0 {
 		lines = append(lines, fmt.Sprintf("rewrote %d SHA1 hash reference(s) in commit/tag messages", r.MessageRewrites))
@@ -445,9 +448,13 @@ func signBranchTips(ctx context.Context, out io.Writer, targetDir, signKey, sour
 		args = append(args, tagName, refName)
 
 		cmd := exec.CommandContext(ctx, gitBin, args...)
-		// Inherit stdio so gpg/ssh-agent passphrase prompts work. We
-		// intentionally do not capture stdout/stderr — the user needs
-		// to see them when authenticating.
+		// Deliberate departure from the req.Out plumbing the rest of
+		// Run uses: gpg/ssh-agent and pinentry need a real TTY for
+		// passphrase prompts, so we inherit the parent's stdio
+		// directly. The consequence is that callers passing
+		// req.Out = io.Discard (e.g. tests) still see subprocess
+		// output on real stderr — that's the cost of working
+		// authentication.
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stderr // git tag -s is usually quiet on success
 		cmd.Stderr = os.Stderr
@@ -993,11 +1000,12 @@ func (t *translator) translateCommit(sha1 plumbing.Hash, src plumbing.EncodedObj
 			t.messageRewrites += n
 		}
 	}
-	if c.Signature != "" {
+	// A commit can carry both Signature (SHA1 form, "gpgsig") and
+	// SignatureSHA256 ("gpgsig-sha256") in a transitional dual-hash
+	// repo, but they encode the same logical signature. Strip both
+	// fields if present, count once.
+	if c.Signature != "" || c.SignatureSHA256 != "" {
 		c.Signature = ""
-		t.signaturesStripped++
-	}
-	if c.SignatureSHA256 != "" {
 		c.SignatureSHA256 = ""
 		t.signaturesStripped++
 	}
@@ -1053,11 +1061,10 @@ func (t *translator) translateTag(sha1 plumbing.Hash, src plumbing.EncodedObject
 			t.messageRewrites += n
 		}
 	}
-	if tag.Signature != "" {
+	// Same as commits: Signature and SignatureSHA256 are two encodings
+	// of the same logical signature in a transitional dual-hash repo.
+	if tag.Signature != "" || tag.SignatureSHA256 != "" {
 		tag.Signature = ""
-		t.signaturesStripped++
-	}
-	if tag.SignatureSHA256 != "" {
 		tag.SignatureSHA256 = ""
 		t.signaturesStripped++
 	}
@@ -1074,10 +1081,13 @@ func (t *translator) translateTag(sha1 plumbing.Hash, src plumbing.EncodedObject
 	return newHash, nil
 }
 
-// encodeBody runs an object's go-git Encode method into a SHA1-hasher
-// MemoryObject (the hasher we use to capture bytes is irrelevant; we only
-// read the body back out) and returns just the payload bytes — without the
+// encodeBody runs an object's go-git Encode method into a scratch
+// MemoryObject and returns just the payload bytes — without the
 // "<type> <size>\x00" header. writeLoose adds the SHA256-correct header.
+//
+// The format argument to NewMemoryObject is required by the constructor
+// but unused here: we never ask the scratch object for its hash, only
+// for its byte stream.
 func encodeBody(typ plumbing.ObjectType, encode func(plumbing.EncodedObject) error) ([]byte, error) {
 	scratch := plumbing.NewMemoryObject(plumbing.FromObjectFormat(formatcfg.SHA1))
 	scratch.SetType(typ)
@@ -1125,7 +1135,13 @@ func (t *translator) writeLoose(typ plumbing.ObjectType, body []byte) (plumbing.
 	}
 
 	var buf bytes.Buffer
-	zw := zlib.NewWriter(&buf)
+	// Level 1 matches git's core.looseCompression default. Loose objects
+	// are short-lived (gc rolls them into packs), so optimizing for write
+	// speed over size is the standard trade-off.
+	zw, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("zlib writer: %w", err)
+	}
 	if _, err := zw.Write(header); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("zlib write header: %w", err)
 	}
@@ -1285,6 +1301,20 @@ func (t *translator) extractMessageReferences(msg string) []plumbing.Hash {
 	return out
 }
 
+// notesCommitTime returns the committer/author timestamp for the
+// synthetic notes wrapper commit. Reads SOURCE_DATE_EPOCH (the
+// reproducible-builds convention) when set, falling back to the Unix
+// epoch so two runs over identical source state always produce the
+// same notes-ref hash.
+func notesCommitTime() time.Time {
+	if raw := os.Getenv("SOURCE_DATE_EPOCH"); raw != "" {
+		if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return time.Unix(secs, 0).UTC()
+		}
+	}
+	return time.Unix(0, 0).UTC()
+}
+
 // writeOriginNotes writes a `git notes` ref to dst that records each
 // translated commit's original SHA1, keyed by its new SHA256. Standard
 // git tooling (`git log --notes=<ref>`, `git notes --ref=<ref> show
@@ -1341,8 +1371,12 @@ func (t *translator) writeOriginNotes(refName string) (string, error) {
 		return "", fmt.Errorf("store notes tree: %w", err)
 	}
 
-	now := time.Now().UTC()
-	sig := object.Signature{Name: "git-sync", Email: "noreply@entire.io", When: now}
+	// Honor SOURCE_DATE_EPOCH for reproducible builds; otherwise pin to
+	// the Unix epoch so the notes-ref hash is identical across runs over
+	// the same source state. The notes commit is bookkeeping — its
+	// timestamp carries no meaningful information about when the
+	// underlying SHA1 history was created.
+	sig := object.Signature{Name: "git-sync", Email: "noreply@entire.io", When: notesCommitTime()}
 	commit := &object.Commit{
 		Author:    sig,
 		Committer: sig,
