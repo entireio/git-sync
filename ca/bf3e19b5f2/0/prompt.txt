@@ -1,0 +1,11 @@
+### Style / nits
+
+8. *signBranchTips writes to os.Stderr directly* (cmd.Stdout = os.Stderr line ~596) rather than req.Out (the upper layer threads req.Out everywhere else for status lines). Tests pass Out: io.Discard to silence the run, but signBranchTips's subprocess stderr will still leak. Probably intentional (gpg/ssh-agent prompts must be visible), but worth a comment that this is deliberate.
+
+9. *SignaturesStripped counts double for commits with both Signature and SignatureSHA256* — and also counts each mergetag header. The summary line says "GPG signature(s)" which is a slight overcount/mislabel. Cosmetic.
+
+10. *writeOriginNotes's wrapper commit uses time.Now()* for the committer timestamp, which is why the notes-ref hash is non-deterministic across runs. Documented under "One-off, not incremental" — fine, but consider a fixed/zero timestamp (or SOURCE_DATE_EPOCH) for reproducibility.
+
+11. *writeLoose uses default zlib compression*; git uses level 1 for loose objects historically. Larger files but readable. Cosmetic.
+
+12. *encodeBody doc* (sha256convert.go:1179-1184) says "the hasher we use to capture bytes is irrelevant; we only read the body back out" — the plumbing.FromObjectFormat(formatcfg.SHA1) argument is just because NewMemoryObject requires some format. Maybe just // hasher unused — NewMemoryObject requires a format arg. to make this less mystifying on a re-read.
