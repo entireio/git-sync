@@ -27,7 +27,9 @@ All branches and tags on the source are always converted — partial scope
 risks stranding cross-branch references in commit messages. Pass
 --all-refs to also include refs/notes/*, refs/pull/*, and other custom
 namespaces; pass --exclude-ref-prefix to subtract specific namespaces
-from --all-refs.
+from --all-refs. Exclude prefixes that would drop any branch or tag
+(e.g. refs/heads/feature/, refs/tags/, refs/) are rejected at run time
+to preserve the always-convert invariant.
 
 The conversion is destructive in two ways the caller should be aware of:
 GPG signatures on commits and tags are dropped (they sign over the

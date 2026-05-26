@@ -206,6 +206,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if req.TargetDir == "" {
 		return Result{}, errors.New("convert-sha256 requires a target directory")
 	}
+	// Enforce the documented invariant: every branch and every tag is
+	// always converted. Otherwise the partial set could strand
+	// cross-branch hash references in commit and tag messages, which
+	// the message-rewrite pass is built to keep intact.
+	if bad := protectedExcludePrefixes(req.ExcludeRefPrefixes); len(bad) > 0 {
+		return Result{}, fmt.Errorf("convert-sha256 refuses --exclude-ref-prefix values that would drop branches or tags: %s (only namespaces outside refs/heads/ and refs/tags/ may be excluded)", strings.Join(bad, ", "))
+	}
 	out := req.Out
 	if out == nil {
 		out = os.Stderr
@@ -596,6 +603,39 @@ const (
 	originNotesRef       = "refs/notes/sha1-origin"
 	attestationTagPrefix = "refs/tags/converted/"
 )
+
+// protectedExcludePrefixes returns the subset of prefixes that, under
+// planner.IsRefExcluded's string-prefix semantics, would knock out at
+// least one branch or tag. A prefix matches a branch if either side
+// is a string-prefix of the other against "refs/heads/" (and likewise
+// for "refs/tags/"). That covers:
+//
+//   - bare "" (excludes every ref)
+//   - "refs/" or "refs/h", "refs/heads/" (whole branch namespace)
+//   - "refs/heads/feature/" (some branches)
+//   - "refs/tags/" and any narrower suffix
+//
+// Returned in input order, with duplicates removed, so the error
+// message shows the user exactly which flag values to drop.
+func protectedExcludePrefixes(prefixes []string) []string {
+	protected := []string{"refs/heads/", "refs/tags/"}
+	var bad []string
+	seen := map[string]struct{}{}
+	for _, raw := range prefixes {
+		p := strings.TrimSpace(raw)
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		for _, prot := range protected {
+			if strings.HasPrefix(p, prot) || strings.HasPrefix(prot, p) {
+				bad = append(bad, raw)
+				seen[p] = struct{}{}
+				break
+			}
+		}
+	}
+	return bad
+}
 
 // ensureEmptyTarget refuses to init into a non-empty directory so the user
 // doesn't quietly accumulate objects into an existing repo.

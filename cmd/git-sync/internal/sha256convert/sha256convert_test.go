@@ -971,6 +971,64 @@ func newCGIBackend(t *testing.T, gitBin, root string) *cgiBackend {
 // against a real repo.
 var _ = (*filesystem.Storage)(nil)
 
+func TestProtectedExcludePrefixes(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefixes []string
+		want     []string
+	}{
+		{"nil input", nil, nil},
+		{"single benign namespace", []string{"refs/pull/"}, nil},
+		{"multiple benign namespaces", []string{"refs/pull/", "refs/notes/", "refs/changes/"}, nil},
+		{"whole branches namespace banned", []string{"refs/heads/"}, []string{"refs/heads/"}},
+		{"whole tags namespace banned", []string{"refs/tags/"}, []string{"refs/tags/"}},
+		{"branch sub-namespace banned", []string{"refs/heads/feature/"}, []string{"refs/heads/feature/"}},
+		{"tag sub-namespace banned", []string{"refs/tags/v1/"}, []string{"refs/tags/v1/"}},
+		{"refs/ banned because it would drop everything", []string{"refs/"}, []string{"refs/"}},
+		{"empty string banned (would drop every ref)", []string{""}, []string{""}},
+		{"partial refs/h banned (covers refs/heads/)", []string{"refs/h"}, []string{"refs/h"}},
+		{"mixed input reports only the bad ones, in order", []string{"refs/pull/", "refs/heads/", "refs/notes/", "refs/tags/v1.0"}, []string{"refs/heads/", "refs/tags/v1.0"}},
+		{"duplicates collapsed", []string{"refs/heads/", "refs/heads/"}, []string{"refs/heads/"}},
+		{"trims whitespace before matching", []string{"  refs/heads/  "}, []string{"  refs/heads/  "}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := protectedExcludePrefixes(tt.prefixes)
+			if len(got) != len(tt.want) {
+				t.Fatalf("protectedExcludePrefixes(%v) = %v, want %v", tt.prefixes, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("protectedExcludePrefixes(%v)[%d] = %q, want %q", tt.prefixes, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRun_RejectsExcludePrefixesThatDropBranchesOrTags(t *testing.T) {
+	// We never reach the network here — the validation fires before
+	// any I/O — so a non-empty target dir is the only thing the early
+	// path needs.
+	dst := t.TempDir()
+	req := Request{
+		SourceURL:          "http://example.invalid/repo.git",
+		TargetDir:          filepath.Join(dst, "out"),
+		ExcludeRefPrefixes: []string{"refs/pull/", "refs/heads/feature/"},
+	}
+	_, err := Run(t.Context(), req)
+	if err == nil {
+		t.Fatalf("Run accepted --exclude-ref-prefix refs/heads/feature/, expected refusal")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "refs/heads/feature/") {
+		t.Fatalf("error did not name the offending prefix: %v", err)
+	}
+	if !strings.Contains(msg, "exclude-ref-prefix") {
+		t.Fatalf("error did not mention the flag: %v", err)
+	}
+}
+
 func TestPickHEAD(t *testing.T) {
 	branch := func(name string) planner.DesiredRef {
 		ref := plumbing.ReferenceName("refs/heads/" + name)
