@@ -324,15 +324,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("write target refs: %w", err)
 	}
 
-	// Point HEAD at the source's symbolic HEAD if it landed in the
-	// converted ref set. PlainInit defaults HEAD to refs/heads/master,
-	// which often doesn't exist (e.g. repos using "main" as the default).
-	if refService.HeadTarget != "" {
-		if _, ok := desired[refService.HeadTarget]; ok {
-			head := plumbing.NewSymbolicReference(plumbing.HEAD, refService.HeadTarget)
-			if err := dstRepo.Storer.SetReference(head); err != nil {
-				return Result{}, fmt.Errorf("set HEAD: %w", err)
-			}
+	// Point HEAD at a ref that actually exists in the target. PlainInit
+	// defaults HEAD to refs/heads/master, which often doesn't exist
+	// (e.g. repos using "main"), and would then fail the --check HEAD
+	// step. See pickHEAD for the selection order.
+	if headRef := pickHEAD(refService.HeadTarget, desired); headRef != "" {
+		if err := dstRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, headRef)); err != nil {
+			return Result{}, fmt.Errorf("set HEAD: %w", err)
 		}
 	}
 
@@ -1451,6 +1449,48 @@ func (t *translator) writeMappingFile(path string) error {
 		return fmt.Errorf("flush mapping file: %w", err)
 	}
 	return nil
+}
+
+// pickHEAD chooses which target-side ref the bare repo's HEAD should
+// symlink to. It returns "" when no suitable branch exists (e.g. a
+// tags-only conversion), in which case the caller leaves HEAD at the
+// PlainInit default.
+//
+// Selection order:
+//  1. The source's advertised HEAD, if it landed in the converted set.
+//     Resolved via the desired entry's TargetRef so a user-supplied ref
+//     mapping is honored.
+//  2. refs/heads/main, then refs/heads/master, if either is present in
+//     the converted target refs. Some HTTP v1 servers do not advertise
+//     HEAD, so we pattern-match on conventional defaults.
+//  3. The lexicographically first refs/heads/* in the target set, for
+//     a deterministic fallback when neither convention is present.
+func pickHEAD(advertised plumbing.ReferenceName, desired map[plumbing.ReferenceName]planner.DesiredRef) plumbing.ReferenceName {
+	if advertised != "" {
+		if d, ok := desired[advertised]; ok {
+			return d.TargetRef
+		}
+	}
+	branches := make(map[plumbing.ReferenceName]struct{}, len(desired))
+	for _, d := range desired {
+		if d.TargetRef.IsBranch() {
+			branches[d.TargetRef] = struct{}{}
+		}
+	}
+	for _, candidate := range []plumbing.ReferenceName{"refs/heads/main", "refs/heads/master"} {
+		if _, ok := branches[candidate]; ok {
+			return candidate
+		}
+	}
+	if len(branches) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(branches))
+	for name := range branches {
+		names = append(names, string(name))
+	}
+	sort.Strings(names)
+	return plumbing.ReferenceName(names[0])
 }
 
 func writeRefs(

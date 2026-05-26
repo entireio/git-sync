@@ -25,6 +25,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	gogitstorer "github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/filesystem"
+
+	"entire.io/entire/git-sync/internal/planner"
 )
 
 // TestTranslator builds a small SHA1 source repo with blobs, trees, commits,
@@ -968,3 +970,100 @@ func newCGIBackend(t *testing.T, gitBin, root string) *cgiBackend {
 // will start failing in this package's tests rather than only at runtime
 // against a real repo.
 var _ = (*filesystem.Storage)(nil)
+
+func TestPickHEAD(t *testing.T) {
+	branch := func(name string) planner.DesiredRef {
+		ref := plumbing.ReferenceName("refs/heads/" + name)
+		return planner.DesiredRef{Kind: planner.RefKindBranch, SourceRef: ref, TargetRef: ref}
+	}
+	tag := func(name string) planner.DesiredRef {
+		ref := plumbing.ReferenceName("refs/tags/" + name)
+		return planner.DesiredRef{Kind: planner.RefKindTag, SourceRef: ref, TargetRef: ref}
+	}
+	tests := []struct {
+		name       string
+		advertised plumbing.ReferenceName
+		desired    map[plumbing.ReferenceName]planner.DesiredRef
+		want       plumbing.ReferenceName
+	}{
+		{
+			name:       "advertised HEAD wins when present in desired",
+			advertised: "refs/heads/develop",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/main":    branch("main"),
+				"refs/heads/develop": branch("develop"),
+			},
+			want: "refs/heads/develop",
+		},
+		{
+			name:       "advertised HEAD respects ref mapping (target side)",
+			advertised: "refs/heads/source-name",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/source-name": {
+					Kind:      planner.RefKindBranch,
+					SourceRef: "refs/heads/source-name",
+					TargetRef: "refs/heads/target-name",
+				},
+			},
+			want: "refs/heads/target-name",
+		},
+		{
+			name:       "falls back to main when advertised HEAD missing",
+			advertised: "",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/main":   branch("main"),
+				"refs/heads/master": branch("master"),
+			},
+			want: "refs/heads/main",
+		},
+		{
+			name:       "falls back to master when no main",
+			advertised: "",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/master":  branch("master"),
+				"refs/heads/feature": branch("feature"),
+			},
+			want: "refs/heads/master",
+		},
+		{
+			name:       "falls back to first sorted branch when neither main nor master",
+			advertised: "",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/zeta":  branch("zeta"),
+				"refs/heads/alpha": branch("alpha"),
+				"refs/heads/beta":  branch("beta"),
+			},
+			want: "refs/heads/alpha",
+		},
+		{
+			name:       "advertised HEAD pointing outside desired falls back to convention",
+			advertised: "refs/heads/dropped",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/main": branch("main"),
+			},
+			want: "refs/heads/main",
+		},
+		{
+			name:       "tags-only conversion returns empty so HEAD stays at PlainInit default",
+			advertised: "",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/tags/v1.0": tag("v1.0"),
+			},
+			want: "",
+		},
+		{
+			name:       "empty desired returns empty",
+			advertised: "",
+			desired:    map[plumbing.ReferenceName]planner.DesiredRef{},
+			want:       "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pickHEAD(tt.advertised, tt.desired)
+			if got != tt.want {
+				t.Fatalf("pickHEAD = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
