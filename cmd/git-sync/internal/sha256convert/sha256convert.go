@@ -127,10 +127,17 @@ type Result struct {
 
 // Check is one named verification step from --check, with the result
 // and a short detail string suitable for logging/JSON output.
+//
+// Skipped distinguishes "this check passed" from "this check did not
+// run" — e.g. fsck when git is not on PATH, or HEAD on a tags-only
+// conversion. Skipped implies OK so callers that only branch on OK
+// still treat it as non-fatal; callers that need a stricter signal
+// (CI gating, audit logs) should branch on Skipped first.
 type Check struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail,omitempty"`
+	Name    string `json:"name"`
+	OK      bool   `json:"ok"`
+	Skipped bool   `json:"skipped,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // previewMax caps how many items from a potentially-long list (ambiguous
@@ -234,6 +241,21 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}()
 
+	// cleanupTarget fires when set, wiping the SHA256 bare repo we
+	// initialize below. ensureEmptyTarget already verified the dir was
+	// empty going in, so a defensive RemoveAll on failure only ever
+	// removes content this run created. Without it, any error after
+	// PlainInit leaves config/objects/refs/HEAD behind, and the next
+	// retry hits ensureEmptyTarget's "not empty" refusal with no
+	// indication of how to recover. Suppressed by --keep-source-objects
+	// so users can inspect partial state.
+	cleanupTarget := false
+	defer func() {
+		if cleanupTarget && !req.KeepSourceObjects {
+			_ = os.RemoveAll(req.TargetDir)
+		}
+	}()
+
 	// Build the result struct early so error paths can surface
 	// what little ran successfully. In particular, --keep-source-objects
 	// exists to debug failures, so cleanupTemp must flip and TempDir
@@ -310,7 +332,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			return fmt.Sprintf("  discovered %d objects", c.Load())
 		})
 	}
-	reachable, err := discoverReachable(srcRepo.Storer, rootSHA1s, discCounter)
+	reachable, err := discoverReachable(ctx, srcRepo.Storer, rootSHA1s, discCounter)
 	if stopDisc != nil {
 		stopDisc()
 	}
@@ -323,6 +345,10 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return res, fmt.Errorf("init SHA256 target at %s: %w", req.TargetDir, err)
 	}
+	// Anything that fails past here would leave the target dir
+	// non-empty (config + HEAD + maybe objects/refs), blocking a
+	// retry on ensureEmptyTarget; arm the deferred cleanup now.
+	cleanupTarget = true
 
 	tr, err := newTranslator(ctx, srcRepo.Storer, dstRepo.Storer, req.TargetDir, !req.SkipMessageRewrite, reachable)
 	if err != nil {
@@ -431,18 +457,28 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.Checks = runChecks(ctx, req.TargetDir, dstRepo, refsWritten, sideOutputs, hasBranches)
 		for _, c := range res.Checks {
 			mark := "✓"
-			if !c.OK {
+			switch {
+			case !c.OK:
 				mark = "✗"
+			case c.Skipped:
+				mark = "○"
 			}
 			fmt.Fprintf(out, "  %s %s: %s\n", mark, c.Name, c.Detail)
 		}
 		for _, c := range res.Checks {
 			if !c.OK {
+				// The conversion finished; the failure is a
+				// post-hoc verification miss. Keep the target
+				// on disk so the user can inspect exactly what
+				// failed the check.
+				cleanupTarget = false
 				return res, fmt.Errorf("check %q failed: %s", c.Name, c.Detail)
 			}
 		}
 	}
 
+	// Run completed; keep the target dir.
+	cleanupTarget = false
 	return res, nil
 }
 
@@ -549,7 +585,7 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 	// HEAD to symlink to.
 	switch {
 	case !hasBranches:
-		checks = append(checks, Check{Name: "HEAD", OK: true, Detail: "skipped (tags-only conversion; no branch to point at)"})
+		checks = append(checks, Check{Name: "HEAD", OK: true, Skipped: true, Detail: "tags-only conversion; no branch to point at"})
 	default:
 		head, err := repo.Reference(plumbing.HEAD, true)
 		switch {
@@ -609,7 +645,7 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 	// 4. git fsck --full (if git is on PATH).
 	gitBin, err := exec.LookPath("git")
 	if err != nil {
-		checks = append(checks, Check{Name: "git fsck --full", OK: true, Detail: "skipped (git not in PATH)"})
+		checks = append(checks, Check{Name: "git fsck --full", OK: true, Skipped: true, Detail: "git not in PATH"})
 		return checks
 	}
 	cmd := exec.CommandContext(ctx, gitBin, "-C", targetDir, "fsck", "--full")
@@ -877,20 +913,18 @@ func newTranslator(ctx context.Context, src, dst storer.Storer, targetDir string
 // entries, commit tree+parent links, and tag targets) and returns a
 // (SHA1 → object type) map covering the full in-scope set.
 //
-// Submodule gitlinks: a tree entry with mode 160000 points at a commit
-// in another repository, and a SHA1 hash cannot be embedded in a
-// SHA256 tree. If the referenced commit happens to live in this
-// source store (rare; vendored modules), it is recursively visited
-// like any other commit. Otherwise discovery returns an error here,
-// before the target bare repo is initialized — failing fast keeps
-// half-converted state off disk.
+// Submodule gitlinks: any submodule entry (mode 160000) fails the run
+// here, before the target bare repo is initialized — failing fast
+// keeps half-converted state off disk. Rewriting the gitlink to SHA256
+// would produce a tree the upstream .gitmodules repo can never
+// resolve, since it advertises only SHA1.
 //
 // Message-reference edges are not part of this pass; those are added
 // during translation, where the partial mapping is updated as we go.
 //
 // If progress is non-nil, it is incremented once per object visited.
 // The --progress ticker samples this counter from another goroutine.
-func discoverReachable(src storer.Storer, roots []plumbing.Hash, progress *atomic.Int64) (map[plumbing.Hash]plumbing.ObjectType, error) {
+func discoverReachable(ctx context.Context, src storer.Storer, roots []plumbing.Hash, progress *atomic.Int64) (map[plumbing.Hash]plumbing.ObjectType, error) {
 	srcFS, ok := src.(*filesystem.Storage)
 	if !ok {
 		return nil, fmt.Errorf("source storage is not filesystem-backed (%T)", src)
@@ -898,6 +932,13 @@ func discoverReachable(src storer.Storer, roots []plumbing.Hash, progress *atomi
 	reachable := make(map[plumbing.Hash]plumbing.ObjectType)
 	var visit func(plumbing.Hash) error
 	visit = func(sha1 plumbing.Hash) error {
+		// Per-object cancellation check. Discovery on a kernel-scale
+		// repo runs for several minutes before translate() takes over,
+		// so without this Ctrl-C would not interrupt the run until
+		// the discovery phase finished on its own.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("discover %s: %w", sha1, err)
+		}
 		if _, seen := reachable[sha1]; seen {
 			return nil
 		}
@@ -1213,6 +1254,16 @@ func encodeBody(typ plumbing.ObjectType, encode func(plumbing.EncodedObject) err
 // writeLoose writes a single object as a SHA256-named loose object under
 // objects/<aa>/<rest>. Bypasses go-git's objfile.Writer, which would hash
 // with SHA1. Atomic via tempfile+rename, idempotent on duplicate hashes.
+//
+// Durability is not guaranteed against power loss: we do not fsync the
+// loose file or its parent directory before returning. The Stat-by-name
+// idempotency shortcut would then accept a torn file from a previous
+// crashed run as already-written. That trade-off is intentional —
+// convert-sha256 is a single-shot bulk operation (not an incremental
+// sync), it processes millions of objects on kernel-scale repos where
+// per-object fsync would dominate runtime, and Run wipes the target
+// directory on error (see the cleanupTarget defer in Run) so the only
+// supported recovery is re-running from clean state.
 func (t *translator) writeLoose(typ plumbing.ObjectType, body []byte) (plumbing.Hash, error) {
 	h := sha256.New()
 	header := append(typ.Bytes(), ' ')
@@ -1277,12 +1328,15 @@ func (t *translator) writeLoose(typ plumbing.ObjectType, body []byte) (plumbing.
 }
 
 // hashPattern matches hex runs that could be a git object hash. Git's
-// default abbreviation is 7 chars; 40 is a full SHA1. We only rewrite a
+// default abbreviation is 7 chars; 40 is a full SHA1. Case-insensitive
+// so messages that paste an uppercase or mixed-case hash (e.g. from
+// some commit graph viewers) still resolve — the lookup canonicalizes
+// to lowercase before checking the reachable set. We only rewrite a
 // match if the prefix uniquely identifies a commit or tag in the
 // reachable set, so false positives on incidental hex strings are
 // essentially impossible (a random hex would have to collide with a
 // real source SHA1).
-var hashPattern = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
+var hashPattern = regexp.MustCompile(`(?i)\b[0-9a-f]{7,40}\b`)
 
 // matchResult is the 3-state outcome of resolving a hex prefix in a
 // commit/tag message against the reachable set. We distinguish
@@ -1349,6 +1403,10 @@ func (t *translator) rewriteHashesInMessage(msg string) (string, int) {
 // are filtered so incidental hex collisions on content hashes aren't
 // rewritten).
 func (t *translator) resolveMessageRef(prefix string) (plumbing.Hash, matchResult) {
+	// Canonicalize to lowercase: hashPattern is case-insensitive so
+	// the caller can match `ABCD1234` in a message, but reachable
+	// keys and plumbing.Hash.String() are always lowercase hex.
+	prefix = strings.ToLower(prefix)
 	if len(prefix) == 40 {
 		sha1, ok := plumbing.FromHex(prefix)
 		if !ok {

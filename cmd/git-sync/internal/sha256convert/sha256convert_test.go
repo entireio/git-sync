@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,7 +85,7 @@ func TestTranslator(t *testing.T) {
 	}
 	tagHash := writeObject(t, srcRepo.Storer, tag.Encode)
 
-	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{tagHash}, nil)
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{tagHash}, nil)
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
@@ -199,7 +200,7 @@ func TestTranslator_RewritesMessageHashes(t *testing.T) {
 	}
 	childSHA1 := writeObject(t, srcRepo.Storer, child.Encode)
 
-	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{childSHA1}, nil)
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{childSHA1}, nil)
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
@@ -278,7 +279,7 @@ func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
 
 	// Discovery must see both branches so the reachable set covers cA
 	// before cB is encoded.
-	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{cB, cA}, nil)
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{cB, cA}, nil)
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
@@ -332,7 +333,7 @@ func TestTranslator_SkipMessageRewrite(t *testing.T) {
 	}
 	childSHA1 := writeObject(t, srcRepo.Storer, child.Encode)
 
-	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{childSHA1}, nil)
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{childSHA1}, nil)
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
@@ -366,7 +367,7 @@ func TestTranslator_WriteOriginNotes(t *testing.T) {
 	c1 := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c1\n", TreeHash: tree}).Encode)
 	c2 := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c2\n", TreeHash: tree, ParentHashes: []plumbing.Hash{c1}}).Encode)
 
-	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{c2}, nil)
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{c2}, nil)
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
@@ -438,7 +439,7 @@ func TestTranslator_WriteMappingFile(t *testing.T) {
 	sig := object.Signature{Name: "Test", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
 	commit := writeObject(t, srcRepo.Storer, (&object.Commit{Author: sig, Committer: sig, Message: "c\n", TreeHash: tree}).Encode)
 
-	reachable, err := discoverReachable(srcRepo.Storer, []plumbing.Hash{commit}, nil)
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{commit}, nil)
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
@@ -544,7 +545,7 @@ func TestTranslator_UnresolvableSubmodule(t *testing.T) {
 		{Name: "sub", Mode: filemode.Submodule, Hash: external},
 	})
 
-	_, err = discoverReachable(srcRepo.Storer, []plumbing.Hash{treeHash}, nil)
+	_, err = discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{treeHash}, nil)
 	if err == nil {
 		t.Fatal("expected discoverReachable to fail on unresolvable submodule, got nil")
 	}
@@ -583,7 +584,7 @@ func TestTranslator_VendoredSubmoduleStillRefused(t *testing.T) {
 		{Name: "sub", Mode: filemode.Submodule, Hash: innerSHA1},
 	})
 
-	_, err = discoverReachable(srcRepo.Storer, []plumbing.Hash{outerTree}, nil)
+	_, err = discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{outerTree}, nil)
 	if err == nil {
 		t.Fatal("expected discoverReachable to refuse vendored submodule, got nil")
 	}
@@ -1146,6 +1147,119 @@ func TestCheckSideOutputCollision(t *testing.T) {
 	}
 }
 
+// TestDiscoverReachable_HonorsCtxCancellation confirms discovery
+// returns promptly when its context is canceled before it starts,
+// matching the per-object check translate() already does.
+func TestDiscoverReachable_HonorsCtxCancellation(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src.git")
+	srcRepo, err := git.PlainInit(srcDir, true)
+	if err != nil {
+		t.Fatalf("init source: %v", err)
+	}
+	blob := writeBlob(t, srcRepo.Storer, []byte("x\n"))
+	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = discoverReachable(ctx, srcRepo.Storer, []plumbing.Hash{tree}, nil)
+	if err == nil {
+		t.Fatal("expected canceled ctx to surface as error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error should wrap context.Canceled; got %v", err)
+	}
+}
+
+// TestRunChecks_FsckSkippedWhenGitMissing locks in the Skipped flag
+// for the fsck check. Callers that gate on Check.OK alone now can't
+// tell a real fsck pass from a skip; Skipped resolves the ambiguity.
+func TestRunChecks_FsckSkippedWhenGitMissing(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary available; this test exercises the missing-git path via PATH override")
+	}
+	// Force LookPath("git") to fail by overriding PATH.
+	t.Setenv("PATH", "")
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	checks := runChecks(t.Context(), dir, repo, 0, nil, false)
+	var fsck Check
+	for _, c := range checks {
+		if c.Name == "git fsck --full" {
+			fsck = c
+			break
+		}
+	}
+	if fsck.Name == "" {
+		t.Fatalf("fsck check missing from output")
+	}
+	if !fsck.Skipped {
+		t.Errorf("fsck should be Skipped when git is missing, got %+v", fsck)
+	}
+	if !fsck.OK {
+		t.Errorf("Skipped implies OK; got %+v", fsck)
+	}
+}
+
+// TestHashPattern_CaseInsensitive locks in the (?i) on hashPattern —
+// uppercase or mixed-case SHA1 references in messages must resolve
+// against the (lowercase-canonical) reachable set.
+func TestHashPattern_CaseInsensitive(t *testing.T) {
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src.git")
+	dstDir := filepath.Join(root, "dst.git")
+
+	srcRepo, err := git.PlainInit(srcDir, true)
+	if err != nil {
+		t.Fatalf("init src: %v", err)
+	}
+	dstRepo, err := git.PlainInit(dstDir, true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatalf("init dst: %v", err)
+	}
+	blob := writeBlob(t, srcRepo.Storer, []byte("x\n"))
+	tree := writeTree(t, srcRepo.Storer, []object.TreeEntry{{Name: "f", Mode: filemode.Regular, Hash: blob}})
+	sig := object.Signature{Name: "T", Email: "t@example.com", When: time.Unix(1700000000, 0).UTC()}
+	parent := &object.Commit{Author: sig, Committer: sig, Message: "first\n", TreeHash: tree}
+	parentHash := writeObject(t, srcRepo.Storer, parent.Encode)
+
+	// Reference the parent with an UPPERCASE full hash.
+	upper := strings.ToUpper(parentHash.String())
+	child := &object.Commit{
+		Author: sig, Committer: sig,
+		Message:      "see " + upper + " for context\n",
+		TreeHash:     tree,
+		ParentHashes: []plumbing.Hash{parentHash},
+	}
+	childHash := writeObject(t, srcRepo.Storer, child.Encode)
+
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{childHash}, nil)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
+	if err != nil {
+		t.Fatalf("newTranslator: %v", err)
+	}
+	newChild, err := tr.translate(childHash)
+	if err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+	if tr.messageRewrites != 1 {
+		t.Errorf("expected 1 rewrite (case-insensitive match), got %d", tr.messageRewrites)
+	}
+	c, err := object.GetCommit(dstRepo.Storer, newChild)
+	if err != nil {
+		t.Fatalf("read translated child: %v", err)
+	}
+	if strings.Contains(c.Message, upper) {
+		t.Errorf("uppercase SHA1 should have been rewritten; message: %q", c.Message)
+	}
+}
+
 // TestRunChecks_TagOnlyConversionSkipsHEAD locks in the rule that a
 // tags-only conversion does not fail --check on HEAD. PlainInit leaves
 // HEAD pointing at refs/heads/master (which won't exist), and pickHEAD
@@ -1170,10 +1284,13 @@ func TestRunChecks_TagOnlyConversionSkipsHEAD(t *testing.T) {
 		t.Fatalf("HEAD check missing from runChecks output")
 	}
 	if !head.OK {
-		t.Errorf("HEAD should be OK (skipped) for tags-only conversion, got %+v", head)
+		t.Errorf("HEAD should be OK for tags-only conversion, got %+v", head)
 	}
-	if !strings.Contains(head.Detail, "skipped") {
-		t.Errorf("HEAD check should record skipped reason, got %q", head.Detail)
+	if !head.Skipped {
+		t.Errorf("HEAD should be marked Skipped on tags-only conversion, got %+v", head)
+	}
+	if !strings.Contains(head.Detail, "tags-only") {
+		t.Errorf("HEAD detail should explain the skip reason, got %q", head.Detail)
 	}
 }
 
