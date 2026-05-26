@@ -1,0 +1,5 @@
+let's address some review comment for this change
+
+---
+
+1. *--check config check is a substring match* — cmd/git-sync/internal/sha256convert/sha256convert.go:618 does bytes.Contains(cfgBytes, []byte("objectformat = sha256")). It'll pass on oldobjectformat = sha256 or a commented # objectformat = sha256 line. Not a realistic failure in a fresh PlainInit'd repo, but worth a stricter parse (e.g. git config --file <target>/config extensions.objectformat or section-aware regex). Low priority.
