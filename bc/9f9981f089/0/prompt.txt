@@ -1,0 +1,23 @@
+what about these  Strongly recommended — fix before merge or note as known limits
+
+  5. discoverReachable ignores ctx (line 866). Ctrl-C during the multi-minute discovery phase on kernel-scale repos doesn't work —
+  directly contradicts the rationale of commit ec94459.
+  6. writeLoose: no fsync + Stat-by-name idempotency (lines 1214, 1248-1252). Crash-and-resume can silently accept a truncated loose
+  object as already-written.
+  7. No cleanup of half-populated target on error (line 310). Any failure after PlainInit leaves the target dir non-empty, and
+  ensureEmptyTarget then blocks retry with no --force and no hint.
+  8. hashPattern is lowercase-only (line 1265). Upper/mixed-case SHA1 references in messages are silently skipped — no rewrite and no
+  ambiguous-warning. One-line fix: (?i) or lowercase before matching.
+  9. runChecks reports ✓ "skipped" when git missing (line 583). Callers parsing Result.Checks for ok:true can't tell a real fsck pass
+  from one that never ran. Add a Skipped field or report OK:false.
+
+---
+
+10. fsckHasError 64KB scanner buffer (line 609) — long fsck lines silently truncated.
+  11. Unbounded recursion in discoverReachable/translate (lines 866, 944) — deep linear histories could blow stacks; iterativize.
+  12. Unused t.dst field (line 775) — landmine inviting a future contributor to use go-git's SHA1-hardcoded write path. Delete it.
+  13. fsckHasError prefix-only match (line 615) — narrower than the prior substring match; misses some git versions' output.
+  14. writeMappingFile ignores Close error (line 1556) — silent truncation on NFS / quota.
+  15. rewriteHashesInMessage re-scans reachable (line 1296) — doubles the O(reachable) work per message token; documented quadratic
+  ceiling is needlessly halved.
+ I meant these
