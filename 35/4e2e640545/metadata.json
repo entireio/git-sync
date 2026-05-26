@@ -1,0 +1,26 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "354e2e640545",
+  "strategy": "manual-commit",
+  "branch": "nodo/convert-sha256",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cmd/git-sync/internal/sha256convert/sha256convert.go",
+    "cmd/git-sync/internal/sha256convert/sha256convert_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/35/4e2e640545/0/metadata.json",
+      "transcript": "/35/4e2e640545/0/transcript.jsonl",
+      "content_hash": "/35/4e2e640545/0/transcript_hash.txt",
+      "prompt": "/35/4e2e640545/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 29,
+    "cache_creation_tokens": 15820,
+    "cache_read_tokens": 1504488,
+    "output_tokens": 6683,
+    "api_call_count": 24
+  }
+}
