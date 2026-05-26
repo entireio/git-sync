@@ -1,0 +1,15 @@
+Blocking — fix before merge
+
+  1. Submodule gitlinks corrupted in the "vendored" case (sha256convert.go:1016). When a submodule's commit happens to be in the
+  source store, the gitlink hash is rewritten to SHA256 while mode stays at 160000 — but the submodule's URL still points at an
+  upstream SHA1 repo where that SHA256 doesn't exist. The repo looks fsck-clean, then git submodule update fails forever. The comment
+  says "rare, e.g. vendored" but doesn't acknowledge this is broken.
+  2. Tag-only / branchless conversions break --check (sha256convert.go:349). pickHEAD returns "" when there are no branches → Run
+  skips SetReference → HEAD stays at the PlainInit default refs/heads/master → the HEAD check fails after a fully successful
+  translation. Either point HEAD at a tag or skip the HEAD check when no branches exist.
+  3. signBranchTips partial signed-list dropped on failure (sha256convert.go:393 + convert_sha256.go:49-51). Tags signed before the
+  failure persist on disk, but Run returns before assigning res.SignedTags = signed, and the cobra wrapper drops result on err. The
+  user has no way to know which converted/* tags exist — directly contradicts the function's own doc comment.
+  4. --keep-source-objects does nothing on error paths (sha256convert.go:399). The flag is set after every error return, so the temp
+  store gets wiped on exactly the failures it exists to debug. Move the assignment to the top of Run when req.KeepSourceObjects is
+  set.
