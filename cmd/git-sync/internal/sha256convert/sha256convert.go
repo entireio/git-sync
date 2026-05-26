@@ -263,6 +263,14 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return Result{}, errors.New("no source refs matched the requested scope")
 	}
 
+	// Refuse before any further I/O if the source carries refs that
+	// would collide with our side outputs. writeRefs runs before
+	// writeOriginNotes / signBranchTips, so without this check the
+	// later side-output write would silently clobber the source ref.
+	if err := checkSideOutputCollision(desired, req.SkipOriginNotes, req.Sign); err != nil {
+		return Result{}, err
+	}
+
 	// Fetch into temp SHA1 store ------------------------------------------
 	fmt.Fprintf(out, "fetching %d ref(s) from %s ...\n", len(desired), req.SourceURL)
 	gpDesired := convert.DesiredRefs(desired)
@@ -395,7 +403,17 @@ func Run(ctx context.Context, req Request) (Result, error) {
 
 	if req.Check {
 		fmt.Fprintln(out, "verifying output ...")
-		res.Checks = runChecks(ctx, req.TargetDir, dstRepo, refsWritten)
+		// Collect the side outputs this run actually wrote so the
+		// refs check knows which target refs to ignore. Anything not
+		// in here is assumed to be a translated source ref.
+		sideOutputs := make(map[plumbing.ReferenceName]struct{}, 1+len(res.SignedTags))
+		if res.OriginNotesRef != "" {
+			sideOutputs[plumbing.ReferenceName(res.OriginNotesRef)] = struct{}{}
+		}
+		for _, tag := range res.SignedTags {
+			sideOutputs[plumbing.ReferenceName(tag)] = struct{}{}
+		}
+		res.Checks = runChecks(ctx, req.TargetDir, dstRepo, refsWritten, sideOutputs)
 		for _, c := range res.Checks {
 			mark := "✓"
 			if !c.OK {
@@ -477,7 +495,12 @@ func signBranchTips(ctx context.Context, out io.Writer, targetDir, signKey, sour
 // Returns one Check per step. Callers print and/or fail-on-error based
 // on these. No early return so users see the full picture even when an
 // earlier check fails.
-func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refsExpected int) []Check {
+//
+// sideOutputs holds the exact refs the run created on top of the
+// source set (the origin-notes ref, any --sign attestation tags), so
+// the refs check can omit them from the resolved/expected fraction
+// without false-positive-skipping a same-named source ref.
+func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refsExpected int, sideOutputs map[plumbing.ReferenceName]struct{}) []Check {
 	checks := []Check{}
 
 	// 1. Config: extensions.objectformat = sha256. Parse the file
@@ -516,11 +539,12 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 		}
 	}
 
-	// 3. Every written ref resolves to an existing object. Skip refs we
-	// add as side outputs (the origin-notes ref and any
-	// refs/tags/converted/* attestation tags from --sign), since they
-	// are accounted for in their own Result fields and would otherwise
-	// make the displayed fraction misleading.
+	// 3. Every written ref resolves to an existing object. Skip the
+	// specific refs this run created as side outputs — they're
+	// accounted for in their own Result fields and would otherwise
+	// make the displayed fraction misleading. Skipping by exact name
+	// (not by prefix) avoids hiding a legitimate source ref that
+	// happened to share a namespace.
 	resolved := 0
 	missing := ""
 	refs, err := repo.References()
@@ -531,16 +555,12 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 			if r.Type() != plumbing.HashReference {
 				return nil
 			}
-			name := r.Name()
-			if name == plumbing.ReferenceName(originNotesRef) {
-				return nil
-			}
-			if strings.HasPrefix(string(name), attestationTagPrefix) {
+			if _, skip := sideOutputs[r.Name()]; skip {
 				return nil
 			}
 			if _, err := repo.Storer.EncodedObject(plumbing.AnyObject, r.Hash()); err != nil {
 				if missing == "" {
-					missing = fmt.Sprintf("%s → %s: %v", name, r.Hash(), err)
+					missing = fmt.Sprintf("%s → %s: %v", r.Name(), r.Hash(), err)
 				}
 				return nil
 			}
@@ -635,6 +655,32 @@ func protectedExcludePrefixes(prefixes []string) []string {
 		}
 	}
 	return bad
+}
+
+// checkSideOutputCollision refuses the conversion when the source set
+// already contains a ref name this run would later write as a side
+// output. Without this guard, writeRefs would publish the source's
+// value first and writeOriginNotes / signBranchTips would silently
+// overwrite it — losing the source ref and hiding the conflict.
+func checkSideOutputCollision(desired map[plumbing.ReferenceName]planner.DesiredRef, skipOriginNotes, sign bool) error {
+	if !skipOriginNotes {
+		if _, conflict := desired[plumbing.ReferenceName(originNotesRef)]; conflict {
+			return fmt.Errorf("source already advertises %s; pass --no-origin-notes to keep that source ref, or --exclude-ref-prefix %s to drop it from the conversion", originNotesRef, originNotesRef)
+		}
+	}
+	if sign {
+		var clashes []string
+		for name := range desired {
+			if strings.HasPrefix(string(name), attestationTagPrefix) {
+				clashes = append(clashes, string(name))
+			}
+		}
+		if len(clashes) > 0 {
+			sort.Strings(clashes)
+			return fmt.Errorf("source has %s under %s, which collides with the attestation tags --sign would create; drop --sign or rename the source tag(s)", strings.Join(clashes, ", "), attestationTagPrefix)
+		}
+	}
+	return nil
 }
 
 // ensureEmptyTarget refuses to init into a non-empty directory so the user

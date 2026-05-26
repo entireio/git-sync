@@ -1029,6 +1029,84 @@ func TestRun_RejectsExcludePrefixesThatDropBranchesOrTags(t *testing.T) {
 	}
 }
 
+func TestCheckSideOutputCollision(t *testing.T) {
+	mk := func(name string) planner.DesiredRef {
+		ref := plumbing.ReferenceName(name)
+		return planner.DesiredRef{SourceRef: ref, TargetRef: ref}
+	}
+	tests := []struct {
+		name             string
+		desired          map[plumbing.ReferenceName]planner.DesiredRef
+		skipOriginNotes  bool
+		sign             bool
+		wantErrSubstring string
+	}{
+		{
+			name: "no collisions accepted",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/main": mk("refs/heads/main"),
+				"refs/tags/v1":    mk("refs/tags/v1"),
+			},
+			wantErrSubstring: "",
+		},
+		{
+			name: "origin-notes collision refused by default",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/main":         mk("refs/heads/main"),
+				"refs/notes/sha1-origin":  mk("refs/notes/sha1-origin"),
+			},
+			wantErrSubstring: "refs/notes/sha1-origin",
+		},
+		{
+			name: "origin-notes collision allowed when --no-origin-notes set",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/notes/sha1-origin": mk("refs/notes/sha1-origin"),
+			},
+			skipOriginNotes:  true,
+			wantErrSubstring: "",
+		},
+		{
+			name: "converted-tag collision refused only when --sign",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/heads/main":          mk("refs/heads/main"),
+				"refs/tags/converted/main": mk("refs/tags/converted/main"),
+			},
+			sign:             true,
+			wantErrSubstring: "refs/tags/converted/main",
+		},
+		{
+			name: "converted-tag without --sign passes through",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/tags/converted/main": mk("refs/tags/converted/main"),
+			},
+			sign:             false,
+			wantErrSubstring: "",
+		},
+		{
+			name: "multiple converted-tag collisions listed in sorted order",
+			desired: map[plumbing.ReferenceName]planner.DesiredRef{
+				"refs/tags/converted/zeta":  mk("refs/tags/converted/zeta"),
+				"refs/tags/converted/alpha": mk("refs/tags/converted/alpha"),
+			},
+			sign:             true,
+			wantErrSubstring: "refs/tags/converted/alpha, refs/tags/converted/zeta",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkSideOutputCollision(tt.desired, tt.skipOriginNotes, tt.sign)
+			switch {
+			case tt.wantErrSubstring == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tt.wantErrSubstring != "" && err == nil:
+				t.Fatalf("expected error containing %q, got nil", tt.wantErrSubstring)
+			case tt.wantErrSubstring != "" && !strings.Contains(err.Error(), tt.wantErrSubstring):
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrSubstring)
+			}
+		})
+	}
+}
+
 func TestPickHEAD(t *testing.T) {
 	branch := func(name string) planner.DesiredRef {
 		ref := plumbing.ReferenceName("refs/heads/" + name)
