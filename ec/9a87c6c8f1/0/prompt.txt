@@ -1,0 +1,2 @@
+- P2: --exclude-ref-prefix can exclude branches and tags, despite the new command saying branches/tags are always converted. Run passes ExcludeRefPrefixes straight into planner.BuildDesiredRefs at cmd/git-sync/internal/sha256convert/sha256convert.go:238, and the
+    planner applies it to branch and tag selection too. That lets a user run a partial conversion and strand cross-branch message rewrites, which is exactly the invariant the command docs are trying to protect.
