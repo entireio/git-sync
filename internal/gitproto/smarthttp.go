@@ -318,12 +318,12 @@ func RequestInfoRefs(ctx context.Context, conn Conn, service string, gitProtocol
 
 // RequestInfoRefs fetches /info/refs for the given service.
 func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProtocol string) ([]byte, error) {
-	res, err := c.doInfoRefsRequest(ctx, service, gitProtocol, c.Auth)
+	res, err := c.doInfoRefsRequest(ctx, service, gitProtocol, c.Auth, nil)
 	if err != nil {
 		return nil, err
 	}
-	res, err = c.tryHelperRetry(ctx, res, func(auth AuthMethod) (*http.Response, error) {
-		return c.doInfoRefsRequest(ctx, service, gitProtocol, auth)
+	res, err = c.tryHelperRetry(ctx, res, func(auth AuthMethod, target *url.URL) (*http.Response, error) {
+		return c.doInfoRefsRequest(ctx, service, gitProtocol, auth, target)
 	})
 	if err != nil {
 		return nil, err
@@ -428,16 +428,16 @@ func PostRPCStreamBody(ctx context.Context, conn Conn, service string, body io.R
 // when body is an io.Seeker (so we can rewind it); callers that pass a raw
 // non-seekable Reader will see the 401 surface as-is.
 func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
-	res, err := c.doPostRPCRequest(ctx, service, body, v2, phase, c.Auth)
+	res, err := c.doPostRPCRequest(ctx, service, body, v2, phase, c.Auth, nil)
 	if err != nil {
 		return nil, err
 	}
 	if seeker, ok := body.(io.Seeker); ok {
-		res, err = c.tryHelperRetry(ctx, res, func(auth AuthMethod) (*http.Response, error) {
+		res, err = c.tryHelperRetry(ctx, res, func(auth AuthMethod, target *url.URL) (*http.Response, error) {
 			if _, seekErr := seeker.Seek(0, io.SeekStart); seekErr != nil {
 				return nil, fmt.Errorf("rewind RPC body for credential-helper retry: %w", seekErr)
 			}
-			return c.doPostRPCRequest(ctx, service, body, v2, phase, auth)
+			return c.doPostRPCRequest(ctx, service, body, v2, phase, auth, target)
 		})
 		if err != nil {
 			return nil, err
@@ -456,8 +456,17 @@ func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body i
 }
 
 // doPostRPCRequest issues a single POST to /<service>. Caller closes res.Body.
-func (c *HTTPConn) doPostRPCRequest(ctx context.Context, service string, body io.Reader, v2 bool, phase string, auth AuthMethod) (*http.Response, error) {
-	reqURL := fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
+//
+// target is an optional override URL: when non-nil, the request is sent
+// verbatim to that URL instead of building one from c.EndpointURL. See
+// doInfoRefsRequest for why — same redirect-strip avoidance.
+func (c *HTTPConn) doPostRPCRequest(ctx context.Context, service string, body io.Reader, v2 bool, phase string, auth AuthMethod, target *url.URL) (*http.Response, error) {
+	var reqURL string
+	if target != nil {
+		reqURL = target.String()
+	} else {
+		reqURL = fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
+	}
 	ctx = withHTTPTrace(ctx, "POST "+service)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
@@ -506,30 +515,31 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 // reader) and can't be replayed on a mid-stream 401.
 //
 // The flow is:
-//  1. Ask the helper if it has credentials for this endpoint. If not,
-//     bail — no point probing for an auth requirement we can't satisfy.
-//     (This also keeps anonymous syncs from doing a wasted no-op POST.)
-//  2. Probe with a POST to /<service> using the smart-HTTP flush packet
+//  1. Probe with a POST to /<service> using the smart-HTTP flush packet
 //     "0000" as body — a valid no-op (zero ref updates, zero pack data)
 //     by spec. We probe with POST rather than GET because the auth layer
 //     may only gate the POST handler; a GET probe would slip past on
 //     servers that 404/405 GET while requiring auth on POST.
-//  3. If the probe gets 401, attach the helper credentials tentatively.
-//     The next real operation (PostRPCStreamBody or RequestInfoRefs)
-//     calls resolvePendingHelperCreds, which Approves them only once that
+//  2. If the probe gets 401, ask the helper for credentials keyed on the
+//     actually-challenged host (which may differ from c.EndpointURL after a
+//     cross-host redirect). Keying on the post-redirect host matters: that's
+//     where the user stored their creds, and that's the key we'll later
+//     Approve/Reject against.
+//  3. Attach the credentials tentatively. The next real operation calls
+//     resolvePendingHelperCreds, which Approves them only once that
 //     operation fully succeeds or Rejects them on 401/403 — helper state
 //     only changes based on the actual outcome, never on the probe response
 //     alone.
+//  4. If the challenge came from a cross-host redirect, rewrite
+//     c.EndpointURL's scheme/host to the challenger so the real op skips the
+//     redirect (which Go's http.Client would otherwise follow with the
+//     Authorization header stripped, turning every push into a fresh 401).
 //
 // If the probe doesn't 401 (200, 404, 405, etc.) we don't attach; the
 // server either accepts anonymous POSTs here or returns ambiguously,
 // and either way attaching unvalidated credentials could leak them.
 func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	if c.Auth != nil || c.CredentialHelper == nil {
-		return
-	}
-	user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, c.EndpointURL)
-	if lookupErr != nil || !ok {
 		return
 	}
 	res, err := c.doServiceProbe(ctx, service)
@@ -541,8 +551,13 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 		return
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
+	user, pass, ok, lookupErr := c.CredentialHelper.Lookup(ctx, challengeURL)
+	if lookupErr != nil || !ok {
+		return
+	}
 	c.Auth = &transporthttp.BasicAuth{Username: user, Password: pass}
 	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
+	c.adoptChallengeHost(challengeURL)
 }
 
 // resolvePendingHelperCreds settles credentials that were attached tentatively
@@ -601,17 +616,25 @@ func (c *HTTPConn) doServiceProbe(ctx context.Context, service string) (*http.Re
 // tryHelperRetry handles the 401 → lookup → retry → approve/reject lifecycle
 // when a CredentialHelper is configured and no explicit Auth was set up front
 // (explicit auth must surface its own failures rather than be quietly papered
-// over). retry attempts the same request with helper-supplied credentials.
+// over). retry attempts the same request with helper-supplied credentials,
+// targeted at the URL that actually returned the 401 (which may differ from
+// c.EndpointURL if Go's http.Client followed a cross-host redirect).
 //
 // On a 2xx retry the credentials are stored on c.Auth (so follow-up calls on
 // the same connection reuse them) and recorded as pending — the caller then
 // approves them via resolvePendingHelperCreds once the response passes full
-// validation, never on the 2xx status alone. On retry failure (401, 403, or
-// transport error) the helper is told to reject the credentials immediately so
-// a stale stored token self-heals on the next run.
+// validation, never on the 2xx status alone. If the challenge was on a host
+// different from c.EndpointURL we also rewrite c.EndpointURL's scheme/host to
+// the challenger so subsequent ops on this conn don't redirect again (Go's
+// http.Client strips Authorization on cross-host redirects, which would
+// otherwise turn every follow-up into a fresh 401 → Reject of valid creds).
+//
+// On retry failure (401, 403, or transport error) the helper is told to
+// reject the credentials immediately so a stale stored token self-heals on
+// the next run.
 //
 // Caller is responsible for closing the returned response body.
-func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry func(AuthMethod) (*http.Response, error)) (*http.Response, error) {
+func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry func(AuthMethod, *url.URL) (*http.Response, error)) (*http.Response, error) {
 	if res.StatusCode != http.StatusUnauthorized || c.Auth != nil || c.CredentialHelper == nil {
 		return res, nil
 	}
@@ -624,9 +647,14 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 	if !ok {
 		return res, nil
 	}
+	// Capture the actually-challenged URL — what http.Client landed on after
+	// any redirects, including its path/query — so the retry hits it directly
+	// instead of replaying through c.EndpointURL and getting Authorization
+	// stripped on the cross-host hop.
+	retryTarget := res.Request.URL
 	_ = res.Body.Close()
 	retryAuth := &transporthttp.BasicAuth{Username: user, Password: pass}
-	res, err := retry(retryAuth)
+	res, err := retry(retryAuth, retryTarget)
 	if err != nil {
 		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
 		return nil, err
@@ -642,8 +670,28 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		// status alone isn't proof the operation succeeded.
 		c.Auth = retryAuth
 		c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
+		c.adoptChallengeHost(challengeURL)
 	}
 	return res, nil
+}
+
+// adoptChallengeHost rewrites c.EndpointURL's scheme/host to match the host
+// that just successfully authenticated. Required when the challenge came from
+// a cross-host redirect: subsequent requests on this conn would otherwise be
+// sent to the original host, redirected again, and stripped of their
+// Authorization header — turning every follow-up into a fresh 401. Path is
+// preserved on the assumption that the redirect target serves the same repo
+// path (the same assumption FollowInfoRefsRedirect makes after a successful
+// /info/refs).
+func (c *HTTPConn) adoptChallengeHost(challengeURL *url.URL) {
+	if challengeURL == nil {
+		return
+	}
+	if challengeURL.Host == c.EndpointURL.Host && challengeURL.Scheme == c.EndpointURL.Scheme {
+		return
+	}
+	c.EndpointURL.Scheme = challengeURL.Scheme
+	c.EndpointURL.Host = challengeURL.Host
 }
 
 // challengeURLFor returns the URL key used to query the credential helper
@@ -667,8 +715,19 @@ func challengeURLFor(orig *url.URL, res *http.Response) *url.URL {
 }
 
 // doInfoRefsRequest issues a single /info/refs GET. Caller closes res.Body.
-func (c *HTTPConn) doInfoRefsRequest(ctx context.Context, service, gitProtocol string, auth AuthMethod) (*http.Response, error) {
-	reqURL := fmt.Sprintf("%s/info/refs?service=%s", c.EndpointURL.String(), service)
+//
+// target is an optional override URL: when non-nil, the request is sent
+// verbatim to that URL instead of building one from c.EndpointURL. Used by
+// the credential-helper retry path to hit a redirected challenge host
+// directly, skipping the redirect that would otherwise cause Go's
+// http.Client to strip the Authorization header on the cross-host hop.
+func (c *HTTPConn) doInfoRefsRequest(ctx context.Context, service, gitProtocol string, auth AuthMethod, target *url.URL) (*http.Response, error) {
+	var reqURL string
+	if target != nil {
+		reqURL = target.String()
+	} else {
+		reqURL = fmt.Sprintf("%s/info/refs?service=%s", c.EndpointURL.String(), service)
+	}
 	ctx = withHTTPTrace(ctx, "GET "+service+"/info/refs")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {

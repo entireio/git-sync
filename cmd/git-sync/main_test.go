@@ -32,10 +32,16 @@ import (
 )
 
 // TestMain isolates the package's tests from the developer's local
-// credential helper. Without this, `git credential fill` could find
-// stored credentials for 127.0.0.1 (e.g. cached from an earlier test
-// run) and turn EnsureAuthForService's would-be no-op into a real
-// auth-probe POST, throwing off receive-pack POST counts.
+// credential helper. EnsureAuthForService probes /git-receive-pack with a
+// flush-packet POST unconditionally (required to discover cross-host
+// auth challenges and auth-on-POST-only gates), so without stubbing the
+// helper, `git credential fill` could find stored credentials for
+// 127.0.0.1 (e.g. cached from an earlier test run) and attach them,
+// changing the wire shape of the push the test under inspection.
+//
+// The probe itself still happens — receive-pack POST counts include it —
+// but the stub guarantees no credentials are attached and the probe
+// returns without further side effects on the helper.
 //
 // Tests that need to exercise helper behaviour explicitly should
 // restore auth.GitCredentialCommand in their own setup.
@@ -258,8 +264,11 @@ func TestRun_Replicate_SubcommandExecutesAgainstEmptyTarget(t *testing.T) {
 		t.Fatalf("expected relayReason=empty-target-managed-refs, got %#v", result["relayReason"])
 	}
 
-	if got := targetServer.Count("git-receive-pack"); got != 1 {
-		t.Fatalf("expected one receive-pack POST, got %d", got)
+	// Two receive-pack POSTs: the auth-probe (a flush-packet POST that
+	// EnsureAuthForService always sends to detect auth-on-POST-only gates and
+	// cross-host challenges) plus the real push.
+	if got := targetServer.Count("git-receive-pack"); got != 2 {
+		t.Fatalf("expected two receive-pack POSTs (auth-probe + real push), got %d", got)
 	}
 	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
 	if err != nil {
