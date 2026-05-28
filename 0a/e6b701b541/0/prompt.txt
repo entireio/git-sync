@@ -1,0 +1,1 @@
+- P2: mise run lint is still red because cmd/git-sync/internal/sha256convert/sha256convert_test.go:1055 needs gofmt. The diff is just alignment in the refs/notes/sha1-origin test map, but this is CI-blocking.

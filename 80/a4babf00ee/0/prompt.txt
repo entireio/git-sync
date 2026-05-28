@@ -1,0 +1,5 @@
+no I mean fsck or other commands I shoudl run on the output to verity
+
+---
+
+can you add a simple `--check` flag that run these sanity check on the output?

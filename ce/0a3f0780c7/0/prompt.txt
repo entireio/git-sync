@@ -1,0 +1,6 @@
+1. Medium: EnsureAuthForService can incorrectly bless stale helper credentials based on a GET /git-receive-pack response that says nothing about whether auth
+     was actually accepted. In internal/gitproto/smarthttp.go:368, any second probe result other than 401/403 causes c.Auth to be set and
+     CredentialHelper.Approve(...) to run, including 405 and 404. But GET /git-receive-pack is not the real operation, and many servers can return 405 Method
+     Not Allowed before validating credentials at all. In that case, stale helper creds get approved and cached, and the real push path in internal/gitproto/
+     push.go:158 sends the non-rewindable POST with bad c.Auth; because c.Auth is now set, the normal retry path in internal/gitproto/smarthttp.go:278 is
+     skipped. Net effect: the probe can turn “unknown creds” into “trusted creds” and make recovery worse.

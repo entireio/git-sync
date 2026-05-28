@@ -1,0 +1,5 @@
+I think other cli commands have `--progress` can we add one to this one too?
+
+---
+
+how can I test it?

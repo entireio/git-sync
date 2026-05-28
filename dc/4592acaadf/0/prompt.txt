@@ -1,0 +1,49 @@
+Tell me more about the remaining limitations
+
+---
+
+I think it would make sense to always convert all branches and tags
+
+---
+
+Sounds ok, option 3 for all-refa
+
+---
+
+Can you summarize again the limitations?
+
+---
+
+Remove the "outside the repo" from the list, it's just noise. Relist the rest
+
+---
+
+Remove "Survive as data but stop behaving correctly:" too, relist the rest
+
+---
+
+About the edge cases, fail fast in the submodule case, emit a warning in the ambingous sha1
+
+---
+
+Relist the limitations
+
+---
+
+so the edge cases are handled right? submodule by failing fast and abbreviated SHA1 by output a warning
+
+---
+
+ok let's look at mergetag, what's that about?
+
+---
+
+ok let's leave that for now, let's goo through the operational section can you give me a summary of each item
+
+---
+
+ok all of these are acceptable for now, are they documented too?
+
+---
+
+yes add them on a Operational Notesa and simplify the whole doc not not repeat things multiple times

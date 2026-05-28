@@ -1,0 +1,83 @@
+I would like to create a command to the cli that migrate a repo from SHA1 to SHA256 object format, this is a one-off conversion, so no need to use in the library for now. Do you have any question or need extra context?
+
+---
+
+go for it
+
+---
+
+continue
+
+---
+
+how can we test it?
+
+---
+
+let's do (1) and (2)
+
+---
+
+how do I run it on a real repo?
+
+---
+
+git-sync on  main [!?] ❯   ./git-sync convert-sha256 https://github.com/spf13/cobra.git /tmp/cobra/cobra-sha256.git
+
+fetching 8 ref(s) from https://github.com/spf13/cobra.git ...
+translating objects to sha256 ...
+sha256 bare repo: /tmp/cobra/cobra-sha256.git
+source: https://github.com/spf13/cobra.git (v2)
+converted: 1866 blobs, 1598 trees, 1114 commits, 0 tags
+refs written: 8
+warning: stripped 366 GPG signature(s); they no longer match the rewritten object content
+
+---
+
+what does "warning: stripped 366 GPG signature(s); they no longer match the rewritten object content" mean?
+
+---
+
+is it possible to re-sign?
+
+---
+
+apart from signatures, any other sharp edges?
+
+---
+
+how can we handle external sha1 references?
+
+---
+
+yes, let's do (1), (2), and (3) behind a flag
+
+---
+
+add a short summary of the new command in the readme and a more details description of the migration feature in a new document in @docs/
+
+---
+
+to fix this limitation `Limitation: a reference is only rewritten if the referenced commit was
+already translated when the referencing commit is encoded. Ancestor
+references always satisfy this (DFS handles parents first), but
+cross-branch references — for example, a cherry-pick from a sibling
+branch — depend on the order of ref iteration and may not resolve.
+The origin notes ref and the mapping file (below) cover the gap.
+` can we maybe scan the history a second time?
+
+---
+
+can you think about a better approach?
+
+---
+
+two questions: 1. this potentially use a lot of memory right? 2. how do you decide ties in the topological sorting? that could potentially matter because you pick an order and that might contain a sha1 that we cannot resolve
+
+---
+
+ok let's implement it, make sure to change the doc too
+
+---
+
+deleted a few paragraphs from the docs

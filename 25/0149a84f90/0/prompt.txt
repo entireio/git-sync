@@ -1,0 +1,2 @@
+- P2: Side-output refs are not reserved from source refs. After writing source refs, the command unconditionally writes refs/notes/sha1-origin at cmd/git-sync/internal/sha256convert/sha256convert.go:358, so a source repo converted with --all-refs that already has
+    that notes ref gets it overwritten. Related: --check always skips refs/notes/sha1-origin and refs/tags/converted/* at cmd/git-sync/internal/sha256convert/sha256convert.go:528, so legitimate source refs in those namespaces are miscounted or hidden.

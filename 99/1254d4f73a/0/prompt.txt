@@ -1,0 +1,8 @@
+1. Medium: credential-helper lookups are keyed to the original remote, not the host that actually returned 401, so redirected smart-HTTP setups can miss or
+     poison credentials. In internal/gitproto/smarthttp.go:191, the retry path calls Lookup/Approve/Reject with c.EndpointURL. After an http.Client redirect,
+     the challenged URL is res.Request.URL, which may be a different host. That means a 307 to an auth-gated replica will ask the helper for creds for
+     entry.example instead of replica.example, and a successful retry would approve them under the wrong key.
+  2. Medium: helper fallback only exists on GET /info/refs; authenticated POST RPCs still fail hard if discovery is anonymous but the pack request is not.
+     internal/gitproto/smarthttp.go:182 contains the only 401 retry path, while internal/gitproto/smarthttp.go:290 just applies c.Auth and returns
+     httpError(res). That breaks servers that allow anonymous advertisement but require auth on upload-pack/receive-pack POSTs, which is a valid smart-HTTP
+     behavior.
