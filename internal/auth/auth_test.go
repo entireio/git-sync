@@ -489,6 +489,30 @@ func TestGitCredentialHelper_Lookup_HelperFailsReturnsNotFound(t *testing.T) {
 	}
 }
 
+// TestGitCredentialHelper_Lookup_ContextCanceledSurfacesError ensures a
+// cancelled context isn't masked as "no credentials available": when the
+// `git credential fill` subprocess dies because the context is gone, Lookup
+// must return the context error so callers report it instead of falling back
+// to the original HTTP 401.
+func TestGitCredentialHelper_Lookup_ContextCanceledSurfacesError(t *testing.T) {
+	ep := &url.URL{Scheme: "https", Host: "example.com"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	withRecordingHelper(t, new([]recordedCredCall), func(_ CredentialOp, _ string) ([]byte, error) {
+		// exec.CommandContext kills the subprocess once the context is done,
+		// surfacing as a command error.
+		return nil, errors.New("signal: killed")
+	})
+
+	_, _, ok, err := GitCredentialHelper{}.Lookup(ctx, ep)
+	if ok {
+		t.Error("expected ok=false on a cancelled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestGitCredentialHelper_Lookup_EmptyPasswordReturnsNotFound(t *testing.T) {
 	ep := &url.URL{Scheme: "https", Host: "example.com"}
 	withRecordingHelper(t, new([]recordedCredCall), func(_ CredentialOp, _ string) ([]byte, error) {

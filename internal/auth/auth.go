@@ -95,9 +95,9 @@ type GitCredentialHelper struct{}
 
 // Lookup queries the git credential helper for credentials for ep. Returns
 // ok=false if no credentials are available so the caller can surface a
-// clean 401 rather than block.
-//
-//nolint:unparam // err is always nil today but kept for the CredentialHelper interface.
+// clean 401 rather than block. A non-nil error means the lookup itself
+// couldn't complete (e.g. the context was cancelled) and the caller should
+// surface that rather than fall back to the original 401.
 func (GitCredentialHelper) Lookup(ctx context.Context, ep *url.URL) (username, password string, ok bool, err error) {
 	if !isHTTPEndpoint(ep) {
 		return "", "", false, nil
@@ -108,7 +108,14 @@ func (GitCredentialHelper) Lookup(ctx context.Context, ep *url.URL) (username, p
 	}
 	output, helperErr := GitCredentialCommand(ctx, CredentialOpFill, input)
 	if helperErr != nil {
-		return "", "", false, nil //nolint:nilerr // helper failure means "no credentials available"
+		// A cancelled or timed-out context kills the `git credential fill`
+		// subprocess; surface that as the real cause instead of masking it
+		// as "no credentials available", which would report the original
+		// HTTP 401 rather than context.Canceled/DeadlineExceeded.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", "", false, fmt.Errorf("git credential fill: %w", ctxErr)
+		}
+		return "", "", false, nil
 	}
 	values := parseCredentialOutput(output)
 	password = values["password"]
