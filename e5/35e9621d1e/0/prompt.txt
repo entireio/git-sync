@@ -1,0 +1,50 @@
+can you fix the conflict and rebase onto main?
+
+---
+
+yes
+
+---
+
+can you check next if any of the open comments on https://github.com/entireio/git-sync/pull/65 are still relevant?
+
+---
+
+fix 1, do the small reorder
+
+---
+
+can you take a look at https://github.com/entireio/git-sync/pull/65 again, it now has a conflict due to me merging 63, I checked out the branch already
+
+---
+
+ok, can you look at this :
+
+Production impact. Real flow when github.com → replica.example:
+
+  1. GET https://github.com/repo/info/refs (anonymous) → http.Client follows 307 → replica returns 401.
+  2. res.Request.URL.Host == replica.example, so challengeURL = replica.example.
+  3. Lookup against replica.example returns creds (user has them stored under replica).
+  4. Retry builds URL = https://github.com/..., attaches Authorization: Basic ....
+  5. c.HTTP.Do(req) follows the 307 again. Go's http.Client strips Authorization on cross-host redirects (shouldCopyHeaderOnRedirect returns false unless the redirect target is a subdomain
+   match of the source).
+  6. Replica sees the redirected request with no auth → 401.
+  7. We hit the 401/403 branch → Reject(challengeURL=replica.example, …).
+
+  The valid credentials the user stored for replica.example just got Reject'd, even though they were correct. Next run: Lookup returns nothing, the original 401 surfaces, user is locked
+  attempt 2 regardless of URL — Go's redirect-strip behaviour is never exercised.
+
+  Two viable fixes: (a) retry directly against challengeURL rather than c.EndpointURL; or (b) set CheckRedirect to ErrUseLastResponse for the retry and apply auth manually to the final
+  hop.
+
+EnsureAuthForService has a related but milder inconsistency (commit 6 reordering): Lookup runs against c.EndpointURL before the probe, then pendingHelperCreds.url is set to
+  challengeURLFor(c.EndpointURL, res). If the probe redirects cross-host, Approve/Reject fire against a key the helper has no entry under — no leak, no churn of valid creds, but the
+  Approve/Reject signal lands on the wrong key. Worth aligning with the same fix.
+
+---
+
+Can you review this from a security point of view, are we 100% safe to never send the wrong credentials to a host in this redirect chain?
+
+---
+
+yes, let's do this for skiptlsverify, and then let's chat about path aware credential helpers
