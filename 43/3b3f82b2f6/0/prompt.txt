@@ -1,0 +1,68 @@
+can you fix the conflict and rebase onto main?
+
+---
+
+yes
+
+---
+
+can you check next if any of the open comments on https://github.com/entireio/git-sync/pull/65 are still relevant?
+
+---
+
+fix 1, do the small reorder
+
+---
+
+can you take a look at https://github.com/entireio/git-sync/pull/65 again, it now has a conflict due to me merging 63, I checked out the branch already
+
+---
+
+ok, can you look at this :
+
+Production impact. Real flow when github.com → replica.example:
+
+  1. GET https://github.com/repo/info/refs (anonymous) → http.Client follows 307 → replica returns 401.
+  2. res.Request.URL.Host == replica.example, so challengeURL = replica.example.
+  3. Lookup against replica.example returns creds (user has them stored under replica).
+  4. Retry builds URL = https://github.com/..., attaches Authorization: Basic ....
+  5. c.HTTP.Do(req) follows the 307 again. Go's http.Client strips Authorization on cross-host redirects (shouldCopyHeaderOnRedirect returns false unless the redirect target is a subdomain
+   match of the source).
+  6. Replica sees the redirected request with no auth → 401.
+  7. We hit the 401/403 branch → Reject(challengeURL=replica.example, …).
+
+  The valid credentials the user stored for replica.example just got Reject'd, even though they were correct. Next run: Lookup returns nothing, the original 401 surfaces, user is locked
+  attempt 2 regardless of URL — Go's redirect-strip behaviour is never exercised.
+
+  Two viable fixes: (a) retry directly against challengeURL rather than c.EndpointURL; or (b) set CheckRedirect to ErrUseLastResponse for the retry and apply auth manually to the final
+  hop.
+
+EnsureAuthForService has a related but milder inconsistency (commit 6 reordering): Lookup runs against c.EndpointURL before the probe, then pendingHelperCreds.url is set to
+  challengeURLFor(c.EndpointURL, res). If the probe redirects cross-host, Approve/Reject fire against a key the helper has no entry under — no leak, no churn of valid creds, but the
+  Approve/Reject signal lands on the wrong key. Worth aligning with the same fix.
+
+---
+
+Can you review this from a security point of view, are we 100% safe to never send the wrong credentials to a host in this redirect chain?
+
+---
+
+yes, let's do this for skiptlsverify, and then let's chat about path aware credential helpers
+
+---
+
+in context of this: 
+
+❯ go run ./cmd/git-sync sync -v --all-refs git@github.com:entireio/git-sync.git "$ARTIFACTS_REMOTE"
+error: sync: sync: list target refs: request info refs: http 401: https://8b04592ed74a5cce30d355b07276caf3.artifacts.cloudflare.net/git/soph/test-repo-git-sync-ssh-10.git/info/refs?service=git-receive-pack [Cf-Ray=a02fa0e90e6c4480-TXL, Server=cloudflare, Content-Type=text/plain;charset=UTF-8] Authentication required
+exit status 1
+
+Why would this now not ask me for credentials?
+
+---
+
+I'm not sure I follow when and where did we make the design choice it would not be interactive?
+
+---
+
+Ok, we go this wrong then. The user complained that he got a prompt for a repo that does not need auth. But if there is auth needed we can ask. Otherwise I would just use GIT_TERMINAL_PROMPT for git-sync too. If it's set to 0 we don't ask and fail (basically pass it through) but just for the case where no auth is needed we can check once as implemented, right?

@@ -1,0 +1,23 @@
+{
+  "cli_version": "v0.6.3-nightly.202605220724.6d616b16-dev-be0bdf7d4",
+  "checkpoint_id": "433b3f82b2f6",
+  "strategy": "manual-commit",
+  "branch": "soph/issue-63-deferred-credential-helper",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/43/3b3f82b2f6/0/metadata.json",
+      "transcript": "/43/3b3f82b2f6/0/full.jsonl",
+      "content_hash": "/43/3b3f82b2f6/0/content_hash.txt",
+      "prompt": "/43/3b3f82b2f6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5625,
+    "cache_creation_tokens": 1224102,
+    "cache_read_tokens": 36351881,
+    "output_tokens": 202456,
+    "api_call_count": 204
+  }
+}
