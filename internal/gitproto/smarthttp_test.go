@@ -655,6 +655,46 @@ func TestRequestInfoRefs_OnUnauthorizedRetryStill401CallsReject(t *testing.T) {
 	}
 }
 
+// TestRequestInfoRefs_OnUnauthorizedRetry2xxBadContentTypeDoesNotApprove
+// guards the deferred-approval contract: a retry that authenticates (HTTP 200)
+// but returns a non-advertisement body must surface a content-type error and
+// must NOT persist credentials in the helper — the operation didn't actually
+// succeed, so a misleading 2xx shouldn't approve the creds. It's also not an
+// auth failure, so the helper isn't told to reject them either.
+func TestRequestInfoRefs_OnUnauthorizedRetry2xxBadContentTypeDoesNotApprove(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+	attempts := 0
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return newUnauthorizedResponse(req), nil
+		}
+		res := &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    req,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("<html>login</html>")),
+		}
+		res.Header.Set("Content-Type", "text/html")
+		return res, nil
+	}))
+	conn.CredentialHelper = helper
+
+	_, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", "")
+	if err == nil {
+		t.Fatal("expected content-type error after a 2xx retry with a non-advertisement body")
+	}
+	if !strings.Contains(err.Error(), "unexpected info/refs content-type") {
+		t.Fatalf("error = %v, want content-type error", err)
+	}
+	if got := helper.count("approve"); got != 0 {
+		t.Errorf("must not approve credentials for an operation that failed validation, got %d approve calls", got)
+	}
+	if got := helper.count("reject"); got != 0 {
+		t.Errorf("a 2xx-but-invalid response is not an auth failure, got %d reject calls", got)
+	}
+}
+
 // TestRequestInfoRefs_OnUnauthorizedRetry403CallsReject documents that some
 // token services (notably Cloudflare) return 403 "Invalid or expired token"
 // instead of 401 when stored credentials have expired.

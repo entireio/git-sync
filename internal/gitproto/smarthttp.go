@@ -328,9 +328,25 @@ func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProto
 	if err != nil {
 		return nil, err
 	}
-	c.resolvePendingHelperCreds(ctx, res)
-
 	defer res.Body.Close()
+
+	data, err := c.readInfoRefsResponse(res, service)
+	// Settle helper credentials on the fully-validated outcome: approve only
+	// once the advertisement parsed and read within limits, reject on 401/403.
+	// Running this after validation stops a misleading 2xx (wrong content-type
+	// or oversized body) from persisting credentials for an operation that
+	// ultimately failed.
+	c.resolvePendingHelperCreds(ctx, res, err == nil)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// readInfoRefsResponse validates and reads an /info/refs response: it checks
+// the HTTP status and advertisement content-type, applies any redirect to the
+// endpoint, and reads the body under a size cap. The caller closes res.Body.
+func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]byte, error) {
 	if err := httpError(res); err != nil {
 		return nil, err
 	}
@@ -427,10 +443,14 @@ func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body i
 			return nil, err
 		}
 	}
-	c.resolvePendingHelperCreds(ctx, res)
-	if err := httpError(res); err != nil {
+	httpErr := httpError(res)
+	// Settle helper credentials on the validated status: approve on a 2xx,
+	// reject on 401/403. For the POST path the HTTP status is the whole
+	// success signal — there's no advertisement body to validate further.
+	c.resolvePendingHelperCreds(ctx, res, httpErr == nil)
+	if httpErr != nil {
 		_ = res.Body.Close()
-		return nil, err
+		return nil, httpErr
 	}
 	return res.Body, nil
 }
@@ -496,9 +516,10 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 //     servers that 404/405 GET while requiring auth on POST.
 //  3. If the probe gets 401, attach the helper credentials tentatively.
 //     The next real operation (PostRPCStreamBody or RequestInfoRefs)
-//     calls resolvePendingHelperCreds, which Approves them on 2xx or
-//     Rejects them on 401/403 — helper state only changes based on the
-//     actual outcome, never on the probe response alone.
+//     calls resolvePendingHelperCreds, which Approves them only once that
+//     operation fully succeeds or Rejects them on 401/403 — helper state
+//     only changes based on the actual outcome, never on the probe response
+//     alone.
 //
 // If the probe doesn't 401 (200, 404, 405, etc.) we don't attach; the
 // server either accepts anonymous POSTs here or returns ambiguously,
@@ -524,16 +545,23 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 }
 
-// resolvePendingHelperCreds settles credentials that EnsureAuthForService
-// attached tentatively, based on the outcome of a real operation. Called
-// from RequestInfoRefs and PostRPCStreamBody. No-op if nothing pending.
-func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Response) {
+// resolvePendingHelperCreds settles credentials that were attached tentatively
+// — either by EnsureAuthForService's probe or by a tryHelperRetry that got a
+// 2xx — based on the fully-validated outcome of a real operation. Called from
+// RequestInfoRefs and PostRPCStreamBody. No-op if nothing is pending.
+//
+// success reports whether the operation actually succeeded (a 2xx whose body
+// also passed any service-specific validation), as opposed to merely returning
+// a 2xx status. We approve only on success, so a misleading 2xx — e.g. an
+// /info/refs response with the wrong content-type or an oversized body — can't
+// persist credentials for an operation the caller still reports as failed.
+func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Response, success bool) {
 	if c.pendingHelperCreds == nil || c.CredentialHelper == nil {
 		return
 	}
 	creds := c.pendingHelperCreds
 	switch {
-	case res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices:
+	case success:
 		c.pendingHelperCreds = nil
 		c.CredentialHelper.Approve(ctx, creds.url, creds.user, creds.pass)
 	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
@@ -541,9 +569,11 @@ func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Resp
 		c.Auth = nil
 		c.CredentialHelper.Reject(ctx, creds.url, creds.user, creds.pass)
 	}
-	// Other status: leave pending. A later op on this conn may resolve;
-	// the conn is short-lived (one sync), so leftover pending state at
-	// end of life is harmless.
+	// Otherwise (e.g. a 2xx with a malformed/oversized body): leave the creds
+	// pending and c.Auth in place. We must not approve credentials for an
+	// operation that failed validation, but a non-auth failure isn't proof
+	// they're bad either. The conn is short-lived (one sync), so leftover
+	// pending state at end of life is harmless.
 }
 
 // flushPacket is the smart-HTTP pkt-line "flush" marker. A request body
@@ -573,10 +603,12 @@ func (c *HTTPConn) doServiceProbe(ctx context.Context, service string) (*http.Re
 // (explicit auth must surface its own failures rather than be quietly papered
 // over). retry attempts the same request with helper-supplied credentials.
 //
-// On retry success the credentials are stored on c.Auth so follow-up calls
-// on the same connection reuse them. On retry failure (401, 403, or transport
-// error) the helper is told to reject the credentials so a stale stored token
-// self-heals on the next run.
+// On a 2xx retry the credentials are stored on c.Auth (so follow-up calls on
+// the same connection reuse them) and recorded as pending — the caller then
+// approves them via resolvePendingHelperCreds once the response passes full
+// validation, never on the 2xx status alone. On retry failure (401, 403, or
+// transport error) the helper is told to reject the credentials immediately so
+// a stale stored token self-heals on the next run.
 //
 // Caller is responsible for closing the returned response body.
 func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry func(AuthMethod) (*http.Response, error)) (*http.Response, error) {
@@ -605,8 +637,11 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		// surface "Invalid or expired token" as 403 rather than 401.
 		c.CredentialHelper.Reject(ctx, challengeURL, user, pass)
 	case res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices:
+		// Attach tentatively and defer approval to resolvePendingHelperCreds,
+		// which runs after the caller validates the response body — a 2xx
+		// status alone isn't proof the operation succeeded.
 		c.Auth = retryAuth
-		c.CredentialHelper.Approve(ctx, challengeURL, user, pass)
+		c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 	}
 	return res, nil
 }
