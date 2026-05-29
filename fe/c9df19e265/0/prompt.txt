@@ -1,0 +1,1 @@
+can you look at the comments on https://github.com/entireio/git-sync/pull/66 and address them?
