@@ -89,7 +89,7 @@ func TestTranslator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, dstDir, false, reachable)
+	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, false, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestTranslator_RewritesMessageHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
+	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, true, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestTranslator_RewritesCrossBranchReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, true, reachable)
 	// Translate B first — the order that would have left the rewrite
 	// stranded under the old design.
 	if _, err := tr.translate(cB); err != nil {
@@ -337,7 +337,7 @@ func TestTranslator_SkipMessageRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, false, reachable)
 	if _, err := tr.translate(childSHA1); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestTranslator_WriteOriginNotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, false, reachable)
 	if _, err := tr.translate(c2); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestTranslator_WriteMappingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverReachable: %v", err)
 	}
-	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), false, reachable)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, false, reachable)
 	if _, err := tr.translate(commit); err != nil {
 		t.Fatalf("translate: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestTranslator_AmbiguousMessageRefWarning(t *testing.T) {
 	root := t.TempDir()
 	srcRepo := initSHA1(t, filepath.Join(root, "src.git"))
 	dstRepo := initSHA256(t, filepath.Join(root, "dst.git"))
-	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, filepath.Join(root, "dst.git"), true, nil)
+	tr := mustTranslator(t, srcRepo.Storer, dstRepo.Storer, true, nil)
 
 	// Two real-looking SHA1 hashes that share the prefix "deadbee".
 	one := plumbing.NewHash("deadbee100000000000000000000000000000001")
@@ -616,9 +616,9 @@ func initSHA256(t *testing.T, path string) *git.Repository {
 	return r
 }
 
-func mustTranslator(t *testing.T, src, dst gogitstorer.Storer, dir string, rewrite bool, reachable map[plumbing.Hash]plumbing.ObjectType) *translator {
+func mustTranslator(t *testing.T, src, dst gogitstorer.Storer, rewrite bool, reachable map[plumbing.Hash]plumbing.ObjectType) *translator {
 	t.Helper()
-	tr, err := newTranslator(t.Context(), src, dst, dir, rewrite, reachable)
+	tr, err := newTranslator(t.Context(), src, dst, rewrite, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
 	}
@@ -860,7 +860,7 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 	}
 }
 
-// TestRun_GitHTTPBackend_Sign verifies the --sign path end-to-end. SSH
+// TestRun_GitHTTPBackend_Sign verifies the --sign-mode tips path end-to-end. SSH
 // signing is used (not GPG) because it can be set up from scratch in the
 // test with just ssh-keygen, no agent required.
 func TestRun_GitHTTPBackend_Sign(t *testing.T) {
@@ -923,7 +923,7 @@ func TestRun_GitHTTPBackend_Sign(t *testing.T) {
 	res, err := Run(context.Background(), Request{
 		SourceURL: srv.URL + "/source.git",
 		TargetDir: dstDir,
-		Sign:      true,
+		SignMode:  SignModeTips,
 		Out:       io.Discard,
 	})
 	if err != nil {
@@ -1106,7 +1106,7 @@ func TestCheckSideOutputCollision(t *testing.T) {
 			wantErrSubstring: "",
 		},
 		{
-			name: "converted-tag collision refused only when --sign",
+			name: "converted-tag collision refused only when --sign-mode tips",
 			desired: map[plumbing.ReferenceName]planner.DesiredRef{
 				"refs/heads/main":          mk("refs/heads/main"),
 				"refs/tags/converted/main": mk("refs/tags/converted/main"),
@@ -1115,7 +1115,7 @@ func TestCheckSideOutputCollision(t *testing.T) {
 			wantErrSubstring: "refs/tags/converted/main",
 		},
 		{
-			name: "converted-tag without --sign passes through",
+			name: "converted-tag without --sign-mode tips passes through",
 			desired: map[plumbing.ReferenceName]planner.DesiredRef{
 				"refs/tags/converted/main": mk("refs/tags/converted/main"),
 			},
@@ -1240,7 +1240,7 @@ func TestHashPattern_CaseInsensitive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
+	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, true, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
 	}
@@ -1311,7 +1311,7 @@ func TestResolveMessageRef_Memoizes(t *testing.T) {
 	reachable := map[plumbing.Hash]plumbing.ObjectType{
 		plumbing.NewHash("abc1234567890abcdef1234567890abcdef12345"): plumbing.CommitObject,
 	}
-	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, dstDir, true, reachable)
+	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, true, reachable)
 	if err != nil {
 		t.Fatalf("newTranslator: %v", err)
 	}

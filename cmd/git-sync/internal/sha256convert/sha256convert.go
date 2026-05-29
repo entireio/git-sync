@@ -16,10 +16,7 @@ package sha256convert
 import (
 	"bufio"
 	"bytes"
-	"compress/zlib"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -72,13 +69,15 @@ type Request struct {
 	Progress     bool
 	Check        bool
 
-	// Sign, when true, runs `git tag -s converted/<branch> <tip>` for
-	// every converted branch after the conversion completes, attesting
-	// the entire reachable history of each branch via its tip's parent
-	// chain. SignKey is passed to git as `-u <SignKey>`; leave empty to
-	// use the repo's default signing identity.
-	Sign    bool
-	SignKey string
+	// SignMode selects the post-conversion attestation strategy. ""
+	// and SignModeNone sign nothing; SignModeTips runs
+	// `git tag -s converted/<branch> <tip>` for every converted branch,
+	// attesting the entire reachable history of each branch via its
+	// tip's parent chain. (A future "all" mode could sign every commit
+	// and tag.) SignKey is passed to git as `-u <SignKey>`; leave empty
+	// to use the repo's default signing identity.
+	SignMode string
+	SignKey  string
 
 	KeepSourceObjects bool
 
@@ -221,6 +220,11 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if bad := protectedExcludePrefixes(req.ExcludeRefPrefixes); len(bad) > 0 {
 		return Result{}, fmt.Errorf("convert-sha256 refuses --exclude-ref-prefix values that would drop branches or tags: %s (only namespaces outside refs/heads/ and refs/tags/ may be excluded)", strings.Join(bad, ", "))
 	}
+	switch req.SignMode {
+	case "", SignModeNone, SignModeTips:
+	default:
+		return Result{}, fmt.Errorf("convert-sha256: unknown --sign-mode %q (valid: %s, %s)", req.SignMode, SignModeNone, SignModeTips)
+	}
 	out := req.Out
 	if out == nil {
 		out = os.Stderr
@@ -301,7 +305,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// would collide with our side outputs. writeRefs runs before
 	// writeOriginNotes / signBranchTips, so without this check the
 	// later side-output write would silently clobber the source ref.
-	if err := checkSideOutputCollision(desired, req.SkipOriginNotes, req.Sign); err != nil {
+	if err := checkSideOutputCollision(desired, req.SkipOriginNotes, req.SignMode == SignModeTips); err != nil {
 		return res, err
 	}
 
@@ -350,7 +354,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// retry on ensureEmptyTarget; arm the deferred cleanup now.
 	cleanupTarget = true
 
-	tr, err := newTranslator(ctx, srcRepo.Storer, dstRepo.Storer, req.TargetDir, !req.SkipMessageRewrite, reachable)
+	tr, err := newTranslator(ctx, srcRepo.Storer, dstRepo.Storer, !req.SkipMessageRewrite, reachable)
 	if err != nil {
 		return res, err
 	}
@@ -422,7 +426,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.MappingFile = req.MappingFile
 	}
 
-	if req.Sign {
+	if req.SignMode == SignModeTips {
 		signed, err := signBranchTips(ctx, out, req.TargetDir, req.SignKey, req.SourceURL, desired)
 		// signBranchTips returns the tags it had already created
 		// when it failed mid-iteration. Surface that partial list
@@ -548,7 +552,7 @@ func signBranchTips(ctx context.Context, out io.Writer, targetDir, signKey, sour
 // earlier check fails.
 //
 // sideOutputs holds the exact refs the run created on top of the
-// source set (the origin-notes ref, any --sign attestation tags), so
+// source set (the origin-notes ref, any --sign-mode tips attestation tags), so
 // the refs check can omit them from the resolved/expected fraction
 // without false-positive-skipping a same-named source ref.
 //
@@ -698,6 +702,15 @@ const (
 	attestationTagPrefix = "refs/tags/converted/"
 )
 
+// --sign-mode values. SignModeNone (and the empty string) sign nothing;
+// SignModeTips mints one signed attestation tag per branch tip. The set
+// is deliberately small and forward-compatible: an "all" mode that signs
+// every commit/tag could be added without changing the flag's shape.
+const (
+	SignModeNone = "none"
+	SignModeTips = "tips"
+)
+
 // protectedExcludePrefixes returns the subset of prefixes that, under
 // planner.IsRefExcluded's string-prefix semantics, would knock out at
 // least one branch or tag. A prefix matches a branch if either side
@@ -736,13 +749,13 @@ func protectedExcludePrefixes(prefixes []string) []string {
 // output. Without this guard, writeRefs would publish the source's
 // value first and writeOriginNotes / signBranchTips would silently
 // overwrite it — losing the source ref and hiding the conflict.
-func checkSideOutputCollision(desired map[plumbing.ReferenceName]planner.DesiredRef, skipOriginNotes, sign bool) error {
+func checkSideOutputCollision(desired map[plumbing.ReferenceName]planner.DesiredRef, skipOriginNotes, signTips bool) error {
 	if !skipOriginNotes {
 		if _, conflict := desired[plumbing.ReferenceName(originNotesRef)]; conflict {
 			return fmt.Errorf("source already advertises %s; pass --no-origin-notes to keep that source ref, or --exclude-ref-prefix %s to drop it from the conversion", originNotesRef, originNotesRef)
 		}
 	}
-	if sign {
+	if signTips {
 		var clashes []string
 		for name := range desired {
 			if strings.HasPrefix(string(name), attestationTagPrefix) {
@@ -751,7 +764,7 @@ func checkSideOutputCollision(desired map[plumbing.ReferenceName]planner.Desired
 		}
 		if len(clashes) > 0 {
 			sort.Strings(clashes)
-			return fmt.Errorf("source has %s under %s, which collides with the attestation tags --sign would create; drop --sign or rename the source tag(s)", strings.Join(clashes, ", "), attestationTagPrefix)
+			return fmt.Errorf("source has %s under %s, which collides with the attestation tags --sign-mode tips would create; use --sign-mode none or rename the source tag(s)", strings.Join(clashes, ", "), attestationTagPrefix)
 		}
 	}
 	return nil
@@ -835,18 +848,21 @@ func (a authAdapter) Authorizer(req *http.Request) error {
 }
 
 // translator walks the SHA1 source store, rewrites object content with
-// SHA256-mapped hashes, and writes the result as loose objects under the
-// target bare repo. Loose object writing is done by hand because go-git
-// v6 alpha 3's objfile.Writer hardcodes SHA1 in prepareForWrite (see
-// plumbing/format/objfile/writer.go:68), which would store every SHA256
-// object at a SHA1-derived path.
+// SHA256-mapped hashes, and writes the result into the target bare repo
+// via SetEncodedObject. The target storer is configured for SHA256 (see
+// the PlainInit in Run), so go-git hashes and names every loose object
+// under SHA256.
 type translator struct {
 	// ctx is checked at the top of every translate() call so a Ctrl-C
 	// during a million-object conversion is responsive. It is the same
 	// context passed to Run() and is not stored to outlive its caller.
-	ctx        context.Context //nolint:containedctx // translate() is recursive and not directly called by Run; threading ctx through every signature is noisier than a single field used for cancellation only.
-	src        *filesystem.Storage
-	objectsDir string
+	ctx context.Context //nolint:containedctx // translate() is recursive and not directly called by Run; threading ctx through every signature is noisier than a single field used for cancellation only.
+	src *filesystem.Storage
+	// dst is the SHA256-configured target store. Each translated object
+	// is built with dst.NewEncodedObject (which binds it to the target's
+	// SHA256 hasher) and persisted with dst.SetEncodedObject, so both the
+	// returned hash and the on-disk loose path are computed under SHA256.
+	dst storer.EncodedObjectStorer
 	// reachable holds every in-scope SHA1 with its object type, built up
 	// front by discoverReachable, which walks tree/commit/tag dependencies
 	// from the desired ref tips. It is the authoritative "what's in
@@ -901,18 +917,10 @@ func (t *translator) snapshotCounts() Counts {
 	}
 }
 
-func newTranslator(ctx context.Context, src, dst storer.Storer, targetDir string, rewriteMessages bool, reachable map[plumbing.Hash]plumbing.ObjectType) (*translator, error) {
+func newTranslator(ctx context.Context, src storer.Storer, dst storer.EncodedObjectStorer, rewriteMessages bool, reachable map[plumbing.Hash]plumbing.ObjectType) (*translator, error) {
 	srcFS, ok := src.(*filesystem.Storage)
 	if !ok {
 		return nil, fmt.Errorf("source storage is not filesystem-backed (%T)", src)
-	}
-	// Type-check that the target is filesystem-backed too — we write
-	// loose objects by hand into targetDir/objects, bypassing the
-	// storer, but a memory-backed dst here would silently leave the
-	// caller's expected destination empty. Result is discarded: the
-	// translator only references targetDir directly.
-	if _, ok := dst.(*filesystem.Storage); !ok {
-		return nil, fmt.Errorf("target storage is not filesystem-backed (%T)", dst)
 	}
 	if reachable == nil {
 		reachable = make(map[plumbing.Hash]plumbing.ObjectType)
@@ -920,7 +928,7 @@ func newTranslator(ctx context.Context, src, dst storer.Storer, targetDir string
 	return &translator{
 		ctx:                  ctx,
 		src:                  srcFS,
-		objectsDir:           filepath.Join(targetDir, "objects"),
+		dst:                  dst,
 		reachable:            reachable,
 		mapping:              make(map[plumbing.Hash]plumbing.Hash),
 		inProgress:           make(map[plumbing.Hash]struct{}),
@@ -1096,7 +1104,7 @@ func (t *translator) translateBlob(sha1 plumbing.Hash, src plumbing.EncodedObjec
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("blob read: %w", err)
 	}
-	newHash, err := t.writeLoose(plumbing.BlobObject, body)
+	newHash, err := t.storeBlob(body)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("blob store: %w", err)
 	}
@@ -1127,11 +1135,7 @@ func (t *translator) translateTree(sha1 plumbing.Hash, src plumbing.EncodedObjec
 		}
 		tree.Entries[i].Hash = newH
 	}
-	body, err := encodeBody(plumbing.TreeObject, tree.Encode)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("encode tree %s: %w", sha1, err)
-	}
-	newHash, err := t.writeLoose(plumbing.TreeObject, body)
+	newHash, err := t.store(tree.Encode)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("store tree %s: %w", sha1, err)
 	}
@@ -1198,11 +1202,7 @@ func (t *translator) translateCommit(sha1 plumbing.Hash, src plumbing.EncodedObj
 		}
 		c.ExtraHeaders = filtered
 	}
-	body, err := encodeBody(plumbing.CommitObject, c.Encode)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("encode commit %s: %w", sha1, err)
-	}
-	newHash, err := t.writeLoose(plumbing.CommitObject, body)
+	newHash, err := t.store(c.Encode)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("store commit %s: %w", sha1, err)
 	}
@@ -1243,11 +1243,7 @@ func (t *translator) translateTag(sha1 plumbing.Hash, src plumbing.EncodedObject
 		tag.SignatureSHA256 = ""
 		t.signaturesStripped++
 	}
-	body, err := encodeBody(plumbing.TagObject, tag.Encode)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("encode tag %s: %w", sha1, err)
-	}
-	newHash, err := t.writeLoose(plumbing.TagObject, body)
+	newHash, err := t.store(tag.Encode)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("store tag %s: %w", sha1, err)
 	}
@@ -1256,105 +1252,55 @@ func (t *translator) translateTag(sha1 plumbing.Hash, src plumbing.EncodedObject
 	return newHash, nil
 }
 
-// encodeBody runs an object's go-git Encode method into a scratch
-// MemoryObject and returns just the payload bytes — without the
-// "<type> <size>\x00" header. writeLoose adds the SHA256-correct header.
+// store encodes an object into a fresh EncodedObject bound to the target
+// store's SHA256 hasher and persists it as a loose object, returning the
+// new SHA256 hash. Building the object via dst.NewEncodedObject is what
+// guarantees the returned hash and the on-disk filename are both computed
+// under SHA256: NewEncodedObject binds the object to the store's object
+// format, and SetEncodedObject writes (and returns) it under that format.
 //
-// The format argument to NewMemoryObject is required by the constructor
-// but unused here: we never ask the scratch object for its hash, only
-// for its byte stream.
-func encodeBody(typ plumbing.ObjectType, encode func(plumbing.EncodedObject) error) ([]byte, error) {
-	scratch := plumbing.NewMemoryObject(plumbing.FromObjectFormat(formatcfg.SHA1))
-	scratch.SetType(typ)
-	if err := encode(scratch); err != nil {
-		return nil, err
+// This path could not be used on go-git v6 alpha.3 — its objfile.Writer
+// hardcoded SHA1, so SetEncodedObject placed every translated object at a
+// SHA1-derived path even on a SHA256 store. alpha.4 derives the hash
+// format from the store config (go-git commit 5cab3a7), so the manual
+// loose-object writer this code used to carry is no longer needed.
+//
+// go-git's loose writer is atomic (tempfile + rename) and idempotent on
+// duplicate hashes (it lstats the destination and drops the temp file if
+// it already exists); duplicate source objects never reach here anyway,
+// since translate() memoizes through t.mapping before encoding.
+func (t *translator) store(encode func(plumbing.EncodedObject) error) (plumbing.Hash, error) {
+	obj := t.dst.NewEncodedObject()
+	if err := encode(obj); err != nil {
+		return plumbing.ZeroHash, err
 	}
-	r, err := scratch.Reader()
+	h, err := t.dst.SetEncodedObject(obj)
 	if err != nil {
-		return nil, fmt.Errorf("scratch reader: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("set encoded object: %w", err)
 	}
-	defer r.Close()
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read encoded body: %w", err)
-	}
-	return body, nil
+	return h, nil
 }
 
-// writeLoose writes a single object as a SHA256-named loose object under
-// objects/<aa>/<rest>. Bypasses go-git's objfile.Writer, which would hash
-// with SHA1. Atomic via tempfile+rename, idempotent on duplicate hashes.
-//
-// Durability is not guaranteed against power loss: we do not fsync the
-// loose file or its parent directory before returning. The Stat-by-name
-// idempotency shortcut would then accept a torn file from a previous
-// crashed run as already-written. That trade-off is intentional —
-// convert-sha256 is a single-shot bulk operation (not an incremental
-// sync), it processes millions of objects on kernel-scale repos where
-// per-object fsync would dominate runtime, and Run wipes the target
-// directory on error (see the cleanupTarget defer in Run) so the only
-// supported recovery is re-running from clean state.
-func (t *translator) writeLoose(typ plumbing.ObjectType, body []byte) (plumbing.Hash, error) {
-	h := sha256.New()
-	header := append(typ.Bytes(), ' ')
-	header = strconv.AppendInt(header, int64(len(body)), 10)
-	header = append(header, 0)
-	h.Write(header)
-	h.Write(body)
-	sum := h.Sum(nil)
-	hexSum := hex.EncodeToString(sum)
-
-	dir := filepath.Join(t.objectsDir, hexSum[:2])
-	file := filepath.Join(dir, hexSum[2:])
-
-	hashID, ok := plumbing.FromBytes(sum)
-	if !ok {
-		return plumbing.ZeroHash, fmt.Errorf("internal: bad sha256 sum length %d", len(sum))
-	}
-
-	if _, err := os.Stat(file); err == nil {
-		return hashID, nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-
-	var buf bytes.Buffer
-	// Level 1 matches git's core.looseCompression default. Loose objects
-	// are short-lived (gc rolls them into packs), so optimizing for write
-	// speed over size is the standard trade-off.
-	zw, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("zlib writer: %w", err)
-	}
-	if _, err := zw.Write(header); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("zlib write header: %w", err)
-	}
-	if _, err := zw.Write(body); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("zlib write body: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("zlib close: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(dir, "tmp_obj_")
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("create temp object: %w", err)
-	}
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return plumbing.ZeroHash, fmt.Errorf("write temp object: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return plumbing.ZeroHash, fmt.Errorf("close temp object: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), file); err != nil {
-		_ = os.Remove(tmp.Name())
-		return plumbing.ZeroHash, fmt.Errorf("rename %s: %w", file, err)
-	}
-	return hashID, nil
+// storeBlob persists raw bytes as a blob. Blob content is never rewritten
+// during conversion (blobs carry no hash references), so the bytes are
+// copied verbatim.
+func (t *translator) storeBlob(content []byte) (plumbing.Hash, error) {
+	return t.store(func(o plumbing.EncodedObject) error {
+		o.SetType(plumbing.BlobObject)
+		o.SetSize(int64(len(content)))
+		w, err := o.Writer()
+		if err != nil {
+			return fmt.Errorf("blob writer: %w", err)
+		}
+		if _, err := w.Write(content); err != nil {
+			_ = w.Close()
+			return fmt.Errorf("write blob content: %w", err)
+		}
+		if err := w.Close(); err != nil {
+			return fmt.Errorf("close blob writer: %w", err)
+		}
+		return nil
+	})
 }
 
 // hashPattern matches hex runs that could be a git object hash. Git's
@@ -1548,7 +1494,7 @@ func (t *translator) writeOriginNotes(refName string) (string, error) {
 		if !ok {
 			continue
 		}
-		blobHash, err := t.writeLoose(plumbing.BlobObject, []byte(oldSHA1.String()+"\n"))
+		blobHash, err := t.storeBlob([]byte(oldSHA1.String() + "\n"))
 		if err != nil {
 			return "", fmt.Errorf("note blob for %s: %w", oldSHA1, err)
 		}
@@ -1570,11 +1516,7 @@ func (t *translator) writeOriginNotes(refName string) (string, error) {
 		return treeEntries[i].Name < treeEntries[j].Name
 	})
 	tree := &object.Tree{Entries: treeEntries}
-	treeBody, err := encodeBody(plumbing.TreeObject, tree.Encode)
-	if err != nil {
-		return "", fmt.Errorf("encode notes tree: %w", err)
-	}
-	treeHash, err := t.writeLoose(plumbing.TreeObject, treeBody)
+	treeHash, err := t.store(tree.Encode)
 	if err != nil {
 		return "", fmt.Errorf("store notes tree: %w", err)
 	}
@@ -1591,11 +1533,7 @@ func (t *translator) writeOriginNotes(refName string) (string, error) {
 		Message:   "git-sync convert-sha256: SHA1 origin notes\n",
 		TreeHash:  treeHash,
 	}
-	commitBody, err := encodeBody(plumbing.CommitObject, commit.Encode)
-	if err != nil {
-		return "", fmt.Errorf("encode notes commit: %w", err)
-	}
-	commitHash, err := t.writeLoose(plumbing.CommitObject, commitBody)
+	commitHash, err := t.store(commit.Encode)
 	if err != nil {
 		return "", fmt.Errorf("store notes commit: %w", err)
 	}

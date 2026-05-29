@@ -88,8 +88,8 @@ submodule repository first and re-point .gitmodules.`,
 		"show live per-phase object counts on stderr (TTY only)")
 	cmd.Flags().BoolVar(&req.Check, "check", false,
 		"verify the output after conversion (config, HEAD, refs, git fsck --full)")
-	cmd.Flags().BoolVar(&req.Sign, "sign", false,
-		"after conversion, sign each branch tip as refs/tags/converted/<branch> via `git tag -s`")
+	cmd.Flags().StringVar(&req.SignMode, "sign-mode", sha256convert.SignModeNone,
+		"post-conversion signing: `none` (default), or `tips` to sign each branch tip as refs/tags/converted/<branch> via `git tag -s`")
 	cmd.Flags().StringVar(&req.SignKey, "sign-key", "",
 		"signing key id to pass to `git tag -s -u`; default uses the repo's user.signingkey")
 	cmd.Flags().BoolVar(&req.KeepSourceObjects, "keep-source-objects", false,

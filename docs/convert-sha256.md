@@ -128,9 +128,10 @@ Useful for bulk rewriting external systems: feed the file to a script
 that walks Jira tickets, PR bodies, deploy manifests, or any other
 system that holds frozen SHA1 references.
 
-### Branch-tip attestation tags (opt in via `--sign`)
+### Branch-tip attestation tags (opt in via `--sign-mode tips`)
 
-`--sign` shells out to `git tag -s converted/<branch> <tip>` for every
+`--sign-mode` defaults to `none` (sign nothing). `--sign-mode tips`
+shells out to `git tag -s converted/<branch> <tip>` for every
 converted branch after the conversion completes. Each resulting
 signed annotated tag is a cryptographic attestation by the converter
 that the entire reachable history of that branch — every parent, tree,
@@ -183,7 +184,9 @@ identity is set up.
 --no-rewrite-messages              skip inline hash rewrites in messages
 --no-origin-notes                  skip refs/notes/sha1-origin
 --check                            verify the output (config, HEAD, refs, git fsck)
---sign                             sign each branch tip via `git tag -s converted/<branch>`
+--sign-mode                        signing mode: none (default) or tips
+                                   (sign each branch tip as
+                                   refs/tags/converted/<branch> via `git tag -s`)
 --sign-key                         signing key id passed to `git tag -s -u <key>`
 --keep-source-objects              leave the temp SHA1 store on disk
 --progress                         live per-phase object counts (TTY only)
@@ -324,10 +327,14 @@ them (parent/tree/tag-target edges are a DAG, and SHA1 message-
 reference cycles are cryptographically infeasible), but a trip into
 the guard becomes a hard error rather than a stack overflow.
 
-Loose object writing is done by hand rather than via go-git's
-`SetEncodedObject`. The underlying `plumbing/format/objfile.Writer`
-in `go-git/v6@v6.0.0-alpha.3` hardcodes SHA1 in its hasher, which
-would put every translated object at a SHA1-derived path even though
-the content references SHA256. A unit test recomputes `sha256` of
-every loose object's decompressed content and compares against the
-filename to prevent regression.
+Translated objects are written with go-git's `SetEncodedObject`. Each
+one is built through the target store's `NewEncodedObject`, which binds
+it to the store's SHA256 hasher, so both the returned hash and the
+on-disk loose path are computed under SHA256. (Earlier revisions wrote
+loose objects by hand: `go-git/v6@v6.0.0-alpha.3`'s
+`plumbing/format/objfile.Writer` hardcoded SHA1 in its hasher and would
+have placed every translated object at a SHA1-derived path. That was
+fixed upstream in `v6.0.0-alpha.4`, which derives the hash format from
+the store config.) A unit test recomputes `sha256` of every loose
+object's decompressed content and compares it against the filename to
+guard against a regression.
