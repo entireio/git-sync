@@ -260,12 +260,19 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}()
 
+	// Credentials embedded in the URL (https://user:token@host/...) must
+	// never reach status output, the JSON result, or — worst of all — the
+	// signed attestation tag message, which is permanent and gets pushed.
+	// The fetch path keeps the original req.SourceURL; only these
+	// human-facing / persisted copies are redacted.
+	redactedSourceURL := redactSourceURL(req.SourceURL)
+
 	// Build the result struct early so error paths can surface
 	// what little ran successfully. In particular, --keep-source-objects
 	// exists to debug failures, so cleanupTemp must flip and TempDir
 	// must be in the result *before* any later error return; otherwise
 	// the temp store gets wiped on exactly the runs that need it.
-	res := Result{SourceURL: req.SourceURL, TargetDir: req.TargetDir}
+	res := Result{SourceURL: redactedSourceURL, TargetDir: req.TargetDir}
 	if req.KeepSourceObjects {
 		cleanupTemp = false
 		res.TempDir = tempDir
@@ -310,7 +317,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	// Fetch into temp SHA1 store ------------------------------------------
-	fmt.Fprintf(out, "fetching %d ref(s) from %s ...\n", len(desired), req.SourceURL)
+	fmt.Fprintf(out, "fetching %d ref(s) from %s ...\n", len(desired), redactedSourceURL)
 	gpDesired := convert.DesiredRefs(desired)
 	if err := refService.FetchToStore(ctx, srcRepo.Storer, conn, gpDesired, nil); err != nil &&
 		!errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -427,7 +434,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 
 	if req.SignMode == SignModeTips {
-		signed, err := signBranchTips(ctx, out, req.TargetDir, req.SignKey, req.SourceURL, desired)
+		signed, err := signBranchTips(ctx, out, req.TargetDir, req.SignKey, redactedSourceURL, desired)
 		// signBranchTips returns the tags it had already created
 		// when it failed mid-iteration. Surface that partial list
 		// even on error so the caller can clean up — without it,
@@ -787,6 +794,26 @@ func ensureEmptyTarget(path string) error {
 		return fmt.Errorf("target directory %s is not empty", path)
 	}
 	return nil
+}
+
+// redactSourceURL removes any credentials embedded in a source URL so
+// they never reach status output, the JSON result, or the signed
+// attestation tag message. The entire userinfo component is stripped,
+// not just the password: token auth commonly carries the secret in the
+// username position (https://<token>@host/...), which url.URL.Redacted()
+// would leave intact. The fetch path keeps the original req.SourceURL,
+// so stripping here does not affect authentication.
+//
+// If the URL cannot be parsed (openSource parses the same string and
+// fails the run otherwise), we return a placeholder rather than risk
+// echoing credentials we could not locate.
+func redactSourceURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<source url redacted>"
+	}
+	u.User = nil
+	return u.String()
 }
 
 func openSource(ctx context.Context, req Request, planCfg planner.PlanConfig) (gitproto.Conn, *gitproto.RefService, []*plumbing.Reference, error) {

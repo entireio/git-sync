@@ -1046,6 +1046,30 @@ func TestProtectedExcludePrefixes(t *testing.T) {
 	}
 }
 
+func TestRedactSourceURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no credentials", "https://github.com/o/r.git", "https://github.com/o/r.git"},
+		{"user and password", "https://user:secret@github.com/o/r.git", "https://github.com/o/r.git"},
+		// Token-as-username: url.URL.Redacted() would leave this intact
+		// (no password component), so we must strip the whole userinfo.
+		{"token as username", "https://ghp_abc123@github.com/o/r.git", "https://github.com/o/r.git"},
+		{"x-access-token form", "https://x-access-token:ghp_abc@github.com/o/r.git", "https://github.com/o/r.git"},
+		// Unparseable input must not echo whatever credentials it carried.
+		{"unparseable", "https://tok@ho%zz/r.git", "<source url redacted>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactSourceURL(tt.in); got != tt.want {
+				t.Errorf("redactSourceURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRun_RejectsExcludePrefixesThatDropBranchesOrTags(t *testing.T) {
 	// We never reach the network here — the validation fires before
 	// any I/O — so a non-empty target dir is the only thing the early
