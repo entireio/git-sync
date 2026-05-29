@@ -25,6 +25,77 @@
   "session_metrics": {
     "turn_count": 49
   },
+  "summary": {
+    "intent": "Fix git-sync materialized push failures against Cloudflare-Artifacts-class HTTP endpoints, which were consistently dying at ~7.9 KB with 'use of closed network connection'.",
+    "outcome": "Root cause identified as Cloudflare's idle-write timeout triggered by go-git's delta selection phase stalling the HTTP body mid-stream. Fixed by pre-running delta selection before opening the POST body using a new upstream go-git API (WithObjectSelector), which was contributed and merged as go-git PR #2142. git-sync PR #64 opened with full fix plus HTTP diagnostics, keep-alives fix, and pack-encode progress. Credential-reject-on-401 feature started on a separate branch.",
+    "learnings": {
+      "repo": [
+        "Materialized push strategy previously used io.Pipe between go-git encoder and HTTP body — pack bytes flowed directly to wire with chunked encoding, but delta selection caused a 50s+ stall mid-stream.",
+        "Relay/bootstrap paths (PushPack) stream source bytes continuously from GitHub and are unaffected by the idle-write issue; the stall is specific to materialized strategy's local encoding.",
+        "Progress output uses sessionStderr → setTransient pattern: write strings ending with \\r to the ProgressWriter to get transient/overwriting lines on stderr.",
+        "GITSYNC_HTTP_TRACE=1 env var pattern mirrors GITSYNC_FORCE_CHUNKED=1 — env-var-gated debug/experiment flags are the repo's convention for diagnostics.",
+        "GitCredentialFillCommand / GitCredentialRejectCommand are function-variable hooks (not hard-coded exec calls) to enable testability without shelling out in tests.",
+        "Entire-Checkpoint trailers are injected by the prepare-commit-msg hook; the hook does NOT re-fire during git rebase --continue, so amended commits lose the trailer.",
+        "go-git's Encoder.Encode is internally two phases: ObjectsToPack (slow, no output) then encode (fast, streaming). These were not previously separable via the public API.",
+        "Commit message convention is '<area>: <lowercase imperative verb> <description>' with subject under ~70 chars; linter enforces wrapcheck for error wrapping."
+      ],
+      "code": [
+        {
+          "path": "internal/gitproto/push.go",
+          "finding": "countingWriter needed atomic.Int64 because the progress ticker goroutine reads the counter concurrently with the encoder writing — flagged by efficiency review."
+        },
+        {
+          "path": "internal/syncer/progress.go",
+          "finding": "sessionStderr had a data race: concurrent writes from the progress ticker goroutine and the main goroutine required a mutex, caught by PR review comment."
+        },
+        {
+          "path": "internal/auth/auth.go",
+          "line": 69,
+          "end_line": 72,
+          "finding": "lookupGitCredential calls 'git credential fill' to obtain credentials but never calls 'git credential approve' or 'git credential reject', so stale tokens persist in the helper across runs."
+        },
+        {
+          "path": "internal/gitproto/smarthttp.go",
+          "finding": "SpooledBody exposed unexported size/path fields directly to PostRPCStreamBody; encapsulated via applyTo(req) method during simplify pass."
+        },
+        {
+          "path": "../../go-git/plumbing/format/packfile/encoder.go",
+          "line": 170,
+          "finding": "Encoder.Encode mutates ObjectToPack entries (Offset, WantWrite, cycle recovery via restoreOriginal) during the write phase, making any pre-built []*ObjectToPack single-use — reusing across two encoders produces silently broken packs with mismatched headers/footers and wrong hashes."
+        },
+        {
+          "path": "../../go-git/plumbing/format/packfile/delta_selector.go",
+          "line": 64,
+          "end_line": 75,
+          "finding": "ObjectsToPack parallelizes delta walking with goroutines per object type — this is why the phase must complete before writing starts; sorting and parallel walks require the full object list in memory before any bytes flow."
+        }
+      ],
+      "workflow": [
+        "Isolate causal variables with a minimal experiment flag (GITSYNC_FORCE_CHUNKED=1) rather than reasoning from first principles — the Content-Length hypothesis was plausible but wrong; the experiment proved it in minutes.",
+        "When interactive-rebasing to amend a non-HEAD commit, stash unrelated working-tree changes first to avoid them appearing staged mid-rebase.",
+        "force-with-lease over --force when updating a PR branch: fails safely if someone else pushed in the meantime.",
+        "For upstream OSS contributions: export the internal phase boundary rather than adding a new high-level API — lower maintenance burden and easier to get accepted.",
+        "When a go module dep is pinned to an unreleased commit (pseudo-version), document the merge commit hash explicitly in the PR so reviewers know to bump when a tag drops.",
+        "Squash to one commit before upstream PR merge; preserve Co-authored-by trailers for collaborators who committed directly to the branch."
+      ]
+    },
+    "friction": [
+      "Initial diagnosis was wrong — framed as 'Cloudflare rejects chunked encoding' when the actual cause was Cloudflare's idle-write timeout during delta selection; commit messages were amended after the experiment clarified the root cause.",
+      "GITSYNC_FORCE_CHUNKED=1 experiment unexpectedly still sent Content-Length (spooled body had already computed size), requiring a second look at the code path to understand why.",
+      "Interactive rebase dropped Entire-Checkpoint trailers from two commits (prepare-commit-msg hook doesn't re-fire on rebase --continue); caught only at lint-check time.",
+      "go-git hadn't cut a new alpha tag after PR #2142 merged, requiring a pseudo-version pin in go.mod rather than a clean tagged release.",
+      "PR #64 had lint failures post-push: wrapcheck violation on a bare error return and a data race in sessionStderr missed during local testing.",
+      "PrecomputedSelector was added to go-git then removed after maintainer feedback across multiple PR iterations, requiring force-push and squash."
+    ],
+    "open_items": [
+      "go-git dependency pinned to pseudo-version (merge commit 590487407c38); needs bump to next tagged release (v6.0.0-alpha.5 or later) when cut.",
+      "Credential-reject-on-401 feature is implemented on branch soph/credential-reject-on-401 but not yet pushed or PR'd.",
+      "V1 credential-reject is reset-only (no auto-retry within the same run) — retry-and-prompt for interactive UX explicitly deferred.",
+      "humanizeBytes in internal/gitproto duplicates formatBytes in internal/syncer/progress.go — consolidation deferred because syncer imports gitproto (would require moving the helper down the dependency graph).",
+      "Streaming approach against Cloudflare was confirmed working with --all-refs but only in one test run; no regression test covers the CDN idle-write scenario automatically.",
+      "go-git's Encoder has no progress hook for the delta-selection phase; progress is inferred from byte counts (<=12 bytes = still selecting). A proper upstream hook would be cleaner but was not proposed."
+    ]
+  },
   "initial_attribution": {
     "calculated_at": "2026-05-22T13:09:43.387944Z",
     "agent_lines": 169,
