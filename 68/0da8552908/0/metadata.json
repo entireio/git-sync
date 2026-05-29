@@ -22,6 +22,90 @@
   "session_metrics": {
     "turn_count": 45
   },
+  "summary": {
+    "intent": "Debug and fix a materialized push failure (use of closed network connection) when running git-sync with --all-refs against a Cloudflare Artifacts HTTP target, while understanding why --all-refs forces the materialized strategy instead of relay.",
+    "outcome": "Root cause confirmed as a mid-stream HTTP body stall during go-git's synchronous delta selection phase, which trips Cloudflare's idle-write timeout. Fixed via temp-file spool of the materialized pack body (eliminating the stall), then superseded by an upstream go-git API contribution (WithObjectSelector) enabling the slow selection phase to run before the HTTP POST opens, restoring streaming behavior.",
+    "learnings": {
+      "repo": [
+        "git-sync has two push strategies: relay (FF-safe, streaming, heads/tags only) and materialized (full object closure rebuild, fallback for --all-refs or other-kind refs). relay.go:110-111 explicitly refuses RefKindOther.",
+        "--force in sync mode disables relay entirely (relay.go:75), while replicate mode allows relay for RefKindOther because its contract is overwrite not FF-safe (relay.go:148,166-168).",
+        "NewHTTPTransport was returning http.DefaultTransport (package-level shared transport) for the non-skipTLS path — our transport config leaked into any other code in the same process using http.DefaultTransport.",
+        "Progress output uses '\\r'-terminated strings routed through sessionStderr → setTransient in internal/syncer/progress.go for in-place console updates, same pattern as git sideband progress.",
+        "CONTRIBUTING.md requires Entire-Checkpoint trailers added by prepare-commit-msg hook, but the hook does not re-fire during git rebase --continue, so amended commits silently lose their trailers.",
+        "go-git's Encoder.Encode runs delta selection (slow, zero output, parallel per object-type group) synchronously before any pack bytes are written — the phase boundary was not previously exposed via the public API.",
+        "go-git's ObjectToPack structs are mutated by Encoder during the write phase (Offset, WantWrite fields), making a naive PrecomputedSelector that returns the same slice on repeated calls silently produce corrupted packs on reuse."
+      ],
+      "code": [
+        {
+          "path": "internal/planner/relay.go",
+          "line": 75,
+          "end_line": 75,
+          "finding": "force || prune || dryRun disables incremental relay entirely in sync mode, routing to materialized."
+        },
+        {
+          "path": "internal/planner/relay.go",
+          "line": 110,
+          "end_line": 111,
+          "finding": "Relay refuses any ref that is not refs/heads/* or refs/tags/*; --all-refs exposes other ref namespaces which immediately disqualify relay."
+        },
+        {
+          "path": "internal/planner/relay.go",
+          "line": 148,
+          "end_line": 168,
+          "finding": "CanReplicateRelay (replicate mode) accepts RefKindOther because its contract is overwrite; the comment at 166-168 explicitly states FF concern does not apply here."
+        },
+        {
+          "path": "internal/strategy/materialized/materialized.go",
+          "line": 49,
+          "end_line": 105,
+          "finding": "Materialized flow: fetch objects into local in-memory store, walk full reachability closure, subtract target's existing refs, build self-contained (non-thin) packfile. Never end-to-end streaming."
+        },
+        {
+          "path": "internal/gitproto/push.go",
+          "line": 221,
+          "end_line": 233,
+          "finding": "Old PushObjects used io.Pipe — encoder goroutine wrote pack bytes while HTTP transport forwarded them. go-git's Encoder blocked for delta selection before writing anything, creating a ~50s idle stall in the middle of the HTTP POST body."
+        },
+        {
+          "path": "internal/gitproto/smarthttp.go",
+          "line": 138,
+          "end_line": 151,
+          "finding": "NewHTTPTransport returned http.DefaultTransport (the package-level shared instance) when skipTLS=false. Fixed to always Clone() so config is process-isolated. DisableKeepAlives=true added to prevent stale-pool races against CDN idle timeouts."
+        },
+        {
+          "path": "internal/gitproto/smarthttp.go",
+          "line": 254,
+          "end_line": 254,
+          "finding": "PostRPCStreamBody calls http.NewRequestWithContext with a bare io.Reader body. Without ContentLength set, Go emits Transfer-Encoding: chunked, which Cloudflare's edge rejected when the body idled during delta selection."
+        }
+      ],
+      "workflow": [
+        "GITSYNC_HTTP_TRACE=1 + httptrace.ClientTrace (GotConn, WroteRequest, PutIdleConn, TLS events) was the decisive diagnostic tool — it confirmed both the stale-pool reuse and the chunked encoding in a single run.",
+        "httputil.DumpRequestOut gated on the same env var provided the exact wire headers (confirmed Transfer-Encoding: chunked, no Content-Length) before writing any fix.",
+        "A controlled experiment (GITSYNC_FORCE_CHUNKED=1 sending spooled body with chunked encoding) falsified the Content-Length hypothesis and confirmed the mid-stream stall as the real cause.",
+        "Interactive rebase (git rebase -i with edit stops) was used to amend specific non-HEAD commits; --force-with-lease was used for force-pushes to PR branches as a safety guard.",
+        "Contributing upstream to go-git required: exported type rename via bulk sed, DCO Signed-off-by trailer, Assisted-by trailer per AI_POLICY.md, and a Co-authored-by trailer to preserve a maintainer's direct commit contribution before squashing.",
+        "go-git tags lag merges; after a PR merges without a new tag, pinning to a merge commit pseudo-version (go get module@commitsha) was used to unblock downstream work."
+      ]
+    },
+    "friction": [
+      "Initial stale-connection-pool hypothesis was plausible but wrong; required three distinct diagnosis iterations (pool reuse → chunked encoding → mid-stream stall) each requiring a real test run against Cloudflare.",
+      "Disabling keep-alives fixed the pool-reuse bug but the Cloudflare push still failed, revealing the pool fix and the stall fix were independent problems that happened to present identically.",
+      "The GITSYNC_FORCE_CHUNKED experiment unexpectedly showed Content-Length was already present (the spool set it), requiring a code re-read to understand why — the env var bypassed the header but not the spool.",
+      "go-git's Encode API was a two-phase operation with no public boundary, requiring a new upstream API contribution before the cleanest fix was possible.",
+      "PrecomputedSelector introduced a silent correctness bug (ObjectToPack mutation on encode) that was caught only by a follow-up code review, requiring a second PR commit.",
+      "Interactive rebase caused two commits (6f1f5944, f76e2308) to silently lose their Entire-Checkpoint trailers because the prepare-commit-msg hook does not fire on rebase --continue.",
+      "The temp-file spool — the correct interim fix — introduced a new $TMPDIR disk requirement (up to full pack size) that was not present before and required explicit documentation."
+    ],
+    "open_items": [
+      "Confirm the final streaming approach (WithObjectSelector + io.Pipe in PushObjects, no spool) actually succeeds against Cloudflare Artifacts — the end-of-session test run was set up but not yet executed.",
+      "Bump go-git dependency from pseudo-version commit pin to a proper tagged release once go-git cuts a tag that includes the WithObjectSelector merge.",
+      "humanizeBytes in internal/gitproto/push.go duplicates formatBytes in internal/syncer/progress.go; consolidation requires moving the helper down the dependency graph (gitproto cannot import syncer).",
+      "Relay and bootstrap paths also use chunked streaming for HTTP receive-pack POSTs; they are not currently affected but would be if a large bootstrap against a Cloudflare-class target triggers the same CDN idle timeout.",
+      "Two commits on soph/http-stale-pool-fix are missing Entire-Checkpoint trailers (lost during interactive rebase) — flagged but not fixed per user instruction to only reword one commit.",
+      "Consider opening a follow-up go-git issue or PR for the DeltaSelector streaming improvement Paulo mentioned: Storer-driven pack streaming based on post-negotiation reachability heuristics, which would make the WithObjectSelector workaround in git-sync unnecessary."
+    ]
+  },
   "initial_attribution": {
     "calculated_at": "2026-05-22T12:17:47.7731Z",
     "agent_lines": 0,
