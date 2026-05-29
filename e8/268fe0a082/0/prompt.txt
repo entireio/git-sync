@@ -1,0 +1,11 @@
+other comments:
+
+```
+I think we could be leaking credentials here:
+        msg := fmt.Sprintf(
+            "SHA1 → SHA256 conversion attestation for %s.\n\n"+
+                "Source: %s\nProduced by git-sync convert-sha256.\n",
+            refName, sourceURL)
+
+As users can use user:cred@domain for the source URL.
+```
