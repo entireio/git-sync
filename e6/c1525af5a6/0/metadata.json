@@ -26,6 +26,81 @@
   "session_metrics": {
     "turn_count": 62
   },
+  "summary": {
+    "intent": "Review, test, debug, and validate a new `git-sync replicate` mode — a source-authoritative relay-only operation that overwrites divergent refs without materializing packs into memory — culminating in a successful end-to-end run against torvalds/linux.",
+    "outcome": "Shipped the replicate mode with 7 new tests, fixed a go-git double-NAK protocol bug (with upstream PR), rewrote bootstrap planning from probe-based to estimate-based (4 min → 25 sec for linux), added adaptive PACK-header-based batch subdivision, cross-branch dedup, sideband progress streaming, and validated against kubernetes and linux (11.4M objects, ~5 GiB, 18 MB sustained memory).",
+    "learnings": {
+      "repo": [
+        "go-git's receive-pack unconditionally advertises `no-thin` in plumbing/transport/serve.go with a TODO comment — every server built on go-git (including entire-server) inherits this, which is why sync fell back to materialized and replicate originally failed",
+        "Bootstrap temp refs (`refs/gitsync/bootstrap/heads/<branch>`) are left on the target between runs; changing `--target-max-pack-bytes` invalidates the checkpoint plan and causes resume mismatches — now auto-resolved by finding the hash in the stored chain",
+        "The `entiredb auth login` keychain credential can expire during long bootstrap runs; the planning phase used to take long enough (4+ min for linux with probe-based approach) that the OAuth token expired before the push phase",
+        "Linux kernel has 1.4M total commits but only ~75k on the first-parent chain; the `tree:0` filter works correctly but sends all 1.4M commits, causing a transient ~4.6 GB memory spike in go-git's `memory.NewStorage()` at ~3.3 KiB per commit object",
+        "Cross-branch deduplication via haves is critical for repos with shared history: nocache-cleanup transferred 0 bytes after master was pushed because GitHub recognized master's tip in the haves",
+        "`git-remote-entire` (the `entire://` transport helper) negotiates different capabilities than the HTTPS smart-HTTP endpoint at localhost:8080 — they are separate interfaces with potentially different capability sets",
+        "The stable `pkg/gitsync` embedding surface had a breaking JSON rename: `execution.mode` → `execution.transfer_mode` with a new `execution.operation_mode` field — no compatibility alias was added"
+      ],
+      "code": [
+        {
+          "path": "internal/gitproto/fetch.go",
+          "finding": "`drainTrailingNAKs` workaround: go-git v6 upload_pack emits two consecutive `0008NAK\\n` pktlines when haves are sent but none are reachable from wants; `ServerResponse.Decode` consumes only the first, so sideband demuxer reads `'N'` (0x4E) as channel byte and fails with 'unknown channel NAK'. Fixed upstream in `../../go-git` on `fix/upload-pack-double-nak`."
+        },
+        {
+          "path": "internal/planner/relay.go",
+          "finding": "`CanReplicateRelay` originally rejected `no-thin` targets; removed because our `FetchPack` never requests the `thin-pack` capability (go-git client doesn't send it), so the relayed pack is always self-contained and safe to push to `no-thin` targets"
+        },
+        {
+          "path": "internal/strategy/bootstrap/bootstrap.go",
+          "finding": "PACK header pre-check reads 12 bytes (`PACK<version:4><object-count:4>`) and estimates `objectCount × 750 bytes`; aborts before streaming if over `targetMaxPack`. The `for idx := range` loop bug caused `continue` to skip newly-inserted midpoints; fixed by converting to manual index loop"
+        },
+        {
+          "path": "cmd/git-sync/main.go",
+          "line": 412,
+          "end_line": 424,
+          "finding": "Dead branch in `defaultOperationMode`: the `name == \"plan\"` case was identical to the fallback; cleaned up. The `name` parameter was entirely unused since sync/replicate always pass a non-empty `defaultMode`"
+        },
+        {
+          "path": "internal/planner/planner.go",
+          "line": 174,
+          "end_line": 185,
+          "finding": "`BuildReplicationPlans` was mutating the caller's `managed` map in the prune branch; fixed with `copyManagedTargets` and a regression test pinning the non-mutation behavior"
+        },
+        {
+          "path": "internal/gitproto/push.go",
+          "finding": "go-git's server-side receive-pack does not emit sideband progress messages, so `target:` lines only appear when pushing to real git servers (GitHub, GitLab, Gitea with git-core backend); entire-server is silent until report-status"
+        },
+        {
+          "path": "../../go-git/plumbing/transport/serve.go",
+          "line": 45,
+          "finding": "`_ = ar.Capabilities.Set(capability.NoThin)` — go-git's receive-pack hardcodes `no-thin` because thin-pack server-side resolution is unimplemented (TODO comment)"
+        }
+      ],
+      "workflow": [
+        "`GODEBUG=gctrace=1` output format: `heap-before → heap-after → live-heap MB` — the third column (live after GC) is the true retained heap; spikes in the middle column are transient allocations that GC reclaims",
+        "The bootstrap planning phase only activates when the target is empty; testing memory behavior requires a fresh empty target repo each time",
+        "`git credential fill` requires keys to start at column 0 — heredocs with leading spaces (from terminal indentation) silently produce a 'refusing to work with credential missing host field' error",
+        "For large repo pushes with long-running planning phases, re-auth (`entiredb auth login`) before retrying to prevent mid-push 401s from token expiry",
+        "`pack-reused` in GitHub's upload-pack progress means objects were copied byte-for-byte from a prebuilt pack — explains why GitHub fetch is fast even for millions of objects"
+      ]
+    },
+    "friction": [
+      "Auth token expired mid-run during the old probe-based planning phase (4+ min), causing a 401 on the push phase — wasted a full run",
+      "Stale temp refs from previous runs with different `--target-max-pack-bytes` caused 'temp ref hash does not match any planned checkpoint' errors with no recovery path until the auto-resume fix was added",
+      "Misleading 'replicate-target-no-thin' error surfaced before the real error (HTTP 400 'Client sent HTTP request to HTTPS server') because the capability check ran before the connection error was surfaced",
+      "`git credential fill` heredoc indentation issue caused 'refusing to work with credential missing host field' — consumed several minutes of debugging",
+      "Shell `#` comment on its own line caused 'zsh: command not found: #' — small but interrupted a command sequence",
+      "V1 protocol 'unknown channel NAK' failure required reading go-git source and intercepting raw bytes to diagnose; the error message had no indication it was a protocol framing issue",
+      "The subdivide retry loop used `for idx := range` which incremented idx past newly-inserted midpoints, causing infinite retries on the same oversized batch before the fix"
+    ],
+    "open_items": [
+      "go-git upstream PR (`fix/upload-pack-double-nak` in `../../go-git`) pending merge — `drainTrailingNAKs` workaround in `internal/gitproto/fetch.go` can be removed once the bump lands",
+      "Transient ~4.6 GB memory spike during commit graph fetch is unavoidable until go-git's pack parser supports streaming delta resolution without full object storage — would require a custom streaming first-parent extractor in gitproto",
+      "Auto-detection of target body-size limit from rejection error messages not implemented — `--target-max-pack-bytes` must be set manually; the rejection error includes the limit (`body exceeded size limit 2147483648`) but it's not parsed back",
+      "Ref prefix mapping feature (e.g., `--target-prefix refs/gh/`) explored in conversation but not implemented — would require relaxing `refKind` validation and relay eligibility checks to use source-side ref kind rather than re-deriving from target ref name",
+      "Flow-control between source and target not implemented — Go's HTTP transport buffers the full pack in memory when the target is slower than the source; a rate-limiting `io.Pipe` would cap in-flight bytes but was deferred",
+      "go-git server-side sideband progress (`target:` lines) will remain absent for entire-server until go-git's receive-pack implements progress emission during unpack/resolve",
+      "Three cleanup items from original review still deferred: `dryRun` parameter in `CanReplicateRelay` is hardcoded false at every call site; `runReplicate` `allAbsent` ignores managed refs not in `desiredRefs`; `SupportsReplicateRelay` called twice in syncer"
+    ]
+  },
   "initial_attribution": {
     "calculated_at": "2026-04-14T17:32:27.650516Z",
     "agent_lines": 21,
