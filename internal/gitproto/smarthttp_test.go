@@ -338,8 +338,17 @@ func TestRequestInfoRefs_FollowInfoRefsRedirect(t *testing.T) {
 	}
 
 	nodeURL := strings.TrimPrefix(node.URL, "http://")
-	if conn.EndpointURL.Host != nodeURL {
-		t.Errorf("EndpointURL.Host = %q, want %q (endpoint should follow the 307)", conn.EndpointURL.Host, nodeURL)
+	entryHost := strings.TrimPrefix(entry.URL, "http://")
+	// EndpointURL stays as the user-typed input — display/logging keep
+	// the original. The resolved endpoint records where requests now go.
+	if conn.EndpointURL.Host != entryHost {
+		t.Errorf("EndpointURL.Host = %q, want %q (user-typed URL must not be mutated)", conn.EndpointURL.Host, entryHost)
+	}
+	if conn.resolvedEndpoint == nil {
+		t.Fatalf("expected resolvedEndpoint to be set after a cross-host /info/refs redirect")
+	}
+	if conn.resolvedEndpoint.Host != nodeURL {
+		t.Errorf("resolvedEndpoint.Host = %q, want %q (resolved endpoint should follow the 307)", conn.resolvedEndpoint.Host, nodeURL)
 	}
 }
 
@@ -439,6 +448,9 @@ func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 
 	if conn.EndpointURL.Host != entryHost {
 		t.Errorf("EndpointURL.Host = %q, want %q (endpoint should be unchanged by default)", conn.EndpointURL.Host, entryHost)
+	}
+	if conn.resolvedEndpoint != nil {
+		t.Errorf("resolvedEndpoint must remain nil when FollowInfoRefsRedirect is off, got %v", conn.resolvedEndpoint)
 	}
 }
 
@@ -844,6 +856,12 @@ func TestRequestInfoRefs_OnUnauthorizedAfterCrossHostRedirectRetriesAgainstChall
 		return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
 	}))
 	conn.CredentialHelper = helper
+	// FollowInfoRefsRedirect is the user's opt-in to redirect-following.
+	// Without it, the immediate retry still hits the challenger directly
+	// (so the current op succeeds), but the conn's resolved endpoint stays
+	// unset and the next op surfaces a 401 — see the separate
+	// _WithoutFollowFlag test below.
+	conn.FollowInfoRefsRedirect = true
 
 	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
@@ -873,11 +891,76 @@ func TestRequestInfoRefs_OnUnauthorizedAfterCrossHostRedirectRetriesAgainstChall
 		t.Errorf("expected 0 rejects after a successful auth retry, got %d", got)
 	}
 
-	// Follow-up ops on the same conn must hit replica.example directly so they
-	// too can carry auth — otherwise origin redirects strip it again and the
-	// pending creds end up Reject'd at resolvePendingHelperCreds time.
-	if conn.EndpointURL.Host != testReplicaHost {
-		t.Errorf("expected conn.EndpointURL.Host to adopt replica.example, got %q", conn.EndpointURL.Host)
+	// EndpointURL is the user's typed input and must not be mutated — but
+	// resolvedEndpoint records where follow-up ops on this conn should go,
+	// so the next request hits replica.example directly with auth (rather
+	// than redirecting through origin and getting stripped again).
+	if conn.EndpointURL.Host != testOriginHost {
+		t.Errorf("EndpointURL must not be mutated (stays as user input %q), got %q", testOriginHost, conn.EndpointURL.Host)
+	}
+	if conn.resolvedEndpoint == nil {
+		t.Fatal("expected resolvedEndpoint to be set after a cross-host auth resolution")
+	}
+	if conn.resolvedEndpoint.Host != testReplicaHost {
+		t.Errorf("resolvedEndpoint.Host = %q, want %q", conn.resolvedEndpoint.Host, testReplicaHost)
+	}
+}
+
+// TestRequestInfoRefs_CrossHostRetryWithoutFollowFlagSucceedsButDoesNotAdopt
+// covers the gated half of the cross-host fix: when the user has not set
+// FollowInfoRefsRedirect, the immediate retry still hits the challenger
+// directly (so the current op succeeds and the helper Approves valid creds
+// on the right key — the production bug stays fixed), but the conn's
+// effective endpoint is NOT silently moved. Follow-up ops on the same conn
+// stay pointed at the user-typed URL, and the user can set the flag if they
+// want full redirect-following.
+func TestRequestInfoRefs_CrossHostRetryWithoutFollowFlagSucceedsButDoesNotAdopt(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+	type call struct{ host, auth string }
+	var calls []call
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, call{host: req.URL.Host, auth: req.Header.Get("Authorization")})
+		switch req.URL.Host {
+		case testOriginHost:
+			res := &http.Response{
+				StatusCode: http.StatusTemporaryRedirect,
+				Request:    req,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+			res.Header.Set("Location", "https://"+testReplicaHost+"/repo.git/info/refs?service=git-upload-pack")
+			return res, nil
+		case testReplicaHost:
+			if req.Header.Get("Authorization") == "" {
+				return newUnauthorizedResponse(req), nil
+			}
+			return newAdvertisementResponse(req), nil
+		}
+		return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
+	}))
+	conn.CredentialHelper = helper
+	// FollowInfoRefsRedirect intentionally OFF.
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	// Immediate retry still goes to the challenger with auth — the cross-host
+	// fix doesn't depend on the flag for the current op, only for adoption.
+	if calls[2].host != testReplicaHost || !strings.HasPrefix(calls[2].auth, "Basic ") {
+		t.Errorf("retry must still hit replica with auth: %+v", calls[2])
+	}
+	if got := helper.count("approve"); got != 1 {
+		t.Errorf("expected 1 approve (the immediate op succeeded), got %d", got)
+	}
+
+	// But the conn must NOT have adopted the challenger: the user said no to
+	// following redirects, so follow-up ops stay pointed at the original.
+	if conn.EndpointURL.Host != testOriginHost {
+		t.Errorf("EndpointURL must remain on user-typed host, got %q", conn.EndpointURL.Host)
+	}
+	if conn.resolvedEndpoint != nil {
+		t.Errorf("resolvedEndpoint must remain nil without FollowInfoRefsRedirect, got %v", conn.resolvedEndpoint)
 	}
 }
 
@@ -935,9 +1018,14 @@ func TestRequestInfoRefs_CrossHostRedirectWithSkipTLSVerifyRefusesToSendCreds(t 
 		}
 	}
 
-	// c.EndpointURL must not be adopted either.
+	// Neither endpoint field changes: EndpointURL stays as user input and
+	// resolvedEndpoint stays nil (no adoption when TLS-off blocks the
+	// cross-host retry).
 	if conn.EndpointURL.Host != testOriginHost {
 		t.Errorf("EndpointURL must stay on the user-configured host when TLS-off blocks adoption, got %q", conn.EndpointURL.Host)
+	}
+	if conn.resolvedEndpoint != nil {
+		t.Errorf("resolvedEndpoint must remain nil when the cross-host retry is blocked, got %v", conn.resolvedEndpoint)
 	}
 }
 
@@ -1175,6 +1263,9 @@ func TestEnsureAuthForService_CrossHostProbeLooksUpAndAdoptsChallenger(t *testin
 		return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
 	}))
 	conn.CredentialHelper = helper
+	// User opts in to redirect-following — required for the cross-host
+	// endpoint adoption that lets follow-up ops skip the redirect.
+	conn.FollowInfoRefsRedirect = true
 
 	conn.EnsureAuthForService(context.Background(), "git-receive-pack")
 
@@ -1187,8 +1278,14 @@ func TestEnsureAuthForService_CrossHostProbeLooksUpAndAdoptsChallenger(t *testin
 	if last := helper.last("lookup"); last == nil || !strings.Contains(last.url, testReplicaHost) {
 		t.Errorf("lookup must key on replica.example (the actually-challenged host), got %q", last.url)
 	}
-	if conn.EndpointURL.Host != testReplicaHost {
-		t.Errorf("expected EndpointURL to adopt replica.example after cross-host 401, got %q", conn.EndpointURL.Host)
+	if conn.EndpointURL.Host != testOriginHost {
+		t.Errorf("EndpointURL must not be mutated (stays as user input %q), got %q", testOriginHost, conn.EndpointURL.Host)
+	}
+	if conn.resolvedEndpoint == nil {
+		t.Fatal("expected resolvedEndpoint to be set after a cross-host probe 401")
+	}
+	if conn.resolvedEndpoint.Host != testReplicaHost {
+		t.Errorf("resolvedEndpoint.Host = %q, want %q", conn.resolvedEndpoint.Host, testReplicaHost)
 	}
 }
 
@@ -1228,6 +1325,9 @@ func TestEnsureAuthForService_CrossHostProbeWithSkipTLSVerifyDoesNotAttach(t *te
 	}
 	if conn.EndpointURL.Host != testOriginHost {
 		t.Errorf("EndpointURL must not be adopted to %q with TLS-off; got %q", testReplicaHost, conn.EndpointURL.Host)
+	}
+	if conn.resolvedEndpoint != nil {
+		t.Errorf("resolvedEndpoint must remain nil when TLS-off blocks the cross-host probe, got %v", conn.resolvedEndpoint)
 	}
 }
 

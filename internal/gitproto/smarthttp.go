@@ -244,6 +244,35 @@ type HTTPConn struct {
 	// on 401/403, ensuring helper state reflects the actual outcome rather
 	// than an ambiguous probe response.
 	pendingHelperCreds *helperCreds
+
+	// resolvedEndpoint, when non-nil, supersedes EndpointURL.Scheme/Host
+	// for outgoing requests on this conn. Populated when one of two
+	// redirect-following paths fires:
+	//
+	//   - The FollowInfoRefsRedirect block in RequestInfoRefs, after a
+	//     successful /info/refs that landed on a different host.
+	//   - adoptChallengeHost, after credential-helper auth resolves
+	//     against a cross-host challenge.
+	//
+	// Both are gated on FollowInfoRefsRedirect, so resolvedEndpoint only
+	// diverges from EndpointURL when the user has opted into following
+	// redirects. EndpointURL itself is never mutated — display, logging,
+	// telemetry, and the user-typed-URL accessors (Endpoint()) keep
+	// returning what the caller passed in.
+	//
+	// Path/userinfo are copied from EndpointURL; only Scheme/Host differ.
+	resolvedEndpoint *url.URL
+}
+
+// requestURL returns the URL outgoing requests should build from on this
+// conn. It is the resolved endpoint when one has been discovered (and the
+// user opted into following redirects via FollowInfoRefsRedirect), and the
+// user-typed EndpointURL otherwise.
+func (c *HTTPConn) requestURL() *url.URL {
+	if c.resolvedEndpoint != nil {
+		return c.resolvedEndpoint
+	}
+	return c.EndpointURL
 }
 
 type helperCreds struct {
@@ -379,9 +408,17 @@ func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]b
 	}
 	if c.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
 		final := res.Request.URL
-		if final.Host != c.EndpointURL.Host || final.Scheme != c.EndpointURL.Scheme {
-			c.EndpointURL.Scheme = final.Scheme
-			c.EndpointURL.Host = final.Host
+		current := c.requestURL()
+		if final.Host != current.Host || final.Scheme != current.Scheme {
+			// Don't mutate EndpointURL — record the resolved endpoint in
+			// a separate field so the user-typed URL stays available for
+			// display/logging/telemetry. Path/userinfo carry over from
+			// EndpointURL (same assumption as before: the redirect target
+			// serves the same repo path).
+			resolved := *c.EndpointURL
+			resolved.Scheme = final.Scheme
+			resolved.Host = final.Host
+			c.resolvedEndpoint = &resolved
 		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
@@ -481,7 +518,7 @@ func (c *HTTPConn) doPostRPCRequest(ctx context.Context, service string, body io
 	if target != nil {
 		reqURL = target.String()
 	} else {
-		reqURL = fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
+		reqURL = fmt.Sprintf("%s/%s", c.requestURL().String(), service)
 	}
 	ctx = withHTTPTrace(ctx, "POST "+service)
 
@@ -567,7 +604,7 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 		return
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.InsecureSkipTLSVerify && challengeURL.Host != c.EndpointURL.Host {
+	if c.InsecureSkipTLSVerify && challengeURL.Host != c.requestURL().Host {
 		// See tryHelperRetry: with TLS verification off we can't tell a
 		// real challenger from a MITM, so we won't attach helper creds
 		// after a cross-host probe redirect. The real op will surface
@@ -620,7 +657,7 @@ func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Resp
 var flushPacket = []byte("0000")
 
 func (c *HTTPConn) doServiceProbe(ctx context.Context, service string) (*http.Response, error) {
-	reqURL := fmt.Sprintf("%s/%s", c.EndpointURL.String(), service)
+	reqURL := fmt.Sprintf("%s/%s", c.requestURL().String(), service)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(flushPacket))
 	if err != nil {
 		return nil, fmt.Errorf("create auth-probe request: %w", err)
@@ -662,7 +699,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		return res, nil
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.InsecureSkipTLSVerify && challengeURL.Host != c.EndpointURL.Host {
+	if c.InsecureSkipTLSVerify && challengeURL.Host != c.requestURL().Host {
 		// Refuse to hand helper-stored credentials to a redirect target we
 		// can't authenticate. With TLS verification off, the post-redirect
 		// host could be anyone presenting a self-signed cert for the host
@@ -707,23 +744,35 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 	return res, nil
 }
 
-// adoptChallengeHost rewrites c.EndpointURL's scheme/host to match the host
-// that just successfully authenticated. Required when the challenge came from
-// a cross-host redirect: subsequent requests on this conn would otherwise be
-// sent to the original host, redirected again, and stripped of their
-// Authorization header — turning every follow-up into a fresh 401. Path is
-// preserved on the assumption that the redirect target serves the same repo
-// path (the same assumption FollowInfoRefsRedirect makes after a successful
-// /info/refs).
+// adoptChallengeHost records the host that just successfully authenticated
+// as this conn's resolved endpoint, so subsequent ops on the same conn go
+// there directly instead of replaying through c.EndpointURL — which would
+// redirect again and have its Authorization header stripped on the cross-
+// host hop, turning every follow-up into a fresh 401.
+//
+// Gated on FollowInfoRefsRedirect: the user explicitly opting into redirect-
+// following is the trigger for the conn's effective endpoint changing. With
+// the flag off the immediate retry still hits the challenger directly (so
+// the current op succeeds and creds get Approved on the right key), but the
+// next op stays pointed at the user-typed URL. EndpointURL itself is never
+// mutated; we set resolvedEndpoint instead, leaving EndpointURL as user
+// input for display/logging/telemetry to read.
+//
+// Path/userinfo are copied from EndpointURL — same assumption
+// FollowInfoRefsRedirect's /info/refs block makes about the redirect target
+// serving the same repo path.
 func (c *HTTPConn) adoptChallengeHost(challengeURL *url.URL) {
-	if challengeURL == nil {
+	if !c.FollowInfoRefsRedirect || challengeURL == nil {
 		return
 	}
-	if challengeURL.Host == c.EndpointURL.Host && challengeURL.Scheme == c.EndpointURL.Scheme {
+	current := c.requestURL()
+	if challengeURL.Host == current.Host && challengeURL.Scheme == current.Scheme {
 		return
 	}
-	c.EndpointURL.Scheme = challengeURL.Scheme
-	c.EndpointURL.Host = challengeURL.Host
+	resolved := *c.EndpointURL
+	resolved.Scheme = challengeURL.Scheme
+	resolved.Host = challengeURL.Host
+	c.resolvedEndpoint = &resolved
 }
 
 // challengeURLFor returns the URL key used to query the credential helper
@@ -758,7 +807,7 @@ func (c *HTTPConn) doInfoRefsRequest(ctx context.Context, service, gitProtocol s
 	if target != nil {
 		reqURL = target.String()
 	} else {
-		reqURL = fmt.Sprintf("%s/info/refs?service=%s", c.EndpointURL.String(), service)
+		reqURL = fmt.Sprintf("%s/info/refs?service=%s", c.requestURL().String(), service)
 	}
 	ctx = withHTTPTrace(ctx, "GET "+service+"/info/refs")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
