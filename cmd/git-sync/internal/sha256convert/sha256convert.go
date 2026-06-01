@@ -429,6 +429,17 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 
+	// The converted repo is now complete: every reachable object is
+	// written, all refs point at translated tips, and HEAD resolves.
+	// Everything past here — origin notes, the mapping file, signing, and
+	// --check — is optional enrichment or post-hoc verification. A failure
+	// in any of those must surface the error but must NOT delete a
+	// successful conversion: a multi-hour kernel-scale run, a --write-mapping
+	// path typo, or a signing-key misconfig should never silently discard
+	// the repo the user just built. Disarm the target cleanup here so those
+	// steps leave the converted repo on disk for inspection or re-run.
+	cleanupTarget = false
+
 	res.Protocol = refService.Protocol
 	res.RefsConverted = refsWritten
 	res.Counts = tr.snapshotCounts()
@@ -506,18 +517,18 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 		for _, c := range res.Checks {
 			if !c.OK {
-				// The conversion finished; the failure is a
-				// post-hoc verification miss. Keep the target
-				// on disk so the user can inspect exactly what
-				// failed the check.
-				cleanupTarget = false
+				// The conversion finished; a failed check is a
+				// post-hoc verification miss, so the target stays
+				// on disk (cleanup was already disarmed once the
+				// conversion completed) for the user to inspect
+				// exactly what failed.
 				return res, fmt.Errorf("check %q failed: %s", c.Name, c.Detail)
 			}
 		}
 	}
 
-	// Run completed; keep the target dir.
-	cleanupTarget = false
+	// Run completed successfully; the target dir is kept (cleanup was
+	// disarmed once the conversion completed above).
 	return res, nil
 }
 
@@ -889,7 +900,16 @@ func redactSourceURL(raw string) string {
 func openSource(ctx context.Context, req Request, planCfg planner.PlanConfig) (gitproto.Conn, *gitproto.RefService, []*plumbing.Reference, error) {
 	ep, err := url.Parse(req.SourceURL)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("parse source URL: %w", err)
+		// url.Parse wraps the raw URL in its error (`parse "<url>": ...`),
+		// which would leak embedded credentials (https://user:token@host)
+		// into status output, logs, and CI. Surface only the underlying
+		// reason — *url.Error.Err carries the cause without the URL string.
+		reason := err
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			reason = ue.Err
+		}
+		return nil, nil, nil, fmt.Errorf("parse source URL: %w", reason)
 	}
 	if ep.Scheme != "http" && ep.Scheme != "https" {
 		return nil, nil, nil, fmt.Errorf("convert-sha256 currently supports HTTP/HTTPS sources only; got %q", ep.Scheme)

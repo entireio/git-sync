@@ -58,8 +58,10 @@ GITSYNC_SOURCE_TOKEN=ghp_xxx git-sync convert-sha256 \
      message are translated first and then substituted.
    - **Tags**: target hash translated; signatures dropped; message
      hashes rewritten the same way.
-6. Writes refs at the translated tip hashes; repoints HEAD to the
-   source's symbolic HEAD; builds `refs/notes/sha1-origin` (unless
+6. Writes refs at the translated tip hashes; points HEAD at the
+   source's advertised HEAD when it was converted, else `main`/`master`,
+   else the first branch alphabetically (a tags-only conversion leaves
+   HEAD at the init default); builds `refs/notes/sha1-origin` (unless
    `--no-origin-notes`); emits the `--write-mapping` TSV (if requested).
 
 ## Side Outputs
@@ -251,10 +253,13 @@ to convert them anyway (e.g. for a faithful archival mirror you control).
 **One-off, not incremental.** Each run produces a fresh SHA256 repo
 from scratch — there is no "fetch the new SHA1 commits and append to
 the existing SHA256 repo" mode. Realistic use: convert once, then
-make the converted repo the new canonical store. Branch and tag
-hashes are deterministic across runs against the same source state;
-only `refs/notes/sha1-origin` differs because its wrapper commit
-carries `time.Now()` as the committer timestamp.
+make the converted repo the new canonical store. The conversion is
+fully deterministic: branch hashes, tag hashes, **and** the
+`refs/notes/sha1-origin` ref are all identical across runs against the
+same source state. The notes wrapper commit's timestamp is pinned to
+the Unix epoch — or to `SOURCE_DATE_EPOCH` when that environment
+variable is set — rather than `time.Now()`, so even the notes ref
+reproduces byte-for-byte.
 
 **Loose-object storage.** Every translated object is written as a
 loose file under `objects/<aa>/<rest>` — no pack file is produced.
@@ -297,9 +302,10 @@ The checks are:
    `<target>/config`.
 2. **HEAD** — resolves to a non-zero hash and that object exists in
    the store.
-3. **refs** — every written ref (except `refs/notes/sha1-origin`,
-   counted separately) resolves to an object in the store. The count
-   matches `RefsConverted`.
+3. **refs** — every written ref resolves to an object in the store.
+   Side outputs this run created — `refs/notes/sha1-origin` and any
+   `--sign-mode tips` attestation tags — are counted separately, so the
+   reported total matches `RefsConverted`.
 4. **git fsck --full** — the external `git` binary runs a full
    integrity check. Skipped (and reported as such) when `git` isn't
    on `PATH`; the conversion still succeeds.

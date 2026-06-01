@@ -860,6 +860,79 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 	}
 }
 
+// TestRun_GitHTTPBackend_KeepsTargetOnPostConversionFailure guards the
+// invariant that a failure in an optional post-conversion step (here, an
+// unwritable --write-mapping path) leaves the fully-converted repo on disk
+// rather than deleting it. The target is complete and valid once refs and
+// HEAD are written; only the mapping side output failed. Regression test for
+// the cleanup-target lifecycle: cleanup must be disarmed once the conversion
+// completes, so a path typo or a signing misconfig can't silently discard a
+// (potentially multi-hour) conversion.
+func TestRun_GitHTTPBackend_KeepsTargetOnPostConversionFailure(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skipf("set %s=1 to run the convert-sha256 git-http-backend integration test", gitHTTPBackendEnv)
+	}
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git binary not available: %v", err)
+	}
+
+	root := t.TempDir()
+	srcBare := filepath.Join(root, "source.git")
+	worktree := filepath.Join(root, "work")
+	dstDir := filepath.Join(root, "target.git")
+
+	mustGit(t, root, "init", "--bare", srcBare)
+	mustGit(t, root, "init", "-b", "main", worktree)
+	mustGit(t, worktree, "config", "user.name", "convert-sha256 test")
+	mustGit(t, worktree, "config", "user.email", "test@example.com")
+	mustWrite(t, filepath.Join(worktree, "README"), "hello\n")
+	mustGit(t, worktree, "add", "README")
+	mustGit(t, worktree, "commit", "-m", "initial")
+	mustGit(t, worktree, "remote", "add", "origin", srcBare)
+	mustGit(t, worktree, "push", "origin", "HEAD:refs/heads/main")
+
+	srv := newCGIBackend(t, gitBin, root)
+	defer srv.Close()
+
+	// Force the mapping-file write to fail: a regular file standing in for a
+	// directory component makes os.MkdirAll return ENOTDIR. This fires after
+	// the conversion is otherwise complete (refs + HEAD written).
+	blocker := filepath.Join(root, "blocker")
+	mustWrite(t, blocker, "not a dir\n")
+	mappingPath := filepath.Join(blocker, "mapping.tsv")
+
+	_, err = Run(context.Background(), Request{
+		SourceURL:   srv.URL + "/source.git",
+		TargetDir:   dstDir,
+		MappingFile: mappingPath,
+		Out:         io.Discard,
+	})
+	if err == nil {
+		t.Fatal("expected an error from the unwritable --write-mapping path, got nil")
+	}
+	if !strings.Contains(err.Error(), "mapping file") {
+		t.Errorf("error should name the failing step; got: %v", err)
+	}
+
+	// The fix: the converted repo must still be on disk and self-consistent,
+	// not deleted by the post-conversion failure.
+	if _, statErr := os.Stat(dstDir); statErr != nil {
+		t.Fatalf("converted target was deleted after a post-conversion failure: %v", statErr)
+	}
+	format := strings.TrimSpace(mustGitOutput(t, dstDir, "config", "extensions.objectformat"))
+	if format != "sha256" {
+		t.Errorf("extensions.objectformat: got %q, want sha256", format)
+	}
+	fsckOut, fsckErr := exec.CommandContext(t.Context(), gitBin, "-C", dstDir, "fsck", "--full").CombinedOutput()
+	if fsckErr != nil {
+		t.Fatalf("git fsck on kept target failed: %v\n%s", fsckErr, fsckOut)
+	}
+	if strings.Contains(string(fsckOut), "error") || strings.Contains(string(fsckOut), "bad sha") {
+		t.Fatalf("git fsck reported errors on kept target:\n%s", fsckOut)
+	}
+}
+
 // TestRun_GitHTTPBackend_Sign verifies the --sign-mode tips path end-to-end. SSH
 // signing is used (not GPG) because it can be set up from scratch in the
 // test with just ssh-keygen, no agent required.
