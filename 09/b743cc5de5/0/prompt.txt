@@ -36,3 +36,15 @@ commit and push
 *4. docs/convert-sha256.md:234* — claims refs/notes/sha1-origin "differs [across runs] because its wrapper commit carries time.Now()." The code uses notesCommitTime() (:1517), which pins to SOURCE_DATE_EPOCH or Unix(0,0) — so the notes ref is deterministic. The doc states the opposite.
 
 *5. sha256convert.go:6* (package doc) — "no hash mapping is persisted." Contradicted by the default-on refs/notes/sha1-origin and --write-mapping, and by the Request field comments at :85-97. An operator could mistakenly treat the old SHA1s as unrecoverable. thoughts on this?
+
+---
+
+what about ```### Cleanup / reuse
+
+*6. sha256convert.go:1160-1177 & 1225-1238* — translateCommit and translateTag carry byte-identical message-rewrite blocks plus duplicated signature-strip blocks (1182 / 1241). The "translate referenced objects before rewriting" ordering is the subtlest invariant in the file and lives in two copies; a fix risks being applied to only one. Extract a shared rewriteMessageRefs(msg) (string, int, error).
+
+*7. sha256convert.go:1647-1657* — isTTY re-implements stderrIsTTY in internal/syncer/progress.go:395, and startProgressTick re-implements that package's in-place progress redraw (with a different escape sequence, \r\x1b[K vs \x1b[J). Third copy of TTY/progress logic in the repo; consider lifting a shared helper.
+
+*8. sha256convert.go:166-200* — the two previewMax truncation blocks in Lines() are near-identical copy-paste that have already drifted (one adds "full list in --json"). A small previewList(items, max) helper collapses both.
+
+*9. (Efficiency) sha256convert.go:1168-1173 / 1229-1234* — every message is regex-scanned twice (extractMessageReferences then rewriteHashesInMessage). resolveCache spares the reachable-set scan, but the regex pass over the full message body runs twice per commit/tag. A single pass that both collects edges and rewrites would halve it on kernel-scale runs.``` ?
