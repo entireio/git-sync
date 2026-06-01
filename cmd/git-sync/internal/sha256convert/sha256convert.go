@@ -3,14 +3,18 @@
 // a temporary on-disk SHA1 bare repo, then walks every reachable object and
 // re-emits it under SHA256 into a new bare repo at the user-supplied path.
 //
-// The tool is intentionally scoped: no hash mapping is persisted, GPG
-// signatures on commits and tags are dropped (they sign over the original
-// SHA1 byte stream and would be invalid post-rewrite), and any submodule
-// gitlink fails the run so the caller chooses which refs to exclude. The
-// linked-to repository's URL still points at an upstream SHA1 store,
-// which has no way to resolve a SHA256-rewritten gitlink, so rewriting
-// would produce a tree that fsck-passes but breaks
-// `git submodule update`.
+// The tool is intentionally scoped: GPG signatures on commits and tags
+// are dropped (they sign over the original SHA1 byte stream and would be
+// invalid post-rewrite), and any submodule gitlink fails the run so the
+// caller chooses which refs to exclude. The linked-to repository's URL
+// still points at an upstream SHA1 store, which has no way to resolve a
+// SHA256-rewritten gitlink, so rewriting would produce a tree that
+// fsck-passes but breaks `git submodule update`.
+//
+// The SHA1 → SHA256 mapping is preserved, so the original hashes stay
+// recoverable: by default as a refs/notes/sha1-origin notes ref in the
+// converted repo (disable with --no-origin-notes), and optionally as a
+// sidecar TSV via --write-mapping.
 package sha256convert
 
 import (
@@ -158,6 +162,18 @@ type Check struct {
 // switching to a "(N more)" suffix.
 const previewMax = 5
 
+// previewJoin renders items as a comma-separated list, inlining at most
+// previewMax of them and appending ", ... (N more<suffix>)" when the list
+// is longer. suffix points at where the full list lives (e.g.
+// "; full list in --json"); pass "" for none.
+func previewJoin(items []string, suffix string) string {
+	if len(items) <= previewMax {
+		return strings.Join(items, ", ")
+	}
+	return fmt.Sprintf("%s, ... (%d more%s)",
+		strings.Join(items[:previewMax], ", "), len(items)-previewMax, suffix)
+}
+
 // Lines satisfies the human-readable output contract used by other git-sync subcommands.
 func (r Result) Lines() []string {
 	lines := []string{
@@ -177,18 +193,8 @@ func (r Result) Lines() []string {
 		lines = append(lines, fmt.Sprintf("rewrote %d SHA1 hash reference(s) in commit/tag messages", r.MessageRewrites))
 	}
 	if n := len(r.AmbiguousMessageRefs); n > 0 {
-		preview := r.AmbiguousMessageRefs
-		extra := 0
-		if len(preview) > previewMax {
-			extra = len(preview) - previewMax
-			preview = preview[:previewMax]
-		}
-		line := fmt.Sprintf("warning: %d ambiguous SHA1 hex prefix(es) in messages left unrewritten (look up via the mapping file): %s",
-			n, strings.Join(preview, ", "))
-		if extra > 0 {
-			line += fmt.Sprintf(", ... (%d more)", extra)
-		}
-		lines = append(lines, line)
+		lines = append(lines, fmt.Sprintf("warning: %d ambiguous SHA1 hex prefix(es) in messages left unrewritten (look up via the mapping file): %s",
+			n, previewJoin(r.AmbiguousMessageRefs, "")))
 	}
 	if r.SkippedPullRefs > 0 {
 		lines = append(lines, fmt.Sprintf("excluded %d foreign pull/merge-request ref(s) (refs/pull/*, refs/pull-requests/*, refs/merge-requests/*) from --all-refs; pass --include-pull-refs to convert them", r.SkippedPullRefs))
@@ -201,18 +207,8 @@ func (r Result) Lines() []string {
 		lines = append(lines, "mapping written to: "+r.MappingFile)
 	}
 	if n := len(r.SignedTags); n > 0 {
-		preview := r.SignedTags
-		extra := 0
-		if len(preview) > previewMax {
-			extra = len(preview) - previewMax
-			preview = preview[:previewMax]
-		}
-		line := fmt.Sprintf("signed %d branch attestation tag(s): %s",
-			n, strings.Join(preview, ", "))
-		if extra > 0 {
-			line += fmt.Sprintf(", ... (%d more; full list in --json)", extra)
-		}
-		lines = append(lines, line)
+		lines = append(lines, fmt.Sprintf("signed %d branch attestation tag(s): %s",
+			n, previewJoin(r.SignedTags, "; full list in --json")))
 	}
 	if r.TempDir != "" {
 		lines = append(lines, "kept source objects: "+r.TempDir)
@@ -276,7 +272,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	cleanupTarget := false
 	defer func() {
 		if cleanupTarget && !req.KeepSourceObjects {
-			_ = cleanupConvertedTarget(req.TargetDir, targetCreated)
+			cleanupConvertedTarget(req.TargetDir, targetCreated)
 		}
 	}()
 
@@ -889,26 +885,27 @@ func ensureEmptyTarget(path string) (created bool, err error) {
 // pre-created it — ensureEmptyTarget accepts an existing empty directory —
 // only the entries the run added are removed, leaving the directory and
 // any ownership, permissions, ACLs, or mount the user set up intact.
-func cleanupConvertedTarget(path string, created bool) error {
+//
+// Best-effort, like the temp-dir cleanup defer: a removal error is not
+// surfaced because the run is already failing for another reason.
+func cleanupConvertedTarget(path string, created bool) {
 	if created {
-		return os.RemoveAll(path)
+		_ = os.RemoveAll(path)
+		return
 	}
-	return removeDirContents(path)
+	removeDirContents(path)
 }
 
 // removeDirContents removes every entry inside dir but leaves dir itself
-// in place.
-func removeDirContents(dir string) error {
+// in place. Best-effort (see cleanupConvertedTarget).
+func removeDirContents(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return
 	}
 	for _, e := range entries {
-		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
-			return err
-		}
+		_ = os.RemoveAll(filepath.Join(dir, e.Name()))
 	}
-	return nil
 }
 
 // redactSourceURL removes any credentials embedded in a source URL so
@@ -1041,10 +1038,10 @@ type translator struct {
 	ambiguousMessageRefs map[string]struct{}
 	// resolveCache memoizes resolveMessageRef results. reachable is
 	// frozen before translation starts, so the (prefix → matchResult)
-	// mapping is stable for the lifetime of the translator.
-	// extractMessageReferences and rewriteHashesInMessage hit
-	// resolveMessageRef for the same tokens, and the abbreviated-hash
-	// path costs O(len(reachable)) per call — caching halves that.
+	// mapping is stable for the lifetime of the translator. The
+	// abbreviated-hash path costs O(len(reachable)) per distinct prefix;
+	// caching collapses repeats — the same hash cited across many
+	// messages, or more than once in one — to a single scan.
 	resolveCache map[string]resolveCacheEntry
 	// Live counts updated atomically so the --progress ticker goroutine
 	// can sample them without racing against translation. Snapshot into
@@ -1295,6 +1292,21 @@ func (t *translator) translateTree(sha1 plumbing.Hash, src plumbing.EncodedObjec
 	return newHash, nil
 }
 
+// stripSignatures clears a commit's or tag's signature fields, returning
+// true if either was set. Signatures sign over the original SHA1 byte
+// stream and cannot survive the rewrite. A transitional dual-hash object
+// can carry both the SHA1-form "gpgsig" (Signature) and "gpgsig-sha256"
+// (SignatureSHA256) for the same logical signature, so we clear both and
+// the caller counts the artifact once.
+func stripSignatures(sig, sigSHA256 *string) bool {
+	if *sig == "" && *sigSHA256 == "" {
+		return false
+	}
+	*sig = ""
+	*sigSHA256 = ""
+	return true
+}
+
 func (t *translator) translateCommit(sha1 plumbing.Hash, src plumbing.EncodedObject) (plumbing.Hash, error) {
 	c := &object.Commit{}
 	if err := c.Decode(src); err != nil {
@@ -1313,30 +1325,16 @@ func (t *translator) translateCommit(sha1 plumbing.Hash, src plumbing.EncodedObj
 		c.ParentHashes[i] = newP
 	}
 	if t.rewriteMessages {
-		// Translate every in-scope SHA1 mentioned in this commit's
-		// message before rewriting it. This makes the message-reference
-		// edge part of the translation DFS, so the mapping contains
-		// each referenced object by the time we substitute. Without
-		// it, sibling-branch references (cherry-picks, etc.) would
-		// only resolve when ref iteration happened to process the
-		// referenced commit's branch first.
-		for _, ref := range t.extractMessageReferences(c.Message) {
-			if _, err := t.translate(ref); err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("commit %s message ref %s: %w", sha1, ref, err)
-			}
+		rewritten, n, err := t.rewriteMessageRefs(c.Message, "commit", sha1)
+		if err != nil {
+			return plumbing.ZeroHash, err
 		}
-		if rewritten, n := t.rewriteHashesInMessage(c.Message); n > 0 {
+		if n > 0 {
 			c.Message = rewritten
 			t.messageRewrites += n
 		}
 	}
-	// A commit can carry both Signature (SHA1 form, "gpgsig") and
-	// SignatureSHA256 ("gpgsig-sha256") in a transitional dual-hash
-	// repo, but they encode the same logical signature. Strip both
-	// fields if present, count once.
-	if c.Signature != "" || c.SignatureSHA256 != "" {
-		c.Signature = ""
-		c.SignatureSHA256 = ""
+	if stripSignatures(&c.Signature, &c.SignatureSHA256) {
 		t.signaturesStripped++
 	}
 	// "mergetag" extra headers embed a copy of a signed annotated tag with
@@ -1374,24 +1372,16 @@ func (t *translator) translateTag(sha1 plumbing.Hash, src plumbing.EncodedObject
 	}
 	tag.Target = newTarget
 	if t.rewriteMessages {
-		// Same as translateCommit: translate every in-scope message
-		// reference before rewriting, so cross-branch references
-		// always resolve regardless of ref iteration order.
-		for _, ref := range t.extractMessageReferences(tag.Message) {
-			if _, err := t.translate(ref); err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("tag %s message ref %s: %w", sha1, ref, err)
-			}
+		rewritten, n, err := t.rewriteMessageRefs(tag.Message, "tag", sha1)
+		if err != nil {
+			return plumbing.ZeroHash, err
 		}
-		if rewritten, n := t.rewriteHashesInMessage(tag.Message); n > 0 {
+		if n > 0 {
 			tag.Message = rewritten
 			t.messageRewrites += n
 		}
 	}
-	// Same as commits: Signature and SignatureSHA256 are two encodings
-	// of the same logical signature in a transitional dual-hash repo.
-	if tag.Signature != "" || tag.SignatureSHA256 != "" {
-		tag.Signature = ""
-		tag.SignatureSHA256 = ""
+	if stripSignatures(&tag.Signature, &tag.SignatureSHA256) {
 		t.signaturesStripped++
 	}
 	newHash, err := t.store(tag.Encode)
@@ -1478,49 +1468,89 @@ const (
 	matchAmbiguous
 )
 
-// rewriteHashesInMessage scans msg for short and full SHA1 hashes,
-// replacing any that uniquely identify a commit or tag in t.reachable
-// with the corresponding full SHA256 hex from t.mapping. Returns the
+// rewriteMessageRefs resolves the SHA1 hash references in a commit or tag
+// message and rewrites the unique in-scope ones to their full SHA256 hex,
+// in a single regex pass over msg. It first translates every referenced
+// object — adding it as an edge in the translation DFS so t.mapping holds
+// the object by the time we substitute. That ordering is what lets a
+// cross-branch reference (a cherry-pick, or a revert of a sibling branch)
+// resolve regardless of which branch ref iteration processed first; it is
+// the subtlest invariant in this file, which is why both translateCommit
+// and translateTag funnel through here instead of copying it.
+//
+// kind ("commit"/"tag") and sha1 only frame a translate error. Returns the
 // rewritten message and the number of substitutions made. Ambiguous
-// prefixes are recorded in t.ambiguousMessageRefs so the caller can
-// surface a warning at the end of the run.
+// prefixes are left in place and recorded in t.ambiguousMessageRefs so the
+// caller can surface a warning at the end of the run.
 //
-// Uniqueness is decided against t.reachable rather than t.mapping so
-// that abbreviated prefixes get the same verdict during translation as
-// they would after every object has been translated — the answer cannot
-// flip depending on what has been processed so far.
+// Uniqueness is decided against t.reachable rather than t.mapping so that
+// abbreviated prefixes get the same verdict during translation as they
+// would after every object has been translated — the answer cannot flip
+// depending on what has been processed so far.
 //
-// Performance: the abbreviated-hash path scans the reachable set
-// linearly for each match. Fine for repos up to ~100k commits; slower
-// past that. If this ever matters, build a sorted-prefix index over
-// reachable SHA1 hex strings once and binary-search.
-func (t *translator) rewriteHashesInMessage(msg string) (string, int) {
-	count := 0
-	out := hashPattern.ReplaceAllStringFunc(msg, func(s string) string {
-		sha1, result := t.resolveMessageRef(s)
-		switch result {
-		case matchNone:
-			return s
-		case matchAmbiguous:
-			t.ambiguousMessageRefs[s] = struct{}{}
-			return s
-		case matchUnique:
-			newHash, ok := t.mapping[sha1]
-			if !ok {
-				// The reachable set says this SHA1 is in scope, but
-				// the translation DFS hasn't placed it yet. Shouldn't
-				// happen because translateCommit/translateTag add
-				// message-reference edges before encoding — leave the
-				// hex untouched if it somehow does.
-				return s
+// Performance: the abbreviated-hash path scans the reachable set linearly
+// for each distinct prefix (memoized by resolveCache). Fine for repos up
+// to ~100k commits; slower past that. If this ever matters, build a
+// sorted-prefix index over reachable SHA1 hex strings once and binary
+// search.
+func (t *translator) rewriteMessageRefs(msg, kind string, sha1 plumbing.Hash) (string, int, error) {
+	spans := hashPattern.FindAllStringIndex(msg, -1)
+	if len(spans) == 0 {
+		return msg, 0, nil
+	}
+	// Resolve every match once (resolveMessageRef is memoized), recording
+	// the unique in-scope refs to translate before any substitution.
+	type resolvedMatch struct {
+		lo, hi int
+		hash   plumbing.Hash
+		result matchResult
+	}
+	matches := make([]resolvedMatch, 0, len(spans))
+	seen := make(map[plumbing.Hash]struct{})
+	var refs []plumbing.Hash
+	for _, s := range spans {
+		hash, result := t.resolveMessageRef(msg[s[0]:s[1]])
+		matches = append(matches, resolvedMatch{lo: s[0], hi: s[1], hash: hash, result: result})
+		if result == matchUnique {
+			if _, dup := seen[hash]; !dup {
+				seen[hash] = struct{}{}
+				refs = append(refs, hash)
 			}
-			count++
-			return newHash.String()
-		default:
-			return s
 		}
-	})
-	return out, count
+	}
+	for _, ref := range refs {
+		if _, err := t.translate(ref); err != nil {
+			return "", 0, fmt.Errorf("%s %s message ref %s: %w", kind, sha1, ref, err)
+		}
+	}
+	// Rebuild msg, substituting each unique ref now present in the mapping.
+	var b strings.Builder
+	b.Grow(len(msg))
+	prev, count := 0, 0
+	for _, m := range matches {
+		b.WriteString(msg[prev:m.lo])
+		tok := msg[m.lo:m.hi]
+		switch m.result {
+		case matchUnique:
+			if newHash, ok := t.mapping[m.hash]; ok {
+				b.WriteString(newHash.String())
+				count++
+			} else {
+				// reachable says this SHA1 is in scope but the DFS hasn't
+				// placed it. Shouldn't happen — we translated every ref
+				// above — so leave the original hex if it somehow does.
+				b.WriteString(tok)
+			}
+		case matchAmbiguous:
+			t.ambiguousMessageRefs[tok] = struct{}{}
+			b.WriteString(tok)
+		case matchNone:
+			b.WriteString(tok)
+		}
+		prev = m.hi
+	}
+	b.WriteString(msg[prev:])
+	return b.String(), count, nil
 }
 
 // resolveMessageRef classifies a hex prefix against the reachable set.
@@ -1582,28 +1612,6 @@ func (t *translator) resolveMessageRefUncached(prefix string) (plumbing.Hash, ma
 		return match, matchUnique
 	}
 	return plumbing.ZeroHash, matchNone
-}
-
-// extractMessageReferences returns the unique commit/tag SHA1s mentioned
-// by hex prefix in msg. Used by translateCommit/translateTag to add
-// message-reference edges to the translation DFS so the mapping is
-// fully populated by the time the message is rewritten. Ambiguous
-// prefixes generate no edge — they cannot be rewritten anyway.
-func (t *translator) extractMessageReferences(msg string) []plumbing.Hash {
-	seen := make(map[plumbing.Hash]struct{})
-	var out []plumbing.Hash
-	for _, match := range hashPattern.FindAllString(msg, -1) {
-		sha1, result := t.resolveMessageRef(match)
-		if result != matchUnique {
-			continue
-		}
-		if _, dup := seen[sha1]; dup {
-			continue
-		}
-		seen[sha1] = struct{}{}
-		out = append(out, sha1)
-	}
-	return out
 }
 
 // notesCommitTime returns the committer/author timestamp for the

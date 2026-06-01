@@ -511,7 +511,10 @@ func TestTranslator_AmbiguousMessageRefWarning(t *testing.T) {
 	tr.reachable[one] = plumbing.CommitObject
 	tr.reachable[two] = plumbing.CommitObject
 
-	out, count := tr.rewriteHashesInMessage("see commit deadbee for details\n")
+	out, count, err := tr.rewriteMessageRefs("see commit deadbee for details\n", "commit", plumbing.ZeroHash)
+	if err != nil {
+		t.Fatalf("rewriteMessageRefs: %v", err)
+	}
 	if count != 0 {
 		t.Errorf("ambiguous prefix should not be rewritten; got count=%d", count)
 	}
@@ -1315,9 +1318,7 @@ func TestCleanupConvertedTarget(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(path, "objects"), 0o755); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		if err := cleanupConvertedTarget(path, true); err != nil {
-			t.Fatalf("cleanupConvertedTarget: %v", err)
-		}
+		cleanupConvertedTarget(path, true)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be removed; stat err=%v", path, err)
 		}
@@ -1332,9 +1333,7 @@ func TestCleanupConvertedTarget(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(path, "HEAD"), []byte("ref: x\n"), 0o644); err != nil {
 			t.Fatalf("seed file: %v", err)
 		}
-		if err := cleanupConvertedTarget(path, false); err != nil {
-			t.Fatalf("cleanupConvertedTarget: %v", err)
-		}
+		cleanupConvertedTarget(path, false)
 		info, err := os.Stat(path)
 		if err != nil || !info.IsDir() {
 			t.Fatalf("pre-existing directory must survive cleanup; stat err=%v", err)
@@ -1347,6 +1346,32 @@ func TestCleanupConvertedTarget(t *testing.T) {
 			t.Errorf("directory should be empty after cleanup, got %d entries", len(entries))
 		}
 	})
+}
+
+// TestPreviewJoin covers the inline-vs-truncate boundary the two Lines()
+// summaries share, including the optional suffix that points at the full
+// list — the bit that had drifted between the two copy-pasted blocks.
+func TestPreviewJoin(t *testing.T) {
+	over := []string{"a", "b", "c", "d", "e", "f", "g"} // 7 > previewMax (5)
+	tests := []struct {
+		name   string
+		items  []string
+		suffix string
+		want   string
+	}{
+		{"empty", nil, "", ""},
+		{"under the cap joins all", []string{"a", "b"}, "", "a, b"},
+		{"exactly at the cap joins all", []string{"a", "b", "c", "d", "e"}, "", "a, b, c, d, e"},
+		{"over the cap truncates with count", over, "", "a, b, c, d, e, ... (2 more)"},
+		{"suffix lands inside the parens", over, "; full list in --json", "a, b, c, d, e, ... (2 more; full list in --json)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := previewJoin(tt.items, tt.suffix); got != tt.want {
+				t.Errorf("previewJoin(%v, %q) = %q, want %q", tt.items, tt.suffix, got, tt.want)
+			}
+		})
+	}
 }
 
 // The default pull-ref exclusions must never trip the branch/tag
