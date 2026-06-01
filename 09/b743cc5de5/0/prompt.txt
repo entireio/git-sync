@@ -1,0 +1,38 @@
+more reviews!
+
+```
+*1. (High) Decimal numbers in commit/tag messages get silently rewritten into SHA256 hashes*
+sha256convert.go:1369 — hashPattern = (?i)\b[0-9a-f]{7,40}\b
+
+Digits are a subset of hex, so the pattern matches pure-decimal runs. Verified:
+"Fixes #1234567"        -> ["1234567"]
+"build 1700000000 done" -> ["1700000000"]
+"ver 1234567.8901234"   -> ["1234567" "8901234"]   (split on the dot)If a 7+ digit issue number, PR number, or unix timestamp happens to be a unique hex prefix of one reachable commit/tag SHA1, rewriteHashesInMessage replaces it with a 64-char SHA256 and bumps messageRewrites — *with no warning* (only the ambiguous case is surfaced). On a large active repo the per-number probability is low but the corpus of issue refs/timestamps is large, so the expected number of corrupted messages is non-trivial, and the corruption is silent and hard to detect after the fact. The doc/comment claim that false positives are "essentially impossible" only holds for long prefixes. Worth requiring more hex-ish context (e.g. a leading g-less SHA context, or only rewriting full 40-char hashes plus prefixes that contain at least one a-f).
+```
+
+---
+
+not sure I like the euristic though
+
+---
+
+can you revert this change?
+
+---
+
+*2. (Medium) On failure, the cleanup defer deletes a pre-existing target directory, not just run-created content*
+sha256convert.go:246-257 / ensureEmptyTarget at 762
+
+ensureEmptyTarget accepts a directory that already exists as long as it's empty (it only MkdirAlls when absent). But the cleanupTarget defer calls os.RemoveAll(req.TargetDir), which removes the directory itself. The comment asserts it "only ever removes content this run created." If a user pre-creates the target (a mountpoint, or a dir with specific ownership/ACLs) and any step after PlainInit errors, the whole directory is destroyed — contradicting the stated invariant. Consider removing only the entries, or recording whether this run created the dir.
+
+---
+
+commit and push
+
+---
+
+### Documentation (stale vs. code)
+
+*4. docs/convert-sha256.md:234* — claims refs/notes/sha1-origin "differs [across runs] because its wrapper commit carries time.Now()." The code uses notesCommitTime() (:1517), which pins to SOURCE_DATE_EPOCH or Unix(0,0) — so the notes ref is deterministic. The doc states the opposite.
+
+*5. sha256convert.go:6* (package doc) — "no hash mapping is persisted." Contradicted by the default-on refs/notes/sha1-origin and --write-mapping, and by the Request field comments at :85-97. An operator could mistakenly treat the old SHA1s as unrecoverable. thoughts on this?
