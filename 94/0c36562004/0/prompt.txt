@@ -24,3 +24,7 @@ can you revert this change?
 sha256convert.go:246-257 / ensureEmptyTarget at 762
 
 ensureEmptyTarget accepts a directory that already exists as long as it's empty (it only MkdirAlls when absent). But the cleanupTarget defer calls os.RemoveAll(req.TargetDir), which removes the directory itself. The comment asserts it "only ever removes content this run created." If a user pre-creates the target (a mountpoint, or a dir with specific ownership/ACLs) and any step after PlainInit errors, the whole directory is destroyed — contradicting the stated invariant. Consider removing only the entries, or recording whether this run created the dir.
+
+---
+
+commit and push
