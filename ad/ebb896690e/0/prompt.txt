@@ -1,0 +1,21 @@
+Review the current state of this change, test it on a repo, make sure all the PR comments are address, make an assessment of the docs.
+
+---
+
+continue
+
+---
+
+yes
+
+---
+
+```All code in a pull ref is foreign to the repository before a merge. Bringing that in and pushing to a different forge which likely has different semantics around refs/pull can be used to deliver malicious code from the repo target.``` what about this comment? what's the current state?
+
+---
+
+so the default behaveiour is just the main branch or?
+
+---
+
+oki doki
