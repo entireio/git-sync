@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-06-03
+
+### Added
+
+- `git-sync convert-sha256`: one-off conversion that fetches a pack over smart HTTP from a SHA1 source, walks every reachable object via a two-pass topological DFS, and writes a fresh SHA256 bare repository with every tree/commit/tag reference re-encoded — including abbreviated SHA1 prefixes in commit messages. All branches and tags are always converted to avoid stranding cross-branch references; sharp edges and operational characteristics are documented in `docs/convert-sha256.md` ([#66](https://github.com/entireio/git-sync/pull/66))
+
+### Changed
+
+- HTTP auth now matches git's own flow: try anonymous first and only consult the credential helper after a 401, instead of proactively running `git credential fill` for every endpoint. This stops git-sync from dropping into an interactive `Username:`/`Password:` prompt on unauthenticated hosts and from leaking tokens to public repos. Expired credentials (401, or 403 from token services like Cloudflare) trigger a helper `reject` so the next run starts clean; the helper runs with `GIT_TERMINAL_PROMPT=0` to fail fast rather than block on a tty ([#65](https://github.com/entireio/git-sync/pull/65))
+- Bootstrap planning streams the commit-graph fetch instead of materializing the full commit set: a new `ExtractCommitParents` path parses the `tree:0` pack incrementally, extracting only `(commit -> parent hashes)` tuples with a bounded LRU for delta resolution. On `torvalds/linux` this cut peak Go heap from 5.42 GiB to 1.47 GiB (-73%), peak RSS from 5.69 GiB to 1.63 GiB (-71%), and wall time from 32m to 19m (-40%) ([#61](https://github.com/entireio/git-sync/pull/61))
+
+### Fixed
+
+- Materialized push against CDN-fronted HTTP targets (e.g. Cloudflare) no longer fails mid-upload with `use of closed network connection`. Two independent causes: a stale keep-alive pool entry expiring on the CDN edge during the gap between info-refs and receive-pack (fixed by disabling keep-alives on the default transport), and a mid-stream stall while go-git ran delta selection synchronously inside `Encode()` (fixed via `packfile.WithObjectSelector` to run selection up front and stream the write phase through `io.Pipe`). Adds `GITSYNC_HTTP_TRACE=1` for per-request lifecycle tracing with redacted auth, plus in-place verbose progress for the materialized encode/write phases ([#64](https://github.com/entireio/git-sync/pull/64))
+
+### Housekeeping
+
+- Bump go-git to v6.0.0-alpha.4 ([#60](https://github.com/entireio/git-sync/pull/60))
+
 ## [0.5.0] - 2026-05-18
 
 ### Added
