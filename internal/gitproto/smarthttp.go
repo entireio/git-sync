@@ -14,7 +14,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
+	"entire.io/entire/git-sync/internal/useragent"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
 
@@ -528,7 +528,7 @@ func (c *HTTPConn) doPostRPCRequest(ctx context.Context, service string, body io
 	}
 	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
 	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
-	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set("User-Agent", useragent.GoGit())
 	req.Header.Set(StatsPhaseHeader, phase)
 	if v2 {
 		req.Header.Set("Git-Protocol", GitProtocolV2)
@@ -663,7 +663,7 @@ func (c *HTTPConn) doServiceProbe(ctx context.Context, service string) (*http.Re
 	}
 	req.Header.Set("Content-Type", fmt.Sprintf("application/x-%s-request", service))
 	req.Header.Set("Accept", fmt.Sprintf("application/x-%s-result", service))
-	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set("User-Agent", useragent.GoGit())
 	req.Header.Set(StatsPhaseHeader, service+" auth-probe")
 	res, err := c.HTTP.Do(req)
 	if err != nil {
@@ -823,7 +823,7 @@ func (c *HTTPConn) doInfoRefsRequest(ctx context.Context, service, gitProtocol s
 		return nil, fmt.Errorf("create info-refs request: %w", err)
 	}
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set("User-Agent", useragent.GoGit())
 	req.Header.Set(StatsPhaseHeader, service+" info-refs")
 	if gitProtocol != "" {
 		req.Header.Set("Git-Protocol", gitProtocol)

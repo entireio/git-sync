@@ -7,10 +7,13 @@ import (
 	"os"
 	"strings"
 
+	"entire.io/entire/git-sync/cmd/git-sync/internal/versioninfo"
+	"entire.io/entire/git-sync/internal/useragent"
 	"github.com/spf13/cobra"
 )
 
 func main() {
+	useragent.Version = versioninfo.Version
 	err := run(context.Background(), os.Args[1:])
 	if err == nil {
 		return

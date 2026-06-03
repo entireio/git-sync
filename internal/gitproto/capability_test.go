@@ -3,6 +3,7 @@ package gitproto
 import (
 	"testing"
 
+	"entire.io/entire/git-sync/internal/useragent"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
@@ -168,8 +169,8 @@ func TestRequestCapabilities(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("RequestCapabilities() returned %d items, want 1", len(got))
 	}
-	if got[0] != "agent="+capability.DefaultAgent() {
-		t.Errorf("RequestCapabilities()[0] = %q, want %q", got[0], "agent="+capability.DefaultAgent())
+	if got[0] != "agent="+useragent.GoGit() {
+		t.Errorf("RequestCapabilities()[0] = %q, want %q", got[0], "agent="+useragent.GoGit())
 	}
 
 	// Without agent, RequestCapabilities should return empty.

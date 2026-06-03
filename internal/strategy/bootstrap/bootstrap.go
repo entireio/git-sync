@@ -18,11 +18,11 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/useragent"
 )
 
 const (
@@ -1338,7 +1338,7 @@ func lookupGitHubRepoSizeKB(ctx context.Context, conn gitproto.Conn) (int64, boo
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-Github-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", capability.DefaultAgent())
+	req.Header.Set("User-Agent", useragent.Plain())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
 	resp, err := httpConn.HTTP.Do(req)
 	if err != nil {

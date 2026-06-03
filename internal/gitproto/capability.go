@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"entire.io/entire/git-sync/internal/useragent"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
@@ -66,7 +67,7 @@ func (c *V2Capabilities) SortedKeys() []string {
 func (c *V2Capabilities) RequestCapabilities() []string {
 	var caps []string
 	if agent := c.Value("agent"); agent != "" {
-		caps = append(caps, "agent="+capability.DefaultAgent())
+		caps = append(caps, "agent="+useragent.GoGit())
 	}
 	return caps
 }
