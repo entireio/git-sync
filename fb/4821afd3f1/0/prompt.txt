@@ -1,0 +1,17 @@
+Add User Agent string for requests coming from git-sync, so that it has git-sync + version. Ideally it would also have http version 1.1 vs 2.0, but the latter is less important
+
+---
+
+Add User Agent string for requests coming from git-sync, so that it has git-sync + version. Ideally it would also have http version 1.1 vs 2.0, but the latter is less important. Note that this can also be set for go-git commands, let's also do that.
+
+---
+
+A for all calls via go-git. Direct HTTP requests should do B instead.
+
+---
+
+yes for both, go ahead
+
+---
+
+yep

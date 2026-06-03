@@ -1,0 +1,109 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "fb4821afd3f1",
+  "session_id": "0a7a5869-8ef3-45f9-a914-9d9a2634effa",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-03T14:14:13.180626799Z",
+  "branch": "user-agent",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/git-sync/main.go",
+    "internal/gitproto/capability.go",
+    "internal/gitproto/capability_test.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/useragent/useragent.go",
+    "internal/useragent/useragent_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "a5383302895b",
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 133591,
+    "cache_read_tokens": 4297352,
+    "output_tokens": 27285,
+    "api_call_count": 59
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01BzmRSRXtW26R5xbVoS5C9M",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a5383302895b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 12,
+        "end": 13,
+        "entry_ids": [
+          "97986e1e-45ab-47e6-94fa-eac67a62434b"
+        ],
+        "tool_use_id": "toolu_01BzmRSRXtW26R5xbVoS5C9M"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BzmRSRXtW26R5xbVoS5C9M"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-03T14:14:13.17271683Z",
+    "agent_lines": 85,
+    "agent_removed": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 85,
+    "total_lines_changed": 93,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 22,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 22
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 85,
+      "agent_lines_removed": 8,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 85,
+      "agent_lines_removed": 8,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    }
+  ]
+}
