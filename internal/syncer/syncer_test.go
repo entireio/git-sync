@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,12 @@ func TestLeaseFailureErrorEscalatesPastBestEffort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--force-blind") {
 		t.Errorf("expected migration hint in error, got %q", err)
+	}
+	// Under explicit ForceWithLease the lease miss is definitionally a concurrent
+	// target move, so it must be reachable via the public sentinel like the
+	// non-BestEffort path.
+	if !errors.Is(err, gitproto.ErrTargetRefMoved) {
+		t.Errorf("lease failure must satisfy errors.Is(ErrTargetRefMoved), got %q", err)
 	}
 }
 

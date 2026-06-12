@@ -554,6 +554,21 @@ func TestAsRefRejectedErrorClassifiesAndPreserves(t *testing.T) {
 	}
 }
 
+func TestRefRejectedErrorZeroValueErrorDoesNotPanic(t *testing.T) {
+	// An embedder may construct one from the exported fields alone (e.g. when
+	// testing their own errors.As-based handling). Error() must not nil-panic on
+	// the absent unexported wrapped err.
+	e := &RefRejectedError{Ref: "refs/heads/main", Reason: "remote ref has changed"}
+	got := e.Error()
+	if !strings.Contains(got, "refs/heads/main") || !strings.Contains(got, "remote ref has changed") {
+		t.Fatalf("zero-value Error() = %q, want it to include the ref and reason", got)
+	}
+	// moved defaults to false, so an externally-built value is never a move.
+	if errors.Is(e, ErrTargetRefMoved) {
+		t.Fatal("externally-constructed RefRejectedError must not satisfy ErrTargetRefMoved")
+	}
+}
+
 func TestAsRefRejectedErrorPassesNonCommandStatusErrors(t *testing.T) {
 	err := errors.New("decode report-status: short read")
 	got := asRefRejectedError(err)

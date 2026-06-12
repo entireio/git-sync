@@ -155,6 +155,13 @@ var ErrTargetRefMoved = errors.New("target ref moved concurrently")
 // satisfy errors.Is(err, ErrTargetRefMoved), letting callers branch on the cause
 // without substring-matching Reason themselves. Re-exported publicly as
 // gitsync.RefRejectedError.
+//
+// When a single push rejects multiple refs, report-status surfaces the first
+// failing ref (go-git follows canonical git here), so Ref/Reason reflect that
+// first ref; any others resurface on the next attempt. The ErrTargetRefMoved
+// classification cannot be reproduced by external construction (the deciding
+// field is unexported by design) — to exercise errors.Is in a downstream test,
+// wrap the sentinel directly: fmt.Errorf("...: %w", gitsync.ErrTargetRefMoved).
 type RefRejectedError struct {
 	Ref    string // the rejected ref, e.g. "refs/heads/main"
 	Reason string // raw receive-pack ng reason, e.g. "remote ref has changed"
@@ -163,7 +170,15 @@ type RefRejectedError struct {
 	err   error // underlying error; preserves *packp.CommandStatusErr (+ any lease-hint annotation)
 }
 
-func (e *RefRejectedError) Error() string { return e.err.Error() }
+// Error is safe on a zero-value/externally-constructed RefRejectedError (one
+// with no wrapped err), so embedders can build &RefRejectedError{Ref, Reason}
+// in tests without a nil panic.
+func (e *RefRejectedError) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("ref %s rejected: %s", e.Ref, e.Reason)
+	}
+	return e.err.Error()
+}
 
 // Unwrap exposes the underlying receive-pack error so existing
 // errors.As(*packp.CommandStatusErr) checks — and substring inspection of the
@@ -183,11 +198,20 @@ func (e *RefRejectedError) Is(target error) bool {
 // leaseFailureMarkers: "non-fast-forward" / "fetch first" are excluded because an
 // update that is legitimately non-fast-forward and wasn't force-pushed looks
 // identical to a race, and treating it as a benign move would mask a real
-// "needs --force" failure. "remote ref has changed" is entire-server's
-// compare-and-swap rejection (storage.ErrReferenceHasChanged); "stale info" is
-// git's --force-with-lease lease miss. Both mean the server's actual tip differed
-// from the expected-old value this run sent. Match is case-insensitive substring
-// (Reason is free-form; see RefRejectedError).
+// "needs --force" failure.
+//
+// This set is server-specific by design. "remote ref has changed" is
+// entire-server's compare-and-swap rejection (storage.ErrReferenceHasChanged) —
+// the one git-sync's own targets emit, and the case that matters in practice.
+// "stale info" is git's force-with-lease lease-miss phrasing, kept for
+// consistency with leaseFailureMarkers and defence-in-depth; note it is
+// primarily a client-side status, so it may not arrive as a server ng reason on
+// every target. Stock git servers phrase a CAS miss differently again
+// ("failed to update ref" / "cannot lock ref ... but expected ..."), which this
+// set does NOT match — so against a non-entire target a genuine race may fall
+// through to a plain rejection. Extend this set as new server phrasings are
+// observed. Match is case-insensitive substring (Reason is free-form; see
+// RefRejectedError).
 var concurrentMoveMarkers = []string{
 	"remote ref has changed",
 	"stale info",
