@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Typed push-rejection errors on the public API. `Sync`/`Replicate` now report a `*RefRejectedError` (carrying the rejected `Ref` and the raw server `Reason`) for per-ref receive-pack `ng` statuses, reachable with `errors.As`. Rejections that are unambiguous concurrent target-ref moves — entire-server's compare-and-swap rejection (`remote ref has changed`) and git's `--force-with-lease` lease miss (`stale info`) — additionally satisfy `errors.Is(err, ErrTargetRefMoved)`. This lets embedders distinguish a benign racing concurrent push (retryable) from a genuine push failure without substring-matching the free-form error message. Ambiguous markers (`non-fast-forward` / `fetch first`) are deliberately excluded from the move classification so a real "needs `--force`" rejection is not masked. The error message and the underlying `*packp.CommandStatusErr` are preserved unchanged, so existing checks keep working.
+
 ## [0.6.0] - 2026-06-03
 
 ### Added
