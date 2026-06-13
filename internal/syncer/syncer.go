@@ -467,7 +467,12 @@ func (s *syncSession) leaseFailureError() error {
 		return nil
 	}
 	sort.Strings(refs)
-	return fmt.Errorf("lease failure on %d ref(s) (%s) — target moved during sync; rerun, or use --force-blind to overwrite", len(refs), strings.Join(refs, ", "))
+	// Wrap the sentinel so this BestEffort+ForceWithLease escalation is reachable
+	// via errors.Is(err, ErrTargetRefMoved) like the non-BestEffort path. Under
+	// explicit ForceWithLease the "ambiguous marker" caveat does not apply — the
+	// caller opted into lease semantics, so a lease-marker rejection here is
+	// definitionally a concurrent target move.
+	return fmt.Errorf("lease failure on %d ref(s) (%s) — target moved during sync; rerun, or use --force-blind to overwrite: %w", len(refs), strings.Join(refs, ", "), gitproto.ErrTargetRefMoved)
 }
 
 // applyRejections downgrades plans whose ref was rejected by the target to

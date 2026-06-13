@@ -139,6 +139,115 @@ func annotateLeaseFailure(err error) error {
 	return fmt.Errorf("%w (target ref %s moved or differs from session start; rerun, or use --force-blind to overwrite)", err, cs.ReferenceName)
 }
 
+// ErrTargetRefMoved is reported (wrapped) when a push to the target was rejected
+// because the target ref changed concurrently between this run's plan and its
+// push — a benign, retryable compare-and-swap / lease miss rather than a real
+// failure. Test for it with errors.Is(err, ErrTargetRefMoved); the concrete
+// error in the chain is a *RefRejectedError. Re-exported publicly as
+// gitsync.ErrTargetRefMoved.
+var ErrTargetRefMoved = errors.New("target ref moved concurrently")
+
+// RefRejectedError is a single per-ref "ng" status returned by the target's
+// receive-pack report-status. Ref is the rejected ref; Reason is the raw,
+// server-defined reason text — the git wire protocol carries no structured error
+// code, so Reason is free-form and server-specific. Reach it with errors.As.
+// Rejections git-sync can prove are concurrent target-ref moves additionally
+// satisfy errors.Is(err, ErrTargetRefMoved), letting callers branch on the cause
+// without substring-matching Reason themselves. Re-exported publicly as
+// gitsync.RefRejectedError.
+//
+// When a single push rejects multiple refs, report-status surfaces the first
+// failing ref (go-git follows canonical git here), so Ref/Reason reflect that
+// first ref; any others resurface on the next attempt. The ErrTargetRefMoved
+// classification cannot be reproduced by external construction (the deciding
+// field is unexported by design) — to exercise errors.Is in a downstream test,
+// wrap the sentinel directly: fmt.Errorf("...: %w", gitsync.ErrTargetRefMoved).
+type RefRejectedError struct {
+	Ref    string // the rejected ref, e.g. "refs/heads/main"
+	Reason string // raw receive-pack ng reason, e.g. "remote ref has changed"
+
+	moved bool  // git-sync's mode-independent judgment: an unambiguous concurrent move
+	err   error // underlying error; preserves *packp.CommandStatusErr (+ any lease-hint annotation)
+}
+
+// Error is safe on a zero-value/externally-constructed RefRejectedError (one
+// with no wrapped err), so embedders can build &RefRejectedError{Ref, Reason}
+// in tests without a nil panic.
+func (e *RefRejectedError) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("ref %s rejected: %s", e.Ref, e.Reason)
+	}
+	return e.err.Error()
+}
+
+// Unwrap exposes the underlying receive-pack error so existing
+// errors.As(*packp.CommandStatusErr) checks — and substring inspection of the
+// message — keep working byte-for-byte for callers that have not migrated.
+func (e *RefRejectedError) Unwrap() error { return e.err }
+
+// Is matches ErrTargetRefMoved only when this rejection is a concurrent
+// target-ref move. Other rejections remain reachable via errors.As but are not
+// ErrTargetRefMoved.
+func (e *RefRejectedError) Is(target error) bool {
+	return target == ErrTargetRefMoved && e.moved
+}
+
+// concurrentMoveMarkers are receive-pack ng reasons that UNAMBIGUOUSLY mean the
+// target ref changed under us between plan and push — a clean compare-and-swap /
+// lease miss that a plain retry resolves. Deliberately NARROWER than
+// leaseFailureMarkers: "non-fast-forward" / "fetch first" are excluded because an
+// update that is legitimately non-fast-forward and wasn't force-pushed looks
+// identical to a race, and treating it as a benign move would mask a real
+// "needs --force" failure.
+//
+// This set is server-specific by design. "remote ref has changed" is
+// entire-server's compare-and-swap rejection (storage.ErrReferenceHasChanged) —
+// the one git-sync's own targets emit, and the case that matters in practice.
+// "stale info" is git's force-with-lease lease-miss phrasing, kept for
+// consistency with leaseFailureMarkers and defence-in-depth; note it is
+// primarily a client-side status, so it may not arrive as a server ng reason on
+// every target. Stock git servers phrase a CAS miss differently again
+// ("failed to update ref" / "cannot lock ref ... but expected ..."), which this
+// set does NOT match — so against a non-entire target a genuine race may fall
+// through to a plain rejection. Extend this set as new server phrasings are
+// observed. Match is case-insensitive substring (Reason is free-form; see
+// RefRejectedError).
+var concurrentMoveMarkers = []string{
+	"remote ref has changed",
+	"stale info",
+}
+
+// isConcurrentMove reports whether a receive-pack ng reason is an unambiguous
+// concurrent target-ref move (see concurrentMoveMarkers).
+func isConcurrentMove(reason string) bool {
+	lowered := strings.ToLower(reason)
+	for _, marker := range concurrentMoveMarkers {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// asRefRejectedError wraps a target receive-pack report-status "ng" error in
+// a typed *RefRejectedError so callers can branch on errors.As /
+// errors.Is(err, ErrTargetRefMoved) instead of substring-matching the free-form
+// reason themselves. Inputs that are not a per-ref command status (e.g. an
+// unpack-status error) pass through unchanged. The input is preserved via Unwrap,
+// so the message and any errors.As(*packp.CommandStatusErr) check are unchanged.
+func asRefRejectedError(err error) error {
+	var cs *packp.CommandStatusErr
+	if !errors.As(err, &cs) {
+		return err
+	}
+	return &RefRejectedError{
+		Ref:    cs.ReferenceName.String(),
+		Reason: cs.Status,
+		moved:  isConcurrentMove(cs.Status),
+		err:    err,
+	}
+}
+
 // sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
 func sendReceivePack(
 	ctx context.Context,
@@ -190,7 +299,7 @@ func sendReceivePack(
 		}
 		if onRejection == nil {
 			if err := report.Error(); err != nil {
-				return fmt.Errorf("report-status: %w", annotateLeaseFailure(err))
+				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
 			}
 			return nil
 		}

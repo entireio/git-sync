@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -482,5 +483,100 @@ func TestAnnotateLeaseFailurePassesNonCommandStatusErrors(t *testing.T) {
 	err := errors.New("network blew up")
 	if got := annotateLeaseFailure(err); !errors.Is(got, err) {
 		t.Fatalf("unrelated error should pass through unchanged, got %v", got)
+	}
+}
+
+func TestIsConcurrentMove(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+		want   bool
+	}{
+		{"entire-server CAS rejection", "remote ref has changed", true},
+		{"CAS rejection with surrounding detail", "command error on refs/heads/main: remote ref has changed", true},
+		{"force-with-lease stale info", "stale info", true},
+		{"stale info case-insensitive", "Stale Info", true},
+		// Deliberately NOT moves: a plain non-fast-forward that wasn't force-pushed
+		// is indistinguishable from a race and would mask a real "needs --force".
+		{"plain non-fast-forward is ambiguous", "non-fast-forward", false},
+		{"fetch first is ambiguous", "fetch first", false},
+		{"does not match is ambiguous", "remote ref does not match expected old value", false},
+		{"policy rejection", "deny updating a hidden ref", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isConcurrentMove(c.reason); got != c.want {
+				t.Fatalf("isConcurrentMove(%q) = %v, want %v", c.reason, got, c.want)
+			}
+		})
+	}
+}
+
+func TestAsRefRejectedErrorClassifiesAndPreserves(t *testing.T) {
+	cases := []struct {
+		name   string
+		status string
+		moved  bool
+	}{
+		{"concurrent move (remote ref has changed)", "remote ref has changed", true},
+		{"lease miss (stale info)", "stale info", true},
+		{"ambiguous non-fast-forward is not a move", "non-fast-forward", false},
+		{"policy rejection is not a move", "deny updating a hidden ref", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cs := &packp.CommandStatusErr{ReferenceName: "refs/heads/main", Status: c.status}
+			// Mirror the production chain: lease annotation, typed wrap, then the
+			// same outer wrapping report-status / syncer / client apply with %w.
+			wrapped := fmt.Errorf("sync: %w", fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(cs))))
+
+			var rej *RefRejectedError
+			if !errors.As(wrapped, &rej) {
+				t.Fatalf("errors.As must reach *RefRejectedError through wrapping; got %v", wrapped)
+			}
+			if rej.Ref != "refs/heads/main" || rej.Reason != c.status {
+				t.Fatalf("Ref/Reason = %q/%q, want refs/heads/main and %q", rej.Ref, rej.Reason, c.status)
+			}
+			if got := errors.Is(wrapped, ErrTargetRefMoved); got != c.moved {
+				t.Fatalf("errors.Is(ErrTargetRefMoved) = %v, want %v (status=%q)", got, c.moved, c.status)
+			}
+			// Backward compatibility: the underlying go-git error and the raw
+			// reason substring must survive the typed wrap unchanged.
+			var cse *packp.CommandStatusErr
+			if !errors.As(wrapped, &cse) || cse.Status != c.status {
+				t.Fatalf("underlying *packp.CommandStatusErr must be preserved; got %#v", wrapped)
+			}
+			if !strings.Contains(wrapped.Error(), c.status) {
+				t.Fatalf("message must still contain the raw reason %q; got %q", c.status, wrapped.Error())
+			}
+		})
+	}
+}
+
+func TestRefRejectedErrorZeroValueErrorDoesNotPanic(t *testing.T) {
+	// An embedder may construct one from the exported fields alone (e.g. when
+	// testing their own errors.As-based handling). Error() must not nil-panic on
+	// the absent unexported wrapped err.
+	e := &RefRejectedError{Ref: "refs/heads/main", Reason: "remote ref has changed"}
+	got := e.Error()
+	if !strings.Contains(got, "refs/heads/main") || !strings.Contains(got, "remote ref has changed") {
+		t.Fatalf("zero-value Error() = %q, want it to include the ref and reason", got)
+	}
+	// moved defaults to false, so an externally-built value is never a move.
+	if errors.Is(e, ErrTargetRefMoved) {
+		t.Fatal("externally-constructed RefRejectedError must not satisfy ErrTargetRefMoved")
+	}
+}
+
+func TestAsRefRejectedErrorPassesNonCommandStatusErrors(t *testing.T) {
+	err := errors.New("decode report-status: short read")
+	got := asRefRejectedError(err)
+	if !errors.Is(got, err) {
+		t.Fatalf("non-CommandStatusErr should pass through unchanged, got %v", got)
+	}
+	var rej *RefRejectedError
+	if errors.As(got, &rej) {
+		t.Fatalf("non-CommandStatusErr must not be wrapped as *RefRejectedError")
 	}
 }
