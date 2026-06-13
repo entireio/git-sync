@@ -465,13 +465,16 @@ func TestAnnotateLeaseFailureWrapsStaleInfo(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			in := &packp.CommandStatusErr{ReferenceName: "refs/heads/main", Status: c.status}
+			// Faithful input: go-git returns CommandStatusErr BY VALUE from
+			// report.Error(), so annotateLeaseFailure must match it with a value
+			// errors.As target. A *CommandStatusErr input would mask that.
+			in := (&packp.CommandStatus{ReferenceName: "refs/heads/main", Status: c.status}).Error()
 			out := annotateLeaseFailure(in)
 			wrapped := strings.Contains(out.Error(), "moved or differs from session start")
 			if wrapped != c.wrap {
 				t.Fatalf("wrap=%v want=%v (err=%q)", wrapped, c.wrap, out)
 			}
-			var inner *packp.CommandStatusErr
+			var inner packp.CommandStatusErr
 			if !errors.As(out, &inner) || inner.Status != c.status {
 				t.Fatalf("annotateLeaseFailure must preserve the underlying CommandStatusErr; got %#v", out)
 			}
@@ -526,7 +529,10 @@ func TestAsRefRejectedErrorClassifiesAndPreserves(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cs := &packp.CommandStatusErr{ReferenceName: "refs/heads/main", Status: c.status}
+			// Faithful input: go-git's report.Error() returns CommandStatusErr BY
+			// VALUE, not a pointer — the errors.As targets in annotateLeaseFailure /
+			// asRefRejectedError must match the value.
+			cs := (&packp.CommandStatus{ReferenceName: "refs/heads/main", Status: c.status}).Error()
 			// Mirror the production chain: lease annotation, typed wrap, then the
 			// same outer wrapping report-status / syncer / client apply with %w.
 			wrapped := fmt.Errorf("sync: %w", fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(cs))))
@@ -543,9 +549,9 @@ func TestAsRefRejectedErrorClassifiesAndPreserves(t *testing.T) {
 			}
 			// Backward compatibility: the underlying go-git error and the raw
 			// reason substring must survive the typed wrap unchanged.
-			var cse *packp.CommandStatusErr
+			var cse packp.CommandStatusErr
 			if !errors.As(wrapped, &cse) || cse.Status != c.status {
-				t.Fatalf("underlying *packp.CommandStatusErr must be preserved; got %#v", wrapped)
+				t.Fatalf("underlying packp.CommandStatusErr must be preserved; got %#v", wrapped)
 			}
 			if !strings.Contains(wrapped.Error(), c.status) {
 				t.Fatalf("message must still contain the raw reason %q; got %q", c.status, wrapped.Error())
@@ -578,5 +584,36 @@ func TestAsRefRejectedErrorPassesNonCommandStatusErrors(t *testing.T) {
 	var rej *RefRejectedError
 	if errors.As(got, &rej) {
 		t.Fatalf("non-CommandStatusErr must not be wrapped as *RefRejectedError")
+	}
+}
+
+// TestAsRefRejectedError_RealReportStatusPath drives the EXACT error go-git
+// hands sendReceivePack — a value-typed packp.CommandStatusErr produced by
+// ReportStatus.Error() — through the production wrap (annotateLeaseFailure →
+// asRefRejectedError → "report-status: %w"). The hand-built table tests above
+// can construct the input however they like; this one pins the classification
+// to go-git's real return type. If a pointer-vs-value regression ever creeps
+// back into the errors.As targets, asRefRejectedError stops matching, errors.Is
+// goes false, and this fails — which is exactly the bug it guards against.
+func TestAsRefRejectedError_RealReportStatusPath(t *testing.T) {
+	rs := &packp.ReportStatus{
+		UnpackStatus: "ok",
+		CommandStatuses: []*packp.CommandStatus{
+			{ReferenceName: "refs/heads/main", Status: "remote ref has changed"},
+		},
+	}
+	reportErr := rs.Error() // value packp.CommandStatusErr, exactly as in sendReceivePack
+	if reportErr == nil {
+		t.Fatal("expected a rejection error from report-status")
+	}
+
+	wrapped := fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(reportErr)))
+
+	if !errors.Is(wrapped, ErrTargetRefMoved) {
+		t.Fatalf("a real go-git report-status CAS rejection must satisfy errors.Is(ErrTargetRefMoved); got %v (underlying %T)", wrapped, reportErr)
+	}
+	var rej *RefRejectedError
+	if !errors.As(wrapped, &rej) || rej.Reason != "remote ref has changed" {
+		t.Fatalf("must classify as *RefRejectedError carrying the raw reason; got %#v", wrapped)
 	}
 }

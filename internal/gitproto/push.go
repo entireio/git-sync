@@ -129,7 +129,10 @@ func IsLeaseFailure(status string) bool {
 // annotateLeaseFailure wraps a lease-failure CommandStatusErr with a retry/
 // override hint. Other receive-pack errors pass through unchanged.
 func annotateLeaseFailure(err error) error {
-	var cs *packp.CommandStatusErr
+	// go-git returns CommandStatusErr BY VALUE (value receiver Error(),
+	// constructed by value in report_status.go), so the errors.As target must be
+	// a value — a *CommandStatusErr target never matches the value in the chain.
+	var cs packp.CommandStatusErr
 	if !errors.As(err, &cs) {
 		return err
 	}
@@ -236,7 +239,10 @@ func isConcurrentMove(reason string) bool {
 // unpack-status error) pass through unchanged. The input is preserved via Unwrap,
 // so the message and any errors.As(*packp.CommandStatusErr) check are unchanged.
 func asRefRejectedError(err error) error {
-	var cs *packp.CommandStatusErr
+	// Value target, not *CommandStatusErr: go-git returns CommandStatusErr by
+	// value (see annotateLeaseFailure), so a pointer target never matches and the
+	// rejection would silently pass through unclassified.
+	var cs packp.CommandStatusErr
 	if !errors.As(err, &cs) {
 		return err
 	}
