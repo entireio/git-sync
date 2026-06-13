@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>git-sync replicate — How It Works</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9aa7b4;
+    --line:#30363d; --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --red:#f85149;
+    --purple:#bc8cff; --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --src:#58a6ff; --hub:#bc8cff; --tgt:#3fb950;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    padding:32px 20px 80px}
+  .wrap{max-width:980px;margin:0 auto}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.3px}
+  h1 code{font-family:var(--mono);color:var(--accent);font-size:26px}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:15px}
+  h2{font-size:20px;margin:42px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h2 .n{color:var(--accent);font-family:var(--mono);margin-right:10px}
+  p{margin:0 0 14px}
+  code{font-family:var(--mono);font-size:.86em;background:#1f2733;padding:1px 5px;border-radius:5px;color:#d6e2f0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:14px 0}
+  .lede{background:linear-gradient(135deg,#161b22,#1b2435);border-left:4px solid var(--accent)}
+  .lede b{color:var(--accent)}
+  .muted{color:var(--muted)}
+  /* pipeline */
+  .pipe{display:flex;flex-direction:column;gap:0;margin:6px 0}
+  .step{display:flex;align-items:flex-start;gap:14px;position:relative;padding:10px 0}
+  .dot{flex:0 0 auto;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+    font-family:var(--mono);font-size:13px;font-weight:700;background:var(--panel2);border:1px solid var(--line)}
+  .step:not(:last-child)::before{content:"";position:absolute;left:14px;top:40px;bottom:-10px;width:2px;background:var(--line)}
+  .step .body{flex:1}
+  .step .t{font-family:var(--mono);color:var(--accent);font-size:14px}
+  .step .d{color:var(--muted);font-size:13.5px}
+  .step .f{color:#6e7d8c;font-size:12px;font-family:var(--mono)}
+  /* flow boxes */
+  .flow{display:flex;flex-direction:column;align-items:center;gap:0;margin:8px 0}
+  .box{border:1px solid var(--line);background:var(--panel2);border-radius:10px;padding:11px 16px;
+    text-align:center;max-width:560px;width:100%}
+  .box .ttl{font-family:var(--mono);font-size:13.5px}
+  .box .cap{color:var(--muted);font-size:12.5px}
+  .arrow{color:var(--muted);font-size:20px;line-height:1;padding:5px 0}
+  .branch{display:flex;gap:16px;width:100%;max-width:680px;justify-content:center}
+  .branch .leg{flex:1;display:flex;flex-direction:column;align-items:center}
+  .legtag{font-family:var(--mono);font-size:11.5px;padding:2px 9px;border-radius:20px;margin-bottom:6px}
+  .ok{background:rgba(63,185,80,.14);color:var(--green);border:1px solid rgba(63,185,80,.4)}
+  .no{background:rgba(248,81,73,.14);color:var(--red);border:1px solid rgba(248,81,73,.4)}
+  .yes{background:rgba(88,166,255,.14);color:var(--accent);border:1px solid rgba(88,166,255,.4)}
+  .fail{border-color:rgba(248,81,73,.45);background:rgba(248,81,73,.07)}
+  .fail .ttl{color:var(--red)}
+  .succ{border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.07)}
+  .succ .ttl{color:var(--green)}
+  .decision{border-color:rgba(210,153,34,.5);background:rgba(210,153,34,.07);border-radius:24px}
+  .decision .ttl{color:var(--amber)}
+  /* table */
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}
+  td code{font-size:.85em}
+  .pill{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .p-skip{background:rgba(154,167,180,.16);color:var(--muted)}
+  .p-create{background:rgba(63,185,80,.16);color:var(--green)}
+  .p-update{background:rgba(210,153,34,.18);color:var(--amber)}
+  .p-delete{background:rgba(248,81,73,.16);color:var(--red)}
+  /* sequence diagram */
+  .seq{margin:10px 0}
+  .lanes{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;text-align:center;margin-bottom:6px}
+  .lane-h{font-family:var(--mono);font-size:13px;font-weight:700;padding:8px;border-radius:8px}
+  .lane-src{background:rgba(88,166,255,.12);color:var(--src);border:1px solid rgba(88,166,255,.35)}
+  .lane-hub{background:rgba(188,140,255,.12);color:var(--hub);border:1px solid rgba(188,140,255,.35)}
+  .lane-tgt{background:rgba(63,185,80,.12);color:var(--tgt);border:1px solid rgba(63,185,80,.35)}
+  .msg{display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;margin:3px 0}
+  .msg .label{grid-column:1/4;text-align:center;font-size:12.5px;color:var(--muted);
+    font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 10px}
+  .msg .label b{color:var(--ink);font-weight:600}
+  .msg .label.l2r{border-left:3px solid var(--src)}
+  .msg .label.r2l{border-left:3px solid var(--tgt)}
+  .msg .label.hub{border-left:3px solid var(--hub)}
+  .phase{margin:16px 0 6px;font-family:var(--mono);font-size:13px;color:var(--accent);
+    display:flex;align-items:center;gap:8px}
+  .phase::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--accent)}
+  .phase.del::before{background:var(--red)} .phase.del{color:var(--red)}
+  /* note */
+  .note{font-size:13.5px;border-left:3px solid var(--purple);background:rgba(188,140,255,.07);
+    padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .note b{color:var(--purple)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.two{grid-template-columns:1fr}}
+  .foot{margin-top:40px;color:#6e7d8c;font-size:12.5px;border-top:1px solid var(--line);padding-top:16px}
+  .foot code{font-size:.9em;background:none;padding:0;color:#8b9aa8}
+  .tag{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--muted);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1><code>git-sync replicate</code> — How It Works</h1>
+  <p class="sub">Source-authoritative, relay-only mirroring · annotated walkthrough with file references</p>
+
+  <div class="card lede">
+    <p style="margin:0"><b>The contract in one line:</b> make the target's refs <b>match the source exactly</b>, by
+    streaming packs directly between the two remotes — and if that can't be done purely via relay,
+    <b>fail loudly</b> rather than fall back to anything local. No fast-forward gate, no force flags,
+    no materialized fallback.</p>
+  </div>
+
+  <!-- 1 -->
+  <h2><span class="n">1</span>The call chain</h2>
+  <p>Every layer just narrows intent until a strategy actually moves bytes.</p>
+  <div class="card">
+    <div class="pipe">
+      <div class="step"><div class="dot">CLI</div><div class="body">
+        <div class="t">git-sync replicate &lt;source-url&gt; &lt;target-url&gt;</div>
+        <div class="d">User invokes the command.</div></div></div>
+      <div class="step"><div class="dot">1</div><div class="body">
+        <div class="t">newReplicateCmd() → newSyncLikeCmd(mode = ModeReplicate)</div>
+        <div class="d">Shared with <code>sync</code>/<code>plan</code>. Differences: default mode is replicate, and <code>--all-refs</code> uses <b>strict</b> (no best-effort) semantics. Force flags are wired but rejected downstream.</div>
+        <div class="f">cmd/git-sync/syncplan.go:17</div></div></div>
+      <div class="step"><div class="dot">2</div><div class="body">
+        <div class="t">client.Replicate(ctx, req)</div>
+        <div class="d">Sets <code>req.Policy.Mode = ModeReplicate</code> and dispatches.</div>
+        <div class="f">unstable/client.go:173</div></div></div>
+      <div class="step"><div class="dot">3</div><div class="body">
+        <div class="t">syncSession.runReplicate(ctx)</div>
+        <div class="d">Orchestration: build desired refs → check eligibility → plan → execute.</div>
+        <div class="f">internal/syncer/syncer.go:903</div></div></div>
+      <div class="step"><div class="dot">4</div><div class="body">
+        <div class="t">replicate.Execute(ctx, params)</div>
+        <div class="d">The relay itself — fetch a pack from source, stream it into the target.</div>
+        <div class="f">internal/strategy/replicate/replicate.go:43</div></div></div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <h2><span class="n">2</span>The decision flow inside <code>runReplicate</code></h2>
+  <p>Two checkpoints can divert to <span style="color:var(--red)">"use <code>sync</code> instead"</span>; an empty target diverts to bootstrap.</p>
+  <div class="card">
+    <div class="flow">
+      <div class="box"><div class="ttl">BuildDesiredRefs(source refs)</div><div class="cap">what should the target hold?</div></div>
+      <div class="arrow">↓ <span class="muted" style="font-size:12px">none matched → error "no source refs matched"</span></div>
+
+      <div class="box decision"><div class="ttl">SupportsReplicateRelay(target.policy)?</div><div class="cap">are target capabilities known? (relay.go:24)</div></div>
+      <div class="branch">
+        <div class="leg"><span class="legtag no">caps unknown</span>
+          <div class="box fail"><div class="ttl">error</div><div class="cap">"requires relay-capable target … use sync instead"</div></div></div>
+        <div class="leg"><span class="legtag ok">capable</span><div class="arrow">↓</div></div>
+      </div>
+
+      <div class="box decision"><div class="ttl">replicateCanBootstrap(desired)?</div><div class="cap">are ALL managed target refs absent? (syncer.go:1000)</div></div>
+      <div class="branch">
+        <div class="leg"><span class="legtag yes">empty target</span>
+          <div class="box succ"><div class="ttl">bootstrapWithInputs()</div><div class="cap">empty-target relay · reason = <code>empty-target-managed-refs</code> · see §6</div></div></div>
+        <div class="leg"><span class="legtag yes">non-empty</span><div class="arrow">↓</div></div>
+      </div>
+
+      <div class="box"><div class="ttl">BuildReplicationPlans()</div><div class="cap">per-ref skip / create / update / delete — see §3</div></div>
+      <div class="arrow">↓</div>
+      <div class="box decision"><div class="ttl">CanReplicateRelay(relayPlans)?</div><div class="cap">are all create/update shapes relay-safe? (relay.go:146)</div></div>
+      <div class="branch">
+        <div class="leg"><span class="legtag no">not relay-safe</span>
+          <div class="box fail"><div class="ttl">error</div><div class="cap">"… use sync instead"</div></div></div>
+        <div class="leg"><span class="legtag ok">ok</span>
+          <div class="box succ"><div class="ttl">executeReplicate()</div><div class="cap">→ replicate.Execute · see §4</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <h2><span class="n">3</span>Planning — what action each ref gets</h2>
+  <p><code>PlanReplicationRef</code> <span class="tag">planner.go:365</span> compares each desired source ref to the target's current value.
+  The defining trait: <b>no ancestry / fast-forward check</b> — a divergent ref simply becomes an unconditional overwrite.</p>
+  <div class="card" style="padding:6px 22px">
+    <table>
+      <tr><th>Condition</th><th>Action</th><th>Reason string</th></tr>
+      <tr><td>source hash == target hash</td><td><span class="pill p-skip">SKIP</span></td><td><code>&lt;hash&gt; already current</code></td></tr>
+      <tr><td>target ref absent / zero</td><td><span class="pill p-create">CREATE</span></td><td><code>&lt;hash&gt; -&gt; &lt;new&gt;</code></td></tr>
+      <tr><td>differs (any direction)</td><td><span class="pill p-update">UPDATE</span></td><td><code>&lt;old&gt; -&gt; &lt;new&gt; (replicate overwrite)</code></td></tr>
+      <tr><td>on target, absent on source <span class="muted">(<code>--prune</code> only)</span></td><td><span class="pill p-delete">DELETE</span></td><td><code>&lt;hash&gt; -&gt; &lt;deleted&gt;</code></td></tr>
+    </table>
+  </div>
+  <div class="note"><b>Why no force flags?</b> Overwrite is the baseline, so there's no fast-forward gate for a
+  <code>--force-with-lease</code>/<code>--force-blind</code> flag to open. The syncer rejects them outright
+  (<code>syncer.go:646</code>): <i>"replicate does not support force flags; use sync instead."</i></div>
+
+  <!-- 4 -->
+  <h2><span class="n">4</span>Execution — the two-phase relay</h2>
+  <p><code>Execute</code> splits plans into <b>updates</b> (create + update) and <b>deletes</b>, then runs two phases.
+  git-sync sits in the middle and <b>never decodes the object graph</b> — the pack streams straight through.</p>
+
+  <div class="card seq">
+    <div class="lanes">
+      <div class="lane-h lane-src">SOURCE<br><span style="font-weight:400;font-size:11px">upload-pack</span></div>
+      <div class="lane-h lane-hub">git-sync<br><span style="font-weight:400;font-size:11px">relay</span></div>
+      <div class="lane-h lane-tgt">TARGET<br><span style="font-weight:400;font-size:11px">receive-pack</span></div>
+    </div>
+
+    <div class="phase">Phase 1 — pack relay (creates + updates)</div>
+    <div class="msg"><div class="label hub"><b>FetchPack(</b>wants = source hashes, <b>haves = ALL target tips)</b><br>
+      <span class="muted">target tips sent as <code>have</code> ⇒ source computes a minimal pack</span></div></div>
+    <div class="msg"><div class="label l2r"><b>← pack stream</b> (self-contained, <code>ofs-delta</code>, <b>no <code>thin-pack</code></b>)</div></div>
+    <div class="msg"><div class="label hub"><b>LimitPackReader(</b>pack, MaxPackBytes<b>)</b> → <b>closeOnce(</b>reader<b>)</b><br>
+      <span class="muted">enforce optional <code>--max-pack-bytes</code>; make double-close a no-op</span></div></div>
+    <div class="msg"><div class="label r2l"><b>PushPack(</b>cmds = create/update [force = false], pack<b>) →</b><br>
+      <span class="muted">cmds carry old→new ref updates; objects ride along in the pack body</span></div></div>
+
+    <div class="phase del">Phase 2 — ref-only deletes (only if any, e.g. <code>--prune</code>)</div>
+    <div class="msg"><div class="label r2l"><b>PushCommands(</b>cmds = delete<b>) →</b> &nbsp;<span class="muted">no pack — deletes need no objects</span></div></div>
+  </div>
+
+  <div class="two">
+    <div class="card" style="margin:0">
+      <p style="margin:0 0 6px"><b>Why deletes go last & separate</b></p>
+      <p class="muted" style="margin:0;font-size:13.5px">A delete needs no objects, so sending them after the pack push
+      keeps the object-bearing relay clean. <code>PushPack</code> actively rejects delete commands
+      (<code>push.go:526</code>).</p>
+    </div>
+    <div class="card" style="margin:0">
+      <p style="margin:0 0 6px"><b>Result stamp</b></p>
+      <p class="muted" style="margin:0;font-size:13.5px"><code>Relay: true</code>,
+      <code>RelayMode: "replicate"</code>, <code>RelayReason: "replicate-overwrite-relay"</code>.</p>
+    </div>
+  </div>
+
+  <!-- 5 -->
+  <h2><span class="n">5</span>The <code>no-thin</code> invariant</h2>
+  <p>This is what lets replicate's relayed pack be forwarded to <i>any</i> target, even one advertising <code>no-thin</code>.</p>
+  <div class="card">
+    <div class="flow">
+      <div class="box"><div class="ttl">git-sync's FetchPack never requests the <code>thin-pack</code> capability</div>
+        <div class="cap">fetch.go:231 (v2) · fetch.go:488 (v1)</div></div>
+      <div class="arrow">↓</div>
+      <div class="box"><div class="ttl">source therefore always emits a <b>self-contained</b> pack</div>
+        <div class="cap">no deltas against objects the pack doesn't include</div></div>
+      <div class="arrow">↓</div>
+      <div class="box succ"><div class="ttl">safe to stream into a <code>no-thin</code> receive-pack</div>
+        <div class="cap"><code>SupportsReplicateRelay</code> returns <code>replicate-target-capable-no-thin</code></div></div>
+    </div>
+    <div class="note" style="margin-bottom:0"><b>Coupled invariant:</b> if <code>FetchPack</code> ever starts requesting
+    <code>thin-pack</code>, <code>planner.SupportsReplicateRelay</code> must gain a matching fallback that gates on
+    target <code>NoThin</code>. The source-side code comments point at each other to keep this honest.</div>
+  </div>
+
+  <!-- 6 -->
+  <h2><span class="n">6</span>Empty-target detour → bootstrap</h2>
+  <p>When every managed target ref is absent, replicate hands off to the bootstrap strategy
+  <span class="tag">bootstrapWithInputs · syncer.go:1121</span> with reason <code>empty-target-managed-refs</code>.</p>
+  <div class="card">
+    <div class="two">
+      <div>
+        <p style="margin:0 0 6px"><b>HEAD-first ordering</b></p>
+        <p class="muted" style="font-size:13.5px;margin:0"><code>hoistSourceHeadPlan</code> pushes the source's HEAD branch
+        <i>first</i>, so hosts that infer the default branch from the first push (GitHub, GitLab) end up matching the
+        source automatically. <span class="tag">bootstrap.go:202</span></p>
+      </div>
+      <div>
+        <p style="margin:0 0 6px"><b>Batched bootstrap</b></p>
+        <p class="muted" style="font-size:13.5px;margin:0">With <code>--target-max-pack-bytes</code>, the chain is walked
+        and split into checkpoint sub-packs that each fit the limit — <code>first-parent</code> (default) or
+        <code>topo</code> ordering. <span class="tag">bootstrap.go:255</span></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7 -->
+  <h2><span class="n">7</span><code>replicate</code> vs <code>sync</code> at a glance</h2>
+  <div class="card" style="padding:6px 22px">
+    <table>
+      <tr><th>Aspect</th><th style="color:var(--accent)">replicate</th><th>sync</th></tr>
+      <tr><td>Contract</td><td>target refs <b>match</b> source (overwrite)</td><td>reconcile with safety checks</td></tr>
+      <tr><td>Fast-forward / ancestry gate</td><td><span style="color:var(--red)">none</span> — divergent refs overwritten</td><td>yes; non-FF needs a force flag</td></tr>
+      <tr><td>Force flags</td><td><span style="color:var(--red)">rejected</span></td><td>accepted</td></tr>
+      <tr><td>Materialized fallback</td><td><span style="color:var(--red)">never</span> — fails with "use sync instead"</td><td>yes, bounded by <code>--materialized-max-objects</code></td></tr>
+      <tr><td>Empty target</td><td>auto-bootstraps (relay)</td><td>auto-bootstraps (relay)</td></tr>
+      <tr><td><code>--all-refs</code> on rejection</td><td><b>strict</b> — a rejected ref fails the run</td><td>best-effort — rejected ref → <code>warn</code></td></tr>
+      <tr><td>Other-kind refs (notes/pull)</td><td>updated freely</td><td>blocked unless forced</td></tr>
+      <tr><td>Memory profile</td><td>flat / streaming</td><td>flat for relay, grows for fallback</td></tr>
+    </table>
+  </div>
+
+  <div class="foot">
+    <b>Source references</b> — CLI <code>cmd/git-sync/syncplan.go:17,128</code> ·
+    orchestration <code>internal/syncer/syncer.go:903–998, 1121, 1192</code> ·
+    eligibility <code>internal/planner/relay.go:24, 146</code> ·
+    planning <code>internal/planner/planner.go:196, 365</code> ·
+    relay <code>internal/strategy/replicate/replicate.go:43</code> ·
+    wire <code>internal/gitproto/fetch.go:231,488</code>, <code>internal/gitproto/push.go:51,516,551</code> ·
+    docs <code>docs/usage.md</code>, <code>docs/architecture.md</code>.
+  </div>
+
+</div>
+</body>
+</html>
