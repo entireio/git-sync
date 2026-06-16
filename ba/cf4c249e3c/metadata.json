@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.6",
+  "checkpoint_id": "bacf4c249e3c",
+  "strategy": "manual-commit",
+  "branch": "fix/target-push-timeout-batched-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/cf4c249e3c/0/metadata.json",
+      "transcript": "/ba/cf4c249e3c/0/full.jsonl",
+      "content_hash": "/ba/cf4c249e3c/0/content_hash.txt",
+      "prompt": "/ba/cf4c249e3c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27733,
+    "cache_creation_tokens": 103971,
+    "cache_read_tokens": 2274603,
+    "output_tokens": 15235,
+    "api_call_count": 26
+  }
+}

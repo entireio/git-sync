@@ -1,0 +1,5 @@
+can you take a look at https://github.com/entireio/git-sync/issues/70
+
+---
+
+let's implement the fix in a new branch, do meaningful commits, run /simplify when done
