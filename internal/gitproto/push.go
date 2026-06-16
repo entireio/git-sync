@@ -3,16 +3,19 @@ package gitproto
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
+	"github.com/go-git/go-git/v6/plumbing/hash"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
@@ -52,7 +55,8 @@ func (p *Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.R
 	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.Verbose, p.OnRejection)
 }
 
-// PushCommands sends ref-only updates without a pack.
+// PushCommands sends ref-only updates. Creates/updates carry an empty pack;
+// delete-only pushes carry no pack. See the package-level PushCommands.
 func (p *Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
 	return PushCommands(ctx, p.Conn, p.Adv, commands, p.Verbose, p.OnRejection)
 }
@@ -569,7 +573,16 @@ func PushPack(
 	return nil
 }
 
-// PushCommands sends ref update commands without a pack (for ref-only changes).
+// PushCommands sends ref update commands that move no new objects to the
+// target — the referenced objects already exist there.
+//
+// A create/update command still carries a valid empty pack (12-byte header,
+// zero objects, trailing checksum). Pack-less creates are legal git, but some
+// receive-pack implementations read a pack header for every non-delete command
+// and fail with a truncated-pack error when the request body ends after the
+// commands; an explicit empty pack satisfies them and stays valid for servers
+// that tolerate the pack-less form. Delete-only pushes carry no pack, as git
+// requires.
 func PushCommands(
 	ctx context.Context,
 	conn Conn,
@@ -578,11 +591,43 @@ func PushCommands(
 	verbose bool,
 	onRejection func(plumbing.ReferenceName, string),
 ) error {
-	req, _, _, err := buildUpdateRequest(adv, commands, verbose)
+	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
-	return sendReceivePack(ctx, conn, req, nil, verbose, onRejection)
+	var packData io.Reader
+	if hasUpdates {
+		packData = bytes.NewReader(emptyPack(adv))
+	}
+	return sendReceivePack(ctx, conn, req, packData, verbose, onRejection)
+}
+
+// emptyPackHeader is the fixed 12-byte prefix of any packfile with zero
+// objects: the "PACK" signature, version 2, and an object count of 0.
+var emptyPackHeader = []byte{'P', 'A', 'C', 'K', 0, 0, 0, 2, 0, 0, 0, 0}
+
+// A valid empty pack is emptyPackHeader followed by the trailing checksum over
+// it. The bytes depend only on the hash algorithm, so the two possibilities are
+// computed once at package load rather than on every PushCommands call.
+var (
+	emptyPackSHA1   = buildEmptyPack(crypto.SHA1)
+	emptyPackSHA256 = buildEmptyPack(crypto.SHA256)
+)
+
+func buildEmptyPack(algo crypto.Hash) []byte {
+	h := hash.New(algo)
+	_, _ = h.Write(emptyPackHeader)
+	return append(slices.Clone(emptyPackHeader), h.Sum(nil)...)
+}
+
+// emptyPack returns a valid packfile containing zero objects whose trailing
+// checksum matches the target's advertised object format: SHA-256 repositories
+// get a 32-byte trailer; everything else uses the 20-byte SHA-1 trailer.
+func emptyPack(adv *packp.AdvRefs) []byte {
+	if vals := adv.Capabilities.Get(capability.ObjectFormat); len(vals) > 0 && vals[0] == "sha256" {
+		return emptyPackSHA256
+	}
+	return emptyPackSHA1
 }
 
 func progressWriter(verbose bool, dest io.Writer) io.Writer {

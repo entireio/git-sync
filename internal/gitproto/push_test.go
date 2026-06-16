@@ -3,6 +3,9 @@ package gitproto
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -347,6 +350,98 @@ func TestPushObjectsStreamsBody(t *testing.T) {
 	if obs.bodyLen <= 0 {
 		t.Errorf("bodyLen = %d, want > 0", obs.bodyLen)
 	}
+}
+
+// captureReceivePackBody starts a server that records the request body it
+// receives on the returned channel and replies 200 OK. awaitBody reads the
+// next captured body or fails the test if none arrives.
+func captureReceivePackBody(t *testing.T) (<-chan []byte, *httptest.Server) {
+	t.Helper()
+	bodies := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Logf("read request body: %v", err)
+		}
+		_ = r.Body.Close()
+		bodies <- body
+		w.WriteHeader(http.StatusOK)
+	}))
+	return bodies, srv
+}
+
+func awaitBody(t *testing.T, bodies <-chan []byte) []byte {
+	t.Helper()
+	select {
+	case body := <-bodies:
+		return body
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not receive request")
+		return nil
+	}
+}
+
+func TestEmptyPackTrailerMatchesObjectFormat(t *testing.T) {
+	t.Run("sha1 default", func(t *testing.T) {
+		adv := &packp.AdvRefs{}
+		pack := emptyPack(adv)
+		require.Len(t, pack, 12+sha1.Size)
+		require.Equal(t, emptyPackHeader, pack[:12])
+		sum := sha1.Sum(emptyPackHeader)
+		require.Equal(t, sum[:], pack[12:])
+		// Golden: git's canonical empty-pack checksum.
+		require.Equal(t, "029d08823bd8a8eab510ad6ac75c823cfd3ed31e", hex.EncodeToString(pack[12:]))
+	})
+
+	t.Run("sha256 from object-format capability", func(t *testing.T) {
+		adv := &packp.AdvRefs{}
+		adv.Capabilities.Set(capability.ObjectFormat, "sha256")
+		pack := emptyPack(adv)
+		require.Len(t, pack, 12+sha256.Size)
+		require.Equal(t, emptyPackHeader, pack[:12])
+		sum := sha256.Sum256(emptyPackHeader)
+		require.Equal(t, sum[:], pack[12:])
+	})
+}
+
+// TestPushCommandsSendsEmptyPackForCreate guards the interop fix: a ref
+// create that moves no new objects must still carry a valid empty pack, so
+// receive-pack implementations that read a pack header for every non-delete
+// command don't see a truncated body.
+func TestPushCommandsSendsEmptyPackForCreate(t *testing.T) {
+	bodies, srv := captureReceivePackBody(t)
+	defer srv.Close()
+
+	conn := connForServer(t, srv)
+	adv := &packp.AdvRefs{}
+
+	err := PushCommands(context.Background(), conn, adv, []PushCommand{{
+		Name: "refs/heads/docs-rules",
+		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	}}, false, nil)
+	require.NoError(t, err)
+
+	require.True(t, bytes.HasSuffix(awaitBody(t, bodies), emptyPack(adv)),
+		"request body should end with a valid empty pack")
+}
+
+func TestPushCommandsSendsNoPackForDeleteOnly(t *testing.T) {
+	bodies, srv := captureReceivePackBody(t)
+	defer srv.Close()
+
+	conn := connForServer(t, srv)
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.DeleteRefs)
+
+	err := PushCommands(context.Background(), conn, adv, []PushCommand{{
+		Name:   "refs/gitsync/bootstrap/heads/docs-rules",
+		Old:    plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Delete: true,
+	}}, false, nil)
+	require.NoError(t, err)
+
+	require.False(t, bytes.Contains(awaitBody(t, bodies), []byte("PACK")),
+		"delete-only push must not carry a pack")
 }
 
 func TestBuildUpdateRequest(t *testing.T) {
