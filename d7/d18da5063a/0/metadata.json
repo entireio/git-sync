@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.7.6",
+  "checkpoint_id": "d7d18da5063a",
+  "session_id": "fddf9dc4-36f4-4c09-b698-3a0e976d3f4a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-16T17:29:53.656242Z",
+  "branch": "soph/changelog-0-7-0",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "CHANGELOG.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "f06c80f7ce38",
+  "checkpoint_transcript_start": 292,
+  "transcript_lines_at_start": 292,
+  "token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 14036,
+    "cache_read_tokens": 1354717,
+    "output_tokens": 9175,
+    "api_call_count": 8
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-changelog-2026-06-16T17:18:01.991394Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "changelog"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f06c80f7ce38",
+      "timestamp": "2026-06-16T17:18:01.991394Z",
+      "native": {
+        "command": "/changelog"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/changelog",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01NfMwCZDGduUMUFE9Z1BLd6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f06c80f7ce38",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 167,
+        "end": 168,
+        "entry_ids": [
+          "0724a0f0-abe5-49bb-bf8e-61acb5efbe77"
+        ],
+        "tool_use_id": "toolu_01NfMwCZDGduUMUFE9Z1BLd6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NfMwCZDGduUMUFE9Z1BLd6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-16T17:29:53.641799Z",
+    "agent_lines": 5,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "total_lines_changed": 8,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 43,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 43
+      }
+    }
+  ]
+}
