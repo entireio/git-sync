@@ -186,16 +186,15 @@ func TestIsTargetPushDeadlineError(t *testing.T) {
 }
 
 func TestIsBatchableTargetPushError(t *testing.T) {
+	// Per-status edge cases are covered by TestIsTargetBodyLimitError and
+	// TestIsTargetPushDeadlineError; this only confirms the OR wires both in.
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
-		{name: "nil error", err: nil, want: false},
 		{name: "body limit", err: errors.New("body exceeded size limit 1048576"), want: true},
-		{name: "http 413", err: errors.New("http 413"), want: true},
-		{name: "http 408 deadline", err: errors.New("http 408: request timeout"), want: true},
-		{name: "http 504 deadline", err: errors.New("http 504: gateway timeout"), want: true},
+		{name: "deadline", err: errors.New("http 408: request timeout"), want: true},
 		{name: "unrelated", err: errors.New("connection refused"), want: false},
 	}
 
