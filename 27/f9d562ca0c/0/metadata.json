@@ -22,6 +22,40 @@
     "output_tokens": 5980,
     "api_call_count": 11
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01NfMwCZDGduUMUFE9Z1BLd6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "610d49193f4f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 167,
+        "end": 168,
+        "entry_ids": [
+          "0724a0f0-abe5-49bb-bf8e-61acb5efbe77"
+        ],
+        "tool_use_id": "toolu_01NfMwCZDGduUMUFE9Z1BLd6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NfMwCZDGduUMUFE9Z1BLd6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
   "session_metrics": {
     "turn_count": 1
   },
