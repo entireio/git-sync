@@ -29,11 +29,8 @@ func newProbeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Protocol = gitsync.ProtocolMode(protocolVal)
 
-			if req.Source.URL == "" && len(args) > 0 {
-				req.Source.URL = args[0]
-			}
-			if targetURL == "" && len(args) > 1 {
-				targetURL = args[1]
+			if err := resolvePositionalEndpoints(&req.Source.URL, &targetURL, args); err != nil {
+				return err
 			}
 			if req.Source.URL == "" {
 				return errors.New("probe requires a source repository URL")

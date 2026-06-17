@@ -110,20 +110,11 @@ submodule repository first and re-point .gitmodules.`,
 	return cmd
 }
 
-// resolveConvertSHA256Args consumes positional args left-to-right,
-// skipping fields the user already supplied via flags. Without that
-// rule, `--source-url <url> <dir>` would look like one positional and
-// land in SourceURL — leaving TargetDir empty even though the user
-// gave both. The two-flags-no-positionals and zero-flags-two-positionals
-// shapes also work, as do the symmetric --target-dir + positional URL.
+// resolveConvertSHA256Args fills the source URL and target dir from flags
+// and/or positional args (see resolvePositionalEndpoints) and requires both.
 func resolveConvertSHA256Args(req *sha256convert.Request, args []string) error {
-	positional := args
-	if req.SourceURL == "" && len(positional) > 0 {
-		req.SourceURL = positional[0]
-		positional = positional[1:]
-	}
-	if req.TargetDir == "" && len(positional) > 0 {
-		req.TargetDir = positional[0]
+	if err := resolvePositionalEndpoints(&req.SourceURL, &req.TargetDir, args); err != nil {
+		return err
 	}
 	if req.SourceURL == "" || req.TargetDir == "" {
 		return errors.New("convert-sha256 requires a source URL and a target directory")

@@ -142,6 +142,31 @@ func envBool(key string) bool {
 	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
+// resolvePositionalEndpoints fills the source and target from positional args
+// left-to-right, skipping whichever was already supplied via a flag. Consuming
+// by fixed index instead (args[0]→source, args[1]→target) breaks the mixed
+// form `--source-url URL <target>`: the lone positional lands in args[0] and
+// the target slot stays empty.
+//
+// A positional left over after both slots are filled means the user
+// over-specified an endpoint (e.g. `--source-url URL a b`); reject it rather
+// than silently pick one. Callers still validate that both ended up set.
+func resolvePositionalEndpoints(source, target *string, args []string) error {
+	positional := args
+	if *source == "" && len(positional) > 0 {
+		*source = positional[0]
+		positional = positional[1:]
+	}
+	if *target == "" && len(positional) > 0 {
+		*target = positional[0]
+		positional = positional[1:]
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("unexpected argument %q: source and target are already set via flags or earlier positionals", positional[0])
+	}
+	return nil
+}
+
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))

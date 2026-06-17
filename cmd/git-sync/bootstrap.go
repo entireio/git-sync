@@ -30,11 +30,8 @@ func newBootstrapCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Protocol = gitsync.ProtocolMode(protocolVal)
 
-			if req.Source.URL == "" && len(args) > 0 {
-				req.Source.URL = args[0]
-			}
-			if req.Target.URL == "" && len(args) > 1 {
-				req.Target.URL = args[1]
+			if err := resolvePositionalEndpoints(&req.Source.URL, &req.Target.URL, args); err != nil {
+				return err
 			}
 
 			if branches != "" {
