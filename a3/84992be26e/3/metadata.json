@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "a384992be26e",
+  "session_id": "019ed475-8749-79a2-ad7f-dc37c47cc608",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T07:59:35.637698Z",
+  "branch": "fix/credential-host-port",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "f43adacfde20",
+  "checkpoint_transcript_start": 68,
+  "transcript_lines_at_start": 68,
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T07:59:35.633948Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 19,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 19,
+    "total_lines_changed": 20,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
