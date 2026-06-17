@@ -3,7 +3,7 @@
   "checkpoint_id": "b21841a5f646",
   "strategy": "manual-commit",
   "branch": "fix/positional-source-url-args",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "cmd/git-sync/args_test.go",
     "cmd/git-sync/bootstrap.go",
@@ -17,6 +17,12 @@
       "metadata": "/b2/1841a5f646/0/metadata.json",
       "transcript": "/b2/1841a5f646/0/full.jsonl",
       "content_hash": "/b2/1841a5f646/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/b2/1841a5f646/1/metadata.json",
+      "transcript": "/b2/1841a5f646/1/full.jsonl",
+      "content_hash": "/b2/1841a5f646/1/content_hash.txt",
       "prompt": ""
     }
   ]
