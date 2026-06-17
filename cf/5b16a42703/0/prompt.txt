@@ -1,0 +1,276 @@
+<task-notification>
+<task-id>a450806f6d278e9f6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/a450806f6d278e9f6.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplification review H2" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect. Now I have the complete picture. Let me analyze the code for unnecessary complexity:
+
+## Analysis
+
+After reviewing the SSH argument injection fix in `/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/ssh.go`, here are my findings:
+
+**Status: Code is clean — no simplification opportunities without changing behavior.**
+
+The implementation is lean and well-structured:
+
+1. **`rejectOptionLike` helper (lines 182-187)**: This 5-line function is appropriately extracted. It's called 3 times with identical validation logic, so extraction avoids duplication. The function is simple and declarative.
+
+2. **Three call sites (lines 147, 164, 169)**:
+   - **Port validation (line 147)**: Conditional check needed because port is optional (`ep.Port()` returns `""`). The early error return is appropriate.
+   - **Host validation (line 164)**: Always called since host is required (checked at line 160).
+   - **Username validation (line 169)**: Only called when username is present, guarded by the outer if. The intermediate `user` variable (line 168) improves readability vs. `ep.User.Username()` repeated.
+
+3. **Error handling**: Each call site has its own early `return nil, err`, which is necessary because `sshInvocationArgs` and `sshDestination` have different return signatures. No opportunity to consolidate.
+
+4. **"--" insertion (line 155)**: Appropriately placed before the destination with a clear explanatory comment distinguishing it as defense-in-depth from the primary guard (the validations).
+
+**Verdict**: The code prioritizes clarity and correctness. The three validations are distinct in context (different return flows, different optionality), and extracting them into a single helper without tripling parameter complexity is the right trade-off. No consolidation would improve readability.</result>
+<usage><subagent_tokens>17832</subagent_tokens><tool_uses>7</tool_uses><duration_ms>16327</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aed3d5bea66418bb8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/aed3d5bea66418bb8.output</output-file>
+<status>completed</status>
+<summary>Agent "Reuse review H2" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my comprehensive search through the git-sync codebase, here are my findings:
+
+## Simplify Review: Reuse Analysis for `rejectOptionLike`
+
+**Finding: CLEAN - No reuse opportunity detected**
+
+The new `rejectOptionLike(what, value string) error` helper in `/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/ssh.go` (lines 177-187) is a **novel security guard** with no existing equivalent in the codebase.
+
+**Evidence:**
+- **Grep coverage:** Scanned all of `internal/gitproto/` and `internal/validation/` for:
+  - Existing "starts with `-`" checks: Only found in the new code (line 183)
+  - Option injection guards: None exist elsewhere
+  - Argv safety patterns: Only the new `rejectOptionLike` implementation
+  - Helper validation packages: Only `internal/validation/validation.go` for ref/endpoint validation (unrelated domain)
+
+- **Similar patterns checked:**
+  - Shell quoting helpers (`shellQuote`, `shellQuotePath` lines 204-217): These are shell-escaping, not option-injection guards—different concern
+  - Prefix-checking patterns elsewhere (refs.go, validation.go): All are for protocol/ref parsing, not command-line safety
+
+**Reuse Cost:** Zero (this is first/only implementation of its kind)
+
+**Verdict:** No simplification available. The function is properly localized to SSH destination validation where it's needed, and there are no duplicative guards elsewhere to consolidate.</result>
+<usage><subagent_tokens>22522</subagent_tokens><tool_uses>15</tool_uses><duration_ms>34485</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a08f2a7d0a4be6635</task-id>
+<tool-use-id>toolu_01Da4uD9L9mPX5FnabviatSM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/a08f2a7d0a4be6635.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude review H2" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect! Now I have all the information I need. Let me create my analysis:
+
+## Summary of Findings
+
+The security fix is **correctly positioned at the right altitude** — argv-build time in `sshInvocationArgs()` is the appropriate defense depth. Here's my detailed analysis:
+
+### (1) Altitude Analysis: Per-Component Rejection at Argv-Build Time is Correct
+
+**Why this is the right altitude (not parse time):**
+
+- The threat is **argv-specific**: only destination components that reach `exec.CommandContext()` as separate argv elements can be parsed by ssh as options. An option-like host in a URL is harmless until it's built into argv.
+- **Defense-in-depth strategy**: The code uses two complementary guards:
+  1. **Primary guard** (lines 164-170, 147-148): `rejectOptionLike()` validation per component (host, username, port). This is portable and aligns with git's own fix for CVE-2017-1000117.
+  2. **Secondary guard** (line 155): `"--"` terminator before destination in argv, preventing options from being parsed even if a component somehow passes validation.
+
+- **Why not at NewSSHConn()**: URL validation at connection construction time would be higher-altitude but redundant here. The threat is only realized when components flow into argv, not when the URL object exists in memory. Per-component validation at usage time catches any injection point.
+
+### (2) Option-Like Values Cannot Bypass Validation
+
+**Paths examined:**
+
+| Path | Status | Why Safe |
+|------|--------|----------|
+| `sshDestination()` → host | ✓ Validated | Line 164: `rejectOptionLike("SSH host", host)` |
+| `sshDestination()` → username | ✓ Validated | Line 169: `rejectOptionLike("SSH username", user)` |
+| `sshInvocationArgs()` → port | ✓ Validated | Line 147: `rejectOptionLike("SSH port", port)` |
+| `sshRemoteCommand()` → path | ✓ Safe (shell-quoted) | Lines 193, 208-216: `shellQuotePath()` wraps path in single quotes. Path is then embedded in a shell command string (e.g., `git-upload-pack '/repo.git'`), which is passed as a single argv element to ssh. Even `-o` in a path becomes literal text inside quotes. |
+| `remoteCommand` construction | ✓ Safe | Lines 200-206: `shellQuote()` and `gitProtocolEnv()` safely quote all variable components. |
+| argv ordering | ✓ Safe | Line 155: `"--"` precedes destination, and destination is a separate argv element (not parsed as options by ssh). |
+
+**Key insight on the remote command:**
+The remote command string is **NOT** parsed as argv by ssh — it's a single string argument (`ssh` [opts] `&lt;destination&gt; &lt;command&gt;`). The command is executed on the remote server via shell. The local path cannot inject local ssh options because:
+- It's shell-quoted (line 193: `shellQuotePath()`)
+- It's part of a shell command string sent to the remote, not a local ssh invocation argument
+
+### (3) Critical Test Coverage
+
+The fix includes proper test coverage:
+- **TestSSHInvocationArgsRejectsOptionLikeDestination** (ssh_test.go): Tests host and username rejection ✓
+- **TestSSHInvocationArgsTerminatesOptionsBeforeDestination** (ssh_test.go): Verifies `--` placement ✓
+- **Notable gap**: No test for option-like port (e.g., `ssh://example.com:-oProxy=evil/repo`), though the validation code at line 147 covers it.
+
+### Recommended Assessment
+
+**Altitude is correct.** The fix is not a fragile bandaid:
+
+1. **Simplicity**: Per-component validation is straightforward to audit and maintain.
+2. **Defense-in-depth**: Combining per-component validation + `--` terminator provides layered protection.
+3. **Alignment with upstream**: Matches git's own CVE-2017-1000117 fix (reject leading `-`).
+4. **No bypass routes found**: All paths that contribute to argv are validated or safely shell-quoted.
+
+**Minor suggestion** (quality, not security):
+- Consider adding a test case for option-like port values (`ssh://example.com:-oProxy=/repo.git`) to the `TestSSHInvocationArgsRejectsOptionLikeDestination` test for completeness, though the code already handles it.
+
+---
+
+**Files &amp; Lines:**
+- `/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/ssh.go` (lines 146-187): Port, host, username validation and `--` placement
+- `/Users/soph/Work/entire/devenv/git-sync/internal/gitproto/ssh_test.go` (lines 21-58): Validation and `--` placement tests</result>
+<usage><subagent_tokens>35287</subagent_tokens><tool_uses>29</tool_uses><duration_ms>63022</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af1239adc345bda7f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/af1239adc345bda7f.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplification review H3" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect. Now I have all the code I need. Let me analyze the complexity:
+
+## Analysis
+
+The code is **clean and well-simplified**. Here are my findings:
+
+### Control Flow in `CheckAncestry` (lines 447-498)
+
+The `hitFrontier` flag is appropriately used. It tracks whether the walk encountered any pruned ancestors (missing objects from the store). This is necessary because:
+- The walk must distinguish between two end states: "walked entire ancestry without reaching target" vs "walked until hitting pruned commits (frontier)"
+- A boolean flag is the minimal way to capture "did we hit the frontier at any point during iteration"
+
+The logic is straightforward:
+- `hitFrontier = true` when a parent is missing (line 487)
+- At the end (lines 495-498), return `AncestryIndeterminate` if frontier was hit, otherwise `AncestryUnreachable`
+
+No simplification opportunity here — you cannot collapse this into the return value without losing the ability to distinguish the two cases during the loop.
+
+### Control Flow in `PlanRef` (lines 305-371)
+
+The switching on the three `AncestryResult` values is straightforward and minimal:
+
+1. Line 347: if `AncestryReachable` → fast-forward, return early
+2. Line 353: if `force` → force update, return early (applies to both `AncestryUnreachable` and `AncestryIndeterminate`)
+3. Line 360: if `AncestryIndeterminate` → provide indeterminate-specific reason
+4. Implicit else (line 369): `AncestryUnreachable` case with divergence message
+
+This is the minimal form. The explicit check at line 360 for `AncestryIndeterminate` (after setting `ActionBlock`) is necessary because it needs a different reason message than the default case. You cannot merge this into the implicit else without either:
+- Duplicating the `plan.Action = ActionBlock` assignment, or
+- Creating another conditional branch
+
+### Overall Assessment
+
+**No simplifications found.** The code is already at minimum complexity:
+- The `hitFrontier` boolean is essential and minimal
+- The three-way switch in `PlanRef` is necessary for the three distinct outcomes
+- Early returns prevent nesting
+- Reason messages are context-specific and require explicit branching
+
+The implementation follows a clear pattern: settle easy cases first, then distinguish hard cases based on the ancestry result.</result>
+<usage><subagent_tokens>15217</subagent_tokens><tool_uses>5</tool_uses><duration_ms>15866</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68ad8194847275f3</task-id>
+<tool-use-id>toolu_01CtES7rcjvmf9Zmd1BURZSr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/a68ad8194847275f3.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude review H3" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Excellent. Now I have all the information I need. Let me synthesize the analysis.
+
+## Verdict: The Fix is at the Right Altitude
+
+**The current fix (frontier-aware walk + AncestryIndeterminate) is defensible and appropriate. A deeper fix at the fetch level is NOT warranted.**
+
+### Summary of the Fix
+The fix operates at the **walk level** inside `CheckAncestry`:
+- When the ancestry walk encounters a missing commit (one pruned by the fetch because the target already has it), the code treats this as hitting a **frontier** rather than an error or false divergence
+- Returns `AncestryIndeterminate` instead of crashing on missing start or falsely reporting divergence
+- `PlanRef` converts indeterminate into a clean ActionBlock with an actionable message (use --force-with-lease)
+
+### Why This Altitude is Correct
+
+**1. Architectural Fit**
+The root cause is fundamental to the design: `BuildPlans` runs against a have-pruned store (line 821: `FetchToStore(..., targetRefMap)` where `targetRefMap` are all the haves). The pruning is intentional and necessary—it's how we minimize fetch bandwidth.
+
+The frontier walks into this pruned data structure **by design**—we can't avoid it because multiple desired refs compete for ancestry data in the same shared store. The walk doesn't have a bug; it's operating on incomplete data by nature.
+
+**2. Shared Closure Store Constraint**
+The store is shared between:
+- The fast-forward planning phase (needs complete ancestry data for each ref)
+- The materialized fallback (line 888: `executeMaterialized(ctx, repo.Storer, ...)`)
+
+A deeper fix that fetches planning data **per-ref** with only that ref's targetHash as a have would:
+- Require either partitioned stores (complexity, memory overhead) OR
+- Multiple sequential fetches per ref (network overhead, latency, protocol churn)
+- Violate the lazy-fetch optimization (lines 817-828 where closure is fetched on-demand)
+
+**3. Correctness at This Altitude**
+The fix correctly interprets the frontier:
+- A missing commit in this store ≡ "the target already has it"
+- If the walk can't cross the frontier, a fast-forward **cannot be ruled out**—the merge base lives beyond what we can see locally
+- `ActionBlock` with --force override is the **correct policy**: "I can't prove this is a fast-forward from what I can see, but you can force it if you know it's safe"
+
+Compare this to the previous behavior:
+- **Crash on missing start**: Wrong. If the target has the source tip under another ref, that's not an error—it's the whole point of the frontier.
+- **False divergence on pruned intermediate**: Wrong. A genuine non-fast-forward has diverged history we can see; a pruned commit is beyond what we can see.
+
+**4. Semantic Correctness of the Return Value**
+The three-valued result is semantically sound:
+- `AncestryReachable`: Proven fast-forward (walk succeeded, found ancestor)
+- `AncestryUnreachable`: Proven divergence (walk completed without frontier, no ancestor)
+- `AncestryIndeterminate`: **Cannot prove either**—frontier blocks the walk (this is the novel case)
+
+This accurately captures reality: the answer exists beyond the store's frontier.
+
+**5. Performance and Usability**
+- This fix has zero performance cost beyond the walk itself (just set a boolean flag)
+- The actionable error message (`use --force-with-lease if this is a valid fast-forward`) guides users toward --force when they know the push is safe
+- Lazy fetching (line 829) remains intact—we don't force an upfront full-closure fetch
+
+### Why a Deeper Fix Would Be Wrong
+
+A deeper fix at fetch level (fetch each planned ref's closure separately with only its own targetHash as a have) would:
+
+**Trade-offs:**
+- **Pro**: `CheckAncestry` could never hit the frontier—full ancestry data for each ref
+- **Con**: Shatters the lazy-fetch optimization (now each ref forces a sequential fetch upfront)
+- **Con**: Breaks the shared store model (materialized fallback expects one coherent closure)
+- **Con**: Network overhead (N fetches instead of 1, each advertising different haves)
+- **Con**: Unnecessary bandwidth for refs that only create (never need ancestry data)
+
+The deeper fix treats the pruning as a **bug to avoid**, but the pruning is a **feature**—it's the whole reason we can sync fast. The frontier is the *price* of that optimization, and handling it gracefully (as the fix does) is the right design.
+
+### Findings
+
+1. **Correct level of abstraction**: The walk-level fix respects the intentional laziness and shared-store design while correctly handling the frontier as a logical boundary, not an error.
+
+2. **Semantic clarity**: The three-valued AncestryResult correctly expresses the fundamental asymmetry: you can prove a fast-forward, you can prove divergence, but you **cannot prove either** when the deciding history is pruned by the fetch.
+
+3. **No hidden costs**: The fix is pure detection and delegation to `PlanRef`'s policy logic—zero hidden performance or correctness trade-offs.
+
+4. **User-facing behavior is sound**: Blocking with an actionable message is correct for unprovable cases; --force still allows overrides.
+
+This is **not a fragile band-aid**—it's a clean separation of concerns: the fetch optimizes bandwidth, the walk detects the frontier, and the planner makes the policy decision.</result>
+<usage><subagent_tokens>31743</subagent_tokens><tool_uses>18</tool_uses><duration_ms>52353</duration_ms></usage>
+</task-notification>
