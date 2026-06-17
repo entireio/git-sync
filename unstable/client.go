@@ -325,6 +325,7 @@ func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer
 		Source:             source,
 		HTTPClient:         c.httpClient,
 		Branches:           append([]string(nil), req.Scope.Branches...),
+		Mappings:           validationMappings(req.Scope.Mappings),
 		AllRefs:            req.Scope.AllRefs,
 		ExcludeRefPrefixes: append([]string(nil), req.Scope.ExcludeRefPrefixes...),
 		IncludeTags:        req.IncludeTags,
