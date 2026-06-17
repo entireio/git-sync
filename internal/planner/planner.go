@@ -417,9 +417,14 @@ var ErrAncestryDepthExceeded = errors.New("ancestry check exceeded depth limit")
 type AncestryResult int
 
 const (
+	// AncestryInvalid is the zero value and is returned alongside every error.
+	// Keeping it distinct from AncestryReachable means a caller that ignores
+	// the error (result, _ := CheckAncestry(...)) reads a failure as invalid
+	// rather than mistaking it for a provable fast-forward.
+	AncestryInvalid AncestryResult = iota
 	// AncestryReachable means targetHash is provably an ancestor of startHash:
 	// the update is a fast-forward.
-	AncestryReachable AncestryResult = iota
+	AncestryReachable
 	// AncestryUnreachable means startHash's entire ancestry was walked without
 	// reaching targetHash and without hitting any object the target already
 	// has — a genuine non-fast-forward (the two histories have diverged).
@@ -454,7 +459,7 @@ func CheckAncestry(store storer.EncodedObjectStorer, startHash, targetHash plumb
 		if errors.Is(err, plumbing.ErrObjectNotFound) {
 			return AncestryIndeterminate, nil
 		}
-		return 0, fmt.Errorf("load source commit %s: %w", startHash, err)
+		return AncestryInvalid, fmt.Errorf("load source commit %s: %w", startHash, err)
 	}
 
 	seen := map[plumbing.Hash]struct{}{}
@@ -463,7 +468,7 @@ func CheckAncestry(store storer.EncodedObjectStorer, startHash, targetHash plumb
 
 	for len(stack) > 0 {
 		if len(seen) >= MaxAncestryDepth {
-			return 0, ErrAncestryDepthExceeded
+			return AncestryInvalid, ErrAncestryDepthExceeded
 		}
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -487,7 +492,7 @@ func CheckAncestry(store storer.EncodedObjectStorer, startHash, targetHash plumb
 					hitFrontier = true
 					continue
 				}
-				return 0, fmt.Errorf("load parent commit %s: %w", parentHash, err)
+				return AncestryInvalid, fmt.Errorf("load parent commit %s: %w", parentHash, err)
 			}
 			stack = append(stack, parent)
 		}
