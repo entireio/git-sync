@@ -75,11 +75,13 @@ submodule repository first and re-point .gitmodules.`,
 		envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"),
 		"send follow-up source RPCs to the final /info/refs redirect host")
 	cmd.Flags().StringVar(&req.SourceAuth.Token, "source-token",
-		envOr("GITSYNC_SOURCE_TOKEN", ""), "source token/password")
+		"", "source token/password (env: GITSYNC_SOURCE_TOKEN)")
 	cmd.Flags().StringVar(&req.SourceAuth.Username, "source-username",
 		envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
 	cmd.Flags().StringVar(&req.SourceAuth.BearerToken, "source-bearer-token",
-		envOr("GITSYNC_SOURCE_BEARER_TOKEN", ""), "source bearer token")
+		"", "source bearer token (env: GITSYNC_SOURCE_BEARER_TOKEN)")
+	addSecretEnvFallback(cmd, "source-token", &req.SourceAuth.Token, "GITSYNC_SOURCE_TOKEN")
+	addSecretEnvFallback(cmd, "source-bearer-token", &req.SourceAuth.BearerToken, "GITSYNC_SOURCE_BEARER_TOKEN")
 	cmd.Flags().BoolVar(&req.SourceAuth.SkipTLSVerify, "source-insecure-skip-tls-verify",
 		envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"),
 		"skip TLS certificate verification for the source")
