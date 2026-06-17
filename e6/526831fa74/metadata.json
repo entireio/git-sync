@@ -3,7 +3,7 @@
   "checkpoint_id": "e6526831fa74",
   "strategy": "manual-commit",
   "branch": "fix/session-resource-leaks",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "internal/syncer/measurement_test.go",
     "internal/syncer/syncer.go"
@@ -19,6 +19,12 @@
       "metadata": "/e6/526831fa74/1/metadata.json",
       "transcript": "/e6/526831fa74/1/full.jsonl",
       "content_hash": "/e6/526831fa74/1/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/e6/526831fa74/2/metadata.json",
+      "transcript": "/e6/526831fa74/2/full.jsonl",
+      "content_hash": "/e6/526831fa74/2/content_hash.txt",
       "prompt": ""
     }
   ]
