@@ -3,7 +3,7 @@
   "checkpoint_id": "409a151aeced",
   "strategy": "manual-commit",
   "branch": "fix/credential-token-usage-leak",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "cmd/git-sync/convert_sha256.go",
     "cmd/git-sync/flags.go",
@@ -15,13 +15,19 @@
       "transcript": "/40/9a151aeced/0/full.jsonl",
       "content_hash": "/40/9a151aeced/0/content_hash.txt",
       "prompt": "/40/9a151aeced/0/prompt.txt"
+    },
+    {
+      "metadata": "/40/9a151aeced/1/metadata.json",
+      "transcript": "/40/9a151aeced/1/full.jsonl",
+      "content_hash": "/40/9a151aeced/1/content_hash.txt",
+      "prompt": "/40/9a151aeced/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 6665,
+    "input_tokens": 201148,
     "cache_creation_tokens": 105287,
-    "cache_read_tokens": 1037576,
-    "output_tokens": 20937,
-    "api_call_count": 23
+    "cache_read_tokens": 1705736,
+    "output_tokens": 29548,
+    "api_call_count": 42
   }
 }
