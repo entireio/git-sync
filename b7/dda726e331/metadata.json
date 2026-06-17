@@ -3,7 +3,7 @@
   "checkpoint_id": "b7dda726e331",
   "strategy": "manual-commit",
   "branch": "fix/pack-observer-non-fatal",
-  "checkpoints_count": 9,
+  "checkpoints_count": 10,
   "files_touched": [
     "internal/strategy/bootstrap/pack_observer.go",
     "internal/strategy/bootstrap/pack_observer_test.go"
@@ -62,13 +62,19 @@
       "transcript": "/b7/dda726e331/8/full.jsonl",
       "content_hash": "/b7/dda726e331/8/content_hash.txt",
       "prompt": "/b7/dda726e331/8/prompt.txt"
+    },
+    {
+      "metadata": "/b7/dda726e331/9/metadata.json",
+      "transcript": "/b7/dda726e331/9/full.jsonl",
+      "content_hash": "/b7/dda726e331/9/content_hash.txt",
+      "prompt": "/b7/dda726e331/9/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 166629,
+    "input_tokens": 287363,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 470016,
-    "output_tokens": 5687,
-    "api_call_count": 21
+    "cache_read_tokens": 675328,
+    "output_tokens": 7807,
+    "api_call_count": 34
   }
 }
