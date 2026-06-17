@@ -3,7 +3,7 @@
   "checkpoint_id": "3456387d7a8a",
   "strategy": "manual-commit",
   "branch": "fix/gomod-and-test-hygiene",
-  "checkpoints_count": 19,
+  "checkpoints_count": 20,
   "files_touched": [
     "client.go",
     "client_test.go",
@@ -124,6 +124,19 @@
       "transcript": "/34/56387d7a8a/18/full.jsonl",
       "content_hash": "/34/56387d7a8a/18/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/34/56387d7a8a/19/metadata.json",
+      "transcript": "/34/56387d7a8a/19/full.jsonl",
+      "content_hash": "/34/56387d7a8a/19/content_hash.txt",
+      "prompt": "/34/56387d7a8a/19/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 37903,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 180736,
+    "output_tokens": 4838,
+    "api_call_count": 15
+  }
 }
