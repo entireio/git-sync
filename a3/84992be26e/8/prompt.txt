@@ -274,3 +274,155 @@ The deeper fix treats the pruning as a **bug to avoid**, but the pruning is a **
 This is **not a fragile band-aid**—it's a clean separation of concerns: the fetch optimizes bandwidth, the walk detects the frontier, and the planner makes the policy decision.</result>
 <usage><subagent_tokens>31743</subagent_tokens><tool_uses>18</tool_uses><duration_ms>52353</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ae198e02f3f5950d3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/ae198e02f3f5950d3.output</output-file>
+<status>completed</status>
+<summary>Agent "Reuse review M1" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Good, so there are exactly 5 command files. Let me verify the fetch.go issue more carefully since it's the only one not using the helper:
+
+Based on my thorough search of the codebase, here are my findings:
+
+## Reuse Issue Found
+
+**File: `/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/fetch.go`**  
+**Lines 34-35:**
+```go
+if req.Source.URL == "" &amp;&amp; len(args) &gt; 0 {
+    req.Source.URL = args[0]
+}
+```
+
+This is duplicating the positional-argument resolution pattern that `resolvePositionalEndpoints()` now handles. The `fetch` command only needs a source URL (not both source and target), but it's still doing manual `args[0]` indexing when it could benefit from the centralized helper.
+
+## Summary
+
+- **Commands using the helper:** `sync`, `replicate`, `plan`, `bootstrap`, `probe`, `convert-sha256` (via wrapper `resolveConvertSHA256Args`)
+- **Commands NOT using the helper:** `fetch` (lines 34-35)
+- **Other commands:** `version` (no args), `root` (no args)
+
+The `fetch` command's pattern is simpler (single positional, not paired source/target), so it may be intentionally left as-is for clarity. However, it's still a candidate for consolidation if you want to enforce uniform positional handling across all commands. The current code works but is a minor reuse miss.</result>
+<usage><subagent_tokens>21944</subagent_tokens><tool_uses>9</tool_uses><duration_ms>15427</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3976ddf5edc4beeb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/a3976ddf5edc4beeb.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplification review M1" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect. Now I have all the context. Let me analyze the helper function and the call sites for simplification opportunities.
+
+## Analysis
+
+After reviewing the helper function `resolvePositionalEndpoints` in `flags.go` and comparing it to:
+1. The original patterns in syncplan.go, bootstrap.go, and probe.go (fixed-index consumption)
+2. The convert_sha256.go pattern it extracted from (left-to-right consumption)
+3. The wrapper function `resolveConvertSHA256Args` that now calls it
+
+**FINDINGS: The implementation is clean.**
+
+### Helper function assessment (flags.go, lines 117-131):
+
+The implementation correctly:
+- Iterates left-to-right through positional args
+- Conditionally assigns to each slot only if not already flag-supplied
+- Rejects over-specified positional args (the new stricter behavior)
+- Returns an error instead of silently dropping an argument
+- Has clear comments explaining the design rationale (mixed forms like `--source-url URL &lt;target&gt;`)
+
+There is no unnecessary complexity here. The slice-reslicing pattern (`positional = positional[1:]`) is idiomatic Go and clearer than index-based tracking.
+
+### Call sites assessment:
+
+**syncplan.go (line 51):** Simple error propagation, pattern matches bootstrap/probe.
+
+**bootstrap.go (line 33):** Same pattern, clean.
+
+**probe.go (line 32):** Same pattern. One note: assigns to `targetURL` variable instead of `req.Target.URL` — this is necessary because `probe` has optional target semantics (see lines 38-43 where it conditionally wraps targetURL in a pointer), so the split is appropriate.
+
+**convert_sha256.go (line 118):** Wraps the helper in `resolveConvertSHA256Args`, which:
+- Calls `resolvePositionalEndpoints` (line 118)
+- Adds semantic validation that both slots must be filled (lines 121-123)
+- This wrapper function appropriately handles the command-specific contract ("convert-sha256 requires both")
+
+### Possible simplification:
+
+The only minor consideration: `resolveConvertSHA256Args` adds a thin layer that just calls the helper and validates both are set. However, this wrapper is justified because:
+1. It documents the command-specific requirement in a dedicated function
+2. It separates positional argument parsing (helper) from business logic validation (wrapper)
+3. The error message is specific to the command ("convert-sha256 requires...")
+
+**CLEAN** — No changes needed. The helper and call sites are appropriately simple without sacrificing clarity or reusability.</result>
+<usage><subagent_tokens>22633</subagent_tokens><tool_uses>11</tool_uses><duration_ms>20920</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2238851c12aa2609</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/f82fa48e-a8dd-42c8-a49a-7193b101bbf5/tasks/a2238851c12aa2609.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude review M1" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect. Now I have enough context. Let me write up my altitude review findings:
+
+## VERDICT: Shared Helper at Correct Altitude
+
+The refactoring is at the right depth. The change extracts `resolvePositionalEndpoints` as a shared helper in `flags.go` and routes all four commands (sync/replicate/plan, bootstrap, probe, convert-sha256) through it. This is the correct architectural decision.
+
+## Key Findings:
+
+### 1. **Helper Captures Non-Trivial Logic Correctly**
+The helper implements left-to-right positional consumption, not fixed indexing. This is a semantic difference that matters:
+- Fixed indexing (`args[0]→source, args[1]→target`) breaks the mixed form `--source-url URL &lt;target&gt;`, leaving the lone positional in `args[0]` and the target slot empty.
+- Left-to-right consumption (`positional[i]` fills whichever slot is empty) handles all combinations correctly.
+
+The helper's logic is non-trivial enough to warrant extraction (not a one-liner flag registration). The test suite at `/Users/soph/Work/entire/devenv/git-sync/cmd/git-sync/args_test.go` confirms seven meaningful cases, including the previously buggy mixed forms.
+
+### 2. **No Cobra-Native Alternative is Better**
+Three mechanisms were considered:
+
+- **Cobra's `Args` validator:** Only validates count bounds (e.g., `cobra.MaximumNArgs(2)`). Cobra offers no built-in way to express "left-to-right filling with skip-if-set" semantics. A custom `cobra.PositionalArgs` function would require reimplementing the same logic in an `Args` closure, giving no altitude win.
+
+- **PreRunE hook:** Could run after flag parsing and invoke the helper. However, all four commands already use `RunE` directly, and adding PreRunE would require either:
+  - Wrapping logic (like the existing `allRefsFlag` pattern, which stacks PreRunE hooks and notes "not idempotent")
+  - Duplicating the endpoint resolution four times (one per command)
+  
+  Either way, you still need the shared helper.
+
+- **Shared helper (current choice):** Calls from within `RunE` at the point where positional args are known. This is cleaner than PreRunE because:
+  - No hook stacking or idempotence concerns
+  - Co-located with the validation checks that follow (`if req.Source.URL == "" || req.Target.URL == ""`)
+  - Explicit flow: flags are bound, then positionals fill remaining slots, then validation runs
+
+### 3. **Redundancy Between `cobra.MaximumNArgs(2)` and the Helper**
+There is **intentional non-redundancy** here, not a gap:
+
+- `cobra.MaximumNArgs(2)` enforces the count bound at the cobra level—it rejects 3+ positional args before `RunE` is called.
+- `resolvePositionalEndpoints` enforces the *semantic* constraint: "after consuming args left-to-right, no positionals remain." It rejects cases like `--source-url URL a b` (source set by flag + 2 positionals), where the second `b` is leftover.
+
+These are complementary. The MaximumNArgs is a guard; the helper is the consumer. Together they ensure:
+1. Never more than 2 positionals reach `RunE` (guard)
+2. No positional is left unconsumed after filling slots (consumer)
+
+Test case `"source flag plus two positionals"` (line 26, args_test.go) explicitly covers this—the second positional is rejected by the helper, not by cobra's count check.
+
+### 4. **Altitude is Correct**
+- **Too low:** Inlining the logic in each command's RunE (pre-refactor state) leads to inconsistency and the reported bug.
+- **Right level (current):** A single, focused helper in `flags.go` that all callers use.
+- **Too high:** A cobra-native `Args` validator or PreRunE hook wrapping—adds indirection without removing the helper, complicating control flow.
+
+## Recommendation:
+**No changes needed.** The refactoring correctly identifies a reusable semantic pattern (left-to-right endpoint consumption) and extracts it to the right place (shared helper with comprehensive tests). The interaction with `cobra.MaximumNArgs(2)` is clean and intentional.</result>
+<usage><subagent_tokens>26844</subagent_tokens><tool_uses>18</tool_uses><duration_ms>40437</duration_ms></usage>
+</task-notification>
