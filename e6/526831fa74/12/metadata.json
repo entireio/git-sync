@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "e6526831fa74",
+  "session_id": "019ed5e8-a428-7bb1-82c3-349b67b931b9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T14:18:24.747114Z",
+  "branch": "fix/session-resource-leaks",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/syncer/measurement_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "60a64ec1e92e",
+  "token_usage": {
+    "input_tokens": 56751,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 257024,
+    "output_tokens": 3409,
+    "api_call_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T14:18:24.742292Z",
+    "agent_lines": 76,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 76,
+    "total_lines_changed": 89,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 83,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".claude/settings.local.json": 82
+      }
+    }
+  ]
+}
