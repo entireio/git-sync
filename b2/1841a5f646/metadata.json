@@ -3,7 +3,7 @@
   "checkpoint_id": "b21841a5f646",
   "strategy": "manual-commit",
   "branch": "fix/positional-source-url-args",
-  "checkpoints_count": 7,
+  "checkpoints_count": 12,
   "files_touched": [
     "cmd/git-sync/args_test.go",
     "cmd/git-sync/bootstrap.go",
@@ -54,13 +54,19 @@
       "transcript": "/b2/1841a5f646/6/full.jsonl",
       "content_hash": "/b2/1841a5f646/6/content_hash.txt",
       "prompt": "/b2/1841a5f646/6/prompt.txt"
+    },
+    {
+      "metadata": "/b2/1841a5f646/7/metadata.json",
+      "transcript": "/b2/1841a5f646/7/full.jsonl",
+      "content_hash": "/b2/1841a5f646/7/content_hash.txt",
+      "prompt": "/b2/1841a5f646/7/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 111471,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 157184,
-    "output_tokens": 5780,
-    "api_call_count": 14
+    "input_tokens": 150358,
+    "cache_creation_tokens": 295457,
+    "cache_read_tokens": 26665006,
+    "output_tokens": 116881,
+    "api_call_count": 171
   }
 }
