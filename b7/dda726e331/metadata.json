@@ -3,7 +3,7 @@
   "checkpoint_id": "b7dda726e331",
   "strategy": "manual-commit",
   "branch": "fix/pack-observer-non-fatal",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "internal/strategy/bootstrap/pack_observer.go",
     "internal/strategy/bootstrap/pack_observer_test.go"
@@ -13,6 +13,12 @@
       "metadata": "/b7/dda726e331/0/metadata.json",
       "transcript": "/b7/dda726e331/0/full.jsonl",
       "content_hash": "/b7/dda726e331/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/b7/dda726e331/1/metadata.json",
+      "transcript": "/b7/dda726e331/1/full.jsonl",
+      "content_hash": "/b7/dda726e331/1/content_hash.txt",
       "prompt": ""
     }
   ]
