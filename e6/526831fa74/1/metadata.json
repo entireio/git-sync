@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "e6526831fa74",
+  "session_id": "019ed461-aafd-7711-ac20-3b67dd1504c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T14:18:23.889358Z",
+  "branch": "fix/session-resource-leaks",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/syncer/measurement_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "878a10ef43a5",
+  "checkpoint_transcript_start": 67,
+  "transcript_lines_at_start": 67,
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T14:18:23.884535Z",
+    "agent_lines": 76,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 76,
+    "total_lines_changed": 89,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
