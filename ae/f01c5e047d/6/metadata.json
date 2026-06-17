@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "aef01c5e047d",
+  "session_id": "019ed490-90fe-7790-a49d-b9cf8ca83107",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T18:06:58.848375Z",
+  "branch": "fix/tokenstore-windows-flock",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go.mod",
+    "internal/auth/tokenstore_lock_windows.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "3f7fdcc290db",
+  "checkpoint_transcript_start": 44,
+  "transcript_lines_at_start": 44,
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T18:06:58.844494Z",
+    "agent_lines": 47,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 47,
+    "total_lines_changed": 48,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

@@ -3,7 +3,7 @@
   "checkpoint_id": "aef01c5e047d",
   "strategy": "manual-commit",
   "branch": "fix/tokenstore-windows-flock",
-  "checkpoints_count": 6,
+  "checkpoints_count": 7,
   "files_touched": [
     "go.mod",
     "internal/auth/tokenstore_lock_windows.go"
@@ -43,6 +43,12 @@
       "metadata": "/ae/f01c5e047d/5/metadata.json",
       "transcript": "/ae/f01c5e047d/5/full.jsonl",
       "content_hash": "/ae/f01c5e047d/5/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/ae/f01c5e047d/6/metadata.json",
+      "transcript": "/ae/f01c5e047d/6/full.jsonl",
+      "content_hash": "/ae/f01c5e047d/6/content_hash.txt",
       "prompt": ""
     }
   ]
