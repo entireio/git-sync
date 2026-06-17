@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.6",
+  "checkpoint_id": "6229e797c9d4",
+  "strategy": "manual-commit",
+  "branch": "fix/ff-ancestry-pruned-store",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "internal/planner/planner.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/62/29e797c9d4/0/metadata.json",
+      "transcript": "/62/29e797c9d4/0/full.jsonl",
+      "content_hash": "/62/29e797c9d4/0/content_hash.txt",
+      "prompt": "/62/29e797c9d4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26812,
+    "cache_creation_tokens": 108966,
+    "cache_read_tokens": 918553,
+    "output_tokens": 11170,
+    "api_call_count": 16
+  }
+}

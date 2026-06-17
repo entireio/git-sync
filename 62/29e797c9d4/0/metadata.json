@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.7.6",
+  "checkpoint_id": "6229e797c9d4",
+  "session_id": "033c8aac-afee-4c13-846b-15cd785eb263",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T13:46:33.72096Z",
+  "branch": "fix/ff-ancestry-pruned-store",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "internal/planner/planner.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "f497e09223c0",
+  "token_usage": {
+    "input_tokens": 26812,
+    "cache_creation_tokens": 108966,
+    "cache_read_tokens": 918553,
+    "output_tokens": 11170,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T13:46:33.714694Z",
+    "agent_lines": 65,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 65,
+    "total_lines_changed": 76,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 43,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 43
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 43,
+      "user_lines_removed": 0,
+      "agent_lines_added": 9,
+      "agent_lines_removed": 4,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 43
+      }
+    }
+  ]
+}
