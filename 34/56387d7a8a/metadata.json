@@ -1,0 +1,21 @@
+{
+  "cli_version": "0.7.7-nightly.202606170803.4287f89a.0.20260617161127-7335c7df5f3d",
+  "checkpoint_id": "3456387d7a8a",
+  "strategy": "manual-commit",
+  "branch": "fix/gomod-and-test-hygiene",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "client.go",
+    "client_test.go",
+    "example_test.go",
+    "go.mod"
+  ],
+  "sessions": [
+    {
+      "metadata": "/34/56387d7a8a/0/metadata.json",
+      "transcript": "/34/56387d7a8a/0/full.jsonl",
+      "content_hash": "/34/56387d7a8a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
