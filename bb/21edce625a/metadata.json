@@ -3,7 +3,7 @@
   "checkpoint_id": "bb21edce625a",
   "strategy": "manual-commit",
   "branch": "fix/checkpoint-nil-deref",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "internal/planner/checkpoint.go",
     "internal/planner/checkpoint_test.go"
@@ -13,6 +13,12 @@
       "metadata": "/bb/21edce625a/0/metadata.json",
       "transcript": "/bb/21edce625a/0/full.jsonl",
       "content_hash": "/bb/21edce625a/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/bb/21edce625a/1/metadata.json",
+      "transcript": "/bb/21edce625a/1/full.jsonl",
+      "content_hash": "/bb/21edce625a/1/content_hash.txt",
       "prompt": ""
     }
   ]
