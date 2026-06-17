@@ -349,7 +349,7 @@ func measurementLine(m Measurement) []string {
 
 // --- Session setup ---
 
-func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (gitproto.Conn, error) {
+func newConn(ctx context.Context, raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (gitproto.Conn, error) {
 	ep, err := transport.ParseURL(raw.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
@@ -369,7 +369,7 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 		BearerToken:   raw.BearerToken,
 		SkipTLSVerify: raw.SkipTLSVerify,
 	}
-	authMethod, err := auth.Resolve(authEp, ep)
+	authMethod, err := auth.Resolve(ctx, authEp, ep)
 	if err != nil {
 		return nil, fmt.Errorf("resolve auth: %w", err)
 	}
@@ -679,7 +679,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}))
 	}
 
-	s.sourceConn, err = newConn(cfg.Source, "source", s.stats, cfg.HTTPClient)
+	s.sourceConn, err = newConn(ctx, cfg.Source, "source", s.stats, cfg.HTTPClient)
 	if err != nil {
 		return nil, fmt.Errorf("create source transport: %w", err)
 	}
@@ -696,7 +696,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
 
 	if needTarget {
-		targetConn, err := newConn(cfg.Target, "target", s.stats, cfg.HTTPClient)
+		targetConn, err := newConn(ctx, cfg.Target, "target", s.stats, cfg.HTTPClient)
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}

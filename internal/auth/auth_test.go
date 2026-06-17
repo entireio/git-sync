@@ -320,7 +320,7 @@ func TestResolve(t *testing.T) {
 			// doesn't find anything.
 			t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
 
-			got, err := Resolve(tt.raw, tt.ep)
+			got, err := Resolve(context.Background(), tt.raw, tt.ep)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -859,6 +859,36 @@ func TestGetTokenWithRefresh(t *testing.T) {
 	})
 }
 
+// A cancelled caller context must abort the token refresh, proving the
+// context is threaded down to the HTTP request rather than dropped for a
+// background one.
+func TestGetTokenWithRefreshHonorsContext(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENTIRE_TOKEN_STORE", "file")
+	t.Setenv("ENTIRE_TOKEN_STORE_PATH", filepath.Join(dir, "tokens.json"))
+	t.Setenv("ENTIRE_CONFIG_DIR", t.TempDir())
+
+	// Expired access token plus a refresh token, so refresh is attempted.
+	pastExpiry := time.Now().Add(-1 * time.Hour).Unix()
+	if err := WriteStoredToken(credentialService("example.com"), "carol", fmt.Sprintf("stale|%d", pastExpiry)); err != nil {
+		t.Fatalf("WriteStoredToken: %v", err)
+	}
+	if err := WriteStoredToken(credentialService("example.com")+":refresh", "carol", "refresh-tok"); err != nil {
+		t.Fatalf("WriteStoredToken refresh: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before the refresh HTTP request runs
+
+	_, err := getTokenWithRefresh(ctx, "example.com", "carol", "https://example.invalid", false)
+	if err == nil {
+		t.Fatal("expected an error when the context is cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error should wrap context.Canceled, got: %v", err)
+	}
+}
+
 func TestReadWriteStoredTokenFileStore(t *testing.T) {
 	dir := t.TempDir()
 	tokenPath := filepath.Join(dir, "tokens.json")
@@ -927,7 +957,7 @@ func TestLookupEntireDBTokenNotConfigured(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("ENTIRE_CONFIG_DIR", configDir)
 
-	got, err := lookupEntireDBToken("example.com", "https://example.com", false)
+	got, err := lookupEntireDBToken(context.Background(), "example.com", "https://example.com", false)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

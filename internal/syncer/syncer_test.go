@@ -133,7 +133,7 @@ func TestFinalizeCountsTalliesPushedAndDeleted(t *testing.T) {
 
 func TestGitHubOwnerRepo(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", stats, nil)
+	conn, err := newConn(context.Background(), Endpoint{URL: "https://github.com/torvalds/linux.git"}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestGitHubOwnerRepo(t *testing.T) {
 
 func TestGitHubOwnerRepoRejectsNonGitHubSource(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", stats, nil)
+	conn, err := newConn(context.Background(), Endpoint{URL: "https://gitlab.com/group/project.git"}, "source", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestProbeWithoutTargetIgnoresEndpointEqualityCheck(t *testing.T) {
 func TestNewHTTPConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 	stats := newStats(false)
 
-	off, err := newConn(Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
+	off, err := newConn(context.Background(), Endpoint{URL: "https://node.example/repo.git"}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (off): %v", err)
 	}
@@ -237,7 +237,7 @@ func TestNewHTTPConn_PropagatesFollowInfoRefsRedirect(t *testing.T) {
 		t.Error("FollowInfoRefsRedirect should default to false")
 	}
 
-	on, err := newConn(Endpoint{URL: "https://node.example/repo.git", FollowInfoRefsRedirect: true}, "target", stats, nil)
+	on, err := newConn(context.Background(), Endpoint{URL: "https://node.example/repo.git", FollowInfoRefsRedirect: true}, "target", stats, nil)
 	if err != nil {
 		t.Fatalf("new conn (on): %v", err)
 	}
@@ -269,7 +269,7 @@ func TestNewConnBuildsSSHTransport(t *testing.T) {
 	}
 	for _, raw := range tests {
 		t.Run(raw, func(t *testing.T) {
-			conn, err := newConn(Endpoint{URL: raw}, "source", stats, nil)
+			conn, err := newConn(context.Background(), Endpoint{URL: raw}, "source", stats, nil)
 			if err != nil {
 				t.Fatalf("new conn: %v", err)
 			}

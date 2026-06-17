@@ -945,7 +945,7 @@ func openSource(ctx context.Context, req Request, planCfg planner.PlanConfig) (g
 	if ep.Scheme != "http" && ep.Scheme != "https" {
 		return nil, nil, nil, fmt.Errorf("convert-sha256 currently supports HTTP/HTTPS sources only; got %q", ep.Scheme)
 	}
-	authMethod, err := auth.Resolve(auth.Endpoint{
+	authMethod, err := auth.Resolve(ctx, auth.Endpoint{
 		Username:      req.SourceAuth.Username,
 		Token:         req.SourceAuth.Token,
 		BearerToken:   req.SourceAuth.BearerToken,

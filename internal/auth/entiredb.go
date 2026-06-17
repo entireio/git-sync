@@ -38,12 +38,12 @@ type oauthTokenResponse struct {
 // Returns (username, password, true, nil) on success, ("", "", false, nil) when
 // no credential is configured, or ("", "", false, err) when a credential exists
 // but refresh failed (issue #7).
-func LookupEntireDBCredential(raw Endpoint, ep *url.URL) (string, string, bool, error) {
+func LookupEntireDBCredential(ctx context.Context, raw Endpoint, ep *url.URL) (string, string, bool, error) {
 	if ep == nil || ep.Host == "" {
 		return "", "", false, nil
 	}
 	credHost := endpointCredentialHost(ep)
-	token, err := lookupEntireDBToken(credHost, endpointBaseURL(ep), raw.SkipTLSVerify)
+	token, err := lookupEntireDBToken(ctx, credHost, endpointBaseURL(ep), raw.SkipTLSVerify)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -76,7 +76,7 @@ func endpointCredentialHost(ep *url.URL) string {
 	return ep.Host // includes port if present in url.URL
 }
 
-func lookupEntireDBToken(host, baseURL string, skipTLS bool) (string, error) {
+func lookupEntireDBToken(ctx context.Context, host, baseURL string, skipTLS bool) (string, error) {
 	configDir := os.Getenv("ENTIRE_CONFIG_DIR")
 	if configDir == "" {
 		home, err := os.UserHomeDir()
@@ -90,7 +90,7 @@ func lookupEntireDBToken(host, baseURL string, skipTLS bool) (string, error) {
 	if !ok || username == "" {
 		return "", nil
 	}
-	return getTokenWithRefresh(context.Background(), host, username, baseURL, skipTLS)
+	return getTokenWithRefresh(ctx, host, username, baseURL, skipTLS)
 }
 
 func loadEntireDBActiveUser(host, configDir string) (string, bool) {
@@ -109,9 +109,10 @@ func loadEntireDBActiveUser(host, configDir string) (string, bool) {
 	return info.ActiveUser, true
 }
 
-// getTokenWithRefresh retrieves a token, refreshing it if expired.
-// On refresh failure, returns the stale token with a nil error rather than
-// propagating the refresh error silently (issue #7).
+// getTokenWithRefresh retrieves a token, refreshing it if expired or expiring.
+// On refresh failure it returns the error rather than silently reusing the
+// stale token, so the caller surfaces the failure instead of authenticating
+// with a known-bad credential (issue #7).
 func getTokenWithRefresh(ctx context.Context, host, username, baseURL string, skipTLS bool) (string, error) {
 	encoded, err := ReadStoredToken(credentialService(host), username)
 	if err != nil {
@@ -180,6 +181,9 @@ func refreshAccessToken(ctx context.Context, host, username, baseURL string, ski
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
+			// Honor HTTP(S)_PROXY/NO_PROXY like the default transport; a bare
+			// &http.Transport{} leaves Proxy nil and bypasses the proxy.
+			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLS}, //nolint:gosec // InsecureSkipVerify is controlled by user flag
 		},
 	}

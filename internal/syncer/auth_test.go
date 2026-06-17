@@ -31,7 +31,7 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 		return nil, nil
 	}
 
-	resolved, err := auth.Resolve(auth.Endpoint{
+	resolved, err := auth.Resolve(context.Background(), auth.Endpoint{
 		Username: "git",
 		Token:    "explicit-token",
 	}, ep)
@@ -50,7 +50,7 @@ func TestResolveAuthMethodPrefersExplicitToken(t *testing.T) {
 
 func TestNewHTTPConnSkipTLSVerify(t *testing.T) {
 	stats := newStats(false)
-	conn, err := newConn(Endpoint{
+	conn, err := newConn(context.Background(), Endpoint{
 		URL:           "https://example.com/repo.git",
 		SkipTLSVerify: true,
 	}, "source", stats, nil)
@@ -79,7 +79,7 @@ func TestNewHTTPConnUsesProvidedHTTPClient(t *testing.T) {
 	baseTransport := http.DefaultTransport
 	baseClient := &http.Client{Transport: baseTransport}
 
-	conn, err := newConn(Endpoint{URL: "https://example.com/repo.git"}, "source", stats, baseClient)
+	conn, err := newConn(context.Background(), Endpoint{URL: "https://example.com/repo.git"}, "source", stats, baseClient)
 	if err != nil {
 		t.Fatalf("new conn: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestResolveAuthMethodUsesEntireDBStoredToken(t *testing.T) {
 		return nil, nil
 	}
 
-	resolved, err := auth.Resolve(auth.Endpoint{}, ep)
+	resolved, err := auth.Resolve(context.Background(), auth.Endpoint{}, ep)
 	if err != nil {
 		t.Fatalf("resolve auth: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestResolveAuthMethodRefreshesExpiredEntireDBToken(t *testing.T) {
 		t.Fatalf("write refresh token: %v", err)
 	}
 
-	resolved, err := auth.Resolve(auth.Endpoint{SkipTLSVerify: true}, ep)
+	resolved, err := auth.Resolve(context.Background(), auth.Endpoint{SkipTLSVerify: true}, ep)
 	if err != nil {
 		t.Fatalf("resolve auth: %v", err)
 	}
