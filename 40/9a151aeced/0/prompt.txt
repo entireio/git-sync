@@ -1,14 +1,1 @@
-can you take a look at tmp/review.md
-
----
-
-I'd like to do a loop: 
-
-- pick a claim
-- verify the claim against main branch, if not true, skip to next loop iteration
-- create a fix for the claim in a new branch, do meaningful commits
-- run codex as a reviewer on the fix
-- if findings, fix the findings, do codex again
-- if no findings, run /simplify
-- create a PR for the fix
-- restart from the top of the list for the next fix
+just remove .clawpatch from the commit but then just delete the folder, we don't need to keep it
