@@ -3,7 +3,7 @@
   "checkpoint_id": "a384992be26e",
   "strategy": "manual-commit",
   "branch": "fix/credential-host-port",
-  "checkpoints_count": 7,
+  "checkpoints_count": 8,
   "files_touched": [
     "internal/auth/auth.go",
     "internal/auth/auth_test.go"
@@ -50,6 +50,19 @@
       "transcript": "/a3/84992be26e/6/full.jsonl",
       "content_hash": "/a3/84992be26e/6/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/a3/84992be26e/7/metadata.json",
+      "transcript": "/a3/84992be26e/7/full.jsonl",
+      "content_hash": "/a3/84992be26e/7/content_hash.txt",
+      "prompt": "/a3/84992be26e/7/prompt.txt"
     }
-  ]
+  ],
+  "token_usage": {
+    "input_tokens": 90927,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 70144,
+    "output_tokens": 2894,
+    "api_call_count": 9
+  }
 }
