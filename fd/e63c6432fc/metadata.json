@@ -1,0 +1,19 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "fde63c6432fc",
+  "strategy": "manual-commit",
+  "branch": "fix/bench-exit-code-and-sentinels",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/e63c6432fc/0/metadata.json",
+      "transcript": "/fd/e63c6432fc/0/full.jsonl",
+      "content_hash": "/fd/e63c6432fc/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
