@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "b7dda726e331",
+  "session_id": "019ed497-d006-72d1-bad8-8b53aefe088a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T11:16:39.053194Z",
+  "branch": "fix/pack-observer-non-fatal",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/strategy/bootstrap/pack_observer.go",
+    "internal/strategy/bootstrap/pack_observer_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "43bdd534e1bc",
+  "token_usage": {
+    "input_tokens": 166629,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 470016,
+    "output_tokens": 5687,
+    "api_call_count": 21
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T11:16:39.042527Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 51,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 51,
+    "total_lines_changed": 52,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 82,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".claude/settings.local.json": 81
+      }
+    }
+  ]
+}
