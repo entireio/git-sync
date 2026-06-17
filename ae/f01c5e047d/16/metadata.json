@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "aef01c5e047d",
+  "session_id": "019ed681-6882-7893-aba2-36bf557ca0dc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T18:06:59.555413Z",
+  "branch": "fix/tokenstore-windows-flock",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go.mod",
+    "internal/auth/tokenstore_lock_windows.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "1ae49aed63f5",
+  "token_usage": {
+    "input_tokens": 34950,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 258560,
+    "output_tokens": 3264,
+    "api_call_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T18:06:59.550496Z",
+    "agent_lines": 47,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 47,
+    "total_lines_changed": 48,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 83,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".claude/settings.local.json": 82
+      }
+    }
+  ]
+}
