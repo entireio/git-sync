@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "b21841a5f646",
+  "strategy": "manual-commit",
+  "branch": "fix/positional-source-url-args",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/args_test.go",
+    "cmd/git-sync/bootstrap.go",
+    "cmd/git-sync/convert_sha256.go",
+    "cmd/git-sync/flags.go",
+    "cmd/git-sync/probe.go",
+    "cmd/git-sync/syncplan.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b2/1841a5f646/0/metadata.json",
+      "transcript": "/b2/1841a5f646/0/full.jsonl",
+      "content_hash": "/b2/1841a5f646/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
