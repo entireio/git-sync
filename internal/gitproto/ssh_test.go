@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,48 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
+
+// A host or username beginning with "-" must be refused, not handed to ssh as
+// an operand: ssh would parse "-oProxyCommand=..." as an option and execute an
+// arbitrary local command (git's CVE-2017-1000117 class).
+func TestSSHInvocationArgsRejectsOptionLikeDestination(t *testing.T) {
+	cases := []struct {
+		name string
+		ep   *url.URL
+	}{
+		{"host", &url.URL{Scheme: "ssh", Host: "-oProxyCommand=touch /tmp/pwned", Path: "/repo.git"}},
+		{"username", &url.URL{Scheme: "ssh", User: url.User("-oProxyCommand=x"), Host: "example.com", Path: "/repo.git"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := sshInvocationArgs(tc.ep, "git-upload-pack", ""); err == nil {
+				t.Fatalf("expected option-like %s to be rejected, got nil error", tc.name)
+			}
+		})
+	}
+}
+
+// "--" must precede the destination so ssh stops parsing options at it.
+func TestSSHInvocationArgsTerminatesOptionsBeforeDestination(t *testing.T) {
+	ep := &url.URL{Scheme: "ssh", User: url.User("alice"), Host: "example.com:2222", Path: "/repo.git"}
+	args, err := sshInvocationArgs(ep, "git-upload-pack", "")
+	if err != nil {
+		t.Fatalf("sshInvocationArgs: %v", err)
+	}
+	destIdx := -1
+	for i, a := range args {
+		if a == "alice@example.com" {
+			destIdx = i
+			break
+		}
+	}
+	if destIdx <= 0 {
+		t.Fatalf("destination not found in args: %v", args)
+	}
+	if args[destIdx-1] != "--" {
+		t.Fatalf("expected \"--\" immediately before destination, got %v", args)
+	}
+}
 
 func TestNewSSHConnRequiresBinary(t *testing.T) {
 	orig := SSHLookPath
@@ -225,12 +268,18 @@ func newSSHShimEnv(t *testing.T) sshShimEnv {
 		"printf '%s' \"$count\" >" + shellQuote(countFile),
 		"dest=\"\"",
 		"remote=\"\"",
+		"port=\"\"",
 		"if [ \"$1\" = \"-o\" ]; then",
 		"  shift 2",
 		"fi",
 		"if [ \"$1\" = \"-p\" ]; then",
 		"  port=\"$2\"",
 		"  shift 2",
+		"fi",
+		"if [ \"$1\" = \"--\" ]; then",
+		"  shift",
+		"fi",
+		"if [ -n \"$port\" ]; then",
 		"  dest=\"-p $port $1\"",
 		"else",
 		"  dest=\"$1\"",

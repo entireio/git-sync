@@ -144,9 +144,15 @@ func sshInvocationArgs(ep *url.URL, service string, gitProtocol string) ([]strin
 	}
 	args := []string{"-o", "BatchMode=yes"}
 	if port := ep.Port(); port != "" {
+		if err := rejectOptionLike("SSH port", port); err != nil {
+			return nil, err
+		}
 		args = append(args, "-p", port)
 	}
-	args = append(args, destination, remoteCommand)
+	// The "--" terminates ssh option parsing so the destination can never be
+	// consumed as a flag; rejectOptionLike below is the portable primary guard
+	// (older clients ignore unknown operands but all support "--").
+	args = append(args, "--", destination, remoteCommand)
 	return args, nil
 }
 
@@ -155,10 +161,29 @@ func sshDestination(ep *url.URL) (string, error) {
 		return "", errors.New("missing SSH host")
 	}
 	host := ep.Hostname()
+	if err := rejectOptionLike("SSH host", host); err != nil {
+		return "", err
+	}
 	if ep.User != nil && ep.User.Username() != "" {
-		return ep.User.Username() + "@" + host, nil
+		user := ep.User.Username()
+		if err := rejectOptionLike("SSH username", user); err != nil {
+			return "", err
+		}
+		return user + "@" + host, nil
 	}
 	return host, nil
+}
+
+// rejectOptionLike refuses a destination component that begins with "-". Such
+// a value would be parsed by ssh as an option rather than an operand — e.g. a
+// host of "-oProxyCommand=..." turns into arbitrary local command execution
+// (the class of git's CVE-2017-1000117) — and is never a legitimate host,
+// username, or port.
+func rejectOptionLike(what, value string) error {
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("refusing %s %q: must not begin with '-'", what, value)
+	}
+	return nil
 }
 
 func sshRemoteCommand(ep *url.URL, service string, gitProtocol string) (string, error) {
