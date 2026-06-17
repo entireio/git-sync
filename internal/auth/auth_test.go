@@ -162,6 +162,22 @@ func TestCredentialInput_FillQueryNoUser(t *testing.T) {
 	}
 }
 
+// A non-default port must appear in the host field (gitcredentials(7) host is
+// "host[:port]"); otherwise credentials are stored/looked up under the wrong
+// (default-port) entry.
+func TestCredentialInput_IncludesPort(t *testing.T) {
+	ep := &url.URL{
+		Scheme: "https",
+		Host:   "example.com:8443",
+		Path:   "/repo.git",
+	}
+	got := credentialInput(ep, "", "")
+	want := "protocol=https\nhost=example.com:8443\npath=repo.git\n\n"
+	if got != want {
+		t.Errorf("credentialInput returned:\n%q\nwant:\n%q", got, want)
+	}
+}
+
 func TestCredentialInput_ApproveRejectFormatIncludesUserAndPassword(t *testing.T) {
 	ep := &url.URL{
 		Scheme: "https",

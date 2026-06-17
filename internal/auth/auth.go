@@ -177,7 +177,10 @@ func credentialInput(ep *url.URL, username, password string) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "protocol=%s\nhost=%s\n", ep.Scheme, ep.Hostname())
+	// gitcredentials(7) defines host as "host[:port]" — use ep.Host, which
+	// keeps any non-default port. ep.Hostname() drops it, which would store
+	// and look up credentials under the default-port entry instead.
+	fmt.Fprintf(&b, "protocol=%s\nhost=%s\n", ep.Scheme, ep.Host)
 	if path := strings.TrimPrefix(ep.Path, "/"); path != "" {
 		fmt.Fprintf(&b, "path=%s\n", path)
 	}
