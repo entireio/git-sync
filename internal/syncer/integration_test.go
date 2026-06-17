@@ -294,7 +294,7 @@ func TestRun_IntegrationSkipsLocalFetchOnRelayOnlySync(t *testing.T) {
 
 // TestRun_IntegrationKeepsLocalFetchWhenAncestryNeeded ensures the fetch is
 // still performed for a fast-forward update where BuildPlans calls
-// ReachesCommit on the local store. Skipping it would crash the planner.
+// CheckAncestry on the local store. Skipping it would crash the planner.
 func TestRun_IntegrationKeepsLocalFetchWhenAncestryNeeded(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)

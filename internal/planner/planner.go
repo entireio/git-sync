@@ -498,18 +498,6 @@ func CheckAncestry(store storer.EncodedObjectStorer, startHash, targetHash plumb
 	return AncestryUnreachable, nil
 }
 
-// ReachesCommit reports whether targetHash is provably an ancestor of
-// startHash. It is a convenience wrapper over CheckAncestry for callers that
-// only care about a definite fast-forward; AncestryIndeterminate is reported
-// as false (not provably reachable).
-func ReachesCommit(store storer.EncodedObjectStorer, startHash, targetHash plumbing.Hash) (bool, error) {
-	result, err := CheckAncestry(store, startHash, targetHash)
-	if err != nil {
-		return false, err
-	}
-	return result == AncestryReachable, nil
-}
-
 // ObjectsToPush computes the set of objects that need to be sent to the target.
 //
 // A fetch with target refs as haves prunes the source pack server-side, so
