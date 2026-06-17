@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "fde63c6432fc",
+  "session_id": "019ed659-91da-7b22-ba5d-08a16fb8bfc4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T16:54:21.446345Z",
+  "branch": "fix/bench-exit-code-and-sentinels",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync-bench/main_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "527218c7d861",
+  "token_usage": {
+    "input_tokens": 34754,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 150528,
+    "output_tokens": 4374,
+    "api_call_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T16:54:21.440709Z",
+    "agent_lines": 43,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 43,
+    "total_lines_changed": 45,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 83,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".claude/settings.local.json": 82
+      }
+    }
+  ]
+}
