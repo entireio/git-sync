@@ -3,7 +3,7 @@
   "checkpoint_id": "191ffd473fdb",
   "session_id": "f82fa48e-a8dd-42c8-a49a-7193b101bbf5",
   "strategy": "manual-commit",
-  "created_at": "2026-06-17T07:17:01.436778Z",
+  "created_at": "2026-06-17T07:22:08.705789Z",
   "branch": "fix/ssh-argument-injection",
   "checkpoints_count": 3,
   "save_step_count": 1,
@@ -12,11 +12,11 @@
   "model": "claude-opus-4-8[1m]",
   "turn_id": "2223707a8d63",
   "token_usage": {
-    "input_tokens": 16068,
-    "cache_creation_tokens": 166360,
-    "cache_read_tokens": 4927784,
-    "output_tokens": 45218,
-    "api_call_count": 58
+    "input_tokens": 16655,
+    "cache_creation_tokens": 170368,
+    "cache_read_tokens": 5790967,
+    "output_tokens": 46530,
+    "api_call_count": 64
   },
   "skill_events_version": 1,
   "skill_events": [
