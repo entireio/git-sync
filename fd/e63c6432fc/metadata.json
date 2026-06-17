@@ -3,7 +3,7 @@
   "checkpoint_id": "fde63c6432fc",
   "strategy": "manual-commit",
   "branch": "fix/bench-exit-code-and-sentinels",
-  "checkpoints_count": 14,
+  "checkpoints_count": 15,
   "files_touched": [
     "cmd/git-sync-bench/main.go",
     "cmd/git-sync-bench/main_test.go"
@@ -92,13 +92,19 @@
       "transcript": "/fd/e63c6432fc/13/full.jsonl",
       "content_hash": "/fd/e63c6432fc/13/content_hash.txt",
       "prompt": "/fd/e63c6432fc/13/prompt.txt"
+    },
+    {
+      "metadata": "/fd/e63c6432fc/14/metadata.json",
+      "transcript": "/fd/e63c6432fc/14/full.jsonl",
+      "content_hash": "/fd/e63c6432fc/14/content_hash.txt",
+      "prompt": "/fd/e63c6432fc/14/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 107118,
+    "input_tokens": 135046,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 873472,
-    "output_tokens": 7331,
-    "api_call_count": 26
+    "cache_read_tokens": 902656,
+    "output_tokens": 8493,
+    "api_call_count": 31
   }
 }
