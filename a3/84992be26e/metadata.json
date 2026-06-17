@@ -3,7 +3,7 @@
   "checkpoint_id": "a384992be26e",
   "strategy": "manual-commit",
   "branch": "fix/credential-host-port",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "internal/auth/auth.go",
     "internal/auth/auth_test.go"
@@ -19,6 +19,12 @@
       "metadata": "/a3/84992be26e/1/metadata.json",
       "transcript": "/a3/84992be26e/1/full.jsonl",
       "content_hash": "/a3/84992be26e/1/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/a3/84992be26e/2/metadata.json",
+      "transcript": "/a3/84992be26e/2/full.jsonl",
+      "content_hash": "/a3/84992be26e/2/content_hash.txt",
       "prompt": ""
     }
   ]
