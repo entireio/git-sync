@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "e33556e69f04",
+  "strategy": "manual-commit",
+  "branch": "fix/positional-source-url-args",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cmd/git-sync/convert_sha256.go",
+    "cmd/git-sync/flags.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e3/3556e69f04/0/metadata.json",
+      "transcript": "/e3/3556e69f04/0/full.jsonl",
+      "content_hash": "/e3/3556e69f04/0/content_hash.txt",
+      "prompt": "/e3/3556e69f04/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 37719,
+    "cache_creation_tokens": 288623,
+    "cache_read_tokens": 24087602,
+    "output_tokens": 105928,
+    "api_call_count": 148
+  }
+}
