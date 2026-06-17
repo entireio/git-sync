@@ -25,25 +25,21 @@ func addTargetEndpoint(cmd *cobra.Command, ep *gitsync.Endpoint) {
 }
 
 func addSourceAuth(cmd *cobra.Command, auth *gitsync.EndpointAuth) {
-	cmd.Flags().StringVar(&auth.Token, "source-token", "", "source token/password (env: GITSYNC_SOURCE_TOKEN)")
+	addSecretFlag(cmd, &auth.Token, "source-token", "GITSYNC_SOURCE_TOKEN", "source token/password")
 	cmd.Flags().StringVar(&auth.Username, "source-username", envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
-	cmd.Flags().StringVar(&auth.BearerToken, "source-bearer-token", "", "source bearer token (env: GITSYNC_SOURCE_BEARER_TOKEN)")
+	addSecretFlag(cmd, &auth.BearerToken, "source-bearer-token", "GITSYNC_SOURCE_BEARER_TOKEN", "source bearer token")
 	cmd.Flags().BoolVar(&auth.SkipTLSVerify, "source-insecure-skip-tls-verify",
 		envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"),
 		"skip TLS certificate verification for the source")
-	addSecretEnvFallback(cmd, "source-token", &auth.Token, "GITSYNC_SOURCE_TOKEN")
-	addSecretEnvFallback(cmd, "source-bearer-token", &auth.BearerToken, "GITSYNC_SOURCE_BEARER_TOKEN")
 }
 
 func addTargetAuth(cmd *cobra.Command, auth *gitsync.EndpointAuth) {
-	cmd.Flags().StringVar(&auth.Token, "target-token", "", "target token/password (env: GITSYNC_TARGET_TOKEN)")
+	addSecretFlag(cmd, &auth.Token, "target-token", "GITSYNC_TARGET_TOKEN", "target token/password")
 	cmd.Flags().StringVar(&auth.Username, "target-username", envOr("GITSYNC_TARGET_USERNAME", "git"), "target basic auth username")
-	cmd.Flags().StringVar(&auth.BearerToken, "target-bearer-token", "", "target bearer token (env: GITSYNC_TARGET_BEARER_TOKEN)")
+	addSecretFlag(cmd, &auth.BearerToken, "target-bearer-token", "GITSYNC_TARGET_BEARER_TOKEN", "target bearer token")
 	cmd.Flags().BoolVar(&auth.SkipTLSVerify, "target-insecure-skip-tls-verify",
 		envBool("GITSYNC_TARGET_INSECURE_SKIP_TLS_VERIFY"),
 		"skip TLS certificate verification for the target")
-	addSecretEnvFallback(cmd, "target-token", &auth.Token, "GITSYNC_TARGET_TOKEN")
-	addSecretEnvFallback(cmd, "target-bearer-token", &auth.BearerToken, "GITSYNC_TARGET_BEARER_TOKEN")
 }
 
 func addProtocolFlag(cmd *cobra.Command, mode *protocolModeFlag) {
@@ -103,11 +99,20 @@ func chainPreRunE(cmd *cobra.Command, fn func(*cobra.Command, []string) error) {
 	}
 }
 
+// addSecretFlag registers a string flag whose value may also come from an
+// environment variable. Unlike non-secret flags, it must NOT register the env
+// value as the pflag default: pflag prints non-empty defaults in --help and in
+// the usage block dumped on a flag error, which would leak the secret (e.g.
+// into CI logs). Registration and the post-parse env fallback are paired in
+// one call so a new secret flag cannot accidentally re-introduce the leak by
+// reaching for envOr.
+func addSecretFlag(cmd *cobra.Command, dst *string, name, env, usage string) {
+	cmd.Flags().StringVar(dst, name, "", fmt.Sprintf("%s (env: %s)", usage, env))
+	addSecretEnvFallback(cmd, name, dst, env)
+}
+
 // addSecretEnvFallback fills *dst from the named environment variable after
-// parsing, but only when the flag was not given explicitly. Secret-bearing
-// flags must register an empty pflag default rather than the env value:
-// pflag prints non-empty defaults in --help and in the usage block dumped on
-// a flag error, which would leak the secret (e.g. into CI logs).
+// parsing, but only when the flag was not given explicitly.
 func addSecretEnvFallback(cmd *cobra.Command, flag string, dst *string, env string) {
 	chainPreRunE(cmd, func(cmd *cobra.Command, _ []string) error {
 		if cmd.Flags().Changed(flag) {
