@@ -6,7 +6,8 @@
   "checkpoints_count": 5,
   "files_touched": [
     "internal/gitproto/ssh.go",
-    "internal/gitproto/ssh_test.go"
+    "internal/gitproto/ssh_test.go",
+    "internal/syncer/ssh_integration_test.go"
   ],
   "sessions": [
     {
