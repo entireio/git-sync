@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.7.7-nightly.202606170803.4287f89a.0.20260617161127-7335c7df5f3d",
+  "checkpoint_id": "3456387d7a8a",
+  "session_id": "019ed659-91da-7b22-ba5d-08a16fb8bfc4",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T20:19:04.576036Z",
+  "branch": "fix/gomod-and-test-hygiene",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "client.go",
+    "client_test.go",
+    "example_test.go",
+    "go.mod"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "527218c7d861",
+  "checkpoint_transcript_start": 48,
+  "transcript_lines_at_start": 48,
+  "initial_attribution": {
+    "calculated_at": "2026-06-17T20:19:04.571011Z",
+    "agent_lines": 28,
+    "agent_removed": 32,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 28,
+    "total_lines_changed": 60,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
