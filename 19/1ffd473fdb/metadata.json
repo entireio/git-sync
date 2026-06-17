@@ -3,7 +3,7 @@
   "checkpoint_id": "191ffd473fdb",
   "strategy": "manual-commit",
   "branch": "fix/ssh-argument-injection",
-  "checkpoints_count": 2,
+  "checkpoints_count": 5,
   "files_touched": [
     "internal/gitproto/ssh.go",
     "internal/gitproto/ssh_test.go"
@@ -20,13 +20,19 @@
       "transcript": "/19/1ffd473fdb/1/full.jsonl",
       "content_hash": "/19/1ffd473fdb/1/content_hash.txt",
       "prompt": "/19/1ffd473fdb/1/prompt.txt"
+    },
+    {
+      "metadata": "/19/1ffd473fdb/2/metadata.json",
+      "transcript": "/19/1ffd473fdb/2/full.jsonl",
+      "content_hash": "/19/1ffd473fdb/2/content_hash.txt",
+      "prompt": "/19/1ffd473fdb/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 119431,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 356352,
-    "output_tokens": 7270,
-    "api_call_count": 15
+    "input_tokens": 135499,
+    "cache_creation_tokens": 166360,
+    "cache_read_tokens": 5284136,
+    "output_tokens": 52488,
+    "api_call_count": 73
   }
 }
