@@ -3,7 +3,7 @@
   "checkpoint_id": "a96014b75712",
   "strategy": "manual-commit",
   "branch": "fix/v2-fetch-premature-eof",
-  "checkpoints_count": 8,
+  "checkpoints_count": 9,
   "files_touched": [
     "internal/gitproto/fetch.go",
     "internal/gitproto/fetch_test.go"
@@ -55,6 +55,12 @@
       "metadata": "/a9/6014b75712/7/metadata.json",
       "transcript": "/a9/6014b75712/7/full.jsonl",
       "content_hash": "/a9/6014b75712/7/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/a9/6014b75712/8/metadata.json",
+      "transcript": "/a9/6014b75712/8/full.jsonl",
+      "content_hash": "/a9/6014b75712/8/content_hash.txt",
       "prompt": ""
     }
   ]
