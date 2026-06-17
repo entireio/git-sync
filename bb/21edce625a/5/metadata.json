@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "bb21edce625a",
+  "session_id": "f82fa48e-a8dd-42c8-a49a-7193b101bbf5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-17T07:45:55.868564Z",
+  "branch": "fix/checkpoint-nil-deref",
+  "checkpoints_count": 5,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "a900762a3511",
+  "token_usage": {
+    "input_tokens": 35367,
+    "cache_creation_tokens": 266177,
+    "cache_read_tokens": 17461144,
+    "output_tokens": 93644,
+    "api_call_count": 122
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Ai19LdHK3arAQcQmt13yjo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a900762a3511",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 205,
+        "end": 206,
+        "entry_ids": [
+          "027544a9-b499-4db5-af4c-262cc440b5e4"
+        ],
+        "tool_use_id": "toolu_01Ai19LdHK3arAQcQmt13yjo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Ai19LdHK3arAQcQmt13yjo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  }
+}

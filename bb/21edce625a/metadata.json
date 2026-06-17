@@ -3,7 +3,7 @@
   "checkpoint_id": "bb21edce625a",
   "strategy": "manual-commit",
   "branch": "fix/checkpoint-nil-deref",
-  "checkpoints_count": 5,
+  "checkpoints_count": 10,
   "files_touched": [
     "internal/planner/checkpoint.go",
     "internal/planner/checkpoint_test.go"
@@ -38,13 +38,19 @@
       "transcript": "/bb/21edce625a/4/full.jsonl",
       "content_hash": "/bb/21edce625a/4/content_hash.txt",
       "prompt": "/bb/21edce625a/4/prompt.txt"
+    },
+    {
+      "metadata": "/bb/21edce625a/5/metadata.json",
+      "transcript": "/bb/21edce625a/5/full.jsonl",
+      "content_hash": "/bb/21edce625a/5/content_hash.txt",
+      "prompt": "/bb/21edce625a/5/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 362928,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 1044480,
-    "output_tokens": 14689,
-    "api_call_count": 40
+    "input_tokens": 398295,
+    "cache_creation_tokens": 266177,
+    "cache_read_tokens": 18505624,
+    "output_tokens": 108333,
+    "api_call_count": 162
   }
 }
