@@ -1,0 +1,19 @@
+{
+  "cli_version": "0.7.7-nightly.202606160808.d40a4991",
+  "checkpoint_id": "a384992be26e",
+  "strategy": "manual-commit",
+  "branch": "fix/credential-host-port",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a3/84992be26e/0/metadata.json",
+      "transcript": "/a3/84992be26e/0/full.jsonl",
+      "content_hash": "/a3/84992be26e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
