@@ -198,15 +198,28 @@ func (e *RefRejectedError) Is(target error) bool {
 
 // concurrentMoveMarkers are receive-pack ng reasons that UNAMBIGUOUSLY mean the
 // target ref changed under us between plan and push — a clean compare-and-swap /
-// lease miss that a plain retry resolves. Deliberately NARROWER than
+// lease miss that a plain retry resolves. "Changed" covers both an existing ref
+// moving to a new tip AND a planned-absent ref appearing: each is a concurrent
+// push of the same repo winning the race, and each self-heals on the next run
+// (re-plan against the new state usually no-ops). Deliberately NARROWER than
 // leaseFailureMarkers: "non-fast-forward" / "fetch first" are excluded because an
 // update that is legitimately non-fast-forward and wasn't force-pushed looks
 // identical to a race, and treating it as a benign move would mask a real
 // "needs --force" failure.
 //
 // This set is server-specific by design. "remote ref has changed" is
-// entire-server's compare-and-swap rejection (storage.ErrReferenceHasChanged) —
-// the one git-sync's own targets emit, and the case that matters in practice.
+// entire-server's update-side compare-and-swap rejection
+// (storage.ErrReferenceHasChanged): the planned old hash no longer matches the
+// target tip. "already exists" is the same CAS on the create side — git-sync
+// only emits a create command (old = zero hash) for a ref it found ABSENT at
+// plan time, so the server reporting it present at push time can only mean a
+// concurrent sync created it first. That makes "already exists" exactly as
+// unambiguous a race as "remote ref has changed", just for the create rather
+// than the update path; both are the rejections git-sync's own targets emit, and
+// the cases that matter in practice. (entire-server's bootstrap-mode planner has
+// a separate "target ref ... already exists" *planning* error, but that never
+// reaches receive-pack report-status, so it can't surface here.)
+//
 // "stale info" is git's force-with-lease lease-miss phrasing, kept for
 // consistency with leaseFailureMarkers and defence-in-depth; note it is
 // primarily a client-side status, so it may not arrive as a server ng reason on
@@ -218,6 +231,7 @@ func (e *RefRejectedError) Is(target error) bool {
 // RefRejectedError).
 var concurrentMoveMarkers = []string{
 	"remote ref has changed",
+	"already exists",
 	"stale info",
 }
 
