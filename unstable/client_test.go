@@ -100,6 +100,27 @@ func TestClientRejectsUnknownStrategyBeforeIO(t *testing.T) {
 	}
 }
 
+// A mappings-scoped fetch must carry its mappings into the syncer config;
+// dropping them (as buildFetchConfig used to) fetches the wrong refs.
+func TestBuildFetchConfigPreservesMappings(t *testing.T) {
+	req := FetchRequest{
+		Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+		Scope: gitsync.RefScope{
+			Mappings: []gitsync.RefMapping{{Source: "refs/heads/main", Target: "refs/heads/trunk"}},
+		},
+	}
+	cfg, err := New(Options{}).buildFetchConfig(context.Background(), req)
+	if err != nil {
+		t.Fatalf("buildFetchConfig: %v", err)
+	}
+	if len(cfg.Mappings) != 1 {
+		t.Fatalf("expected fetch config to carry 1 mapping, got %d", len(cfg.Mappings))
+	}
+	if cfg.Mappings[0].Source != "refs/heads/main" || cfg.Mappings[0].Target != "refs/heads/trunk" {
+		t.Fatalf("unexpected mapping carried through: %+v", cfg.Mappings[0])
+	}
+}
+
 func TestBuildFetchConfigCopiesHaveHashesAtCallSite(t *testing.T) {
 	req := FetchRequest{
 		Source:     gitsync.Endpoint{URL: "https://source.example/repo.git"},
