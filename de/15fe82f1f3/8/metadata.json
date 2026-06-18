@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.7.7-nightly.202606170803.4287f89a.0.20260617161127-7335c7df5f3d",
+  "checkpoint_id": "de15fe82f1f3",
+  "session_id": "019edb4d-252d-7183-8c21-be145282f275",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T15:53:26.848911Z",
+  "branch": "refactor/remove-entiredb-credential-store",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CHANGELOG.md",
+    "cmd/git-sync/internal/sha256convert/sha256convert.go",
+    "docs/architecture.md",
+    "go.mod",
+    "go.sum",
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go",
+    "internal/auth/entiredb.go",
+    "internal/auth/tokenstore.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/entire_local_smoke_test.go",
+    "internal/syncer/entire_local_smoke_test_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "dbb2c94e800f",
+  "token_usage": {
+    "input_tokens": 205225,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2897920,
+    "output_tokens": 11100,
+    "api_call_count": 39
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T15:53:26.838346Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 2,
+    "total_committed": 0,
+    "total_lines_changed": 2,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 88,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".claude/settings.local.json": 87
+      }
+    }
+  ]
+}

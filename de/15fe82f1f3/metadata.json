@@ -3,7 +3,7 @@
   "checkpoint_id": "de15fe82f1f3",
   "strategy": "manual-commit",
   "branch": "refactor/remove-entiredb-credential-store",
-  "checkpoints_count": 12,
+  "checkpoints_count": 13,
   "files_touched": [
     "CHANGELOG.md",
     "cmd/git-sync/internal/sha256convert/sha256convert.go",
@@ -67,13 +67,19 @@
       "transcript": "/de/15fe82f1f3/7/full.jsonl",
       "content_hash": "/de/15fe82f1f3/7/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/de/15fe82f1f3/8/metadata.json",
+      "transcript": "/de/15fe82f1f3/8/full.jsonl",
+      "content_hash": "/de/15fe82f1f3/8/content_hash.txt",
+      "prompt": "/de/15fe82f1f3/8/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 143170,
+    "input_tokens": 348395,
     "cache_creation_tokens": 4131325,
-    "cache_read_tokens": 178377300,
-    "output_tokens": 359998,
-    "api_call_count": 460
+    "cache_read_tokens": 181275220,
+    "output_tokens": 371098,
+    "api_call_count": 499
   }
 }
