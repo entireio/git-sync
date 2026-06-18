@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/zalando/go-keyring"
 )
@@ -127,28 +126,6 @@ func writeFileToken(path, service, username, password string) error {
 	return nil
 }
 
-// flockShared acquires a shared (read) lock on path+".lock".
-func flockShared(path string) (func(), error) {
-	return flockOpen(path+".lock", syscall.LOCK_SH)
-}
-
-// flockExclusive acquires an exclusive (write) lock on path+".lock".
-func flockExclusive(path string) (func(), error) {
-	return flockOpen(path+".lock", syscall.LOCK_EX)
-}
-
-func flockOpen(lockPath string, how int) (func(), error) {
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open lock file: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), how); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("acquire file lock: %w", err)
-	}
-	return func() {
-		//nolint:errcheck // unlock errors on close are not actionable
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	}, nil
-}
+// flockShared / flockExclusive are defined per-platform: tokenstore_lock_unix.go
+// uses syscall.Flock, tokenstore_lock_windows.go provides a compiling fallback
+// (syscall.Flock and the LOCK_* constants do not exist on Windows).
