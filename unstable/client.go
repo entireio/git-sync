@@ -298,24 +298,24 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:             source,
-		Target:             target,
-		HTTPClient:         c.httpClient,
-		Branches:           append([]string(nil), req.Scope.Branches...),
-		Mappings:           validationMappings(req.Scope.Mappings),
-		AllRefs:            req.Scope.AllRefs,
-		ExcludeRefPrefixes: append([]string(nil), req.Scope.ExcludeRefPrefixes...),
-		IncludeTags:        req.IncludeTags,
-		BestEffort:         req.BestEffort,
-		ShowStats:          req.Options.CollectStats,
-		MeasureMemory:      req.Options.MeasureMemory,
-		Progress:           req.Options.Progress,
+		Source:              source,
+		Target:              target,
+		HTTPClient:          c.httpClient,
+		Branches:            append([]string(nil), req.Scope.Branches...),
+		Mappings:            validationMappings(req.Scope.Mappings),
+		AllRefs:             req.Scope.AllRefs,
+		ExcludeRefPrefixes:  append([]string(nil), req.Scope.ExcludeRefPrefixes...),
+		IncludeTags:         req.IncludeTags,
+		BestEffort:          req.BestEffort,
+		ShowStats:           req.Options.CollectStats,
+		MeasureMemory:       req.Options.MeasureMemory,
+		Progress:            req.Options.Progress,
 		MaxPackBytes:        req.Options.MaxPackBytes,
 		TargetMaxPackBytes:  req.Options.TargetMaxPackBytes,
 		TargetMaxRefUpdates: req.Options.TargetMaxRefUpdates,
 		ProtocolMode:        protocolString(req.Protocol),
-		Verbose:            req.Options.Verbose,
-		BootstrapStrategy:  req.Options.BootstrapStrategy,
+		Verbose:             req.Options.Verbose,
+		BootstrapStrategy:   req.Options.BootstrapStrategy,
 	}, nil
 }
 

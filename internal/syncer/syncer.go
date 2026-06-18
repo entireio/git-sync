@@ -740,7 +740,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			NoThin:            targetFeatures.NoThin,
 		}
 		s.target.pusher = gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
-	s.target.pusher.MaxRefUpdates = cfg.TargetMaxRefUpdates
+		s.target.pusher.MaxRefUpdates = cfg.TargetMaxRefUpdates
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
 			s.target.pusher.OnRejection = func(name plumbing.ReferenceName, status string) {
