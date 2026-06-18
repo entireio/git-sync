@@ -76,6 +76,47 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 	}
 }
 
+// BuildPlans must not mutate the caller's managed map: under --prune it adds
+// prune candidates, and those additions must land in a copy.
+func TestBuildPlansDoesNotMutateManagedMap(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	staleRef := plumbing.NewBranchReferenceName("stale")
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+
+	managed := map[plumbing.ReferenceName]ManagedTarget{
+		mainRef: {Kind: RefKindBranch, Label: "main"},
+	}
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		mainRef: {Kind: RefKindBranch, Label: "main", SourceRef: mainRef, TargetRef: mainRef, SourceHash: hash},
+	}
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		mainRef:  hash, // same hash -> skip, no ancestry walk needed
+		staleRef: plumbing.NewHash("2222222222222222222222222222222222222222"),
+	}
+
+	plans, err := BuildPlans(memory.NewStorage(), desired, targetRefs, managed, PlanConfig{Prune: true})
+	if err != nil {
+		t.Fatalf("BuildPlans: %v", err)
+	}
+	// Sanity: the stale ref was planned for deletion (so prune actually ran).
+	var sawDelete bool
+	for _, p := range plans {
+		if p.TargetRef == staleRef && p.Action == ActionDelete {
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Fatalf("expected a delete plan for the stale ref; plans = %+v", plans)
+	}
+
+	if len(managed) != 1 {
+		t.Fatalf("BuildPlans mutated caller's managed map: len = %d, want 1", len(managed))
+	}
+	if _, leaked := managed[staleRef]; leaked {
+		t.Fatalf("prune candidate %s leaked into the caller's managed map", staleRef)
+	}
+}
+
 func TestPlanReplicationRefOverwritesDivergence(t *testing.T) {
 	target := plumbing.NewHash("1111111111111111111111111111111111111111")
 	source := plumbing.NewHash("2222222222222222222222222222222222222222")

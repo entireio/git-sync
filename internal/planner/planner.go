@@ -134,6 +134,9 @@ func BuildPlans(
 ) ([]BranchPlan, error) {
 	cfg = normalizeAllRefs(cfg)
 	if cfg.Prune {
+		// addPruneCandidates mutates the map, so copy first — the caller's
+		// managed map must not be modified (matches BuildReplicationPlans).
+		managed = copyManagedTargets(managed)
 		addPruneCandidates(managed, targetRefs, cfg)
 	}
 
@@ -200,8 +203,10 @@ func BuildReplicationPlans(
 	cfg PlanConfig,
 ) ([]BranchPlan, error) {
 	cfg = normalizeAllRefs(cfg)
-	managed = copyManagedTargets(managed)
 	if cfg.Prune {
+		// Copy before the only mutation so the caller's managed map is left
+		// untouched (matches BuildPlans).
+		managed = copyManagedTargets(managed)
 		addPruneCandidates(managed, targetRefs, cfg)
 	}
 
