@@ -190,7 +190,7 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-advertisement", service))
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.tb.Fatalf("write advertised refs: %v", err)
+		s.tb.Errorf("write advertised refs: %v", err)
 	}
 }
 
@@ -214,7 +214,7 @@ func (s *smartHTTPRepoServer) handleUploadPack(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.tb.Fatalf("write upload-pack response: %v", err)
+		s.tb.Errorf("write upload-pack response: %v", err)
 	}
 }
 
@@ -267,7 +267,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.tb.Fatalf("write receive-pack response: %v", err)
+		s.tb.Errorf("write receive-pack response: %v", err)
 	}
 }
 
@@ -280,7 +280,7 @@ func (s *smartHTTPRepoServer) writeReceivePackReport(w http.ResponseWriter, repo
 
 	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.tb.Fatalf("write receive-pack report: %v", err)
+		s.tb.Errorf("write receive-pack report: %v", err)
 	}
 }
 

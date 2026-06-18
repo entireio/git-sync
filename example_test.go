@@ -3,6 +3,7 @@ package gitsync_test
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"entire.io/entire/git-sync"
 )
@@ -16,7 +17,13 @@ func ExampleClient_Sync() {
 		},
 	})
 
-	if _, err := client.Sync(context.Background(), gitsync.SyncRequest{
+	// Bound the call with a context deadline so it can't hang on network I/O
+	// when go test runs this example. The hosts below are RFC 2606 reserved
+	// names that don't resolve, so the call fails fast and prints nothing.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := client.Sync(ctx, gitsync.SyncRequest{
 		Source: gitsync.Endpoint{URL: "https://github.example/source/repo.git"},
 		Target: gitsync.Endpoint{URL: "https://git.example/target/repo.git"},
 		Scope:  gitsync.RefScope{Branches: []string{"main"}},
@@ -27,6 +34,5 @@ func ExampleClient_Sync() {
 	}); err != nil {
 		return // network error expected in example environment
 	}
-
 	// Output:
 }

@@ -144,44 +144,32 @@ func (c *Client) authFor(ctx context.Context, endpoint Endpoint, role EndpointRo
 }
 
 func (r SyncRequest) Validate() error {
-	if r.Source.URL == "" {
-		return errors.New("source URL is required")
-	}
-	if r.Target.URL == "" {
-		return errors.New("target URL is required")
-	}
-	if err := validateOperationMode(r.Policy.Mode); err != nil {
-		return err
-	}
-	if err := r.Policy.Validate(); err != nil {
-		return err
-	}
-	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
-		return fmt.Errorf("normalize protocol: %w", err)
-	}
-	if _, err := validation.ValidateMappings(validationMappings(r.Scope.Mappings), r.Scope.AllRefs); err != nil {
-		return fmt.Errorf("validate mappings: %w", err)
-	}
-	return nil
+	return validateSyncFields(r.Source, r.Target, r.Scope, r.Policy)
 }
 
 func (r PlanRequest) Validate() error {
-	if r.Source.URL == "" {
+	return validateSyncFields(r.Source, r.Target, r.Scope, r.Policy)
+}
+
+// validateSyncFields validates the fields shared by SyncRequest and
+// PlanRequest, whose Validate methods are otherwise identical.
+func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPolicy) error {
+	if source.URL == "" {
 		return errors.New("source URL is required")
 	}
-	if r.Target.URL == "" {
+	if target.URL == "" {
 		return errors.New("target URL is required")
 	}
-	if err := validateOperationMode(r.Policy.Mode); err != nil {
+	if err := validateOperationMode(policy.Mode); err != nil {
 		return err
 	}
-	if err := r.Policy.Validate(); err != nil {
+	if err := policy.Validate(); err != nil {
 		return err
 	}
-	if _, err := validation.NormalizeProtocolMode(string(r.Policy.Protocol)); err != nil {
+	if _, err := validation.NormalizeProtocolMode(string(policy.Protocol)); err != nil {
 		return fmt.Errorf("normalize protocol: %w", err)
 	}
-	if _, err := validation.ValidateMappings(validationMappings(r.Scope.Mappings), r.Scope.AllRefs); err != nil {
+	if _, err := validation.ValidateMappings(validationMappings(scope.Mappings), scope.AllRefs); err != nil {
 		return fmt.Errorf("validate mappings: %w", err)
 	}
 	return nil
