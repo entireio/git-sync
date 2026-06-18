@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.7.7-nightly.202606170803.4287f89a.0.20260617161127-7335c7df5f3d",
+  "checkpoint_id": "de15fe82f1f3",
+  "session_id": "019ed6b1-a43f-7850-b02e-60133b30a0df",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T15:53:26.389625Z",
+  "branch": "refactor/remove-entiredb-credential-store",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CHANGELOG.md",
+    "cmd/git-sync/internal/sha256convert/sha256convert.go",
+    "docs/architecture.md",
+    "go.mod",
+    "go.sum",
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go",
+    "internal/auth/entiredb.go",
+    "internal/auth/tokenstore.go",
+    "internal/syncer/auth_test.go",
+    "internal/syncer/entire_local_smoke_test.go",
+    "internal/syncer/entire_local_smoke_test_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.5",
+  "turn_id": "af066e71f215",
+  "checkpoint_transcript_start": 58,
+  "transcript_lines_at_start": 58,
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T15:53:26.386052Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 2,
+    "total_committed": 0,
+    "total_lines_changed": 2,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
