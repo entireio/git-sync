@@ -1,0 +1,44 @@
+can you give me the git-sync command to test this, basically to take github.com/entireio/large-ref-test to https://github.com/Soph/large-ref-test.git it has 55k refs
+
+---
+
+replicate --all-refs --stats --verbose \
+    https://github.com/entireio/large-ref-test.git \
+    https://github.com/Soph/large-ref-test.git
+
+---
+
+❯ go run ./cmd/git-sync replicate --all-refs --stats --verbose \
+    https://github.com/entireio/large-ref-test.git \
+    https://github.com/Soph/large-ref-test.git
+time=2026-06-18T17:10:33.872+02:00 level=INFO msg="bootstrap fetching refs from source" ref_count=55008
+time=2026-06-18T17:10:34.837+02:00 level=INFO msg="bootstrap pushing refs to target" ref_count=55008
+source: Enumerating objects: 165068, done.
+source: Counting objects: 100% (18018/18018), done.
+source: Compressing objects: 100% (12012/12012), done.
+source: Total 165068 (delta 5355), reused 12663 (delta 0), pack-reused 147050 (from 1)
+target: Resolving deltas: 100% (48302/48302), done.
+target: Internal Server Error
+target: Request ID FDA6:2C5CB9:C81186:A17850:6A340A6A
+target: Time 2026-06-18T15:12:37Zerror: replicate: replicate: bootstrap execute: push target refs: report-status: command error on refs/heads/main: Internal Server Error
+exit status 1
+
+---
+
+❯ GITSYNC_MAX_REF_UPDATES_PER_PUSH=2000 go run ./cmd/git-sync replicate --all-refs --stats --verbose \
+    https://github.com/entireio/large-ref-test.git \
+    https://github.com/Soph/large-ref-test.git
+time=2026-06-18T17:45:17.620+02:00 level=INFO msg="bootstrap fetching refs from source" ref_count=55008
+time=2026-06-18T17:45:18.571+02:00 level=INFO msg="bootstrap pushing refs to target" ref_count=55008
+source: Enumerating objects: 165068, done.
+source: Counting objects: 100% (18018/18018), done.
+source: Compressing objects: 100% (12012/12012), done.
+source: Total 165068 (delta 5355), reused 12663 (delta 0), pack-reused 147050 (from 1)
+target: Resolving deltas: 100% (48302/48302), done.
+target: target: target: target: target: target: target: target: target: target: target: target: target:
+
+it's still running but the output is interesting
+
+---
+
+can you give me the git command to delete remote refs especially if it works with a wildcard? 5k finished but I want to try 10k too

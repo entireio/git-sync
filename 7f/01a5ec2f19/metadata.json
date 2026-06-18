@@ -1,0 +1,25 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "7f01a5ec2f19",
+  "strategy": "manual-commit",
+  "branch": "fix/batch-ref-updates-receive-pack",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "internal/gitproto/push.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7f/01a5ec2f19/0/metadata.json",
+      "transcript": "/7f/01a5ec2f19/0/full.jsonl",
+      "content_hash": "/7f/01a5ec2f19/0/content_hash.txt",
+      "prompt": "/7f/01a5ec2f19/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 292,
+    "cache_creation_tokens": 15399,
+    "cache_read_tokens": 3044399,
+    "output_tokens": 17206,
+    "api_call_count": 17
+  }
+}

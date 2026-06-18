@@ -1,0 +1,107 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "7f01a5ec2f19",
+  "session_id": "76731dd6-65de-4d92-be87-716b3e380099",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T16:02:50.230741Z",
+  "branch": "fix/batch-ref-updates-receive-pack",
+  "checkpoints_count": 5,
+  "save_step_count": 3,
+  "files_touched": [
+    "internal/gitproto/push.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "b4e1bf6d3896",
+  "checkpoint_transcript_start": 386,
+  "transcript_lines_at_start": 386,
+  "token_usage": {
+    "input_tokens": 292,
+    "cache_creation_tokens": 15399,
+    "cache_read_tokens": 3044399,
+    "output_tokens": 17206,
+    "api_call_count": 17
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-simplify-2026-06-18T14:51:52.939029Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "eed16f693f16",
+      "timestamp": "2026-06-18T14:51:52.939029Z",
+      "native": {
+        "command": "/simplify"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T16:02:50.201447Z",
+    "agent_lines": 18,
+    "agent_removed": 6,
+    "human_added": 15,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 43,
+    "total_lines_changed": 49,
+    "agent_percentage": 48.97959183673469,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 44,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 44
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 44,
+      "user_lines_removed": 0,
+      "agent_lines_added": 28,
+      "agent_lines_removed": 6,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 44
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 44,
+      "user_lines_removed": 0,
+      "agent_lines_added": 28,
+      "agent_lines_removed": 6,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 44
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 44,
+      "user_lines_removed": 0,
+      "agent_lines_added": 28,
+      "agent_lines_removed": 6,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 44
+      }
+    }
+  ]
+}
