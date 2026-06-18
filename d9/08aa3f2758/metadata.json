@@ -1,0 +1,30 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "d908aa3f2758",
+  "strategy": "manual-commit",
+  "branch": "fix/batch-ref-updates-receive-pack",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cmd/git-sync/bootstrap.go",
+    "cmd/git-sync/syncplan.go",
+    "internal/gitproto/push.go",
+    "internal/gitproto/push_test.go",
+    "internal/syncer/syncer.go",
+    "unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/08aa3f2758/0/metadata.json",
+      "transcript": "/d9/08aa3f2758/0/full.jsonl",
+      "content_hash": "/d9/08aa3f2758/0/content_hash.txt",
+      "prompt": "/d9/08aa3f2758/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 999,
+    "cache_creation_tokens": 65734,
+    "cache_read_tokens": 11302319,
+    "output_tokens": 44819,
+    "api_call_count": 48
+  }
+}

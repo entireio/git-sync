@@ -1,0 +1,81 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "d908aa3f2758",
+  "session_id": "76731dd6-65de-4d92-be87-716b3e380099",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T16:27:30.746231Z",
+  "branch": "fix/batch-ref-updates-receive-pack",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/gitproto/push.go",
+    "internal/syncer/syncer.go",
+    "unstable/client.go",
+    "cmd/git-sync/syncplan.go",
+    "cmd/git-sync/bootstrap.go",
+    "internal/gitproto/push_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "38c3cf3d9057",
+  "checkpoint_transcript_start": 486,
+  "transcript_lines_at_start": 486,
+  "token_usage": {
+    "input_tokens": 999,
+    "cache_creation_tokens": 65734,
+    "cache_read_tokens": 11302319,
+    "output_tokens": 44819,
+    "api_call_count": 48
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-simplify-2026-06-18T14:51:52.939029Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "eed16f693f16",
+      "timestamp": "2026-06-18T14:51:52.939029Z",
+      "native": {
+        "command": "/simplify"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T16:27:30.729157Z",
+    "agent_lines": 168,
+    "agent_removed": 65,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 168,
+    "total_lines_changed": 233,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 44,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 44
+      }
+    }
+  ]
+}

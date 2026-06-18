@@ -1,0 +1,22 @@
+target: error: GH013: Repository rule violations found for refs/entire/checkpoints/5T/01KVBJD96J55PB4WRH2EADBE5T.
+target:
+target: - GITHUB PUSH PROTECTION
+target:   —————————————————————————————————————————
+target:     Resolve the following violations before pushing again
+target:
+target:     - Timed out validating Secrets detected, please try again
+target:
+target: error: GH013: Repository rule violations found for refs/entire/checkpoints/5T/01KVBJD9ZCNC48MJD4DSRGPN5T.
+target:
+target: - GITHUB PUSH PROTECTION
+target:   —————————————————————————————————————————
+target:     Resolve the following violations before pushing again
+target:
+target:     - Timed out validating Secrets detected, please try again
+target:
+error: replicate: replicate: bootstrap execute: push target refs: report-status: command error on refs/entire/checkpoints/2Y/01KVBHQG88946KVY2MYW6RKW2Y: push declined due to repository rule violations
+exit status 1
+
+---
+
+ok, let's add a param and also supress target but maybe if verbose is on instead log that a batch finished?
