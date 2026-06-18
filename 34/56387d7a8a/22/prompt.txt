@@ -555,3 +555,7 @@ No correctness concerns. No structural alternatives would be simpler.</result>
 ---
 
 continue
+
+---
+
+can you check linting on https://github.com/entireio/git-sync/pull/93
