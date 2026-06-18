@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"entire.io/entire/git-sync/internalbridge"
+	"entire.io/entire/git-sync/internal/internalbridge"
 )
 
 // ProtocolMode controls source-side protocol negotiation.
