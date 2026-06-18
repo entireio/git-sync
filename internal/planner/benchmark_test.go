@@ -105,7 +105,7 @@ func BenchmarkSampledCheckpointCandidates(b *testing.B) {
 	}
 }
 
-func BenchmarkReachesCommit(b *testing.B) {
+func BenchmarkCheckAncestry(b *testing.B) {
 	repo, err := git.Init(memory.NewStorage(), nil)
 	if err != nil {
 		b.Fatalf("init repo: %v", err)
@@ -123,11 +123,11 @@ func BenchmarkReachesCommit(b *testing.B) {
 
 	b.ResetTimer()
 	for range b.N {
-		ok, err := ReachesCommit(repo.Storer, tip, root)
+		result, err := CheckAncestry(repo.Storer, tip, root)
 		if err != nil {
 			b.Fatal(err)
 		}
-		if !ok {
+		if result != AncestryReachable {
 			b.Fatal("expected tip to reach root")
 		}
 	}

@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,103 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 	}
 	if blockPlan.Action != ActionBlock {
 		t.Fatalf("expected block, got %s", blockPlan.Action)
+	}
+}
+
+// A fully-populated store must still distinguish a real non-fast-forward
+// (divergence) from the pruned-frontier case below.
+func TestCheckAncestryUnreachableOnDivergence(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	next := seedCommit(t, repo, []plumbing.Hash{root})
+	side := seedCommit(t, repo, []plumbing.Hash{root})
+
+	result, err := CheckAncestry(repo.Storer, side, next)
+	if err != nil {
+		t.Fatalf("CheckAncestry: %v", err)
+	}
+	if result != AncestryUnreachable {
+		t.Fatalf("expected AncestryUnreachable for divergent history, got %v", result)
+	}
+}
+
+// When the source tip itself is absent — it lives behind the have frontier
+// because the target already has it under another ref — the check must report
+// indeterminate, not fail (which previously aborted the whole sync with a
+// "load source commit" error).
+func TestCheckAncestryIndeterminateOnMissingStart(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	missingStart := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	result, err := CheckAncestry(repo.Storer, missingStart, target)
+	if err != nil {
+		t.Fatalf("CheckAncestry should not error on a pruned start commit: %v", err)
+	}
+	if result != AncestryIndeterminate {
+		t.Fatalf("expected AncestryIndeterminate for missing start, got %v", result)
+	}
+}
+
+// When the walk reaches a parent that was pruned (the target already has it),
+// the answer lies beyond the frontier: indeterminate, not a false "diverged".
+func TestCheckAncestryIndeterminateOnPrunedAncestor(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	prunedParent := plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc")
+	tip := seedCommit(t, repo, []plumbing.Hash{prunedParent})
+	target := plumbing.NewHash("dddddddddddddddddddddddddddddddddddddddd")
+
+	result, err := CheckAncestry(repo.Storer, tip, target)
+	if err != nil {
+		t.Fatalf("CheckAncestry: %v", err)
+	}
+	if result != AncestryIndeterminate {
+		t.Fatalf("expected AncestryIndeterminate when an ancestor is pruned, got %v", result)
+	}
+}
+
+// PlanRef must turn the indeterminate case into a clean, actionable block
+// rather than a hard error, and --force must still let it through.
+func TestPlanRefIndeterminateBlocksAndForceOverrides(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	missingSource := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	want := DesiredRef{
+		Kind: RefKindBranch, Label: "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: missingSource,
+	}
+
+	plan, err := PlanRef(repo.Storer, want, target, false)
+	if err != nil {
+		t.Fatalf("PlanRef should not error on indeterminate ancestry: %v", err)
+	}
+	if plan.Action != ActionBlock {
+		t.Fatalf("expected ActionBlock, got %s", plan.Action)
+	}
+	if !strings.Contains(plan.Reason, "cannot verify fast-forward") {
+		t.Fatalf("expected actionable indeterminate reason, got %q", plan.Reason)
+	}
+
+	forced, err := PlanRef(repo.Storer, want, target, true)
+	if err != nil {
+		t.Fatalf("PlanRef (force): %v", err)
+	}
+	if forced.Action != ActionUpdate {
+		t.Fatalf("expected ActionUpdate under force, got %s", forced.Action)
 	}
 }
 
