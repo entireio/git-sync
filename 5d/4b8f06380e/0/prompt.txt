@@ -1,0 +1,357 @@
+We have a repo with 50k refs and we go this error: 2026/06/18 13:17:39 WARN Permanent sync error, terminating error="sync: replicate relay failed: replicate execute: push target refs: target receive-pack: post RPC stream body: http 400: https://marvin.aws-us-east-2.entire.internal:8281/git/repo/01KVCD01JNGDNFSACE4TA54ZGF/git-receive-pack [Content-Type=text/plain; charset=utf-8] too many ref-update commands: 55006 (limit 25000)"
+
+---
+
+entire backend is in ../entiredb
+
+---
+
+/simplify
+
+---
+
+<task-notification>
+<task-id>ab6382cc508f7ce62</task-id>
+<tool-use-id>toolu_01Xb37mSUCeut6FNAUaQAqut</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/76731dd6-65de-4d92-be87-716b3e380099/tasks/ab6382cc508f7ce62.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplification review" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect. Now I have the full picture. Let me analyze the simplification issues:
+
+## Simplification Issues Found
+
+1. **Lines 419-422 &amp; 657-660: Duplicated first/rest splitting pattern**
+   - **Cost**: Copy-paste identical logic appears twice with manual `[]PushCommand(nil)` initialization and conditional slice assignment.
+   - **Simpler form**: Both `PushObjects` (lines 418-431) and `PushPack` (lines 657-679) manually split `first, rest := commands, []PushCommand(nil); if len(commands) &gt; maxRefUpdatesPerPush { first, rest = commands[:cap], commands[cap:] }`. This exact pattern could reuse `chunkRefUpdates`, which is already defined (lines 69-79) to handle this split-and-loop. Instead of open-coding the first/rest pattern, call `chunkRefUpdates(updates)` in `PushObjects` (line 419) and `chunkRefUpdates(commands)` in `PushPack` (line 657), then iterate the batches.
+
+2. **Lines 418-430 (PushObjects updates handling): Incomplete chunking**
+   - **Cost**: The code manually splits updates only once (`first, rest`), then calls `PushCommands` on `rest` which *internally* calls `chunkRefUpdates` again (line 701). This means if updates are 2×maxRefUpdatesPerPush, the first manual split handles one batch, then `PushCommands` re-chunks the rest—two levels of re-chunking.
+   - **Simpler form**: Call `chunkRefUpdates(updates)` and loop over all batches (first one via `pushObjectsBatch`, rest via `PushCommands`), eliminating the duplicate chunking logic.
+
+3. **Lines 418-430 (PushObjects): Unused state—the `rest` variable in updates block**
+   - **Cost**: Line 426 only checks `if len(rest) &gt; 0`, but `rest` is already created on line 419 as `[]PushCommand(nil)`, then conditionally reassigned on line 421. The variable exists solely to drive the single conditional on line 426; all actual work is delegated to `PushCommands`.
+   - **Simpler form**: After pushing the first batch (line 423), extract `rest := updates[maxRefUpdatesPerPush:]` and directly call `PushCommands(rest)` without the conditional `first, rest :=` overhead, or just loop batches from `chunkRefUpdates`.
+
+4. **Lines 657-660 (PushPack): First/rest split not using `chunkRefUpdates`**
+   - **Cost**: Code mirrors the chunking logic already implemented in `chunkRefUpdates` (lines 69-79). Maintaining the logic in two places increases risk of inconsistency (e.g., if max size changes, both sites must be updated).
+   - **Simpler form**: Instead of `first, rest := commands, []PushCommand(nil); if len(commands) &gt; maxRefUpdatesPerPush { first, rest = ... }`, use `batches := chunkRefUpdates(commands)` and take `first := batches[0]`, `rest := flattenRest(batches[1:])` or loop directly. Alternatively, inline a tiny `splitFirst` helper that returns two slices without the full chunking overhead.
+
+**Summary**: The code duplicates the first/rest splitting pattern twice (lines 419 and 657) when `chunkRefUpdates` is available. Both sites re-implement the same conditional split rather than reusing the helper. Additionally, `PushObjects` splits updates once manually, then `PushCommands` re-chunks them, creating a second redundant chunking pass. Consolidating both `PushPack` and `PushObjects` to use `chunkRefUpdates` throughout would eliminate this copy-paste and the double-chunking in `PushObjects`.</result>
+<usage><subagent_tokens>26346</subagent_tokens><tool_uses>3</tool_uses><duration_ms>17161</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad4fe66be0defd838</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/76731dd6-65de-4d92-be87-716b3e380099/tasks/ad4fe66be0defd838.output</output-file>
+<status>completed</status>
+<summary>Agent "Reuse review" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my thorough analysis of the code change, here are the REUSE issues I found:
+
+## REUSE Issues Report
+
+**File**: `internal/gitproto/push.go`
+
+**Issue 1: Duplicated manual slicing logic in PushPack and PushObjects**
+- **Location**: Lines 657-660 (PushPack) and 419-421 (PushObjects)
+- **Summary**: Both functions implement identical "split first batch from rest" logic
+- **Cost**: Code duplication. The pattern appears twice:
+  ```go
+  first, rest := commands, []PushCommand(nil)
+  if len(commands) &gt; maxRefUpdatesPerPush {
+      first, rest = commands[:maxRefUpdatesPerPush], commands[maxRefUpdatesPerPush:]
+  }
+  ```
+- **Recommendation**: Extract this into a helper function (e.g., `splitFirstBatch(cmds []PushCommand) (first, rest []PushCommand)`) and use it in both places.
+
+---
+
+**File**: `internal/gitproto/push_test.go`
+
+**Issue 2: Test server helper duplicates request-recording capability of existing captureReceivePackBody**
+- **Location**: Lines 740-779 (pushRecorder type and server method)
+- **Summary**: The new `pushRecorder` struct and its `server()` method parse UpdateRequests and store multiple recorded pushes, but `captureReceivePackBody` (line 359) already captures request bodies. The parsing logic (Decode UpdateRequests, extract commands count and pack) is specific to this test's needs, but the underlying request-capture pattern is similar to existing infrastructure.
+- **Cost**: A more specialized server helper was introduced instead of extending the existing `captureReceivePackBody` pattern. However, `pushRecorder`'s need to store multiple requests and parse them is a legitimate difference from `captureReceivePackBody`'s single-request, channel-based design. This is marginal reuse waste since it serves a different purpose (batch testing vs. single-request assertions).
+- **Note**: This is a lower-severity issue than #1 since the new helper is genuinely specialized for multi-request batch testing, which the existing helpers don't support.
+
+---
+
+**Summary**: One clear reuse violation (duplicate manual slicing logic in push.go). The test helper is acceptable as-is since it serves a distinct purpose (recording multiple requests) that the existing helpers don't provide.</result>
+<usage><subagent_tokens>32939</subagent_tokens><tool_uses>28</tool_uses><duration_ms>58670</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5305f4bddbcddb7d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/76731dd6-65de-4d92-be87-716b3e380099/tasks/a5305f4bddbcddb7d.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude review" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Excellent! Now I have a full picture. Let me create a summary of my findings.
+
+## Altitude Review: Ref-Update Command Batching in git-sync
+
+### Summary of Implementation
+
+The change adds batching to three functions in `internal/gitproto/push.go` to keep receive-pack requests under the server's 25,000 command cap:
+
+1. **`PushPack` (lines 637–681)**: Splits into first/rest when commands exceed `maxRefUpdatesPerPush`
+2. **`PushObjects` (lines 394–436)**: Separates updates/deletes, then splits updates into first batch and rest
+3. **`PushCommands` (lines 693–707)**: Uses `chunkRefUpdates()` to batch all commands
+
+### Altitude Analysis: CORRECT DEPTH ✓
+
+The batching is implemented at the **correct altitude—the gitproto push-primitive layer is the right place**.
+
+**Why this is correct:**
+
+1. **All strategies funnel through these three functions.** Every push path (replicate, incremental, materialized, bootstrap) calls `PushPack` and/or `PushCommands` eventually. A strategy-layer solution would require duplicating batching logic across `/internal/strategy/replicate`, `/internal/strategy/incremental`, and `/internal/strategy/materialized`—each would need to know the server cap and implement the same split-first/rest dance. Centralizing at gitproto avoids that duplication.
+
+2. **Strategies don't control *how many refs* get pushed—they control *what refs* and *in what mode*.** Strategies decide whether to relay, which objects to include, whether to force-update—but not the internal mechanics of cutting a single push into batches. The batch-splitting is a protocol-level detail that should be opaque to strategies. From a strategy's perspective, calling `PushPack(commands, pack)` or `PushCommands(commands)` should "just work" regardless of command count.
+
+3. **The split behavior is universal.** Every target has a cap; the same split logic (pack rides with first batch, rest move ref-only) applies everywhere. This is not a per-strategy decision.
+
+### Internal Generalization: FRAGMENTATION (Minor Issue)
+
+**Three separate implementations of "split into first/rest" is a code smell:**
+
+1. **`PushPack` (lines 657–660)**: Simple first/rest split
+   ```go
+   first, rest := commands, []PushCommand(nil)
+   if len(commands) &gt; maxRefUpdatesPerPush {
+       first, rest = commands[:maxRefUpdatesPerPush], commands[maxRefUpdatesPerPush:]
+   }
+   ```
+
+2. **`PushObjects` (lines 418–430)**: Separates updates/deletes, then first/rest *only for updates*
+   ```go
+   if len(updates) &gt; 0 {
+       first, rest := updates, []PushCommand(nil)
+       if len(updates) &gt; maxRefUpdatesPerPush {
+           first, rest = updates[:maxRefUpdatesPerPush], updates[maxRefUpdatesPerPush:]
+       }
+       // pushObjectsBatch with first + pack
+       // PushCommands with rest (no pack)
+   }
+   if len(deletes) &gt; 0 {
+       // PushCommands with deletes separately
+   }
+   ```
+
+3. **`PushCommands` (lines 701–706)**: Uses helper `chunkRefUpdates()` to batch all at once
+   ```go
+   for _, batch := range chunkRefUpdates(commands) {
+       pushCommandsBatch(...)
+   }
+   ```
+
+**The pattern across all three is:** send first batch (with pack if present), then send remaining batches as ref-only. `chunkRefUpdates()` handles the general chunking, but `PushPack` and `PushObjects` duplicate the first/rest logic. A shared helper like `splitFirstBatch()` would reduce duplication:
+
+```go
+func splitFirstBatch(commands []PushCommand) (first, rest []PushCommand) {
+    if len(commands) &lt;= maxRefUpdatesPerPush {
+        return commands, nil
+    }
+    return commands[:maxRefUpdatesPerPush], commands[maxRefUpdatesPerPush:]
+}
+```
+
+This is **not a correctness bug**, just a missed DRY opportunity that makes the code slightly harder to maintain and audit.
+
+### Hardcoded Limit: CORRECT PLACEMENT ✓
+
+The `const maxRefUpdatesPerPush = 20_000` is correctly at the right altitude:
+
+- **Not configurable**: Unlike `MaxPackBytes` and `TargetMaxPackBytes` (which are configurable per-sync in `/internal/syncer/syncer.go` at lines 86–87), the ref-update cap should **not** be configurable. It's a server limit (entire-server hard-codes 25,000), not a tuning knob for users.
+- **Well-documented**: The comment (lines 53–63) explains the server cap (25,000), the safety margin (20,000), and the invariant that makes splitting safe (pack carries all objects).
+- **Consistent with other protocol limits**: The bitwise hardcodes in `/internal/gitproto/` (sideband sizes, protocol constants) follow the same pattern—they're not exposed to config because they're not user-tunable.
+
+The codebase has a clear precedent: `DefaultMaxMaterializedObjects` (materialized.go, line 40) is a constant, not a config field—users don't tune object limits, they get a sensible default or hit an error.
+
+### Test Coverage: ✓
+
+- `TestChunkRefUpdates` (push_test.go, line 793): validates chunking logic
+- `TestPushCommandsBatchesOverCap` (line 806): verifies PushCommands splits and preserves empty packs
+- `TestPushPackBatchesOverCap` (line 830): verifies PushPack sends real pack with first batch, empty packs with rest
+- **Missing**: No test for `PushObjects` batching behavior (though the function is tested elsewhere; just no explicit split test)
+
+### Verdict
+
+**The altitude is correct.** Batching at the gitproto layer is the right depth because:
+- It centralizes a universal protocol constraint
+- All strategies benefit without duplication
+- It's invisible to strategy-layer code
+
+**Minor housekeeping opportunity:**  Extract a shared `splitFirstBatch()` helper to eliminate duplication in `PushPack` and `PushObjects`, reducing the surface area for future bugs.
+
+**No deeper fix needed.** This is not a bandaid; it's the right architectural layer.</result>
+<usage><subagent_tokens>53589</subagent_tokens><tool_uses>28</tool_uses><duration_ms>66922</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abc6397a2d74538b0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/76731dd6-65de-4d92-be87-716b3e380099/tasks/abc6397a2d74538b0.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect! So in HEAD, PushObjects directly called sendReceivePack with all commands. In the current code, it now:
+
+1. Allocates `updates` and `deletes` slices to partition commands
+2. Calls `pushObjectsBatch` for the first part
+3. Calls `PushCommands` for the rest
+
+And PushPack also changed from doing nothing to doing the batching logic.
+
+Now let me analyze the efficiency issues:
+
+## Efficiency Analysis
+
+Let me examine the three key areas mentioned in the task:
+
+### 1. **chunkRefUpdates** (lines 69-79)
+
+For the small case (len(commands) &lt;= maxRefUpdatesPerPush), it returns:
+```go
+return [][]PushCommand{commands}
+```
+
+This allocates a single-element wrapper slice on every call, even when not needed. This hits PushCommands on every call.
+
+**Cost**: Single allocation of a 24-byte slice (slice header) per small push to `chunkRefUpdates`.
+
+**Alternative**: For pushes under the cap, callers could avoid this wrapper entirely by checking the size first. But this is a minor optimization since it's only 24 bytes once per small push.
+
+### 2. **PushObjects** (lines 394-436) 
+
+The current code (when commands &gt; cap) does this unnecessarily:
+
+```go
+updates := make([]PushCommand, 0, len(commands))
+var deletes []PushCommand
+for _, c := range commands {
+    if c.Delete {
+        deletes = append(deletes, c)
+    } else {
+        updates = append(updates, c)
+    }
+}
+```
+
+This always partitions into two slices, even when:
+- All commands fit in cap anyway (but the function already returned earlier at line 405 for this case, so this code only runs when len(commands) &gt; cap)
+- The partition happens BEFORE checking if we even need to do batching
+
+**BUT WAIT** - I need to reconsider. Looking at lines 404-406, there IS an early return:
+```go
+if len(commands) &lt;= maxRefUpdatesPerPush {
+    return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, onRejection)
+}
+```
+
+So the partition code (lines 408-416) ONLY runs when len(commands) &gt; cap.
+
+The partition is necessary because:
+- PushObjects with the packed objects only works for creates/updates
+- Deletes must go through PushCommands
+- If there are more updates than can fit in one request, we need to split the updates/deletes anyway
+
+**Cost**: Allocates two slices (updates and deletes) for any push &gt; cap. With 20,000 item cap, this is inevitable for large pushes. The alternative would be to not partition upfront but this would complicate the logic.
+
+### 3. **PushPack** (lines 646-681)
+
+The new code does:
+```go
+first, rest := commands, []PushCommand(nil)
+if len(commands) &gt; maxRefUpdatesPerPush {
+    first, rest = commands[:maxRefUpdatesPerPush], commands[maxRefUpdatesPerPush:]
+}
+```
+
+This allocates a nil slice when commands &lt;= cap (line 657), then potentially re-assigns it. 
+
+**Cost**: One unnecessary `[]PushCommand(nil)` allocation (16 bytes) per small pack push.
+
+**Better approach**: 
+```go
+if len(commands) &gt; maxRefUpdatesPerPush {
+    first := commands[:maxRefUpdatesPerPush]
+    rest := commands[maxRefUpdatesPerPush:]
+    // ... handle rest
+    return nil // early return before the rest handling
+} else {
+    // handle small case directly
+}
+```
+
+Or simpler:
+```go
+if len(commands) &lt;= maxRefUpdatesPerPush {
+    // handle inline, no rest needed
+    return ...
+}
+first, rest := commands[:maxRefUpdatesPerPush], commands[maxRefUpdatesPerPush:]
+// handle rest
+```
+
+### 4. **PushObjects allocation pattern** (lines 419-421)
+
+Similar issue:
+```go
+first, rest := updates, []PushCommand(nil)
+if len(updates) &gt; maxRefUpdatesPerPush {
+    first, rest = updates[:maxRefUpdatesPerPush], updates[maxRefUpdatesPerPush:]
+}
+```
+
+This always allocates a nil slice (line 419) even when len(updates) &lt;= cap.
+
+**Better approach**: Early return for the small case.
+
+Now let me write my findings report:
+
+---
+
+## Summary of Efficiency Findings
+
+The diff adds ref-update batching to push functions, which is correct and necessary. However, there are **two concrete inefficiencies in the hot path** (small pushes):
+
+### 1. **PushPack: Unnecessary nil slice allocation on every small pack push** 
+**File**: `internal/gitproto/push.go`  
+**Lines**: 657  
+**Issue**: `first, rest := commands, []PushCommand(nil)` allocates a nil slice unconditionally, then overwrites `first` and `rest` only if len(commands) &gt; cap.  
+**Cost**: 16-byte slice header allocation per small push (&lt; 20,000 commands).  
+**Cheaper alternative**: Add early return for small case before any slice assignments. For len(commands) &lt;= cap, handle directly without allocating nil slices.
+
+### 2. **PushObjects: Unnecessary nil slice allocation in the partition path**
+**File**: `internal/gitproto/push.go`  
+**Lines**: 419  
+**Issue**: Same pattern: `first, rest := updates, []PushCommand(nil)` allocates unconditionally, then re-assigns if len(updates) &gt; cap.  
+**Cost**: 16-byte slice header per large push (when entering the partition code &gt; line 407).  
+**Cheaper alternative**: Early return if len(updates) &lt;= cap before the slice assignments; only allocate slices in the branch where they're needed.
+
+### 3. **chunkRefUpdates: Single-element wrapper slice on every call**
+**File**: `internal/gitproto/push.go`  
+**Lines**: 71  
+**Issue**: Returns `[][]PushCommand{commands}` for small input, allocating a slice wrapper even for the common case.  
+**Cost**: 24-byte slice header per small ref-only push.  
+**Assessment**: Minor. This is unavoidable in the current design since chunkRefUpdates always returns [][]PushCommand for uniform handling in the caller loop. The cost is a single allocation per push and is negligible.
+
+### 4. **PushObjects: Unnecessary partition allocation for all pushes &gt; cap**
+**File**: `internal/gitproto/push.go`  
+**Lines**: 408-416  
+**Issue**: Always allocates and populates both `updates` and `deletes` slices when len(commands) &gt; cap, even though the partition is semantically necessary.  
+**Assessment**: Clean. This is unavoidable—the logic requires separating deletes (which need ref-only push via PushCommands) from updates (which can carry the pack). Not an efficiency regression.
+
+### Verdict
+The batching implementation is **well-structured overall**. The two inefficiencies (items 1 &amp; 2) are minor and localized to small-push hot paths—low impact. They could be cleaned up with early returns, but the current code is readable and the cost is negligible in practice (32 bytes per small push across two functions).</result>
+<usage><subagent_tokens>55427</subagent_tokens><tool_uses>25</tool_uses><duration_ms>207877</duration_ms></usage>
+</task-notification>
