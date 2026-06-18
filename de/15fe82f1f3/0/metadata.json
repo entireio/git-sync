@@ -3,24 +3,20 @@
   "checkpoint_id": "de15fe82f1f3",
   "session_id": "f82fa48e-a8dd-42c8-a49a-7193b101bbf5",
   "strategy": "manual-commit",
-  "created_at": "2026-06-18T15:15:24.667604Z",
+  "created_at": "2026-06-18T15:53:27.564417Z",
   "branch": "refactor/remove-entiredb-credential-store",
   "checkpoints_count": 5,
-  "save_step_count": 2,
-  "files_touched": [
-    "internal/auth/auth.go",
-    "internal/auth/auth_test.go",
-    "internal/syncer/syncer.go"
-  ],
+  "save_step_count": 1,
+  "files_touched": [],
   "agent": "Claude Code",
   "model": "claude-opus-4-8[1m]",
   "turn_id": "ddecbb013320",
   "token_usage": {
-    "input_tokens": 143170,
-    "cache_creation_tokens": 4131325,
-    "cache_read_tokens": 178377300,
-    "output_tokens": 359998,
-    "api_call_count": 460
+    "input_tokens": 143172,
+    "cache_creation_tokens": 4132671,
+    "cache_read_tokens": 179123592,
+    "output_tokens": 360565,
+    "api_call_count": 461
   },
   "skill_events_version": 1,
   "skill_events": [
@@ -58,41 +54,5 @@
   ],
   "session_metrics": {
     "turn_count": 20
-  },
-  "initial_attribution": {
-    "calculated_at": "2026-06-18T15:15:24.602431Z",
-    "agent_lines": 0,
-    "agent_removed": 0,
-    "human_added": 0,
-    "human_modified": 19,
-    "human_removed": 404,
-    "total_committed": 0,
-    "total_lines_changed": 1304,
-    "agent_percentage": 0,
-    "metric_version": 2
-  },
-  "prompt_attributions": [
-    {
-      "checkpoint_number": 2,
-      "user_lines_added": 85,
-      "user_lines_removed": 0,
-      "agent_lines_added": 0,
-      "agent_lines_removed": 0,
-      "user_added_per_file": {
-        ".claude/scheduled_tasks.lock": 1,
-        ".claude/settings.local.json": 84
-      }
-    },
-    {
-      "checkpoint_number": 3,
-      "user_lines_added": 85,
-      "user_lines_removed": 0,
-      "agent_lines_added": 0,
-      "agent_lines_removed": 0,
-      "user_added_per_file": {
-        ".claude/scheduled_tasks.lock": 1,
-        ".claude/settings.local.json": 84
-      }
-    }
-  ]
+  }
 }

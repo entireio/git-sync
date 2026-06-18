@@ -577,3 +577,15 @@ can
 ---
 
 can you look at the comment on https://github.com/entireio/git-sync/pull/92
+
+---
+
+on https://github.com/entireio/git-sync/pull/90 can you take a look at ../cli we now have a git-remote-entire helper, so I'm wondering a bit if the code the PR touches is actually still needed? But I guess for the lib part?
+
+---
+
+the mirror-pipeline is in ../mirror-pipeline can you check?
+
+---
+
+Yes do A, there is no other consumer of the library and that talks to entiredb
