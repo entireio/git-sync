@@ -1,0 +1,13 @@
+error: replicate: replicate: replicate relay failed: replicate execute: push target refs: report-status: command error on refs/entire/checkpoints/BP/01KVBJD16MVN8GJYEVSQPW1EBP: push declined due to repository rule violations
+
+---
+
+gh api -X PATCH repos/Soph/large-ref-test --input - <<'JSON'
+  {"security_and_analysis":{"secret_scanning_push_protection":{"status":"disabled"}}}
+  JSON
+
+does not work
+
+---
+
+lint is failing
