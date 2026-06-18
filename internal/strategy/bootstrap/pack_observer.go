@@ -78,9 +78,33 @@ func newPackStreamObserver(src io.ReadCloser) *packStreamObserver {
 		headerReady: make(chan struct{}),
 		done:        make(chan struct{}),
 	}
-	obs.tee = io.TeeReader(src, pw)
+	// Tee through a best-effort writer: once the consume goroutine stops and
+	// closes pr (on a Scanner error or after a malformed pack), writes to pw
+	// would fail with io.ErrClosedPipe and TeeReader would surface that from
+	// Read, aborting the live upload. Observation is non-fatal, so absorb the
+	// failure and keep the bytes flowing to the server.
+	obs.tee = io.TeeReader(src, &bestEffortWriter{w: pw})
 	go obs.consume(pr)
 	return obs
+}
+
+// bestEffortWriter forwards bytes to the observer pipe but never propagates a
+// write failure: after the first error it silently drops subsequent writes and
+// always reports success, so the wrapping TeeReader cannot turn a stopped
+// observer into a failed upload. Touched only by the upload's Read goroutine.
+type bestEffortWriter struct {
+	w      io.Writer
+	broken bool
+}
+
+func (b *bestEffortWriter) Write(p []byte) (int, error) {
+	if b.broken {
+		return len(p), nil
+	}
+	if _, err := b.w.Write(p); err != nil {
+		b.broken = true
+	}
+	return len(p), nil
 }
 
 func (o *packStreamObserver) Read(p []byte) (int, error) {

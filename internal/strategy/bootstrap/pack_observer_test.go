@@ -116,6 +116,33 @@ func TestPackStreamObserverCountsObjects(t *testing.T) {
 	}
 }
 
+// A Scanner error mid-stream must not abort the upload: every byte handed in
+// must still come back out of Read (the documented "non-fatal for the upload"
+// contract), with the error recorded only for debugging. Previously the
+// Scanner's deferred pipe close made the TeeReader's write fail and killed the
+// push.
+func TestPackStreamObserverScannerErrorDoesNotAbortUpload(t *testing.T) {
+	t.Parallel()
+	// Not a valid packfile — the Scanner fails parsing the header almost
+	// immediately and closes its pipe reader while bytes are still flowing.
+	payload := bytes.Repeat([]byte("definitely-not-a-packfile\n"), 2048)
+
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(payload)))
+	out, err := io.ReadAll(o)
+	if err != nil {
+		t.Fatalf("upload Read aborted by a non-fatal observer error: %v", err)
+	}
+	if !bytes.Equal(out, payload) {
+		t.Fatalf("observer dropped bytes: got %d, want %d", len(out), len(payload))
+	}
+	if err := o.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if o.ScannerError() == nil {
+		t.Fatal("expected a scanner error to be recorded for non-pack input")
+	}
+}
+
 // TestPackStreamObserverHeaderReadyEarly verifies that the header is
 // observed before all bytes have been pulled — important for callers
 // that want to make subdivision decisions partway through the upload.
