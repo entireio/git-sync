@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7-nightly.202606170803.4287f89a.0.20260617161127-7335c7df5f3d",
+  "checkpoint_id": "de15fe82f1f3",
+  "strategy": "manual-commit",
+  "branch": "refactor/remove-entiredb-credential-store",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/de/15fe82f1f3/0/metadata.json",
+      "transcript": "/de/15fe82f1f3/0/full.jsonl",
+      "content_hash": "/de/15fe82f1f3/0/content_hash.txt",
+      "prompt": "/de/15fe82f1f3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 143170,
+    "cache_creation_tokens": 4131325,
+    "cache_read_tokens": 178377300,
+    "output_tokens": 359998,
+    "api_call_count": 460
+  }
+}
