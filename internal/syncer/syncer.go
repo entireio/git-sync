@@ -586,12 +586,18 @@ type syncSession struct {
 	rejections map[plumbing.ReferenceName]string
 }
 
-// finish releases any resources owned by the session — currently the live
-// progress ticker. Idempotent and safe to call from defer in callers that
-// also produce results in the happy path.
+// finish releases the resources owned by the session: the live progress
+// ticker, the memory-measurement ticker goroutine, and the source/target
+// transports (SSH transports spawn processes). Idempotent and safe to call
+// from defer in callers that also produce results in the happy path —
+// measurementDone is sync.Once-guarded, so an error path that never built a
+// Result still stops its goroutine without disturbing the happy-path value.
 func (s *syncSession) finish() {
 	if s.progress != nil {
 		s.progress.terminate()
+	}
+	if s.measurementDone != nil {
+		_ = s.measurementDone()
 	}
 	if s.sourceConn != nil {
 		_ = s.sourceConn.Close()
@@ -657,6 +663,16 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		stats:           newStats(cfg.ShowStats),
 		measurementDone: startMeasurement(cfg.MeasureMemory),
 	}
+	// startMeasurement spawned a ticker goroutine and the steps below open
+	// transports (SSH spawns a process). If we return an error partway through
+	// setup the caller has no session to finish(), so release everything here
+	// unless we hand the session back.
+	success := false
+	defer func() {
+		if !success {
+			s.finish()
+		}
+	}()
 	var warnedSSHStats bool
 	warnSSHStats := func(sourceConn, targetConn gitproto.Conn) {
 		if warnedSSHStats {
@@ -700,6 +716,9 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("create target transport: %w", err)
 		}
+		// Hand the conn to the session immediately so the deferred cleanup
+		// closes it even if a ref-listing step below fails.
+		s.target = &targetSession{conn: targetConn}
 		targetConn.SetProgressWriter(&sessionStderr{s: s})
 		warnSSHStats(s.sourceConn, targetConn)
 		targetAdv, err := gitproto.AdvertisedRefsV1(ctx, targetConn, transport.ReceivePackService)
@@ -712,17 +731,14 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
-		s.target = &targetSession{
-			conn:     targetConn,
-			adv:      targetAdv,
-			refMap:   targetRefMap,
-			features: targetFeatures,
-			policy: planner.RelayTargetPolicy{
-				CapabilitiesKnown: targetFeatures.Known,
-				NoThin:            targetFeatures.NoThin,
-			},
-			pusher: gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose),
+		s.target.adv = targetAdv
+		s.target.refMap = targetRefMap
+		s.target.features = targetFeatures
+		s.target.policy = planner.RelayTargetPolicy{
+			CapabilitiesKnown: targetFeatures.Known,
+			NoThin:            targetFeatures.NoThin,
 		}
+		s.target.pusher = gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
 			s.target.pusher.OnRejection = func(name plumbing.ReferenceName, status string) {
@@ -752,6 +768,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}
 	}
 
+	success = true
 	return s, nil
 }
 
