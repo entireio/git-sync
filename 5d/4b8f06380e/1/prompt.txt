@@ -1,0 +1,65 @@
+can you take a look at: 
+
+Here's the git-sync issue, structured to mirror the entiredb one.
+
+---
+
+## git-sync: batched bootstrap sends pack-less ref creates that some servers reject
+
+### Symptom
+During a batched bootstrap, git-sync finalizes a "subsumed" branch by sending a **ref-create command with no packfile**. Against a receive-pack implementation that expects a pack for any non-delete command, this fails:
+```
+bootstrap execute: create subsumed branch ref for refs/heads/<branch>:
+report-status: unpack error: quarantine fanout: read packfile header: EOF
+```
+The bootstrap dies mid-run, leaving the target half-populated. First observed mirroring `github.com/JUMPTOON/app` → entiredb prod `aws-us-east-2`, 2026-06-15 07:36 (trace `433bad8f4ef654ac651f868ab3c2fa3e`): ~15 batch pushes succeeded, then the subsumed-ref create EOF'd.
+
+### Root cause
+In the batched bootstrap, the subsumed-branch path issues a ref-only push:
+```go
+// internal/strategy/bootstrap/bootstrap.go (subsumed branch finalize)
+cmds := []gitproto.PushCommand{{Name: ..., Old: ZeroHash, New: batch.Plan.SourceHash}}
+p.TargetPusher.PushCommands(ctx, cmds)   // no pack
+```
+`PushCommands` → `sendReceivePack(ctx, conn, req, nil, …)` with `packData=nil`, so the request body is the command pkt-lines + flush and **nothing else** (`internal/gitproto/push.go:585`, body assembly at `push.go:293-296`).
+
+That's valid git when the objects already exist, but it relies on the server tolerating a pack-less create. entiredb (and likely others) treats every non-delete as "a pack will follow" and errors reading the absent header. The interop contract is ambiguous and git-sync is on the fragile side of it.
+
+### Suggested fix
+On the subsumed-ref / pack-less create path, send a **valid empty packfile** (12-byte header + trailer, 0 objects) instead of no pack, so servers that unconditionally read a pack header are satisfied. (Cheap, and strictly more compatible.) Alternatively, gate the pack-less optimization on a detected server capability.
+
+### Evidence
+- Trace `433bad8f4ef654ac651f868ab3c2fa3e` — batched bootstrap, EOF on `create subsumed branch ref for refs/heads/docs-rules`.
+- Counterpart server-side cause (entiredb): `commandsNeedPack` returns true for any non-delete (`server/githttp/receive_pack_connectivity.go:66`), then `io.ReadFull` of the 12-byte header EOFs on the empty body (`objstore/packfile_fanout.go:44`).
+
+---
+
+## Related (separate, larger git-sync issue): replicate strategy can't batch, so a half-bootstrapped repo never recovers
+
+### Why it matters
+Once the bootstrap above fails partway, the target is non-empty, so `runReplicate` routes to `executeReplicate` instead of bootstrap (`internal/syncer/syncer.go` — `replicateCanBootstrap` false). The replicate strategy streams **one pack for all updates with no subdivision**:
+```go
+// internal/strategy/replicate/replicate.go:62-73 — fetch one pack, push once, no retry
+```
+For JUMPTOON/app the resulting pack is >10 GiB and the target rejects it (`push rejected: body exceeded size limit 10737418240`), 708× over the window — a permanent wedge.
+
+### Two gaps
+1. **No body-limit fallback in replicate.** The `body exceeded size limit` detection + checkpoint-batched relay (`autoTargetMaxPackBytes`, `bodyLimitPattern`) lives **only** in the bootstrap strategy (`internal/strategy/bootstrap/bootstrap.go:33,1380`). Replicate has none — it just returns `push target refs: %w` and fails.
+2. **`TargetMaxPackBytes` isn't reachable via the public API.** `Options`/`SyncRequest`/`SyncPolicy` don't expose it; `internalbridge/config.go:75` hardcodes it to 0. So a caller (mirror-pipeline) can't proactively cap pack size even if it wanted to.
+
+### Suggested fix
+- Give the replicate strategy the same body-limit detection + checkpoint-batched relay the bootstrap path has (or route replicate's create/update plans through `executeBatched`).
+- Expose `TargetMaxPackBytes` on the public `SyncPolicy`/`Options` and thread it through `SyncConfig` so callers can set it up front (~5 GiB) and avoid the wasted 10 GiB round-trips.
+- Consider making bootstrap **resumable** after a mid-batch failure rather than stranding partial state (the scaffolding exists — `BootstrapResumeIndex`, temp refs — but it didn't re-engage here).
+
+---
+
+I kept the pack-less-create bug as the primary issue (it's the direct counterpart to the entiredb one) and split the replicate-batching work out, since it's a bigger, separable change. Want me to file these as two GitHub issues in git-sync, or fold them into one? I can verify the exact `bootstrap.go` line numbers in the real git-sync repo (I've been reading the vendored copy) before filing.
+
+---
+
+let's first fix the empty-pack
+
+---
+
+/simplify
