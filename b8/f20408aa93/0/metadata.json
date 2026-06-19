@@ -1,0 +1,38 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "b8f20408aa93",
+  "session_id": "4f8f5e9b-9f90-4c22-88b9-988c55f45833",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T16:25:01.684874Z",
+  "branch": "feat/remote-helper-transport",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "1cb522a521d2",
+  "token_usage": {
+    "input_tokens": 32570,
+    "cache_creation_tokens": 221276,
+    "cache_read_tokens": 13472172,
+    "output_tokens": 108369,
+    "api_call_count": 86
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T16:25:01.666741Z",
+    "agent_lines": 12,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "total_lines_changed": 12,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

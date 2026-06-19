@@ -1,0 +1,22 @@
+❯ GITSYNC_MAX_REF_UPDATES_PER_PUSH=5000 go run ./cmd/git-sync replicate --all-refs --stats --verbose \
+    https://github.com/entireio/large-ref-test.git \
+    entire://aws-us-east-2.entire.io/et/soph-test/soph-test-large-ref
+error: replicate: replicate: list target refs: request info refs: request info-refs: Get "entire://aws-us-east-2.entire.io/et/soph-test/soph-test-large-ref/info/refs?service=git-receive-pack": round trip: unsupported protocol scheme "entire"
+exit status 1
+
+---
+
+But why is git the cli working with it?
+
+---
+
+The thing is: git-sync could also use the remote helper right? Like: 
+
+❯ GITSYNC_MAX_REF_UPDATES_PER_PUSH=5000 go run ./cmd/git-sync replicate --all-refs --stats --verbose \
+    https://github.com/entireio/large-ref-test.git \
+    https://aws-us-east-2.entire.io/et/soph-test/soph-test-large-ref
+Username for 'https://aws-us-east-2.entire.io':
+
+---
+
+ok, let's try adding the scheme support, make a new branch of main and do meaningful commits
