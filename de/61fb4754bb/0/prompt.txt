@@ -66,3 +66,7 @@ would this now work for any helper?
 ---
 
 I wouldn't do the connect fallback but should we do the capabilities probe just to give meaninful errors?
+
+---
+
+ok, do meaningful commits and let's open a PR
