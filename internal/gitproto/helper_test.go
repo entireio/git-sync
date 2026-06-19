@@ -29,11 +29,13 @@ func TestHelperRemoteHelperProcess(_ *testing.T) {
 	os.Exit(0)
 }
 
-// runFakeHelper emulates git-remote-entire's stateless-connect handling closely
-// enough to drive HelperConn: it reads the stateless-connect command line,
-// writes the empty-line ack, emits a canned advertisement, then services one
+// runFakeHelper emulates git-remote-entire's protocol handling closely enough
+// to drive HelperConn: it answers the capabilities probe, then (for a
+// stateless-connect-capable advertisement) reads the stateless-connect command,
+// writes the empty-line ack, emits a canned advertisement, and services one
 // request. upload-pack frames the response with a trailing 0002 (v2 stateless);
-// receive-pack streams the response and exits (v0 connect).
+// receive-pack streams the response and exits (v0 connect). The "no-stateless"
+// mode advertises only `connect` so HelperConn's capability probe rejects it.
 func runFakeHelper(mode string, stdin io.Reader, stdout io.Writer) error {
 	write := func(s string) error {
 		_, err := io.WriteString(stdout, s)
@@ -41,6 +43,19 @@ func runFakeHelper(mode string, stdin io.Reader, stdout io.Writer) error {
 	}
 
 	br := bufio.NewReader(stdin)
+
+	if line, err := br.ReadString('\n'); err != nil {
+		return fmt.Errorf("read capabilities command: %w", err)
+	} else if got := strings.TrimRight(line, "\r\n"); got != "capabilities" {
+		return fmt.Errorf("expected capabilities, got %q", got)
+	}
+	if mode == "no-stateless" {
+		return write("connect\noption\n\n") // no stateless-connect: probe must reject
+	}
+	if err := write("stateless-connect\npush\noption\n\n"); err != nil {
+		return err
+	}
+
 	cmd, err := br.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read command: %w", err)
@@ -195,6 +210,17 @@ func TestHelperConn_Fallback(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fallback") {
 		t.Fatalf("error = %v, want it to mention fallback", err)
+	}
+}
+
+func TestHelperConn_NoStatelessConnect_MeaningfulError(t *testing.T) {
+	c := fakeHelperConn(t, "no-stateless")
+	_, err := c.RequestInfoRefs(context.Background(), "git-upload-pack", GitProtocolV2)
+	if err == nil {
+		t.Fatal("expected error when helper lacks stateless-connect")
+	}
+	if !strings.Contains(err.Error(), "stateless-connect") {
+		t.Fatalf("error = %v, want it to explain the missing stateless-connect capability", err)
 	}
 }
 

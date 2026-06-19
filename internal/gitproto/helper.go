@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -43,11 +44,12 @@ func LookupRemoteHelper(scheme string) (string, bool) {
 // no native transport for (e.g. entire://) by delegating auth and the actual
 // network I/O to the helper, while still running the wire protocol itself.
 //
-// It assumes the helper supports stateless-connect (the modern v2 bridge) for
-// both upload-pack and receive-pack — it issues stateless-connect directly
-// rather than negotiating via the capabilities handshake, and treats a
-// "fallback" reply as an error. git-remote-entire satisfies this; a helper that
-// only offers the legacy `connect` capability is not supported.
+// It requires the helper to support stateless-connect (the modern v2 bridge)
+// for both upload-pack and receive-pack. It probes the helper's advertised
+// capabilities first and fails with a clear error if stateless-connect is
+// absent; it does not fall back to the legacy `connect` capability. A
+// per-service "fallback" reply is also treated as an error. git-remote-entire
+// satisfies this.
 //
 // Each Conn operation spawns its own helper process and tears it down when the
 // operation completes. This is deliberate, not lazy: the helper services
@@ -177,6 +179,18 @@ func (c *HelperConn) dial(ctx context.Context, service string) (*helperProcess, 
 		out:    bufio.NewReaderSize(stdout, 65536),
 		stderr: stderr,
 	}
+	// Probe capabilities first so an incompatible helper produces a clear error
+	// instead of a cryptic mid-protocol failure. This is a local exchange — no
+	// network round trip happens until stateless-connect below.
+	caps, err := proc.readCapabilities()
+	if err != nil {
+		return nil, fmt.Errorf("probe remote helper %s: %w", c.HelperPath, errors.Join(err, proc.cleanup()))
+	}
+	if !slices.Contains(caps, "stateless-connect") {
+		unsupported := fmt.Errorf("remote helper %s does not support stateless-connect (advertises: %s); git-sync needs a stateless-connect-capable helper such as git-remote-entire",
+			c.HelperPath, strings.Join(caps, " "))
+		return nil, errors.Join(unsupported, proc.cleanup())
+	}
 	if _, err := io.WriteString(stdin, "stateless-connect "+service+"\n"); err != nil {
 		return nil, fmt.Errorf("request stateless-connect %s: %w", service, errors.Join(err, proc.cleanup()))
 	}
@@ -195,6 +209,27 @@ type helperProcess struct {
 	stderr *sshCommandError
 
 	stdinOnce sync.Once
+}
+
+// readCapabilities issues the helper's `capabilities` command and returns the
+// advertised capability names (the token before any argument on each line),
+// reading until the blank terminator line.
+func (p *helperProcess) readCapabilities() ([]string, error) {
+	if _, err := io.WriteString(p.stdin, "capabilities\n"); err != nil {
+		return nil, fmt.Errorf("request capabilities: %w", err)
+	}
+	var caps []string
+	for {
+		line, err := p.out.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("read capabilities: %w", p.stderr.wrap(err))
+		}
+		if line = strings.TrimRight(line, "\r\n"); line == "" {
+			return caps, nil
+		}
+		name, _, _ := strings.Cut(line, " ")
+		caps = append(caps, name)
+	}
 }
 
 // readAck consumes the helper's stateless-connect response line: an empty line
