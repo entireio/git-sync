@@ -1,0 +1,26 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "91460e76a6df",
+  "strategy": "manual-commit",
+  "branch": "feat/remote-helper-transport",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "README.md",
+    "docs/usage.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/460e76a6df/0/metadata.json",
+      "transcript": "/91/460e76a6df/0/full.jsonl",
+      "content_hash": "/91/460e76a6df/0/content_hash.txt",
+      "prompt": "/91/460e76a6df/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32570,
+    "cache_creation_tokens": 221276,
+    "cache_read_tokens": 13472172,
+    "output_tokens": 108369,
+    "api_call_count": 86
+  }
+}
