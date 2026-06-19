@@ -364,6 +364,18 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 		}
 		return conn, nil
 	}
+	// Schemes git-sync has no native transport for (e.g. entire://) are handed
+	// to a git remote helper named git-remote-<scheme>, if one is installed.
+	// The helper owns auth and the network round trips; git-sync drives the
+	// smart protocol over its stateless-connect bridge. http/https are excluded
+	// so we never divert them away from the optimized native HTTP transport
+	// (git ships its own git-remote-http(s)).
+	if ep.Scheme != "http" && ep.Scheme != "https" {
+		if helperPath, ok := gitproto.LookupRemoteHelper(ep.Scheme); ok {
+			stats.setSideDisplay(label, hostnameFromURL(raw.URL))
+			return gitproto.NewHelperConn(helperPath, ep, raw.URL, label), nil
+		}
+	}
 	authEp := auth.Endpoint{
 		Username:      raw.Username,
 		Token:         raw.Token,
