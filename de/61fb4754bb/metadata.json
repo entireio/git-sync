@@ -1,0 +1,27 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "de61fb4754bb",
+  "strategy": "manual-commit",
+  "branch": "feat/remote-helper-transport",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "internal/gitproto/helper.go",
+    "internal/gitproto/pktline.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/de/61fb4754bb/0/metadata.json",
+      "transcript": "/de/61fb4754bb/0/full.jsonl",
+      "content_hash": "/de/61fb4754bb/0/content_hash.txt",
+      "prompt": "/de/61fb4754bb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10232,
+    "cache_creation_tokens": 74461,
+    "cache_read_tokens": 10423694,
+    "output_tokens": 43915,
+    "api_call_count": 36
+  }
+}
