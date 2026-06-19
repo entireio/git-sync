@@ -1,0 +1,50 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "1be8d21b867a",
+  "session_id": "4f8f5e9b-9f90-4c22-88b9-988c55f45833",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T16:24:51.159862Z",
+  "branch": "feat/remote-helper-transport",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "internal/gitproto/helper.go",
+    "internal/gitproto/helper_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "1cb522a521d2",
+  "token_usage": {
+    "input_tokens": 32568,
+    "cache_creation_tokens": 220628,
+    "cache_read_tokens": 13229722,
+    "output_tokens": 107874,
+    "api_call_count": 85
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T16:24:51.142752Z",
+    "agent_lines": 625,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 625,
+    "total_lines_changed": 625,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 46,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 46
+      }
+    }
+  ]
+}
