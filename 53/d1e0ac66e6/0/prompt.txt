@@ -1,0 +1,72 @@
+/simplify
+
+---
+
+<task-notification>
+<task-id>aedbf9eaea46fce56</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/4f8f5e9b-9f90-4c22-88b9-988c55f45833/tasks/aedbf9eaea46fce56.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review of helper transport" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed `internal/gitproto/helper.go` for efficiency only. Findings:
+
+## 1. (Primary, hot path) `responseEndReader.fill` allocates a fresh buffer per pkt-line — helper.go:335
+
+`buf := make([]byte, n)` runs for every data packet of the response. A v2 fetch streams the entire pack as sideband pkt-lines (≤~64KB each), so a P-byte pack ⇒ ~P/65520 allocations of up to 64KB. A 4 GB fetch ≈ **65,000 allocations / ~4 GB of GC garbage**, all on the streaming hot path. This is exactly the cost `PacketReader` was changed to avoid (pktline.go:24 "reuses a fixed header buffer and a growable payload buffer to reduce allocations (issue #17)").
+
+**Cheaper alternative — reuse a grow-only buffer, mirroring `PacketReader`.** It's safe here: `fill()` is only entered when `len(r.pending)==0`, i.e. the previous packet's bytes have already been fully `copy`'d out to callers, so overwriting the backing array can't corrupt anything.
+
+```go
+type responseEndReader struct {
+	src     *bufio.Reader
+	buf     []byte // reused payload+header scratch (issue #17 pattern)
+	pending []byte
+	done    bool
+}
+// in fill(), data case:
+if n &gt; cap(r.buf) {
+	r.buf = make([]byte, n)
+} else {
+	r.buf = r.buf[:n]
+}
+copy(r.buf, header[:])
+if n &gt; 4 {
+	if _, err := io.ReadFull(r.src, r.buf[4:]); err != nil { ... }
+}
+r.pending = r.buf
+```
+
+This drops steady-state allocation to zero. (The `append([]byte(nil), header[:]...)` flush/delim case at :325 allocates 4 bytes but fires ~once per response — negligible, leave it.)
+
+A more involved option (forward the 4-byte header, then stream the payload via an `io.LimitedReader` over `src` with no payload buffer at all) eliminates the copy too, but complicates the state machine; the buffer-reuse fix captures essentially all the win for a few lines.
+
+## 2. (Confirm — sound) Fresh process per RPC / extra info/refs
+
+The "one extra info/refs per RPC" doc comment is accurate, and the rationale (helper services one stateless-connect session per process; receive-pack reads pack-to-EOF) is genuine — the process can't be reused. One nuance the comment undersells: each RPC also pays a **process spawn + the helper's own auth/token resolution**, not just an info/refs. For a fetch that's ~3 spawns; for a ref-heavy multi-batch push it's 1 + N batches, so "negligible beside pack transfer" holds for data-heavy pushes but is less true for many-ref/small-object pushes. Not worth re-architecting — flagging only so the claim isn't taken as universal.
+
+## 3. (Clean — no action) `helperRPCStream` capture and the body-writer goroutine
+
+`helperRPCStream` is a plain struct, not a closure; it holds `ctx/resp/proc/copyErr`, all needed for teardown — no oversized scope retained. The `go func()` in `PostRPCStreamBody` captures `proc`, `body`, `copyErr`; `body` (the request/pack reader) is held only until `io.Copy` finishes, which is required. No leak.
+
+## 4. (Minor) `dial` does `append(os.Environ(), …)` per RPC — helper.go:155
+
+Allocates + copies the whole environment each spawn. A few RPCs per sync ⇒ immaterial; note only, no change warranted.
+
+No sequential-vs-parallel waste: the body-write goroutine already overlaps with response reads, and dial→advertisement→write→read are protocol-ordered.
+
+**Recommend fixing #1 only.**</result>
+<usage><subagent_tokens>272283</subagent_tokens><tool_uses>2</tool_uses><duration_ms>60509</duration_ms></usage>
+</task-notification>
+
+---
+
+would this now work for any helper?
+
+---
+
+I wouldn't do the connect fallback but should we do the capabilities probe just to give meaninful errors?
+
+---
+
+ok, do meaningful commits and let's open a PR
