@@ -137,6 +137,14 @@ Yes. `git-sync` supports SSH remotes through the local `ssh` binary, including
 `ssh://`, SCP-style `git@host:path.git`, and `git+ssh://` URLs. See
 [docs/usage.md](docs/usage.md) for details and current caveats.
 
+### What about other URL schemes (e.g. `entire://`)?
+
+For any scheme it has no native transport for, `git-sync` falls back to a git
+remote helper named `git-remote-<scheme>` on `PATH`, exactly as `git` does. With
+`git-remote-entire` installed, `entire://` URLs work for both fetch and push and
+authenticate through the helper. See
+[Remote-helper schemes](docs/usage.md#remote-helper-schemes).
+
 ### Does it run as a daemon or watch for changes?
 
 No. `git-sync` is a one-shot CLI/library operation. To sync on a schedule or in response to events, run it from cron, CI, a worker, or another service.

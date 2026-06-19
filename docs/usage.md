@@ -145,6 +145,35 @@ SSH-side throughput.
 If `ssh` is not available on `PATH`, `git-sync` fails early with a clear
 `locate ssh binary` error before contacting either remote.
 
+### Remote-helper schemes
+
+For any URL scheme `git-sync` has no native transport for, it looks for a git
+remote helper named `git-remote-<scheme>` on `PATH` — the same mechanism `git`
+itself uses for custom schemes. If one is installed, `git-sync` delegates auth
+and the network round trips to it while still driving the smart protocol over
+the helper's `stateless-connect` bridge.
+
+The motivating case is Entire's own `entire://` URLs:
+
+```bash
+git-sync replicate --all-refs \
+  https://github.com/source-org/source-repo.git \
+  entire://cluster-host/et/project/repo
+```
+
+This requires `git-remote-entire` (installed by the Entire CLI) on `PATH`.
+Authentication — including the Entire context model and OAuth token refresh —
+is handled entirely by the helper, so no `--target-token` is needed when you're
+already logged in via the CLI. Both fetch (upload-pack, protocol v2) and push
+(receive-pack) work through the helper.
+
+`http`/`https`/`ssh` are never routed to a helper: `git-sync` always uses its
+own optimized transports for those, even though `git` ships
+`git-remote-http(s)`.
+
+Like SSH, the helper bridge has no per-request byte accounting, so `--stats`
+omits helper-side throughput (the other side's throughput still prints).
+
 ## Sync Behavior
 
 `sync` picks the bootstrap relay path automatically when the target is empty. For non-empty targets, safe fast-forward updates also use a relay path that streams the source pack directly into target `receive-pack` without local materialization. Anything not relay-eligible (force, prune, deletes, tag retargets) falls back to a materialized path bounded by `--materialized-max-objects`.
