@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>git-sync — Visual Guide</title>
+<style>
+  :root{
+    --bg:#0c1018;
+    --bg2:#121826;
+    --panel:#161d2e;
+    --panel2:#1b2438;
+    --line:#26304a;
+    --ink:#e7ecf5;
+    --muted:#9aa6be;
+    --faint:#6b768e;
+    --accent:#5e8bff;
+    --accent2:#7c5cff;
+    --green:#3fd6a0;
+    --amber:#f5b860;
+    --red:#ff6b7a;
+    --pink:#ff7eb6;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:var(--sans);line-height:1.6;font-size:17px;
+    -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(900px 500px at 100% -10%,rgba(124,92,255,.10),transparent 60%),
+                     radial-gradient(800px 500px at -10% 5%,rgba(94,139,255,.10),transparent 55%);
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:0 18px calc(80px + env(safe-area-inset-bottom))}
+
+  /* hero */
+  header.hero{padding:54px 0 30px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin:0 0 14px}
+  h1{font-size:40px;line-height:1.05;letter-spacing:-.02em;margin:0 0 16px;font-weight:760}
+  h1 .g{background:linear-gradient(100deg,var(--accent),var(--accent2) 60%,var(--pink));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{font-size:18px;color:var(--muted);margin:0;max-width:60ch}
+  .tag-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted);border:1px solid var(--line);background:var(--panel);padding:5px 11px;border-radius:999px}
+
+  /* TOC */
+  nav.toc{margin:26px 0 8px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,var(--panel),var(--bg2));padding:8px}
+  nav.toc ol{margin:0;padding:0;list-style:none;counter-reset:s}
+  nav.toc a{counter-increment:s;display:flex;gap:12px;align-items:baseline;text-decoration:none;color:var(--ink);padding:11px 12px;border-radius:10px}
+  nav.toc a:active{background:var(--panel2)}
+  nav.toc a::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);font-size:12px;color:var(--accent);min-width:24px}
+  nav.toc a span{color:var(--muted);font-size:14px;margin-left:auto;text-align:right}
+
+  /* sections */
+  section{padding:38px 0 8px;border-top:1px solid var(--line);margin-top:34px}
+  section:first-of-type{border-top:none}
+  .sec-no{font-family:var(--mono);font-size:12px;letter-spacing:.18em;color:var(--accent2);text-transform:uppercase}
+  h2{font-size:27px;letter-spacing:-.01em;margin:6px 0 12px;font-weight:720}
+  h3{font-size:18px;margin:30px 0 10px;font-weight:680;color:var(--ink)}
+  h3 .em{color:var(--accent)}
+  p{margin:0 0 14px;color:#cdd6e8}
+  strong{color:#fff;font-weight:640}
+  em.t{font-style:normal;color:var(--accent);font-weight:600}
+  a.link{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(94,139,255,.35)}
+
+  ul.clean{margin:0 0 16px;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding-left:22px;margin:8px 0;color:#cdd6e8}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:11px;width:7px;height:7px;border-radius:2px;background:var(--accent);transform:rotate(45deg)}
+
+  /* callouts */
+  .note{border-left:3px solid var(--accent);background:var(--panel);border-radius:0 12px 12px 0;padding:14px 16px;margin:18px 0;font-size:15.5px;color:var(--muted)}
+  .note .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:5px}
+  .note.warn{border-color:var(--amber)} .note.warn .lbl{color:var(--amber)}
+  .note.key{border-color:var(--green)} .note.key .lbl{color:var(--green)}
+
+  /* code */
+  pre{background:#0a0e16;border:1px solid var(--line);border-radius:14px;padding:15px 16px;overflow-x:auto;margin:16px 0;-webkit-overflow-scrolling:touch}
+  pre code{font-family:var(--mono);font-size:13px;line-height:1.65;color:#cfd8ec;white-space:pre}
+  code.inl{font-family:var(--mono);font-size:.86em;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 6px;color:#dbe4f7}
+  .c-key{color:#7c5cff;font-weight:600}.c-str{color:#3fd6a0}.c-cmt{color:#62708c;font-style:italic}.c-fn{color:#5e8bff}.c-num{color:#f5b860}.c-flag{color:#ff7eb6}
+
+  /* diagram shell */
+  figure{margin:20px 0;border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,var(--panel),var(--bg2));padding:18px 14px;overflow:hidden}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{font-size:13px;color:var(--faint);text-align:center;margin-top:12px;font-family:var(--mono)}
+
+  /* node boxes used in flex diagrams */
+  .flow{display:flex;flex-direction:column;gap:0;margin:18px 0}
+  .stage{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px 16px}
+  .stage .h{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--accent);margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .stage .h b{background:var(--accent);color:#08101f;border-radius:6px;font-size:11px;padding:1px 7px;letter-spacing:0}
+  .stage p{margin:0;font-size:14.5px;color:var(--muted)}
+  .arrow{align-self:center;color:var(--faint);font-size:18px;padding:6px 0;line-height:1}
+
+  /* decision cards */
+  .paths{display:flex;flex-direction:column;gap:12px;margin:18px 0}
+  .path{border:1px solid var(--line);border-radius:14px;padding:14px 15px;background:var(--panel);position:relative;overflow:hidden}
+  .path::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+  .path.b1::before{background:var(--green)} .path.b2::before{background:var(--accent)}
+  .path.b3::before{background:var(--accent2)} .path.b4::before{background:var(--amber)}
+  .path .ttl{font-weight:680;font-size:16px;margin-bottom:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .path .badge{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .path.b1 .badge{color:var(--green);border-color:rgba(63,214,160,.4)}
+  .path.b2 .badge{color:var(--accent);border-color:rgba(94,139,255,.4)}
+  .path.b3 .badge{color:var(--accent2);border-color:rgba(124,92,255,.4)}
+  .path.b4 .badge{color:var(--amber);border-color:rgba(245,184,96,.4)}
+  .path p{margin:4px 0 0;font-size:14.5px;color:var(--muted)}
+  .path .mem{font-family:var(--mono);font-size:12px;margin-top:8px;color:var(--faint)}
+
+  /* tables */
+  .tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:18px 0}
+  .tbl .row{display:grid;border-top:1px solid var(--line)}
+  .tbl .row:first-child{border-top:none;background:var(--panel2)}
+  .tbl.k .row{grid-template-columns:1fr}
+  .tbl .cell{padding:12px 14px}
+  .tbl .row:first-child .cell{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .kv{border-top:1px solid var(--line)}
+  .kv:first-child{border-top:none}
+  .kv .flag{font-family:var(--mono);font-size:13px;color:var(--pink);padding:12px 14px 2px}
+  .kv .desc{font-size:14px;color:var(--muted);padding:0 14px 12px}
+  .kv .desc b{color:#dbe4f7}
+
+  /* failure cards */
+  .fail{border:1px solid var(--line);border-left:3px solid var(--red);border-radius:0 12px 12px 0;background:var(--panel);padding:13px 15px;margin:12px 0}
+  .fail .sym{font-weight:660;color:#fff;font-size:15px}
+  .fail .why{font-size:14px;color:var(--muted);margin:5px 0 0}
+  .fail .fix{font-size:14px;color:var(--green);margin:7px 0 0}
+  .fail .fix::before{content:"→ ";color:var(--green)}
+
+  .twocol{display:grid;grid-template-columns:1fr;gap:10px;margin:16px 0}
+  .mini{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:13px 14px}
+  .mini .t{font-family:var(--mono);font-size:12px;color:var(--accent);margin-bottom:4px}
+  .mini p{margin:0;font-size:14px;color:var(--muted)}
+
+  footer{margin-top:48px;padding-top:24px;border-top:1px solid var(--line);color:var(--faint);font-size:13px;font-family:var(--mono)}
+  .top{display:inline-block;margin-top:10px;color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:13px}
+
+  @media (min-width:680px){
+    h1{font-size:52px}
+    .twocol{grid-template-columns:1fr 1fr}
+    body{font-size:17px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero" id="top">
+    <p class="kicker">Field guide · read on your phone</p>
+    <h1>How <span class="g">git&#8209;sync</span> works</h1>
+    <p class="lede">A remote-to-remote Git mirroring tool that streams packs between two servers — without ever creating a local clone. From the one core idea down to every knob, failure mode, and the SRE playbook.</p>
+    <div class="tag-row">
+      <span class="pill">relay-first</span>
+      <span class="pill">smart HTTP / SSH</span>
+      <span class="pill">no working tree</span>
+      <span class="pill">typed JSON</span>
+      <span class="pill">go-git in-memory</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <ol>
+      <a href="#core"><span>the one idea</span>The core idea</a>
+      <a href="#basics"><span>refs, packs, the wire</span>The basics you need</a>
+      <a href="#paths"><span>4 transfer modes</span>How a sync decides</a>
+      <a href="#protocol"><span>pkt-line · sideband · relay</span>On the wire</a>
+      <a href="#commands"><span>sync · replicate · plan</span>The commands</a>
+      <a href="#sre"><span>git-sync for SRE</span>Operating it</a>
+      <a href="#knobs"><span>every flag that matters</span>The knobs</a>
+      <a href="#failures"><span>what breaks &amp; why</span>Failure modes</a>
+    </ol>
+  </nav>
+
+  <!-- ============ 1. CORE IDEA ============ -->
+  <section id="core">
+    <span class="sec-no">01 — Core idea</span>
+    <h2>Move Git data between two remotes, without a local copy</h2>
+    <p>The normal way to mirror one Git remote into another is: <code class="inl">clone --mirror</code> to disk, then <code class="inl">push --mirror</code> back up. That works, but it turns a <em class="t">remote-to-remote</em> operation into a <strong>local storage and local bandwidth problem</strong> — every byte lands on your disk twice.</p>
+    <p>git-sync's one big bet is <strong>relay</strong>: fetch a packfile from the source and stream those exact bytes straight into the target's <code class="inl">receive-pack</code>, without decoding the object graph locally. The process holds <strong>at most one pack chunk at a time</strong> — never the whole repo.</p>
+
+    <figure>
+      <svg viewBox="0 0 520 240" role="img" aria-label="Clone-mirror versus relay comparison">
+        <defs>
+          <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#6b768e"/>
+          </marker>
+          <marker id="arg" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#3fd6a0"/>
+          </marker>
+        </defs>
+        <!-- top: old way -->
+        <text x="10" y="22" fill="#ff6b7a" font-family="monospace" font-size="12">clone --mirror + push --mirror</text>
+        <rect x="10" y="34" width="120" height="46" rx="9" fill="#161d2e" stroke="#26304a"/>
+        <text x="70" y="54" fill="#e7ecf5" font-size="12" text-anchor="middle">Source</text>
+        <text x="70" y="70" fill="#6b768e" font-size="10" text-anchor="middle">remote</text>
+        <rect x="200" y="34" width="120" height="46" rx="9" fill="#2a1820" stroke="#ff6b7a"/>
+        <text x="260" y="54" fill="#ff9aa6" font-size="12" text-anchor="middle">YOUR DISK</text>
+        <text x="260" y="70" fill="#ff6b7a" font-size="10" text-anchor="middle">full mirror clone</text>
+        <rect x="390" y="34" width="120" height="46" rx="9" fill="#161d2e" stroke="#26304a"/>
+        <text x="450" y="54" fill="#e7ecf5" font-size="12" text-anchor="middle">Target</text>
+        <text x="450" y="70" fill="#6b768e" font-size="10" text-anchor="middle">remote</text>
+        <line x1="132" y1="57" x2="196" y2="57" stroke="#6b768e" stroke-width="1.6" marker-end="url(#ar)"/>
+        <line x1="322" y1="57" x2="386" y2="57" stroke="#6b768e" stroke-width="1.6" marker-end="url(#ar)"/>
+
+        <!-- divider -->
+        <line x1="10" y1="110" x2="510" y2="110" stroke="#26304a" stroke-dasharray="3 4"/>
+
+        <!-- bottom: relay -->
+        <text x="10" y="140" fill="#3fd6a0" font-family="monospace" font-size="12">git-sync relay</text>
+        <rect x="10" y="152" width="120" height="46" rx="9" fill="#161d2e" stroke="#26304a"/>
+        <text x="70" y="172" fill="#e7ecf5" font-size="12" text-anchor="middle">Source</text>
+        <text x="70" y="188" fill="#6b768e" font-size="10" text-anchor="middle">upload-pack</text>
+        <rect x="205" y="156" width="110" height="38" rx="9" fill="#13241d" stroke="#3fd6a0"/>
+        <text x="260" y="174" fill="#7ef0c4" font-size="11" text-anchor="middle">git-sync</text>
+        <text x="260" y="188" fill="#3fd6a0" font-size="9" text-anchor="middle">1 chunk at a time</text>
+        <rect x="390" y="152" width="120" height="46" rx="9" fill="#161d2e" stroke="#26304a"/>
+        <text x="450" y="172" fill="#e7ecf5" font-size="12" text-anchor="middle">Target</text>
+        <text x="450" y="188" fill="#6b768e" font-size="10" text-anchor="middle">receive-pack</text>
+        <line x1="132" y1="175" x2="201" y2="175" stroke="#3fd6a0" stroke-width="1.8" marker-end="url(#arg)"/>
+        <line x1="317" y1="175" x2="386" y2="175" stroke="#3fd6a0" stroke-width="1.8" marker-end="url(#arg)"/>
+        <text x="260" y="224" fill="#6b768e" font-size="10" text-anchor="middle">pack bytes pass through — never decoded, never stored</text>
+      </svg>
+      <figcaption>same bytes, two very different storage stories</figcaption>
+    </figure>
+
+    <div class="note key">
+      <span class="lbl">The whole product in one line</span>
+      git-sync is the missing middle layer: <strong>provider-agnostic, remote-to-remote, automation-friendly</strong>, and explicit about what is safe to relay vs. what needs a fallback.
+    </div>
+
+    <h3>When it's the right tool</h3>
+    <ul class="clean">
+      <li><strong>Strong fit:</strong> migrations and repeat sync jobs where updates are mostly fast-forward, on disposable runners with no persistent repo storage.</li>
+      <li><strong>Weak fit:</strong> workflows that need arbitrary local Git reconciliation, history rewriting, or already keep warm local mirrors. A local-clone service is the more general model; git-sync is the lower-state, operationally cheaper one.</li>
+    </ul>
+  </section>
+
+  <!-- ============ 2. BASICS ============ -->
+  <section id="basics">
+    <span class="sec-no">02 — Basics</span>
+    <h2>Four things you need to picture</h2>
+    <p>Everything downstream is built from these. If you already know Git internals, skim — but the <em class="t">have/want</em> handshake is the load-bearing one.</p>
+
+    <h3><span class="em">1.</span> Refs are just named pointers</h3>
+    <p>A ref (<code class="inl">refs/heads/main</code>, <code class="inl">refs/tags/v1</code>) is a name pointing at a 40/64-char hash. Mirroring a repo is really just: <strong>make the target's ref pointers match the source's</strong>, and ship whatever objects the target is missing to back them.</p>
+
+    <h3><span class="em">2.</span> Objects travel in a packfile</h3>
+    <p>Commits, trees, blobs and tags are content-addressed objects. Git ships them in bulk as a <em class="t">packfile</em> — a compressed, delta-encoded stream that starts with a 12-byte header:</p>
+    <pre><code><span class="c-str">"PACK"</span>  <span class="c-key">uint32</span> version  <span class="c-key">uint32</span> object_count</code></pre>
+    <p>git-sync peeks at exactly those 12 bytes to <em class="t">estimate</em> a pack's size before committing to a multi-gigabyte transfer (more in §3).</p>
+
+    <h3><span class="em">3.</span> have / want is the negotiation</h3>
+    <p>To fetch incrementally, the client tells the source what it already has and what it wants:</p>
+    <pre><code><span class="c-flag">want</span> 9f2c…  <span class="c-cmt"># a source tip I need</span>
+<span class="c-flag">have</span> 41ab…  <span class="c-cmt"># a hash the TARGET already has</span>
+<span class="c-key">done</span></code></pre>
+    <div class="note">
+      <span class="lbl">The clever bit</span>
+      git-sync advertises the <strong>target's</strong> current tips as <code class="inl">have</code> lines to the <strong>source</strong>. The source then computes a pack containing only the objects the target lacks — so reruns download less the more history the two sides already share.
+    </div>
+
+    <h3><span class="em">4.</span> Two services per remote</h3>
+    <p>Smart HTTP exposes two RPC services. Discovery (a GET) lists refs &amp; capabilities; the RPC (a POST) carries the actual fetch or push body.</p>
+    <div class="tbl">
+      <div class="row" style="grid-template-columns:1.2fr 1fr"><div class="cell">service</div><div class="cell">role</div></div>
+      <div class="row" style="grid-template-columns:1.2fr 1fr"><div class="cell" style="font-family:var(--mono);font-size:13px;color:#7ef0c4">git-upload-pack</div><div class="cell" style="color:var(--muted);font-size:14px">SOURCE — list refs, serve objects (fetch)</div></div>
+      <div class="row" style="grid-template-columns:1.2fr 1fr"><div class="cell" style="font-family:var(--mono);font-size:13px;color:#ff9aa6">git-receive-pack</div><div class="cell" style="color:var(--muted);font-size:14px">TARGET — list refs, accept objects (push)</div></div>
+    </div>
+    <p>git-sync is <strong>smart-HTTP-only</strong> (plus SSH) — dumb HTTP can't do the capability discovery and have/want exchange that relay depends on.</p>
+  </section>
+
+  <!-- ============ 3. PATHS ============ -->
+  <section id="paths">
+    <span class="sec-no">03 — The decision</span>
+    <h2>How a single sync picks its path</h2>
+    <p>This is the heart of the engine. Every run plans every ref first — classifying each into <em class="t">create / update / delete / skip / block</em> — then chooses <strong>one of four transfer modes</strong>. Three of them are relay (cheap, streaming); the fourth materializes objects in memory and is deliberately bounded.</p>
+
+    <figure>
+      <svg viewBox="0 0 520 360" role="img" aria-label="git-sync transfer mode decision tree">
+        <defs><marker id="d" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L7,4 L0,8 Z" fill="#6b768e"/></marker></defs>
+        <!-- start -->
+        <rect x="170" y="8" width="180" height="38" rx="10" fill="#1b2438" stroke="#5e8bff"/>
+        <text x="260" y="32" fill="#cfe0ff" font-size="13" text-anchor="middle">plan all refs</text>
+
+        <!-- Q1 empty target -->
+        <line x1="260" y1="46" x2="260" y2="66" stroke="#6b768e" marker-end="url(#d)"/>
+        <rect x="150" y="66" width="220" height="34" rx="9" fill="#121826" stroke="#26304a"/>
+        <text x="260" y="87" fill="#9aa6be" font-size="12" text-anchor="middle">target empty for these refs?</text>
+
+        <!-- yes -> bootstrap -->
+        <line x1="150" y1="83" x2="70" y2="83" stroke="#3fd6a0"/>
+        <line x1="70" y1="83" x2="70" y2="110" stroke="#3fd6a0" marker-end="url(#d)"/>
+        <text x="108" y="79" fill="#3fd6a0" font-size="10">yes</text>
+        <rect x="8" y="110" width="124" height="46" rx="10" fill="#13241d" stroke="#3fd6a0"/>
+        <text x="70" y="130" fill="#7ef0c4" font-size="12" text-anchor="middle" font-weight="bold">BOOTSTRAP</text>
+        <text x="70" y="146" fill="#3fd6a0" font-size="9" text-anchor="middle">empty-target relay</text>
+
+        <!-- no down -->
+        <line x1="260" y1="100" x2="260" y2="120" stroke="#6b768e" marker-end="url(#d)"/>
+        <text x="272" y="115" fill="#6b768e" font-size="10">no</text>
+
+        <!-- Q2 all FF / create? -->
+        <rect x="150" y="120" width="220" height="34" rx="9" fill="#121826" stroke="#26304a"/>
+        <text x="260" y="135" fill="#9aa6be" font-size="11.5" text-anchor="middle">only fast-forwards, branch</text>
+        <text x="260" y="148" fill="#9aa6be" font-size="11.5" text-anchor="middle">creates, or new tags?</text>
+
+        <!-- yes -> incremental -->
+        <line x1="370" y1="137" x2="450" y2="137" stroke="#5e8bff"/>
+        <line x1="450" y1="137" x2="450" y2="164" stroke="#5e8bff" marker-end="url(#d)"/>
+        <text x="404" y="133" fill="#5e8bff" font-size="10">yes</text>
+        <rect x="388" y="164" width="124" height="46" rx="10" fill="#11203a" stroke="#5e8bff"/>
+        <text x="450" y="184" fill="#bcd4ff" font-size="11" text-anchor="middle" font-weight="bold">INCREMENTAL</text>
+        <text x="450" y="200" fill="#5e8bff" font-size="9" text-anchor="middle">narrow relay fast-path</text>
+
+        <!-- no down -->
+        <line x1="260" y1="154" x2="260" y2="178" stroke="#6b768e" marker-end="url(#d)"/>
+        <text x="272" y="170" fill="#6b768e" font-size="10">no</text>
+
+        <!-- Q3 replicate? -->
+        <rect x="150" y="178" width="220" height="34" rx="9" fill="#121826" stroke="#26304a"/>
+        <text x="260" y="199" fill="#9aa6be" font-size="12" text-anchor="middle">replicate mode + relay-able?</text>
+
+        <!-- yes replicate -->
+        <line x1="150" y1="195" x2="70" y2="195" stroke="#7c5cff"/>
+        <line x1="70" y1="195" x2="70" y2="222" stroke="#7c5cff" marker-end="url(#d)"/>
+        <text x="108" y="191" fill="#7c5cff" font-size="10">yes</text>
+        <rect x="8" y="222" width="124" height="46" rx="10" fill="#1a142e" stroke="#7c5cff"/>
+        <text x="70" y="242" fill="#cdbcff" font-size="12" text-anchor="middle" font-weight="bold">REPLICATE</text>
+        <text x="70" y="258" fill="#7c5cff" font-size="9" text-anchor="middle">overwrite relay, no fallback</text>
+
+        <!-- no -> materialized -->
+        <line x1="260" y1="212" x2="260" y2="244" stroke="#6b768e" marker-end="url(#d)"/>
+        <text x="272" y="232" fill="#6b768e" font-size="10">no</text>
+        <rect x="170" y="244" width="180" height="50" rx="10" fill="#2a2113" stroke="#f5b860"/>
+        <text x="260" y="266" fill="#ffd99a" font-size="12" text-anchor="middle" font-weight="bold">MATERIALIZED FALLBACK</text>
+        <text x="260" y="282" fill="#f5b860" font-size="9.5" text-anchor="middle">decode + repack in memory, bounded</text>
+
+        <text x="260" y="324" fill="#6b768e" font-size="10" text-anchor="middle">force · prune · deletes · tag-retargets · no-thin target → fallback</text>
+        <text x="260" y="342" fill="#62708c" font-size="9.5" text-anchor="middle">blocked (non-FF without --force) refs make the run exit non-zero before any push</text>
+      </svg>
+      <figcaption>plan → classify → choose exactly one transfer mode</figcaption>
+    </figure>
+
+    <div class="paths">
+      <div class="path b1">
+        <div class="ttl">Bootstrap <span class="badge">relay · empty target</span></div>
+        <p>Target has none of these refs yet. Stream the source pack straight in. <code class="inl">sync</code> does this automatically — same command seeds <em>and</em> maintains. The source HEAD's branch is pushed first so the mirror's default branch matches.</p>
+        <div class="mem">memory: streaming · one chunk at a time</div>
+      </div>
+      <div class="path b2">
+        <div class="ttl">Incremental relay <span class="badge">relay · fast-forward</span></div>
+        <p>Every ref is a clean fast-forward branch update, a branch create, or a brand-new tag. The narrow fast path — relays the source pack with target tips as <code class="inl">have</code>. Never decodes objects locally.</p>
+        <div class="mem">memory: streaming</div>
+      </div>
+      <div class="path b3">
+        <div class="ttl">Replicate <span class="badge">relay · overwrite</span></div>
+        <p>Source-authoritative: target refs are made to match source unconditionally (create/update, even divergent). Relay-only — if it can't relay, it <strong>fails and tells you to use <code class="inl">sync</code></strong> rather than silently materializing.</p>
+        <div class="mem">memory: streaming · tolerates no-thin targets</div>
+      </div>
+      <div class="path b4">
+        <div class="ttl">Materialized fallback <span class="badge">in-memory · bounded</span></div>
+        <p>Anything relay can't safely do — force pushes, prune, deletes, tag retargets, or a <code class="inl">no-thin</code> target under <code class="inl">sync</code>. Decodes the needed objects into an in-memory go-git store, computes closure, and re-encodes a pack. Guarded by <code class="inl">--materialized-max-objects</code>.</p>
+        <div class="mem">memory: scales with objects to send — the risky path</div>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <span class="lbl">Memory model — the real predictor</span>
+      "Repo size" alone tells you nothing. For the fallback, what matters is: <strong>how many objects must be sent, how big the missing blobs are, and how much the target already overlaps.</strong> A small branch delta on top of an existing tip is cheap; a broad fallback with no shared history can approach the whole pushed object set in RAM.
+    </div>
+
+    <h3>The lazy-fetch optimization</h3>
+    <p>git-sync won't download the source closure unless planning actually needs it. Pure skip/create plans that take incremental relay skip the upfront fetch entirely — relay does its own fetch on the source. The closure is pulled only for ancestry checks (FF detection on a divergent branch) or when the materialized fallback ends up running:</p>
+    <pre><code><span class="c-cmt">// internal/syncer/syncer.go</span>
+<span class="c-key">func</span> <span class="c-fn">needsLocalSourceClosure</span>(cfg, desired, targetRefs) <span class="c-key">bool</span> {
+    <span class="c-key">if</span> cfg.<span class="c-fn">ForceAny</span>() || cfg.Prune {
+        <span class="c-key">return</span> <span class="c-num">true</span>   <span class="c-cmt">// fallback will run; it needs the closure</span>
+    }
+    <span class="c-key">for</span> targetRef, want := <span class="c-key">range</span> desired {
+        targetHash := targetRefs[targetRef]
+        <span class="c-key">if</span> targetHash.<span class="c-fn">IsZero</span>() { <span class="c-key">continue</span> }  <span class="c-cmt">// create</span>
+        <span class="c-key">if</span> targetHash == want.SourceHash { <span class="c-key">continue</span> } <span class="c-cmt">// skip</span>
+        <span class="c-key">return</span> <span class="c-num">true</span>   <span class="c-cmt">// divergent → need ancestry data</span>
+    }
+    <span class="c-key">return</span> <span class="c-num">false</span>  <span class="c-cmt">// all skip/create → relay handles it, no fetch</span>
+}</code></pre>
+  </section>
+
+  <!-- ============ 4. PROTOCOL ============ -->
+  <section id="protocol">
+    <span class="sec-no">04 — On the wire</span>
+    <h2>What relay actually looks like</h2>
+    <p>Going deep now. Every smart-HTTP body is a sequence of <em class="t">pkt-lines</em>: a 4-byte hex length prefix then payload. Three lengths carry no payload and act as control markers.</p>
+    <div class="tbl k">
+      <div class="row"><div class="cell" style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px"><span>marker</span><span>hex</span><span>meaning</span></div></div>
+      <div class="row"><div class="cell" style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px;font-size:14px"><span style="font-family:var(--mono);color:var(--accent)">flush</span><span style="font-family:var(--mono);color:var(--muted)">0000</span><span style="color:var(--muted)">end of section / stream</span></div></div>
+      <div class="row"><div class="cell" style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px;font-size:14px"><span style="font-family:var(--mono);color:var(--accent)">delim</span><span style="font-family:var(--mono);color:var(--muted)">0001</span><span style="color:var(--muted)">section delimiter (v2)</span></div></div>
+      <div class="row"><div class="cell" style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px;font-size:14px"><span style="font-family:var(--mono);color:var(--accent)">end</span><span style="font-family:var(--mono);color:var(--muted)">0002</span><span style="color:var(--muted)">end of v2 response</span></div></div>
+    </div>
+
+    <h3>Sideband: three channels in one stream</h3>
+    <p>When the server offers <code class="inl">side-band-64k</code>, the response is multiplexed. The first byte of each payload selects the channel:</p>
+    <ul class="clean">
+      <li><code class="inl">0x01</code> — <strong>pack data</strong> (the bytes we relay)</li>
+      <li><code class="inl">0x02</code> — progress text → stderr (or discarded)</li>
+      <li><code class="inl">0x03</code> — fatal error → fail the run</li>
+    </ul>
+
+    <h3>The relay frame swap</h3>
+    <p>This is the conceptual move. The source's pack chunks arrive one-per-pkt-line on channel <code class="inl">0x01</code>. git-sync strips the pkt-line + sideband envelope and concatenates the <strong>raw pack bytes</strong> into the target's push body, right after the command list and a flush. Byte-for-byte, the source-produced pack shows up on the target's wire — never re-encoded.</p>
+
+    <figure>
+      <svg viewBox="0 0 520 250" role="img" aria-label="Relay framing: source stream unwrapped into target push body">
+        <defs><marker id="r1" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#3fd6a0"/></marker></defs>
+        <text x="14" y="20" fill="#9aa6be" font-family="monospace" font-size="11">SOURCE upload-pack response</text>
+        <text x="320" y="20" fill="#9aa6be" font-family="monospace" font-size="11">TARGET receive-pack body</text>
+
+        <!-- source frames -->
+        <rect x="14" y="32" width="200" height="22" rx="5" fill="#161d2e" stroke="#26304a"/><text x="22" y="47" fill="#62708c" font-family="monospace" font-size="10">pkt NAK / v2 sections</text>
+        <rect x="14" y="58" width="200" height="22" rx="5" fill="#161d2e" stroke="#26304a"/><text x="22" y="73" fill="#f5b860" font-family="monospace" font-size="10">0x02 progress → stderr</text>
+        <rect x="14" y="84" width="200" height="22" rx="5" fill="#13241d" stroke="#3fd6a0"/><text x="22" y="99" fill="#7ef0c4" font-family="monospace" font-size="10">0x01 [pack chunk]</text>
+        <rect x="14" y="110" width="200" height="22" rx="5" fill="#13241d" stroke="#3fd6a0"/><text x="22" y="125" fill="#7ef0c4" font-family="monospace" font-size="10">0x01 [pack chunk]</text>
+        <rect x="14" y="136" width="200" height="22" rx="5" fill="#13241d" stroke="#3fd6a0"/><text x="22" y="151" fill="#7ef0c4" font-family="monospace" font-size="10">0x01 [pack chunk]</text>
+        <rect x="14" y="162" width="200" height="22" rx="5" fill="#161d2e" stroke="#26304a"/><text x="22" y="177" fill="#62708c" font-family="monospace" font-size="10">flush 0000</text>
+
+        <!-- target frames -->
+        <rect x="320" y="32" width="186" height="22" rx="5" fill="#161d2e" stroke="#26304a"/><text x="328" y="47" fill="#9aa6be" font-family="monospace" font-size="10">pkt command list</text>
+        <rect x="320" y="58" width="186" height="22" rx="5" fill="#161d2e" stroke="#26304a"/><text x="328" y="73" fill="#62708c" font-family="monospace" font-size="10">flush 0000</text>
+        <rect x="320" y="84" width="186" height="22" rx="5" fill="#13241d" stroke="#3fd6a0"/><text x="328" y="99" fill="#7ef0c4" font-family="monospace" font-size="10">raw pack bytes</text>
+        <rect x="320" y="110" width="186" height="22" rx="5" fill="#13241d" stroke="#3fd6a0"/><text x="328" y="125" fill="#7ef0c4" font-family="monospace" font-size="10">raw pack bytes</text>
+        <rect x="320" y="136" width="186" height="22" rx="5" fill="#13241d" stroke="#3fd6a0"/><text x="328" y="151" fill="#7ef0c4" font-family="monospace" font-size="10">raw pack bytes</text>
+
+        <!-- arrows -->
+        <path d="M216 95 C 270 95, 266 95, 318 95" fill="none" stroke="#3fd6a0" stroke-width="1.6" marker-end="url(#r1)"/>
+        <path d="M216 121 C 270 121, 266 121, 318 121" fill="none" stroke="#3fd6a0" stroke-width="1.6" marker-end="url(#r1)"/>
+        <path d="M216 147 C 270 147, 266 147, 318 147" fill="none" stroke="#3fd6a0" stroke-width="1.6" marker-end="url(#r1)"/>
+        <text x="260" y="214" fill="#6b768e" font-family="monospace" font-size="10" text-anchor="middle">strip envelope · concat raw pack · no decode</text>
+      </svg>
+      <figcaption>the pack is forwarded, not rebuilt</figcaption>
+    </figure>
+
+    <h3>Why <code class="inl">no-thin</code> matters</h3>
+    <p>A <em class="t">thin pack</em> contains deltas whose base objects live outside the pack — smaller on the wire, but the receiver must resolve them against its existing DB. git-sync <strong>never requests <code class="inl">thin-pack</code></strong> on the source, so every relayed pack is self-contained. That's why relay is safe against any target. The paths still differ on policy:</p>
+    <ul class="clean">
+      <li><strong>Replicate</strong> proceeds on <code class="inl">no-thin</code> targets — the pack is self-contained, so it's safe.</li>
+      <li><strong>Incremental relay</strong> (inside sync) is conservative: it skips <code class="inl">no-thin</code> and falls back to materialized. A safety margin, not a hard requirement.</li>
+      <li><strong>Bootstrap</strong> ignores <code class="inl">no-thin</code> entirely — empty target, always fine.</li>
+    </ul>
+
+    <h3>Pre-flight pack sizing (batched bootstrap)</h3>
+    <p>For huge initial migrations, git-sync reads just the 12-byte PACK header, multiplies <code class="inl">object_count</code> by a per-object estimate, and if the projected pack exceeds <code class="inl">--target-max-pack-bytes</code>, it <strong>aborts the fetch and inserts a checkpoint</strong> — wasting 12 bytes instead of gigabytes. Body-too-large rejections after the fact insert a midpoint and retry. Both converge in O(log n) splits.</p>
+
+    <h3>Protocol v2, where it helps</h3>
+    <p>Source-side discovery and fetch use v2 when available; push always stays on v1 <code class="inl">receive-pack</code>. <code class="inl">--protocol auto</code> tries v2 then falls back; <code class="inl">v2</code> requires it; <code class="inl">v1</code> skips the attempt. v2 buys cheaper ref listing (<code class="inl">ls-refs</code> with prefixes) and <code class="inl">filter=tree:0</code> commit-graph-only fetches that batched-bootstrap planning relies on.</p>
+  </section>
+
+  <!-- ============ 5. COMMANDS ============ -->
+  <section id="commands">
+    <span class="sec-no">05 — Commands</span>
+    <h2>The surface you actually type</h2>
+    <div class="twocol">
+      <div class="mini"><div class="t">sync</div><p>Mirror source → target. Auto-bootstraps empty targets, fast-forward by default. The everyday command.</p></div>
+      <div class="mini"><div class="t">replicate</div><p>Source-authoritative overwrite via relay. Fails rather than materialize locally.</p></div>
+      <div class="mini"><div class="t">plan</div><p>Dry run. Same flags as sync; <code class="inl">--mode replicate</code> previews a replicate.</p></div>
+      <div class="mini"><div class="t">probe / fetch / bootstrap</div><p>Lower-level inspection &amp; seeding. Available via <code class="inl">--help</code> / the unstable library.</p></div>
+    </div>
+
+    <h3>The quick start</h3>
+    <pre><code>git-sync sync \
+  <span class="c-flag">--source-token</span> <span class="c-str">"$GITSYNC_SOURCE_TOKEN"</span> \
+  <span class="c-flag">--target-token</span> <span class="c-str">"$GITSYNC_TARGET_TOKEN"</span> \
+  https://github.com/src-org/repo.git \
+  https://github.com/dst-org/repo.git</code></pre>
+
+    <h3>Common shapes</h3>
+    <pre><code><span class="c-cmt"># specific branches, with a rename</span>
+git-sync sync <span class="c-flag">--branch</span> main,release <span class="c-flag">--map</span> main:stable SRC DST
+
+<span class="c-cmt"># tags + prune refs that vanished from source</span>
+git-sync sync <span class="c-flag">--tags</span> <span class="c-flag">--prune</span> SRC DST
+
+<span class="c-cmt"># everything, minus noisy PR refs</span>
+git-sync sync <span class="c-flag">--all-refs</span> <span class="c-flag">--exclude-ref-prefix</span> refs/pull/ SRC DST
+
+<span class="c-cmt"># overwrite, fail loudly if relay impossible</span>
+git-sync replicate <span class="c-flag">--stats</span> SRC DST</code></pre>
+
+    <div class="note">
+      <span class="lbl">Force, the modern way</span>
+      The old <code class="inl">--force</code> is gone. Use <strong><code class="inl">--force-with-lease</code></strong> (allow non-FF, but reject if the target moved during the run — a per-run lease, no state between runs) or <strong><code class="inl">--force-blind</code></strong> (overwrite unconditionally, like <code class="inl">git push --force</code>). Mutually exclusive. <code class="inl">replicate</code> and <code class="inl">bootstrap</code> take neither.
+    </div>
+
+    <h3>Auth resolution order</h3>
+    <ul class="clean">
+      <li>explicit flags (<code class="inl">--source-token</code>, <code class="inl">--source-bearer-token</code>…)</li>
+      <li><code class="inl">GITSYNC_*</code> env vars</li>
+      <li><code class="inl">git credential fill</code> helper (http/https only; deferred until a 401)</li>
+      <li>anonymous</li>
+    </ul>
+    <p>For GitHub-style hosts, basic auth with the token as the <em>password</em> (<code class="inl">username=git</code>). Bearer tokens supported via <code class="inl">*_BEARER_TOKEN</code>.</p>
+  </section>
+
+  <!-- ============ 6. SRE ============ -->
+  <section id="sre">
+    <span class="sec-no">06 — git-sync for SRE</span>
+    <h2>Operating it in anger</h2>
+    <p>git-sync is built for disposable runners and automation. The operational story rests on three pillars: <strong>plan before you push, read the typed output, and tune the guardrails per target.</strong></p>
+
+    <h3>1 — Plan first, always</h3>
+    <p><code class="inl">plan</code> takes the same flags as the real run and shows the exact per-ref actions plus which relay mode would fire — without touching the target. Wire it into CI as a gate. If <code class="inl">sync</code> finds <em class="t">blocked</em> refs (non-FF without a force flag), it exits non-zero <strong>before pushing anything</strong>, so a partial mirror is never the failure mode.</p>
+
+    <h3>2 — Consume the JSON, not the text</h3>
+    <p>Add <code class="inl">--json</code> to anything. The interface is stable (camelCase, hashes as strings). Key fields to alert on:</p>
+    <pre><code>{
+  <span class="c-str">"pushed"</span>: <span class="c-num">12</span>, <span class="c-str">"skipped"</span>: <span class="c-num">40</span>, <span class="c-str">"blocked"</span>: <span class="c-num">0</span>,
+  <span class="c-str">"deleted"</span>: <span class="c-num">1</span>,  <span class="c-str">"warned"</span>: <span class="c-num">0</span>,
+  <span class="c-str">"relay"</span>: <span class="c-num">true</span>, <span class="c-str">"relayMode"</span>: <span class="c-str">"incremental"</span>,
+  <span class="c-str">"relayReason"</span>: <span class="c-str">"fast-forward-branch-or-tag-create"</span>,
+  <span class="c-str">"batching"</span>: <span class="c-num">false</span>, <span class="c-str">"batchCount"</span>: <span class="c-num">0</span>,
+  <span class="c-str">"protocol"</span>: <span class="c-str">"v2"</span>,
+  <span class="c-str">"execution"</span>: { <span class="c-str">"sourceHead"</span>: <span class="c-str">"refs/heads/main"</span> }
+}</code></pre>
+    <ul class="clean">
+      <li><strong><code class="inl">blocked &gt; 0</code></strong> → run failed; a ref needs <code class="inl">--force-with-lease</code> or human eyes.</li>
+      <li><strong><code class="inl">relay:false</code></strong> on a job you expected to be cheap → you fell into the materialized fallback. Investigate <em>why</em> via <code class="inl">relayReason</code> (e.g. <code class="inl">incremental-disabled-by-force-prune-or-dry-run</code>, <code class="inl">no-thin</code>).</li>
+      <li><strong><code class="inl">warned &gt; 0</code></strong> → best-effort run had per-ref rejections (e.g. GitHub refusing <code class="inl">refs/pull/*</code>). Expected with <code class="inl">--all-refs</code>; surprising otherwise.</li>
+    </ul>
+
+    <h3>3 — Measure memory &amp; throughput</h3>
+    <p><code class="inl">--measure-memory</code> samples elapsed time and Go heap; <code class="inl">--stats</code> adds per-service request/byte/want/have/command counters and a throughput line. Use these to set <code class="inl">--materialized-max-objects</code> from real data instead of guessing.</p>
+    <pre><code>measurement: elapsed-ms=<span class="c-num">8421</span> peak-heap-inuse-bytes=<span class="c-num">214958080</span> gc-count=<span class="c-num">11</span>
+stats: git-upload-pack fetch requests=<span class="c-num">1</span> response-bytes=<span class="c-num">98231140</span> wants=<span class="c-num">7</span></code></pre>
+    <div class="note">
+      <span class="lbl">Bounded by design</span>
+      <code class="inl">info/refs</code> responses are capped at 64 MiB and buffered RPC responses at 128 MiB — the streaming relay body bypasses these caps because it reads pack chunks incrementally. The local process is protected even against a hostile or broken remote.
+    </div>
+
+    <h3>4 — Huge first migrations: batch it</h3>
+    <p>When the target enforces a request-body limit, set <code class="inl">--target-max-pack-bytes</code>. git-sync plans the bootstrap as a chain of checkpoints, each sub-pack sized to fit, and auto-subdivides on the fly. Two orderings:</p>
+    <div class="twocol">
+      <div class="mini"><div class="t">first-parent (default)</div><p>Walks only the trunk backbone. Cheapest enumeration; fine for most repos.</p></div>
+      <div class="mini"><div class="t">topo</div><p>Every reachable commit is a candidate checkpoint. For merge-heavy repos where one first-parent step drags in a huge side branch that can't be subdivided.</p></div>
+    </div>
+    <div class="note warn">
+      <span class="lbl">topo's hidden requirement</span>
+      Under <code class="inl">topo</code>, the internal <code class="inl">refs/gitsync/bootstrap/*</code> temp ref may take non-fast-forward updates between checkpoints. Targets that enforce <code class="inl">receive.denyNonFastforwards</code> across <em>all</em> refs (not just <code class="inl">refs/heads</code>) will reject them. Major hosts (GitHub, GitLab, Bitbucket, Cloudflare) don't, by default. User-visible refs still get a single FF update at cutover.
+    </div>
+
+    <h3>5 — Default branch &amp; ordering</h3>
+    <p>Bootstrap pushes the source HEAD's branch <strong>first</strong>, so hosts that infer the default from the first push (GitHub, GitLab) get the right default branch automatically. Git's wire protocol can't set a remote symref, so for raw bare repos you set HEAD out of band: <code class="inl">git init --bare --initial-branch=…</code> beforehand, or the host API afterward (<code class="inl">PATCH /repos/{o}/{r}</code> with <code class="inl">default_branch</code>).</p>
+
+    <h3>6 — Provider quirks worth pre-configuring</h3>
+    <ul class="clean">
+      <li><strong>Ref-update batch size:</strong> <code class="inl">--target-max-ref-updates</code> caps commands per push (default 5000). Raise for entire-server targets (≤25000); lower for providers that reject large ref pushes.</li>
+      <li><strong>Regional redirects:</strong> some hosts 307 <code class="inl">/info/refs</code> to a replica. Set <code class="inl">--source/--target-follow-info-refs-redirect</code> so RPC POSTs follow to the redirected host (avoids sticky-session 404s).</li>
+      <li><strong>SSH:</strong> shells out to your <code class="inl">ssh</code> binary with <code class="inl">BatchMode=yes</code> — uses <code class="inl">~/.ssh/config</code>, no prompts. Pre-seed <code class="inl">known_hosts</code> or set <code class="inl">StrictHostKeyChecking=accept-new</code>. Throughput stats are not yet byte-counted over SSH.</li>
+    </ul>
+
+    <h3>A safe production loop</h3>
+    <pre><code><span class="c-cmt"># 1. gate on a dry run</span>
+git-sync plan <span class="c-flag">--json</span> SRC DST | jq <span class="c-str">'.blocked'</span>   <span class="c-cmt"># must be 0</span>
+
+<span class="c-cmt"># 2. real run, bounded + observable, fail closed</span>
+git-sync sync <span class="c-flag">--json</span> <span class="c-flag">--stats</span> <span class="c-flag">--measure-memory</span> \
+  <span class="c-flag">--materialized-max-objects</span> <span class="c-num">500000</span> \
+  <span class="c-flag">--target-max-pack-bytes</span> <span class="c-num">536870912</span> \
+  SRC DST > result.json || alert <span class="c-str">"sync failed"</span>
+
+<span class="c-cmt"># 3. assert the path you expected</span>
+jq <span class="c-str">'select(.relay==false) | "fell back to materialized!"'</span> result.json</code></pre>
+  </section>
+
+  <!-- ============ 7. KNOBS ============ -->
+  <section id="knobs">
+    <span class="sec-no">07 — The knobs</span>
+    <h2>Every flag that changes behavior</h2>
+
+    <h3>Scope — what gets mirrored</h3>
+    <div class="tbl">
+      <div class="kv"><div class="flag">--branch a,b,c</div><div class="desc">comma list; default is all source branches</div></div>
+      <div class="kv"><div class="flag">--map src:dst</div><div class="desc">rename a ref; short names map branches, full refs map exactly. Repeatable. Not subject to <code class="inl">--exclude-ref-prefix</code>.</div></div>
+      <div class="kv"><div class="flag">--tags</div><div class="desc">mirror tags (immutable by default — retarget needs a force flag)</div></div>
+      <div class="kv"><div class="flag">--all-refs</div><div class="desc">every <code class="inl">refs/*</code> namespace (notes, pulls, custom). On sync/plan, also enables <b>best-effort</b>: per-ref target rejections become warnings, not failures. On replicate, strict.</div></div>
+      <div class="kv"><div class="flag">--exclude-ref-prefix P</div><div class="desc">repeatable; drop refs under a prefix from discovery <i>and</i> prune scope. Classic: <code class="inl">refs/pull/</code>.</div></div>
+      <div class="kv"><div class="flag">--prune</div><div class="desc">delete managed target refs that vanished from source (needs target <code class="inl">delete-refs</code>)</div></div>
+    </div>
+
+    <h3>Safety — non-fast-forward</h3>
+    <div class="tbl">
+      <div class="kv"><div class="flag">--force-with-lease</div><div class="desc">allow non-FF + tag retarget; reject if target moved during the run (per-run lease)</div></div>
+      <div class="kv"><div class="flag">--force-blind</div><div class="desc">allow non-FF + retarget; overwrite regardless of current tip</div></div>
+    </div>
+
+    <h3>Guardrails — bounding the work</h3>
+    <div class="tbl">
+      <div class="kv"><div class="flag">--materialized-max-objects N</div><div class="desc"><b>the key safety rail.</b> Abort a non-relay materialized sync above N objects. Coarse, not a precise heap model — a backstop against the unbounded fallback.</div></div>
+      <div class="kv"><div class="flag">--target-max-pack-bytes N</div><div class="desc">target receive-pack body limit; batches are planned &amp; auto-subdivided to fit</div></div>
+      <div class="kv"><div class="flag">--max-pack-bytes N</div><div class="desc">abort a bootstrap-relay push if the streamed source pack exceeds N bytes</div></div>
+      <div class="kv"><div class="flag">--target-max-ref-updates N</div><div class="desc">max ref-update commands per push (0 = default 5000; env <code class="inl">GITSYNC_MAX_REF_UPDATES_PER_PUSH</code>)</div></div>
+      <div class="kv"><div class="flag">--bootstrap-strategy</div><div class="desc"><code class="inl">first-parent</code> (default) or <code class="inl">topo</code> checkpoint chain ordering</div></div>
+    </div>
+
+    <h3>Transport &amp; visibility</h3>
+    <div class="tbl">
+      <div class="kv"><div class="flag">--protocol auto|v1|v2</div><div class="desc">source-side protocol; push is always v1. Default <code class="inl">auto</code>.</div></div>
+      <div class="kv"><div class="flag">--json</div><div class="desc">stable machine-readable output</div></div>
+      <div class="kv"><div class="flag">--stats</div><div class="desc">per-service request/byte/want/have/command counters + throughput</div></div>
+      <div class="kv"><div class="flag">--measure-memory</div><div class="desc">elapsed time + Go heap sampling</div></div>
+      <div class="kv"><div class="flag">--progress / -v</div><div class="desc">live per-side throughput (TTY only) / verbose logging</div></div>
+      <div class="kv"><div class="flag">--*-follow-info-refs-redirect</div><div class="desc">send follow-up RPCs to the final redirect host (per side)</div></div>
+      <div class="kv"><div class="flag">--*-insecure-skip-tls-verify</div><div class="desc">self-signed local targets only — never the public internet</div></div>
+    </div>
+  </section>
+
+  <!-- ============ 8. FAILURES ============ -->
+  <section id="failures">
+    <span class="sec-no">08 — Failure modes</span>
+    <h2>What breaks, why, and the fix</h2>
+
+    <div class="fail">
+      <div class="sym">Blocked: target not fast-forwardable</div>
+      <p class="why">A branch diverged; the target tip isn't an ancestor of the source tip. Sync exits non-zero <em>before any push</em>.</p>
+      <p class="fix">Decide intent: <code class="inl">--force-with-lease</code> (safe overwrite) or <code class="inl">--force-blind</code> (unconditional). Or fix the divergence upstream.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Lease failure — target moved during sync</div>
+      <p class="why">Under <code class="inl">--force-with-lease</code>, another writer moved the target between session start and push. receive-pack rejects "does not match expected old value." Fatal even under best-effort.</p>
+      <p class="fix">Rerun (re-captures the lease), or <code class="inl">--force-blind</code> if you truly mean to clobber.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Target rejected push — body too large</div>
+      <p class="why">A relayed/batched pack exceeded the target's request-body limit.</p>
+      <p class="fix">Lower <code class="inl">--target-max-pack-bytes</code> (batched bootstrap auto-subdivides), or use a target with a higher limit.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Fell into materialized fallback unexpectedly</div>
+      <p class="why">Something made relay ineligible: a force/prune flag, a delete, a tag retarget, or a <code class="inl">no-thin</code> target under sync. Memory + time spike.</p>
+      <p class="fix">Check <code class="inl">relayReason</code> in JSON. If it's <code class="inl">no-thin</code> and an overwrite is acceptable, <code class="inl">replicate</code> relays it instead.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">replicate: requires relay-capable target</div>
+      <p class="why">Replicate is relay-only by contract and refuses to materialize.</p>
+      <p class="fix">Rerun with <code class="inl">sync</code> (accepts the materialized fallback), or fix the target capability gap.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Materialized abort — too many objects</div>
+      <p class="why">The fallback would exceed <code class="inl">--materialized-max-objects</code>. The guardrail did its job.</p>
+      <p class="fix">If legitimate, raise the limit after checking <code class="inl">--measure-memory</code> headroom; otherwise reshape the run (narrower scope, bootstrap the missing history first).</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">v2 negotiation failed</div>
+      <p class="why"><code class="inl">--protocol v2</code> was forced but the source returned v1 (old server, or a proxy stripping the <code class="inl">Git-Protocol</code> header).</p>
+      <p class="fix">Use <code class="inl">--protocol auto</code> to fall back gracefully.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Redirect chain mismatch (307 → 404)</div>
+      <p class="why">The discovery GET redirected to host X, but an RPC POST hit a different redirect or expected sticky sessions.</p>
+      <p class="fix">Set <code class="inl">--*-follow-info-refs-redirect</code> so RPCs target the post-redirect host directly.</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Auth 401 vs 403</div>
+      <p class="why"><b>401</b> = missing/wrong credentials (will retry via credential helper if configured). <b>403</b> = credentials accepted but lack permission for the action.</p>
+      <p class="fix">401 → fix the token/env/helper. 403 → grant the token write scope on the target (or read on a private source).</p>
+    </div>
+
+    <div class="fail">
+      <div class="sym">Source hidden-ref fetch refused (Gerrit refs/changes/*)</div>
+      <p class="why">Best-effort only covers <em>target-side</em> receive-pack. If the <em>source</em> advertises a hidden ref but won't serve a <code class="inl">want</code> for it, the fetch errors out — no per-ref warn.</p>
+      <p class="fix">Scope it out with <code class="inl">--exclude-ref-prefix</code> (e.g. <code class="inl">refs/changes/</code>).</p>
+    </div>
+
+    <div class="note key">
+      <span class="lbl">The mental model for triage</span>
+      Pack-level transport &amp; unpack failures, and source <code class="inl">upload-pack</code> failures, are always <strong>fatal</strong>. Only <em>target-side</em> per-ref rejections can be downgraded to warnings — and only under best-effort (which <code class="inl">--all-refs</code> on sync turns on). Replicate never downgrades: its contract is "target == source."
+    </div>
+  </section>
+
+  <footer>
+    git-sync · visual field guide · self-contained, offline-readable<br>
+    sources: docs/architecture.md · docs/protocol.md · docs/usage.md · internal/syncer · internal/planner
+    <br><a class="top" href="#top">↑ back to top</a>
+  </footer>
+
+</div>
+</body>
+</html>
