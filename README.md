@@ -92,6 +92,7 @@ Extended and environment-specific test instructions are in [docs/testing.md](doc
 
 ## Documentation
 
+- [docs/git-sync-visual-guide.html](docs/git-sync-visual-guide.html) — self-contained, mobile-friendly visual guide: core idea, transfer-mode decision, relay framing, SRE/operations, knobs, and failure modes
 - [docs/usage.md](docs/usage.md) — CLI commands, examples, sync behavior, JSON output, auth, protocol notes
 - [docs/architecture.md](docs/architecture.md) — product rationale, package layout, operation modes vs transfer modes, memory model
 - [docs/protocol.md](docs/protocol.md) — smart HTTP, pkt-line, capability negotiation, sideband, relay framing
