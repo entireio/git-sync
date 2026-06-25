@@ -1,0 +1,37 @@
+{
+  "id": "trail-confidence",
+  "display_name": "Confidence Eval",
+  "enabled": true,
+  "scope": "trail",
+  "runtime": {
+    "kind": "prompt_runner",
+    "agent": "claude",
+    "timeout_ms": 300000,
+    "sandbox": {
+      "base_template": "claude",
+      "repo_token": "read"
+    }
+  },
+  "automation": {
+    "kind": "trail_prompt"
+  },
+  "prompt": {
+    "template": "You are a confidence evaluator for the git-sync project — a Go tool that mirrors Git refs between remotes using an in-memory go-git object store and smart HTTP (info/refs, upload-pack, receive-pack).\n\nRun `git diff origin/{{base_branch}}...HEAD` to see the changes, then score **confidence** from 0 to 100 (higher = more confident the changes are correct and well-tested).\n\nConsider:\n\n**Test coverage**\n- Are new code paths covered by unit or integration tests? Integration tests (internal/syncer/integration_test.go, internal/gitproto/*_test.go) are especially valuable for protocol paths.\n- Do tests exercise error/timeout cases, not just the happy path?\n\n**Correctness signals**\n- Errors returned explicitly and propagated rather than silently dropped\n- Resources (sessions, HTTP connections, pack readers) closed on all exit paths\n- No obvious nil-pointer risks in new error-handling branches\n\n**Change scope and focus**\n- Is the diff narrow and purposeful, or does it touch many unrelated files?\n- Do changed hot files (syncer.go, gitproto/push.go, planner.go, bootstrap.go) have matching test changes?\n\n**Protocol edge cases accounted for**\n- Pack-less fetch responses, CAS race conditions, receive-pack batching limits, and HTTP redirect behavior are tricky — are the relevant cases addressed or explicitly avoided?\n\nScore bands:\n- 80–100: All changed paths have tests; error handling is explicit; change is narrow and focused\n- 60–79: Most paths tested; minor gaps in edge-case coverage\n- 40–59: Some tests present but protocol or planner paths lack coverage\n- 20–39: Logic changes with minimal or no tests\n- 0–19: Untested changes to core protocol, planner, or auth handling\n\nOutput ONLY this JSON object as the very last line of your response:\n\n{\"value\": <number 0-100>, \"rationale\": \"<1-2 sentence explanation>\"}"
+  },
+  "select": {
+    "trigger_types": [
+      "api",
+      "push"
+    ]
+  },
+  "output": {
+    "adapter": "last_json_line",
+    "result_type": "trail_monitor",
+    "trail_monitor": {
+      "key": "confidence",
+      "label": "Confidence",
+      "value_type": "percent",
+      "polarity": "higher_is_better"
+    }
+  }
+}

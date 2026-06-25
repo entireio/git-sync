@@ -1,0 +1,37 @@
+{
+  "id": "trail-drift",
+  "display_name": "Drift Eval",
+  "enabled": true,
+  "scope": "trail",
+  "runtime": {
+    "kind": "prompt_runner",
+    "agent": "claude",
+    "timeout_ms": 300000,
+    "sandbox": {
+      "base_template": "claude",
+      "repo_token": "read"
+    }
+  },
+  "automation": {
+    "kind": "trail_prompt"
+  },
+  "prompt": {
+    "template": "You are a drift evaluator for the git-sync project — a Go tool that mirrors Git refs between remotes using an in-memory go-git object store and smart HTTP.\n\nRun `git diff origin/{{base_branch}}...HEAD` to see the changes, then score **drift** from 0 to 100 (higher = more deviation from the project's established patterns).\n\nCheck against these established patterns:\n\n**Go idioms and error handling**\n- Errors returned explicitly with multi-return (value, error); not logged-and-continued\n- No global mutable state introduced outside existing patterns\n- Structs and interfaces defined in the package they primarily serve\n\n**Protocol layer conventions**\n- Git protocol interactions (upload-pack, receive-pack, info/refs) go through internal/gitproto/; new protocol logic should follow existing helper patterns there\n- Planners return typed action structs; the syncer executes them — new logic that blurs this boundary drifts\n\n**CLI and output contract**\n- Commands emit structured JSON for automation; new commands or flags should follow the patterns in cmd/git-sync/flags.go\n- Usage and help text must never include credential or token values\n- Positional args: source URL then target URL, left-to-right\n\n**Auth and credential handling**\n- Credentials accessed through the established credential-store interface; ad-hoc env-var reads or inline auth bypass it\n- No token values formatted into log messages or error strings\n\n**Testing style**\n- Integration tests use real in-memory git repos or HTTP stubs — mocking git protocol details that integration tests cover better is drift\n\nScore bands:\n- 0–20: Follows all established patterns\n- 21–40: Minor deviations (e.g., slightly inconsistent error message style)\n- 41–60: New abstraction that doesn't fit existing layering, or inconsistent flag handling\n- 61–80: Bypasses established interfaces (credential store, planner/syncer split)\n- 81–100: Restructures core packages, changes JSON output contract, or introduces global mutable state\n\nOutput ONLY this JSON object as the very last line of your response:\n\n{\"value\": <number 0-100>, \"rationale\": \"<1-2 sentence explanation>\"}"
+  },
+  "select": {
+    "trigger_types": [
+      "api",
+      "push"
+    ]
+  },
+  "output": {
+    "adapter": "last_json_line",
+    "result_type": "trail_monitor",
+    "trail_monitor": {
+      "key": "drift",
+      "label": "Drift",
+      "value_type": "percent",
+      "polarity": "lower_is_better"
+    }
+  }
+}
