@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.9-nightly.202607010740.050a8adca.0.20260701135829-953874558ee2",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "1dd678f9643b",
+  "strategy": "manual-commit",
+  "branch": "simplify/de-slop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/flags.go",
+    "internal/gitproto/convert.go",
+    "internal/gitproto/convert_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/d678f9643b/0/metadata.json",
+      "transcript": "/1d/d678f9643b/0/full.jsonl",
+      "compact_transcript": "/1d/d678f9643b/0/transcript.jsonl",
+      "content_hash": "/1d/d678f9643b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7703,
+    "cache_creation_tokens": 544989,
+    "cache_read_tokens": 1690747,
+    "output_tokens": 10486,
+    "api_call_count": 8
+  }
+}
