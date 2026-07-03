@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/go-git/go-git/v6/plumbing"
 
@@ -66,7 +65,7 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 			return Result{}, fmt.Errorf("fetch source pack: %w", err)
 		}
 		packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-		packReader = closeOnce(packReader)
+		packReader = gitproto.CloseOnce(packReader)
 		if err := p.TargetPusher.PushPack(ctx, convert.PlansToPushCommands(updatePlans, false), packReader); err != nil {
 			_ = packReader.Close()
 			return Result{}, fmt.Errorf("push target refs: %w", err)
@@ -81,33 +80,4 @@ func Execute(ctx context.Context, p Params) (Result, error) {
 	}
 
 	return Result{Relay: true, RelayMode: "replicate", RelayReason: "replicate-overwrite-relay"}, nil
-}
-
-type closeOnceReadCloser struct {
-	io.ReadCloser
-
-	once sync.Once
-}
-
-func (c *closeOnceReadCloser) Close() error {
-	var err error
-	c.once.Do(func() {
-		err = c.ReadCloser.Close()
-	})
-	if err != nil {
-		return fmt.Errorf("close pack reader: %w", err)
-	}
-	return nil
-}
-
-func closeOnce(rc io.ReadCloser) io.ReadCloser {
-	if rc == nil {
-		return nil
-	}
-	if _, ok := rc.(*closeOnceReadCloser); ok {
-		return rc
-	}
-	// PushPack and the caller both close the relay reader; wrap it so retries and
-	// error cleanup do not surface spurious double-close failures.
-	return &closeOnceReadCloser{ReadCloser: rc}
 }

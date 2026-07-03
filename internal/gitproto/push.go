@@ -663,7 +663,7 @@ func startPackWriteProgress(cw *countingWriter, dest io.Writer) func() {
 				return
 			case <-ticker.C:
 				fmt.Fprintf(dest, "encoding pack: %s, elapsed %s\r",
-					humanizeBytes(cw.Count()), time.Since(start).Round(time.Second))
+					HumanBytes(cw.Count()), time.Since(start).Round(time.Second))
 			}
 		}
 	}()
@@ -672,28 +672,32 @@ func startPackWriteProgress(cw *countingWriter, dest io.Writer) func() {
 		close(stop)
 		<-done
 		fmt.Fprintf(dest, "encoded pack: %s in %s\n",
-			humanizeBytes(cw.Count()), time.Since(start).Round(time.Second))
+			HumanBytes(cw.Count()), time.Since(start).Round(time.Second))
 	}
 }
 
-// humanizeBytes renders n in IEC units with one decimal place for KB+
-// (e.g. "47.3 MB"). Anything below 1 KB is shown as raw bytes.
-func humanizeBytes(n int64) string {
-	const (
-		kb = 1024
-		mb = kb * 1024
-		gb = mb * 1024
-	)
-	switch {
-	case n < kb:
+// HumanBytes renders a byte count in IEC-ish binary units (e.g. "47.3 MB"),
+// scaling decimal precision down as the value grows. Shared by the progress
+// and batching output across syncer, strategy, and gitproto.
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
 		return fmt.Sprintf("%d B", n)
-	case n < mb:
-		return fmt.Sprintf("%.1f KB", float64(n)/float64(kb))
-	case n < gb:
-		return fmt.Sprintf("%.1f MB", float64(n)/float64(mb))
-	default:
-		return fmt.Sprintf("%.1f GB", float64(n)/float64(gb))
 	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	value := float64(n) / float64(div)
+	suffix := []string{"KB", "MB", "GB", "TB", "PB"}[exp]
+	if value >= 100 {
+		return fmt.Sprintf("%.0f %s", value, suffix)
+	}
+	if value >= 10 {
+		return fmt.Sprintf("%.1f %s", value, suffix)
+	}
+	return fmt.Sprintf("%.2f %s", value, suffix)
 }
 
 // PushPack pushes a pack stream (relay) to the target.

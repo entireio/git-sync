@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -167,7 +166,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		return result, fmt.Errorf("fetch source pack: %w", err)
 	}
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-	packReader = closeOnce(packReader)
+	packReader = gitproto.CloseOnce(packReader)
 
 	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
 	if p.OnPhase != nil {
@@ -188,7 +187,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		p.log("bootstrap retrying with batched mode after batchable push failure",
 			"target_max_pack_bytes", autoBatch, "reason", reason)
 		p.notice(fmt.Sprintf("%s — switching to batched mode (limit %s)",
-			reason, humanBytes(autoBatch)))
+			reason, gitproto.HumanBytes(autoBatch)))
 		p.TargetMaxPack = autoBatch
 		return executeBatched(ctx, p, plans, result)
 	}
@@ -438,7 +437,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if err != nil {
 				return result, fmt.Errorf("fetch source batch pack for %s: %w", batch.Plan.TargetRef, err)
 			}
-			packReader = closeOnce(packReader)
+			packReader = gitproto.CloseOnce(packReader)
 
 			// Peek at the PACK header (12 bytes) to get the object count.
 			// If the estimated pack size (objectCount × calibrated
@@ -462,8 +461,8 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 							"calibrated_bytes_per_object", calibratedBytesPerObject)
 						p.notice(fmt.Sprintf(
 							"estimated pack ~%s exceeds target limit %s — splitting %d → %d packs (~%s each)",
-							humanBytes(estimated), humanBytes(p.TargetMaxPack),
-							oldRemaining, newCount, humanBytes(perPack),
+							gitproto.HumanBytes(estimated), gitproto.HumanBytes(p.TargetMaxPack),
+							oldRemaining, newCount, gitproto.HumanBytes(perPack),
 						))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						subdivided = true
@@ -596,7 +595,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 							"error", pushErr.Error())
 						limitText := ""
 						if limit > 0 {
-							limitText = fmt.Sprintf(" (target limit %s)", humanBytes(limit))
+							limitText = fmt.Sprintf(" (target limit %s)", gitproto.HumanBytes(limit))
 						}
 						reason := "target rejected pack"
 						if abortedEarly {
@@ -683,7 +682,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			}
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
-			packReader = closeOnce(packReader)
+			packReader = gitproto.CloseOnce(packReader)
 			cmds := convert.PlansToPushCommands(tailPlans, false)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
@@ -1409,30 +1408,6 @@ func autoTargetMaxPackBytes(p Params, err error) (int64, bool) {
 	return limit, true
 }
 
-// humanBytes renders a byte count in IEC-ish binary units. Local copy
-// because importing the syncer's formatter would invert the dependency
-// direction; the bootstrap package is meant to be standalone.
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for x := n / unit; x >= unit; x /= unit {
-		div *= unit
-		exp++
-	}
-	value := float64(n) / float64(div)
-	suffix := []string{"KB", "MB", "GB", "TB", "PB"}[exp]
-	if value >= 100 {
-		return fmt.Sprintf("%.0f %s", value, suffix)
-	}
-	if value >= 10 {
-		return fmt.Sprintf("%.1f %s", value, suffix)
-	}
-	return fmt.Sprintf("%.2f %s", value, suffix)
-}
-
 func isTargetBodyLimitError(err error) bool {
 	if err == nil {
 		return false
@@ -1520,31 +1495,4 @@ func (p Params) log(msg string, args ...any) {
 		return
 	}
 	p.Logger.Info(msg, args...)
-}
-
-type closeOnceReadCloser struct {
-	io.ReadCloser
-
-	once sync.Once
-}
-
-func (c *closeOnceReadCloser) Close() error {
-	var err error
-	c.once.Do(func() {
-		err = c.ReadCloser.Close()
-	})
-	if err != nil {
-		return fmt.Errorf("close pack reader: %w", err)
-	}
-	return nil
-}
-
-func closeOnce(rc io.ReadCloser) io.ReadCloser {
-	if rc == nil {
-		return nil
-	}
-	if _, ok := rc.(*closeOnceReadCloser); ok {
-		return rc
-	}
-	return &closeOnceReadCloser{ReadCloser: rc}
 }

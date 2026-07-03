@@ -437,6 +437,30 @@ func (s *syncSession) finalizeCounts(pushPlans []BranchPlan, result *Result) {
 	result.Deleted += deleted
 }
 
+// classifyPlans splits planned actions into pushable plans, tallying skips and
+// blocks into result. Under dry-run, pushable plans are counted as skipped and
+// none are returned. ActionWarn is not produced by planning; it is only set
+// after a push by applyRejections.
+func classifyPlans(plans []BranchPlan, dryRun bool, result *Result) []BranchPlan {
+	pushPlans := make([]BranchPlan, 0, len(plans))
+	for _, plan := range plans {
+		switch plan.Action {
+		case ActionCreate, ActionUpdate, ActionDelete:
+			if dryRun {
+				result.Skipped++
+				continue
+			}
+			pushPlans = append(pushPlans, plan)
+		case ActionSkip:
+			result.Skipped++
+		case ActionBlock:
+			result.Blocked++
+		case ActionWarn:
+		}
+	}
+	return pushPlans
+}
+
 // tallyActions counts ref pushes and deletes from a classified plan slice.
 // ActionWarn/Skip/Block don't contribute; rejections are tracked separately
 // in Result.Warned via applyRejections.
@@ -876,23 +900,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		SourceHEAD: s.sourceService.HeadTarget,
 	}
 
-	pushPlans := make([]BranchPlan, 0, len(plans))
-	for _, plan := range plans {
-		switch plan.Action {
-		case ActionCreate, ActionUpdate, ActionDelete:
-			if s.cfg.DryRun {
-				result.Skipped++
-				continue
-			}
-			pushPlans = append(pushPlans, plan)
-		case ActionSkip:
-			result.Skipped++
-		case ActionBlock:
-			result.Blocked++
-		case ActionWarn:
-			// not produced by planning; only set after a push by applyRejections.
-		}
-	}
+	pushPlans := classifyPlans(plans, s.cfg.DryRun, &result)
 
 	if !s.cfg.DryRun && result.Blocked > 0 {
 		return result, fmt.Errorf("blocked %d ref update(s); rerun with --force-with-lease (or --force-blind) where appropriate", result.Blocked)
@@ -983,25 +991,11 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		SourceHEAD:    s.sourceService.HeadTarget,
 	}
 
-	pushPlans := make([]BranchPlan, 0, len(plans))
-	relayPlans := make([]BranchPlan, 0, len(plans))
-	for _, plan := range plans {
-		switch plan.Action {
-		case ActionCreate, ActionUpdate, ActionDelete:
-			if s.cfg.DryRun {
-				result.Skipped++
-				continue
-			}
-			pushPlans = append(pushPlans, plan)
-			if plan.Action != ActionDelete {
-				relayPlans = append(relayPlans, plan)
-			}
-		case ActionSkip:
-			result.Skipped++
-		case ActionBlock:
-			result.Blocked++
-		case ActionWarn:
-			// not produced by planning; only set after a push by applyRejections.
+	pushPlans := classifyPlans(plans, s.cfg.DryRun, &result)
+	relayPlans := make([]BranchPlan, 0, len(pushPlans))
+	for _, plan := range pushPlans {
+		if plan.Action != ActionDelete {
+			relayPlans = append(relayPlans, plan)
 		}
 	}
 
