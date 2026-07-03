@@ -7,6 +7,9 @@ import (
 	"sync"
 )
 
+// This file holds shared io.ReadCloser wrappers for pack streams produced
+// and consumed by this package.
+
 // CloseOnce wraps a ReadCloser so repeated Close calls only close the
 // underlying reader once. Strategies use it for pack readers that are closed
 // both by PushPack and by the caller's retry/error cleanup, so double closes

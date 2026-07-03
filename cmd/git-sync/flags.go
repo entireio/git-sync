@@ -180,7 +180,12 @@ func splitCSV(value string) []string {
 }
 
 // parseMappings converts raw --map values (src:dst form) into ref mappings.
+// Returns nil (not an empty slice) when no mappings were given, matching the
+// zero value the request structs start with.
 func parseMappings(raw []string) ([]gitsync.RefMapping, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
 	out := make([]gitsync.RefMapping, 0, len(raw))
 	for _, value := range raw {
 		mapping, err := validation.ParseMapping(value)
