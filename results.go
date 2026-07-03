@@ -1,4 +1,4 @@
-package internalbridge
+package gitsync
 
 import (
 	"github.com/go-git/go-git/v6/plumbing"
@@ -7,25 +7,28 @@ import (
 	"entire.io/entire/git-sync/internal/syncer"
 )
 
+// RefKind classifies a ref in results.
 type RefKind string
 
 const (
-	RefKindBranch RefKind = RefKind(planner.RefKindBranch)
-	RefKindTag    RefKind = RefKind(planner.RefKindTag)
-	RefKindOther  RefKind = RefKind(planner.RefKindOther)
+	RefKindBranch = RefKind(planner.RefKindBranch)
+	RefKindTag    = RefKind(planner.RefKindTag)
+	RefKindOther  = RefKind(planner.RefKindOther)
 )
 
+// Action is the planned or executed per-ref action.
 type Action string
 
 const (
-	ActionCreate Action = Action(planner.ActionCreate)
-	ActionUpdate Action = Action(planner.ActionUpdate)
-	ActionDelete Action = Action(planner.ActionDelete)
-	ActionSkip   Action = Action(planner.ActionSkip)
-	ActionBlock  Action = Action(planner.ActionBlock)
-	ActionWarn   Action = Action(planner.ActionWarn)
+	ActionCreate = Action(planner.ActionCreate)
+	ActionUpdate = Action(planner.ActionUpdate)
+	ActionDelete = Action(planner.ActionDelete)
+	ActionSkip   = Action(planner.ActionSkip)
+	ActionBlock  = Action(planner.ActionBlock)
+	ActionWarn   = Action(planner.ActionWarn)
 )
 
+// RefResult describes the outcome for a single ref.
 type RefResult struct {
 	Branch     string  `json:"branch"`
 	SourceRef  string  `json:"sourceRef"`
@@ -37,13 +40,16 @@ type RefResult struct {
 	Reason     string  `json:"reason"`
 }
 
+// RefPlan is a planned ref action; it has the same shape as RefResult.
 type RefPlan = RefResult
 
+// RefInfo is a ref name and its hash as reported by a probe.
 type RefInfo struct {
 	Name string `json:"name"`
 	Hash string `json:"hash"`
 }
 
+// ServiceStats aggregates request counters for one git service.
 type ServiceStats struct {
 	Name          string `json:"name"`
 	Requests      int    `json:"requests"`
@@ -54,6 +60,7 @@ type ServiceStats struct {
 	Commands      int    `json:"commands"`
 }
 
+// SideBytes reports transfer volume and timing for one side of a sync.
 type SideBytes struct {
 	Label       string `json:"label"`
 	Bytes       int64  `json:"bytes"`
@@ -62,6 +69,7 @@ type SideBytes struct {
 	IdleNanos   int64  `json:"idleNanos,omitempty"`
 }
 
+// Stats aggregates transfer statistics when CollectStats was requested.
 type Stats struct {
 	Enabled      bool                     `json:"enabled"`
 	Items        map[string]*ServiceStats `json:"items"`
@@ -69,6 +77,7 @@ type Stats struct {
 	ElapsedNanos int64                    `json:"elapsedNanos,omitempty"`
 }
 
+// Measurement reports process resource usage when measurement was enabled.
 type Measurement struct {
 	Enabled            bool   `json:"enabled"`
 	ElapsedMillis      int64  `json:"elapsedMillis"`
@@ -78,6 +87,7 @@ type Measurement struct {
 	GCCount            uint32 `json:"gcCount"`
 }
 
+// ProbeResult is the outcome of a Probe.
 type ProbeResult struct {
 	SourceURL     string      `json:"sourceUrl"`
 	TargetURL     string      `json:"targetUrl,omitempty"`
@@ -92,6 +102,7 @@ type ProbeResult struct {
 	Measurement   Measurement `json:"measurement"`
 }
 
+// SyncCounts tallies per-ref outcomes of a sync.
 type SyncCounts struct {
 	Applied int `json:"applied"`
 	Skipped int `json:"skipped"`
@@ -100,12 +111,14 @@ type SyncCounts struct {
 	Warned  int `json:"warned"`
 }
 
+// BatchSummary reports batched push progress.
 type BatchSummary struct {
 	Enabled bool `json:"enabled"`
 	Planned int  `json:"planned"`
 	Done    int  `json:"done"`
 }
 
+// ExecutionSummary describes how a sync was executed.
 type ExecutionSummary struct {
 	DryRun             bool         `json:"dryRun"`
 	Protocol           string       `json:"protocol"`
@@ -118,6 +131,7 @@ type ExecutionSummary struct {
 	Batch              BatchSummary `json:"batch"`
 }
 
+// SyncResult is the outcome of a Sync or Replicate.
 type SyncResult struct {
 	Refs        []RefResult      `json:"refs"`
 	Counts      SyncCounts       `json:"counts"`
@@ -126,9 +140,10 @@ type SyncResult struct {
 	Measurement Measurement      `json:"measurement"`
 }
 
+// PlanResult is the outcome of a Plan; it has the same shape as SyncResult.
 type PlanResult = SyncResult
 
-func FromProbeResult(result syncer.ProbeResult) ProbeResult {
+func fromProbeResult(result syncer.ProbeResult) ProbeResult {
 	out := ProbeResult{
 		SourceURL:     result.SourceURL,
 		TargetURL:     result.TargetURL,
@@ -139,8 +154,8 @@ func FromProbeResult(result syncer.ProbeResult) ProbeResult {
 		TargetCaps:    append([]string(nil), result.TargetCaps...),
 		Refs:          make([]RefInfo, 0, len(result.Refs)),
 		SourceHEAD:    result.SourceHEAD.String(),
-		Stats:         FromStats(result.Stats),
-		Measurement:   FromMeasurement(result.Measurement),
+		Stats:         fromStats(result.Stats),
+		Measurement:   fromMeasurement(result.Measurement),
 	}
 	for _, ref := range result.Refs {
 		out.Refs = append(out.Refs, RefInfo{Name: ref.Name, Hash: ref.Hash.String()})
@@ -148,7 +163,7 @@ func FromProbeResult(result syncer.ProbeResult) ProbeResult {
 	return out
 }
 
-func FromSyncResult(result syncer.Result) SyncResult {
+func fromSyncResult(result syncer.Result) SyncResult {
 	out := SyncResult{
 		Refs: make([]RefResult, 0, len(result.Plans)),
 		Counts: SyncCounts{
@@ -173,16 +188,16 @@ func FromSyncResult(result syncer.Result) SyncResult {
 				Done:    result.BatchCount,
 			},
 		},
-		Stats:       FromStats(result.Stats),
-		Measurement: FromMeasurement(result.Measurement),
+		Stats:       fromStats(result.Stats),
+		Measurement: fromMeasurement(result.Measurement),
 	}
 	for _, plan := range result.Plans {
 		out.Refs = append(out.Refs, RefResult{
 			Branch:     plan.Branch,
 			SourceRef:  plan.SourceRef.String(),
 			TargetRef:  plan.TargetRef.String(),
-			SourceHash: HashString(plan.SourceHash),
-			TargetHash: HashString(plan.TargetHash),
+			SourceHash: hashString(plan.SourceHash),
+			TargetHash: hashString(plan.TargetHash),
 			Kind:       RefKind(plan.Kind),
 			Action:     Action(plan.Action),
 			Reason:     plan.Reason,
@@ -191,18 +206,21 @@ func FromSyncResult(result syncer.Result) SyncResult {
 	return out
 }
 
-func FromStats(stats syncer.Stats) Stats {
-	out := Stats{Enabled: stats.Enabled, Items: make(map[string]*ServiceStats, len(stats.Items))}
+func fromStats(stats syncer.Stats) Stats {
+	out := Stats{
+		Enabled:      stats.Enabled,
+		Items:        make(map[string]*ServiceStats, len(stats.Items)),
+		ElapsedNanos: stats.ElapsedNanos,
+	}
 	for key, item := range stats.Items {
-		copyItem := *item
 		out.Items[key] = &ServiceStats{
-			Name:          copyItem.Name,
-			Requests:      copyItem.Requests,
-			RequestBytes:  copyItem.RequestBytes,
-			ResponseBytes: copyItem.ResponseBytes,
-			Wants:         copyItem.Wants,
-			Haves:         copyItem.Haves,
-			Commands:      copyItem.Commands,
+			Name:          item.Name,
+			Requests:      item.Requests,
+			RequestBytes:  item.RequestBytes,
+			ResponseBytes: item.ResponseBytes,
+			Wants:         item.Wants,
+			Haves:         item.Haves,
+			Commands:      item.Commands,
 		}
 	}
 	if len(stats.Sides) > 0 {
@@ -217,11 +235,10 @@ func FromStats(stats syncer.Stats) Stats {
 			})
 		}
 	}
-	out.ElapsedNanos = stats.ElapsedNanos
 	return out
 }
 
-func FromMeasurement(m syncer.Measurement) Measurement {
+func fromMeasurement(m syncer.Measurement) Measurement {
 	return Measurement{
 		Enabled:            m.Enabled,
 		ElapsedMillis:      m.ElapsedMillis,
@@ -232,7 +249,7 @@ func FromMeasurement(m syncer.Measurement) Measurement {
 	}
 }
 
-func HashString(hash plumbing.Hash) string {
+func hashString(hash plumbing.Hash) string {
 	if hash.IsZero() {
 		return ""
 	}

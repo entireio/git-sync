@@ -1,4 +1,4 @@
-package internalbridge
+package gitsync
 
 import (
 	"testing"
@@ -10,14 +10,14 @@ import (
 )
 
 func TestHashStringZeroHashIsEmpty(t *testing.T) {
-	got := HashString(plumbing.ZeroHash)
+	got := hashString(plumbing.ZeroHash)
 	if got != "" {
-		t.Fatalf("HashString(zero) = %q, want empty string", got)
+		t.Fatalf("hashString(zero) = %q, want empty string", got)
 	}
 }
 
 func TestFromProbeResultCopiesStableFields(t *testing.T) {
-	got := FromProbeResult(syncer.ProbeResult{
+	got := fromProbeResult(syncer.ProbeResult{
 		SourceURL:     "https://source.example/repo.git",
 		TargetURL:     "https://target.example/repo.git",
 		RequestedMode: "auto",
@@ -49,7 +49,7 @@ func TestFromProbeResultCopiesStableFields(t *testing.T) {
 }
 
 func TestFromSyncResultShapesStableSummary(t *testing.T) {
-	got := FromSyncResult(syncer.Result{
+	got := fromSyncResult(syncer.Result{
 		Plans: []planner.BranchPlan{
 			{
 				Branch:     "main",

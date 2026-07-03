@@ -8,7 +8,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"entire.io/entire/git-sync"
-	"entire.io/entire/git-sync/internal/internalbridge"
 	"entire.io/entire/git-sync/internal/syncer"
 	"entire.io/entire/git-sync/internal/validation"
 )
@@ -374,27 +373,23 @@ func operationModeString(mode gitsync.OperationMode) string {
 }
 
 func syncerEndpoint(endpoint gitsync.Endpoint, auth gitsync.EndpointAuth) syncer.Endpoint {
-	return internalbridge.ToSyncerEndpoint(
-		internalbridge.Endpoint{
-			URL:                    endpoint.URL,
-			FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
-		},
-		internalbridge.EndpointAuth{
-			Username:      auth.Username,
-			Token:         auth.Token,
-			BearerToken:   auth.BearerToken,
-			SkipTLSVerify: auth.SkipTLSVerify,
-		},
-	)
+	return syncer.Endpoint{
+		URL:                    endpoint.URL,
+		Username:               auth.Username,
+		Token:                  auth.Token,
+		BearerToken:            auth.BearerToken,
+		SkipTLSVerify:          auth.SkipTLSVerify,
+		FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
+	}
 }
 
 func validationMappings(mappings []gitsync.RefMapping) []validation.RefMapping {
-	bridgeMappings := make([]internalbridge.RefMapping, 0, len(mappings))
+	out := make([]validation.RefMapping, 0, len(mappings))
 	for _, mapping := range mappings {
-		bridgeMappings = append(bridgeMappings, internalbridge.RefMapping{
+		out = append(out, validation.RefMapping{
 			Source: mapping.Source,
 			Target: mapping.Target,
 		})
 	}
-	return internalbridge.ToValidationMappings(bridgeMappings)
+	return out
 }
