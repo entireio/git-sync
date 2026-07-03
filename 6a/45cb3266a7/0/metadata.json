@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.7.9-nightly.202607010740.050a8adca.0.20260701135829-953874558ee2",
+  "checkpoint_id": "6a45cb3266a7",
+  "session_id": "1e0a84da-d36b-4e8a-925c-b32310479358",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T13:17:06.961239Z",
+  "branch": "simplify/de-slop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cmd/git-sync/flags.go",
+    "cmd/git-sync/syncplan.go",
+    "cmd/git-sync/bootstrap.go",
+    "cmd/git-sync/convert_sha256.go",
+    "cmd/git-sync/internal/versioninfo/versioninfo.go",
+    "cmd/git-sync/root.go",
+    "cmd/git-sync/version.go",
+    "cmd/git-sync-bench/main.go",
+    "cmd/git-sync/internal/sha256convert/sha256convert.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "f557f791be0a",
+  "checkpoint_transcript_start": 500,
+  "transcript_lines_at_start": 500,
+  "compact_transcript_start": 137,
+  "token_usage": {
+    "input_tokens": 4120,
+    "cache_creation_tokens": 32577,
+    "cache_read_tokens": 4342710,
+    "output_tokens": 10576,
+    "api_call_count": 18
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-goal-2026-07-03T11:26:12.628459Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f557f791be0a",
+      "timestamp": "2026-07-03T11:26:12.628459Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-07-03T13:17:06.907445Z",
+    "agent_lines": 48,
+    "agent_removed": 61,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 109,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
