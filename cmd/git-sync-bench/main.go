@@ -383,15 +383,7 @@ func uniqueStrings(input []string) []string {
 		return nil
 	}
 	slices.Sort(input)
-	out := input[:0]
-	var prev string
-	for i, item := range input {
-		if i == 0 || item != prev {
-			out = append(out, item)
-			prev = item
-		}
-	}
-	return out
+	return slices.Compact(input)
 }
 
 func normalizeRepoURL(raw string) (string, error) {

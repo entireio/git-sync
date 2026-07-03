@@ -12,8 +12,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Show build information",
 		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "git-sync %s (commit %s, built %s)\n",
-				versioninfo.Version, versioninfo.Commit, versioninfo.Date)
+			fmt.Fprintln(cmd.OutOrStdout(), versioninfo.String())
 		},
 	}
 }

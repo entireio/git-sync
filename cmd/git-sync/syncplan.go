@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	gitsync "entire.io/entire/git-sync"
-	"entire.io/entire/git-sync/internal/validation"
 	"entire.io/entire/git-sync/unstable"
 	"github.com/spf13/cobra"
 )
@@ -29,7 +28,7 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 		sourceAuth  gitsync.EndpointAuth
 		targetAuth  gitsync.EndpointAuth
 		branches    string
-		modeValue   = operationModeFlag(defaultOperationMode(defaultMode))
+		modeValue   = defaultOperationMode(defaultMode)
 		protocolVal = newProtocolFlag()
 		legacyForce bool
 		req         = unstable.SyncRequest{DryRun: dryRun}
@@ -55,16 +54,11 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 			if branches != "" {
 				req.Scope.Branches = splitCSV(branches)
 			}
-			for _, raw := range mappings {
-				mapping, err := validation.ParseMapping(raw)
-				if err != nil {
-					return fmt.Errorf("parse mapping %q: %w", raw, err)
-				}
-				req.Scope.Mappings = append(req.Scope.Mappings, gitsync.RefMapping{
-					Source: mapping.Source,
-					Target: mapping.Target,
-				})
+			parsed, err := parseMappings(mappings)
+			if err != nil {
+				return err
 			}
+			req.Scope.Mappings = parsed
 
 			if req.Source.URL == "" || req.Target.URL == "" {
 				return fmt.Errorf("%s requires source and target repository URLs", name)
@@ -74,10 +68,7 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 				Auth: gitsync.StaticAuthProvider{Source: sourceAuth, Target: targetAuth},
 			})
 
-			var (
-				result unstable.Result
-				err    error
-			)
+			var result unstable.Result
 			ctx := cmd.Context()
 			switch {
 			case dryRun:

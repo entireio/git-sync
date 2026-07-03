@@ -27,8 +27,7 @@ seed an empty target (bootstrap), or inspect either side (probe, fetch).`,
 			return cmd.Help()
 		},
 	}
-	cmd.SetVersionTemplate(fmt.Sprintf("git-sync %s (commit %s, built %s)\n",
-		versioninfo.Version, versioninfo.Commit, versioninfo.Date))
+	cmd.SetVersionTemplate(versioninfo.String() + "\n")
 
 	cmd.AddCommand(newSyncCmd())
 	cmd.AddCommand(newReplicateCmd())

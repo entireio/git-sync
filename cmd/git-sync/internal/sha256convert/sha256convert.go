@@ -1525,12 +1525,6 @@ func (t *translator) rewriteMessageRefs(msg, kind string, sha1 plumbing.Hash) (s
 	return b.String(), count, nil
 }
 
-// resolveMessageRef classifies a hex prefix against the reachable set.
-// Returns matchUnique with the resolved SHA1 when exactly one commit
-// or tag in scope matches; matchAmbiguous when more than one does;
-// matchNone otherwise (no match, or the match is a blob/tree — those
-// are filtered so incidental hex collisions on content hashes aren't
-// rewritten).
 // resolveCacheEntry holds a memoized (Hash, matchResult) pair from
 // resolveMessageRef. Stored in t.resolveCache keyed by lowercased prefix.
 type resolveCacheEntry struct {
@@ -1538,6 +1532,12 @@ type resolveCacheEntry struct {
 	result matchResult
 }
 
+// resolveMessageRef classifies a hex prefix against the reachable set.
+// Returns matchUnique with the resolved SHA1 when exactly one commit
+// or tag in scope matches; matchAmbiguous when more than one does;
+// matchNone otherwise (no match, or the match is a blob/tree — those
+// are filtered so incidental hex collisions on content hashes aren't
+// rewritten).
 func (t *translator) resolveMessageRef(prefix string) (plumbing.Hash, matchResult) {
 	// Canonicalize to lowercase: hashPattern is case-insensitive so
 	// the caller can match `ABCD1234` in a message, but reachable
