@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.9-nightly.202607010740.050a8adca.0.20260701135829-953874558ee2",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "2c0d78a8a805",
+  "strategy": "manual-commit",
+  "branch": "simplify/de-slop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "client.go",
+    "unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2c/0d78a8a805/0/metadata.json",
+      "transcript": "/2c/0d78a8a805/0/full.jsonl",
+      "compact_transcript": "/2c/0d78a8a805/0/transcript.jsonl",
+      "content_hash": "/2c/0d78a8a805/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7796,
+    "cache_creation_tokens": 13194,
+    "cache_read_tokens": 1299324,
+    "output_tokens": 3130,
+    "api_call_count": 5
+  }
+}
