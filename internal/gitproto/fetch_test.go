@@ -59,25 +59,6 @@ func TestCapabilities(t *testing.T) {
 	}
 }
 
-func TestFetchFeatures(t *testing.T) {
-	v2Caps := &V2Capabilities{
-		Caps: map[string]string{
-			"fetch": "shallow filter include-tag",
-		},
-	}
-	rs := &RefService{Protocol: "v2", V2Caps: v2Caps}
-	features := rs.FetchFeatures()
-	if !features.Filter || !features.IncludeTag {
-		t.Fatalf("FetchFeatures() = %+v, want filter and include-tag enabled", features)
-	}
-
-	rs = &RefService{Protocol: "v1"}
-	features = rs.FetchFeatures()
-	if features.Filter || features.IncludeTag {
-		t.Fatalf("FetchFeatures() for v1 = %+v, want zero value", features)
-	}
-}
-
 func TestSupportsBootstrapBatch(t *testing.T) {
 	if (&RefService{Protocol: "v1"}).SupportsBootstrapBatch() {
 		t.Fatal("v1 service should not support bootstrap batching")
@@ -132,17 +113,6 @@ func TestBuildSidebandReaderWithProgress(t *testing.T) {
 	got := buildSidebandReader(caps, reader, progress)
 	if got == reader {
 		t.Error("expected wrapped reader when sideband capability is set")
-	}
-}
-
-func TestProgressWriter(t *testing.T) {
-	w := progressWriter(false, nil)
-	if w != nil {
-		t.Error("progressWriter(false, nil) should return nil")
-	}
-	w = progressWriter(true, nil)
-	if w == nil {
-		t.Error("progressWriter(true, nil) should return non-nil writer")
 	}
 }
 
@@ -335,24 +305,30 @@ func TestFetchPackUnsupportedProtocol(t *testing.T) {
 	}
 }
 
-func TestFetchCommitGraphRequiresV2(t *testing.T) {
+func TestFetchCommitParentsRequiresV2(t *testing.T) {
 	rs := &RefService{Protocol: "v1"}
-	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{}, nil)
+	parents, err := rs.FetchCommitParents(t.Context(), nil, DesiredRef{}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-v2 protocol")
 	}
+	if parents != nil {
+		t.Fatalf("expected nil parents on error, got %v", parents)
+	}
 }
 
-func TestFetchCommitGraphRequiresFilter(t *testing.T) {
+func TestFetchCommitParentsRequiresFilter(t *testing.T) {
 	caps := &V2Capabilities{
 		Caps: map[string]string{
 			"fetch": "shallow",
 		},
 	}
 	rs := &RefService{Protocol: "v2", V2Caps: caps}
-	err := rs.FetchCommitGraph(t.Context(), nil, nil, DesiredRef{}, nil)
+	parents, err := rs.FetchCommitParents(t.Context(), nil, DesiredRef{}, nil)
 	if err == nil {
 		t.Fatal("expected error when filter not supported")
+	}
+	if parents != nil {
+		t.Fatalf("expected nil parents on error, got %v", parents)
 	}
 }
 

@@ -28,26 +28,10 @@ type DesiredRef struct {
 	IsTag      bool
 }
 
-// FetchFeatures summarizes negotiated source fetch features used by strategies.
-type FetchFeatures struct {
-	Filter     bool
-	IncludeTag bool
-}
-
-func (s *RefService) FetchFeatures() FetchFeatures {
-	if s == nil || s.Protocol != "v2" || s.V2Caps == nil {
-		return FetchFeatures{}
-	}
-	return FetchFeatures{
-		Filter:     s.V2Caps.FetchSupports("filter"),
-		IncludeTag: s.V2Caps.FetchSupports("include-tag"),
-	}
-}
-
 // SupportsBootstrapBatch centralizes the source-side capability check for the
 // batched bootstrap strategy.
 func (s *RefService) SupportsBootstrapBatch() bool {
-	return s != nil && s.Protocol == "v2" && s.FetchFeatures().Filter
+	return s != nil && s.Protocol == "v2" && s.V2Caps != nil && s.V2Caps.FetchSupports("filter")
 }
 
 // FetchToStore fetches objects from source into the given store, using the
@@ -95,57 +79,15 @@ func (s *RefService) FetchPack(
 	}
 }
 
-// FetchCommitGraph fetches only the commit graph (tree:0 filter) for a ref.
-// Requires v2 with filter support. Optional haves let the source skip commits
-// already reachable from those hashes, which is valuable when planning later
-// branches that share history with an already-planned trunk.
-func (s *RefService) FetchCommitGraph(
-	ctx context.Context,
-	store storer.Storer,
-	conn Conn,
-	ref DesiredRef,
-	haves []plumbing.Hash,
-) error {
-	if s.Protocol != "v2" {
-		return errors.New("commit graph fetch requires protocol v2")
-	}
-	if !s.V2Caps.FetchSupports("filter") {
-		return errors.New("source does not advertise fetch filter support")
-	}
-
-	sortedHaves := SortedUniqueHashes(haves)
-	cmdArgs := make([]string, 0, 4+len(sortedHaves))
-	cmdArgs = append(cmdArgs,
-		"ofs-delta",
-		"no-progress",
-		"filter tree:0",
-		"want "+ref.SourceHash.String(),
-	)
-	for _, h := range sortedHaves {
-		cmdArgs = append(cmdArgs, "have "+h.String())
-	}
-	cmdArgs = append(cmdArgs, "done")
-
-	body, err := EncodeCommand("fetch", s.V2Caps.RequestCapabilities(), cmdArgs)
-	if err != nil {
-		return err
-	}
-	reader, err := PostRPCStream(ctx, conn, transport.UploadPackService, body, true, "upload-pack fetch")
-	if err != nil {
-		return err
-	}
-	defer ioutil.CheckClose(reader, &err)
-	// Commit-graph fetches are short and not user-facing; skip progress.
-	return storeV2FetchPack(store, reader, false, nil)
-}
-
-// FetchCommitParents fetches a commit graph (tree:0 filter) and
+// FetchCommitParents fetches a commit graph (v2 fetch with tree:0 filter) and
 // extracts (commit -> parent hashes) directly from the pack stream
 // without materializing the full object set into a store. Peak memory
 // during this call is dominated by the result map plus a small fixed
 // delta-resolution cache; no commit content is retained.
 //
-// Same wire protocol as FetchCommitGraph (v2 fetch with tree:0 filter).
+// Optional haves let the source skip commits already reachable from those
+// hashes, which is valuable when planning later branches that share history
+// with an already-planned trunk.
 // Returns an empty map (not nil) when the source has no new commits.
 func (s *RefService) FetchCommitParents(
 	ctx context.Context,

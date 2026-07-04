@@ -8,91 +8,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
-func TestToPushCommands(t *testing.T) {
-	hashA := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	hashB := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-
-	tests := []struct {
-		name       string
-		plan       PushPlan
-		wantNew    plumbing.Hash
-		wantOld    plumbing.Hash
-		wantDelete bool
-	}{
-		{
-			name: "create command",
-			plan: PushPlan{
-				TargetRef:  "refs/heads/main",
-				TargetHash: plumbing.ZeroHash,
-				SourceHash: hashA,
-			},
-			wantNew: hashA,
-			wantOld: plumbing.ZeroHash,
-		},
-		{
-			name: "update command",
-			plan: PushPlan{
-				TargetRef:  "refs/heads/main",
-				TargetHash: hashA,
-				SourceHash: hashB,
-			},
-			wantNew: hashB,
-			wantOld: hashA,
-		},
-		{
-			name: "delete command",
-			plan: PushPlan{
-				TargetRef:  "refs/heads/old-branch",
-				TargetHash: hashA,
-				Delete:     true,
-			},
-			wantOld:    hashA,
-			wantDelete: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmds := ToPushCommands([]PushPlan{tt.plan})
-			if len(cmds) != 1 {
-				t.Fatalf("expected 1 command, got %d", len(cmds))
-			}
-			cmd := cmds[0]
-			if cmd.Name != tt.plan.TargetRef {
-				t.Errorf("Name = %s, want %s", cmd.Name, tt.plan.TargetRef)
-			}
-			if cmd.Old != tt.wantOld {
-				t.Errorf("Old = %s, want %s", cmd.Old, tt.wantOld)
-			}
-			if cmd.Delete != tt.wantDelete {
-				t.Errorf("Delete = %v, want %v", cmd.Delete, tt.wantDelete)
-			}
-			if !tt.wantDelete && cmd.New != tt.wantNew {
-				t.Errorf("New = %s, want %s", cmd.New, tt.wantNew)
-			}
-		})
-	}
-}
-
-func TestToPushCommandsMultiple(t *testing.T) {
-	plans := []PushPlan{
-		{TargetRef: "refs/heads/a", SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
-		{TargetRef: "refs/heads/b", SourceHash: plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
-		{TargetRef: "refs/heads/c", TargetHash: plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc"), Delete: true},
-	}
-	cmds := ToPushCommands(plans)
-	if len(cmds) != 3 {
-		t.Fatalf("expected 3 commands, got %d", len(cmds))
-	}
-}
-
-func TestToPushCommandsEmpty(t *testing.T) {
-	cmds := ToPushCommands(nil)
-	if len(cmds) != 0 {
-		t.Fatalf("expected 0 commands for nil input, got %d", len(cmds))
-	}
-}
-
 func TestLimitPackReaderWithinLimit(t *testing.T) {
 	data := "hello world"
 	rc := io.NopCloser(strings.NewReader(data))
@@ -207,5 +122,62 @@ func TestSortedUniqueHashes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type countingCloser struct {
+	io.Reader
+
+	closes int
+}
+
+func (c *countingCloser) Close() error {
+	c.closes++
+	return nil
+}
+
+func TestCloseOnce(t *testing.T) {
+	if CloseOnce(nil) != nil {
+		t.Fatal("CloseOnce(nil) should return nil")
+	}
+
+	cc := &countingCloser{Reader: strings.NewReader("data")}
+	wrapped := CloseOnce(cc)
+	if again := CloseOnce(wrapped); again != wrapped {
+		t.Fatal("CloseOnce should return an already-wrapped reader unchanged")
+	}
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("second Close() error: %v", err)
+	}
+	if cc.closes != 1 {
+		t.Fatalf("underlying closer closed %d times, want 1", cc.closes)
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0 B"},
+		{42, "42 B"},
+		{1023, "1023 B"},
+		{1024, "1.00 KB"},
+		{1500, "1.46 KB"},
+		{int64(15 * 1024), "15.0 KB"},
+		{int64(1024 * 1024), "1.00 MB"},
+		{int64(150 * 1024 * 1024), "150 MB"},
+		{int64(3) << 30, "3.00 GB"},
+		{int64(2) << 40, "2.00 TB"},
+		{int64(5) << 50, "5.00 PB"},
+	}
+	for _, c := range cases {
+		if got := HumanBytes(c.in); got != c.want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

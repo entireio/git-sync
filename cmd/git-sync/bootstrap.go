@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	gitsync "entire.io/entire/git-sync"
-	"entire.io/entire/git-sync/internal/validation"
 	"entire.io/entire/git-sync/unstable"
 	"github.com/spf13/cobra"
 )
@@ -37,16 +36,11 @@ func newBootstrapCmd() *cobra.Command {
 			if branches != "" {
 				req.Scope.Branches = splitCSV(branches)
 			}
-			for _, raw := range mappings {
-				mapping, err := validation.ParseMapping(raw)
-				if err != nil {
-					return fmt.Errorf("parse mapping %q: %w", raw, err)
-				}
-				req.Scope.Mappings = append(req.Scope.Mappings, gitsync.RefMapping{
-					Source: mapping.Source,
-					Target: mapping.Target,
-				})
+			parsed, err := parseMappings(mappings)
+			if err != nil {
+				return err
 			}
+			req.Scope.Mappings = parsed
 
 			if req.Source.URL == "" || req.Target.URL == "" {
 				return errors.New("bootstrap requires source and target repository URLs")

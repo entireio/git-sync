@@ -126,7 +126,7 @@ func addSecretEnvFallback(cmd *cobra.Command, flag string, dst *string, env stri
 }
 
 func newProtocolFlag() protocolModeFlag {
-	return protocolModeFlag(protocolMode(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto)))
+	return protocolModeFlag(envOr("GITSYNC_PROTOCOL", validation.ProtocolAuto))
 }
 
 func envOr(key, fallback string) string {
@@ -179,11 +179,26 @@ func splitCSV(value string) []string {
 	return out
 }
 
-type protocolMode gitsync.ProtocolMode
-type operationMode gitsync.OperationMode
+// parseMappings converts raw --map values (src:dst form) into ref mappings.
+// Returns nil (not an empty slice) when no mappings were given, matching the
+// zero value the request structs start with.
+func parseMappings(raw []string) ([]gitsync.RefMapping, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]gitsync.RefMapping, 0, len(raw))
+	for _, value := range raw {
+		mapping, err := validation.ParseMapping(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse mapping %q: %w", value, err)
+		}
+		out = append(out, gitsync.RefMapping{Source: mapping.Source, Target: mapping.Target})
+	}
+	return out, nil
+}
 
-type protocolModeFlag protocolMode
-type operationModeFlag operationMode
+type protocolModeFlag gitsync.ProtocolMode
+type operationModeFlag gitsync.OperationMode
 
 func (p *protocolModeFlag) String() string { return string(*p) }
 func (p *protocolModeFlag) Type() string   { return "string" }
@@ -193,7 +208,7 @@ func (p *protocolModeFlag) Set(value string) error {
 	if err != nil {
 		return fmt.Errorf("normalize protocol: %w", err)
 	}
-	*p = protocolModeFlag(protocolMode(gitsync.ProtocolMode(mode)))
+	*p = protocolModeFlag(mode)
 	return nil
 }
 
@@ -203,7 +218,7 @@ func (m *operationModeFlag) Type() string   { return "string" }
 func (m *operationModeFlag) Set(value string) error {
 	switch gitsync.OperationMode(value) {
 	case gitsync.ModeSync, gitsync.ModeReplicate:
-		*m = operationModeFlag(operationMode(value))
+		*m = operationModeFlag(value)
 		return nil
 	default:
 		return fmt.Errorf("unsupported mode %q", value)
@@ -213,9 +228,9 @@ func (m *operationModeFlag) Set(value string) error {
 // defaultOperationMode returns the starting value for the --mode flag.
 // Subcommands that pin a mode (sync, replicate) pass it in; plan passes ""
 // and gets sync as the default, letting --mode override it.
-func defaultOperationMode(defaultMode gitsync.OperationMode) operationMode {
+func defaultOperationMode(defaultMode gitsync.OperationMode) operationModeFlag {
 	if defaultMode != "" {
-		return operationMode(defaultMode)
+		return operationModeFlag(defaultMode)
 	}
-	return operationMode(gitsync.ModeSync)
+	return operationModeFlag(gitsync.ModeSync)
 }

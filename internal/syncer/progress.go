@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"entire.io/entire/git-sync/internal/gitproto"
 )
 
 // progressReporter renders live per-side throughput to a writer (typically
@@ -291,7 +293,7 @@ func formatSide(side SideBytes, fallbackDur time.Duration, instantBytesPerSec fl
 
 	var rateText string
 	if !done && instantBytesPerSec > 0 {
-		rateText = formatBytes(int64(instantBytesPerSec)) + "/s"
+		rateText = gitproto.HumanBytes(int64(instantBytesPerSec)) + "/s"
 	} else {
 		rateDur := fallbackDur
 		if side.ActiveNanos > 0 {
@@ -300,7 +302,7 @@ func formatSide(side SideBytes, fallbackDur time.Duration, instantBytesPerSec fl
 		rateText = formatRate(side.Bytes, rateDur)
 	}
 
-	rate := formatBytes(side.Bytes) + " @ " + rateText
+	rate := gitproto.HumanBytes(side.Bytes) + " @ " + rateText
 	if done {
 		rate += doneMark
 	}
@@ -409,28 +411,6 @@ func stderrIsTTY() bool {
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
-// formatBytes renders byte counts in IEC-ish human units (binary base).
-func formatBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for x := n / unit; x >= unit; x /= unit {
-		div *= unit
-		exp++
-	}
-	value := float64(n) / float64(div)
-	suffix := []string{"KB", "MB", "GB", "TB", "PB"}[exp]
-	if value >= 100 {
-		return fmt.Sprintf("%.0f %s", value, suffix)
-	}
-	if value >= 10 {
-		return fmt.Sprintf("%.1f %s", value, suffix)
-	}
-	return fmt.Sprintf("%.2f %s", value, suffix)
-}
-
 // formatRate renders a bytes/second average over the supplied duration.
 // Returns "0 B/s" until the duration is large enough to be meaningful,
 // avoiding misleadingly large rates from sub-millisecond samples.
@@ -439,5 +419,5 @@ func formatRate(bytes int64, dur time.Duration) string {
 		return "0 B/s"
 	}
 	rate := float64(bytes) / dur.Seconds()
-	return formatBytes(int64(rate)) + "/s"
+	return gitproto.HumanBytes(int64(rate)) + "/s"
 }

@@ -3,7 +3,6 @@ package gitproto
 import (
 	"bufio"
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"io"
 
@@ -191,11 +190,6 @@ func SkipSection(pr *PacketReader) error {
 			return nil
 		}
 	}
-}
-
-// HashHex is a helper to encode a 20-byte hash as lowercase hex.
-func HashHex(h [20]byte) string {
-	return hex.EncodeToString(h[:])
 }
 
 // FormatPktLine encodes a single pkt-line from a string payload.

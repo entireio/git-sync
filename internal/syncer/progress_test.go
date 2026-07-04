@@ -7,28 +7,6 @@ import (
 	"time"
 )
 
-func TestFormatBytes(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		in   int64
-		want string
-	}{
-		{0, "0 B"},
-		{42, "42 B"},
-		{1023, "1023 B"},
-		{1024, "1.00 KB"},
-		{1500, "1.46 KB"},
-		{int64(15 * 1024), "15.0 KB"},
-		{int64(1024 * 1024), "1.00 MB"},
-		{int64(150 * 1024 * 1024), "150 MB"},
-	}
-	for _, c := range cases {
-		if got := formatBytes(c.in); got != c.want {
-			t.Errorf("formatBytes(%d) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestFormatRate(t *testing.T) {
 	t.Parallel()
 	const zeroRate = "0 B/s"

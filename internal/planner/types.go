@@ -222,43 +222,6 @@ func CopyRefHashMap(input map[plumbing.ReferenceName]plumbing.Hash) map[plumbing
 	return out
 }
 
-// DesiredSubset returns the subset of desired refs that match the given plans.
-func DesiredSubset(
-	desired map[plumbing.ReferenceName]DesiredRef,
-	plans []BranchPlan,
-) map[plumbing.ReferenceName]DesiredRef {
-	out := make(map[plumbing.ReferenceName]DesiredRef, len(plans))
-	for _, plan := range plans {
-		if ref, ok := desired[plan.TargetRef]; ok {
-			out[plan.TargetRef] = ref
-		}
-	}
-	return out
-}
-
-// SingleDesired builds a single-entry desired ref map.
-func SingleDesired(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) map[plumbing.ReferenceName]DesiredRef {
-	return map[plumbing.ReferenceName]DesiredRef{
-		targetRef: {
-			Kind:       RefKindBranch,
-			Label:      targetRef.Short(),
-			SourceRef:  sourceRef,
-			TargetRef:  targetRef,
-			SourceHash: hash,
-		},
-	}
-}
-
-// SingleHaveMap builds a single-entry have map for fetch negotiation.
-func SingleHaveMap(hash plumbing.Hash) map[plumbing.ReferenceName]plumbing.Hash {
-	if hash.IsZero() {
-		return nil
-	}
-	return map[plumbing.ReferenceName]plumbing.Hash{
-		plumbing.ReferenceName("refs/gitsync/have"): hash,
-	}
-}
-
 // BootstrapTempRef returns the temporary ref name used during batched bootstrap.
 func BootstrapTempRef(targetRef plumbing.ReferenceName) plumbing.ReferenceName {
 	return plumbing.ReferenceName("refs/gitsync/bootstrap/heads/" + targetRef.Short())

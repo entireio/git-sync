@@ -45,20 +45,6 @@ func DesiredRefsForPlans(
 	return out
 }
 
-// PlansToPushPlans converts planner BranchPlans to gitproto PushPlans.
-func PlansToPushPlans(plans []planner.BranchPlan) []gitproto.PushPlan {
-	out := make([]gitproto.PushPlan, len(plans))
-	for i, p := range plans {
-		out[i] = gitproto.PushPlan{
-			TargetRef:  p.TargetRef,
-			TargetHash: p.TargetHash,
-			SourceHash: p.SourceHash,
-			Delete:     p.Action == planner.ActionDelete,
-		}
-	}
-	return out
-}
-
 // PlansToPushCommands converts planner BranchPlans directly to gitproto PushCommands.
 // When forceBlind is true, non-delete commands send a zero expected-old so
 // receive-pack overwrites regardless of current target value; see SyncPolicy.

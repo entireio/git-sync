@@ -3,8 +3,6 @@ package gitsync
 import (
 	"context"
 	"errors"
-
-	"entire.io/entire/git-sync/internal/internalbridge"
 )
 
 // ProtocolMode controls source-side protocol negotiation.
@@ -157,35 +155,3 @@ type SyncRequest struct {
 	Policy       SyncPolicy `json:"policy"`
 	CollectStats bool       `json:"collectStats"`
 }
-
-type RefKind = internalbridge.RefKind
-
-const (
-	RefKindBranch RefKind = internalbridge.RefKindBranch
-	RefKindTag    RefKind = internalbridge.RefKindTag
-	RefKindOther  RefKind = internalbridge.RefKindOther
-)
-
-type Action = internalbridge.Action
-
-const (
-	ActionCreate Action = internalbridge.ActionCreate
-	ActionUpdate Action = internalbridge.ActionUpdate
-	ActionDelete Action = internalbridge.ActionDelete
-	ActionSkip   Action = internalbridge.ActionSkip
-	ActionBlock  Action = internalbridge.ActionBlock
-	ActionWarn   Action = internalbridge.ActionWarn
-)
-
-type RefResult = internalbridge.RefResult
-type RefPlan = internalbridge.RefPlan
-type RefInfo = internalbridge.RefInfo
-type ServiceStats = internalbridge.ServiceStats
-type Stats = internalbridge.Stats
-type Measurement = internalbridge.Measurement
-type ProbeResult = internalbridge.ProbeResult
-type SyncCounts = internalbridge.SyncCounts
-type BatchSummary = internalbridge.BatchSummary
-type ExecutionSummary = internalbridge.ExecutionSummary
-type SyncResult = internalbridge.SyncResult
-type PlanResult = internalbridge.PlanResult

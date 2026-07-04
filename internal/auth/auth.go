@@ -3,22 +3,21 @@ package auth
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os/exec"
 	"strings"
 
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
+
+	"entire.io/entire/git-sync/internal/gitproto"
 )
 
 const defaultGitUsername = "git"
 
-// Method authorizes outbound HTTP requests for a remote. It is satisfied
-// by *transporthttp.BasicAuth and *transporthttp.TokenAuth, whose Authorizer
-// methods replaced the Method interface that go-git removed in v6 alpha.2.
-type Method interface {
-	Authorizer(req *http.Request) error
-}
+// Method authorizes outbound HTTP requests for a remote. It aliases
+// gitproto.AuthMethod so values returned by Resolve flow into gitproto
+// connection constructors without conversion.
+type Method = gitproto.AuthMethod
 
 // Endpoint holds the authentication-related fields for a remote.
 type Endpoint struct {

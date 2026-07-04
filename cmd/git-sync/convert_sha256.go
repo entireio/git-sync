@@ -74,13 +74,7 @@ submodule repository first and re-point .gitmodules.`,
 	cmd.Flags().BoolVar(&req.SourceFollowInfoRefsRedirect, "source-follow-info-refs-redirect",
 		envBool("GITSYNC_SOURCE_FOLLOW_INFO_REFS_REDIRECT"),
 		"send follow-up source RPCs to the final /info/refs redirect host")
-	addSecretFlag(cmd, &req.SourceAuth.Token, "source-token", "GITSYNC_SOURCE_TOKEN", "source token/password")
-	cmd.Flags().StringVar(&req.SourceAuth.Username, "source-username",
-		envOr("GITSYNC_SOURCE_USERNAME", "git"), "source basic auth username")
-	addSecretFlag(cmd, &req.SourceAuth.BearerToken, "source-bearer-token", "GITSYNC_SOURCE_BEARER_TOKEN", "source bearer token")
-	cmd.Flags().BoolVar(&req.SourceAuth.SkipTLSVerify, "source-insecure-skip-tls-verify",
-		envBool("GITSYNC_SOURCE_INSECURE_SKIP_TLS_VERIFY"),
-		"skip TLS certificate verification for the source")
+	addSourceAuth(cmd, &req.SourceAuth)
 	cmd.Flags().StringVar(&req.TargetDir, "target-dir", "", "directory to initialize as a SHA256 bare repository")
 
 	allRefsFlag(cmd, allRefsUsageScopeOnly, &req.AllRefs)

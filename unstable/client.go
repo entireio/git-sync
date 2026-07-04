@@ -8,7 +8,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"entire.io/entire/git-sync"
-	"entire.io/entire/git-sync/internal/internalbridge"
 	"entire.io/entire/git-sync/internal/syncer"
 	"entire.io/entire/git-sync/internal/validation"
 )
@@ -234,7 +233,7 @@ func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer
 		ShowStats:          req.Options.CollectStats,
 		MeasureMemory:      req.Options.MeasureMemory,
 		Progress:           req.Options.Progress,
-		ProtocolMode:       protocolString(req.Protocol),
+		ProtocolMode:       string(req.Protocol),
 		Verbose:            req.Options.Verbose,
 	}
 	if req.Target != nil {
@@ -273,7 +272,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		ShowStats:              req.Options.CollectStats,
 		MeasureMemory:          req.Options.MeasureMemory,
 		Progress:               req.Options.Progress,
-		Mode:                   operationModeString(req.Policy.Mode),
+		Mode:                   string(req.Policy.Mode),
 		ForceWithLease:         req.Policy.ForceWithLease,
 		ForceBlind:             req.Policy.ForceBlind,
 		Prune:                  req.Policy.Prune,
@@ -282,7 +281,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		TargetMaxPackBytes:     req.Options.TargetMaxPackBytes,
 		TargetMaxRefUpdates:    req.Options.TargetMaxRefUpdates,
 		MaterializedMaxObjects: maxObjects,
-		ProtocolMode:           protocolString(req.Policy.Protocol),
+		ProtocolMode:           string(req.Policy.Protocol),
 		Verbose:                req.Options.Verbose,
 		BootstrapStrategy:      req.Options.BootstrapStrategy,
 	}, nil
@@ -313,7 +312,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		MaxPackBytes:        req.Options.MaxPackBytes,
 		TargetMaxPackBytes:  req.Options.TargetMaxPackBytes,
 		TargetMaxRefUpdates: req.Options.TargetMaxRefUpdates,
-		ProtocolMode:        protocolString(req.Protocol),
+		ProtocolMode:        string(req.Protocol),
 		Verbose:             req.Options.Verbose,
 		BootstrapStrategy:   req.Options.BootstrapStrategy,
 	}, nil
@@ -335,7 +334,7 @@ func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer
 		ShowStats:          req.Options.CollectStats,
 		MeasureMemory:      req.Options.MeasureMemory,
 		Progress:           req.Options.Progress,
-		ProtocolMode:       protocolString(req.Protocol),
+		ProtocolMode:       string(req.Protocol),
 		Verbose:            req.Options.Verbose,
 	}, nil
 }
@@ -359,42 +358,24 @@ func (c *Client) resolveEndpoint(ctx context.Context, endpoint gitsync.Endpoint,
 	return syncerEndpoint(endpoint, auth), nil
 }
 
-func protocolString(mode gitsync.ProtocolMode) string {
-	if mode == "" {
-		return string(gitsync.ProtocolAuto)
-	}
-	return string(mode)
-}
-
-func operationModeString(mode gitsync.OperationMode) string {
-	if mode == "" {
-		return string(gitsync.ModeSync)
-	}
-	return string(mode)
-}
-
 func syncerEndpoint(endpoint gitsync.Endpoint, auth gitsync.EndpointAuth) syncer.Endpoint {
-	return internalbridge.ToSyncerEndpoint(
-		internalbridge.Endpoint{
-			URL:                    endpoint.URL,
-			FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
-		},
-		internalbridge.EndpointAuth{
-			Username:      auth.Username,
-			Token:         auth.Token,
-			BearerToken:   auth.BearerToken,
-			SkipTLSVerify: auth.SkipTLSVerify,
-		},
-	)
+	return syncer.Endpoint{
+		URL:                    endpoint.URL,
+		Username:               auth.Username,
+		Token:                  auth.Token,
+		BearerToken:            auth.BearerToken,
+		SkipTLSVerify:          auth.SkipTLSVerify,
+		FollowInfoRefsRedirect: endpoint.FollowInfoRefsRedirect,
+	}
 }
 
 func validationMappings(mappings []gitsync.RefMapping) []validation.RefMapping {
-	bridgeMappings := make([]internalbridge.RefMapping, 0, len(mappings))
+	out := make([]validation.RefMapping, 0, len(mappings))
 	for _, mapping := range mappings {
-		bridgeMappings = append(bridgeMappings, internalbridge.RefMapping{
+		out = append(out, validation.RefMapping{
 			Source: mapping.Source,
 			Target: mapping.Target,
 		})
 	}
-	return internalbridge.ToValidationMappings(bridgeMappings)
+	return out
 }

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"entire.io/entire/git-sync/internal/internalbridge"
+	"entire.io/entire/git-sync/internal/syncer"
 	"entire.io/entire/git-sync/internal/validation"
 )
 
@@ -36,11 +36,11 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	result, err := internalbridge.Probe(ctx, cfg)
+	result, err := syncer.Probe(ctx, cfg)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("probe: %w", err)
 	}
-	return internalbridge.FromProbeResult(result), nil
+	return fromProbeResult(result), nil
 }
 
 // Plan computes ref actions without pushing.
@@ -48,15 +48,15 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
 	}
-	cfg, err := c.buildSyncConfig(ctx, req.Source, req.Target, req.Scope, req.Policy, req.CollectStats, true)
+	cfg, err := c.buildSyncConfig(ctx, SyncRequest(req), true)
 	if err != nil {
 		return PlanResult{}, err
 	}
-	result, err := internalbridge.Run(ctx, cfg)
+	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
 		return PlanResult{}, fmt.Errorf("plan: %w", err)
 	}
-	return internalbridge.FromSyncResult(result), nil
+	return fromSyncResult(result), nil
 }
 
 // Sync executes a sync between two remotes.
@@ -64,15 +64,15 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	if err := req.Validate(); err != nil {
 		return SyncResult{}, err
 	}
-	cfg, err := c.buildSyncConfig(ctx, req.Source, req.Target, req.Scope, req.Policy, req.CollectStats, false)
+	cfg, err := c.buildSyncConfig(ctx, req, false)
 	if err != nil {
 		return SyncResult{}, err
 	}
-	result, err := internalbridge.Run(ctx, cfg)
+	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("sync: %w", err)
 	}
-	return internalbridge.FromSyncResult(result), nil
+	return fromSyncResult(result), nil
 }
 
 // Replicate executes source-authoritative relay-only replication between two remotes.
@@ -81,55 +81,59 @@ func (c *Client) Replicate(ctx context.Context, req SyncRequest) (SyncResult, er
 	return c.Sync(ctx, req)
 }
 
-func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (internalbridge.Config, error) {
+func (c *Client) buildProbeConfig(ctx context.Context, req ProbeRequest) (syncer.Config, error) {
 	sourceAuth, err := c.authFor(ctx, req.Source, SourceRole)
 	if err != nil {
-		return internalbridge.Config{}, err
+		return syncer.Config{}, err
 	}
-	var target *internalbridge.Endpoint
-	targetAuth := internalbridge.EndpointAuth{}
+	cfg := syncer.Config{
+		Source:             syncerEndpoint(req.Source, sourceAuth),
+		HTTPClient:         c.httpClient,
+		IncludeTags:        req.IncludeTags,
+		AllRefs:            req.AllRefs,
+		ExcludeRefPrefixes: append([]string(nil), req.ExcludeRefPrefixes...),
+		ShowStats:          req.CollectStats,
+		ProtocolMode:       string(req.Protocol),
+	}
 	if req.Target != nil {
-		resolvedTargetAuth, err := c.authFor(ctx, *req.Target, TargetRole)
+		targetAuth, err := c.authFor(ctx, *req.Target, TargetRole)
 		if err != nil {
-			return internalbridge.Config{}, err
+			return syncer.Config{}, err
 		}
-		target = ptr(bridgeEndpoint(*req.Target))
-		targetAuth = bridgeEndpointAuth(resolvedTargetAuth)
+		cfg.Target = syncerEndpoint(*req.Target, targetAuth)
 	}
-	return internalbridge.ProbeConfig(
-		bridgeEndpoint(req.Source),
-		bridgeEndpointAuth(sourceAuth),
-		target,
-		targetAuth,
-		internalbridge.ProtocolMode(req.Protocol),
-		req.IncludeTags,
-		req.AllRefs,
-		req.CollectStats,
-		req.ExcludeRefPrefixes,
-		c.httpClient,
-	), nil
+	return cfg, nil
 }
 
-func (c *Client) buildSyncConfig(ctx context.Context, source Endpoint, target Endpoint, scope RefScope, policy SyncPolicy, collectStats, dryRun bool) (internalbridge.Config, error) {
-	sourceAuth, err := c.authFor(ctx, source, SourceRole)
+func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bool) (syncer.Config, error) {
+	sourceAuth, err := c.authFor(ctx, req.Source, SourceRole)
 	if err != nil {
-		return internalbridge.Config{}, err
+		return syncer.Config{}, err
 	}
-	targetAuth, err := c.authFor(ctx, target, TargetRole)
+	targetAuth, err := c.authFor(ctx, req.Target, TargetRole)
 	if err != nil {
-		return internalbridge.Config{}, err
+		return syncer.Config{}, err
 	}
-	return internalbridge.SyncConfig(
-		bridgeEndpoint(source),
-		bridgeEndpointAuth(sourceAuth),
-		bridgeEndpoint(target),
-		bridgeEndpointAuth(targetAuth),
-		bridgeScope(scope),
-		bridgePolicy(policy),
-		collectStats,
-		dryRun,
-		c.httpClient,
-	), nil
+	return syncer.Config{
+		Source:                 syncerEndpoint(req.Source, sourceAuth),
+		Target:                 syncerEndpoint(req.Target, targetAuth),
+		HTTPClient:             c.httpClient,
+		Branches:               append([]string(nil), req.Scope.Branches...),
+		Mappings:               validationMappings(req.Scope.Mappings),
+		AllRefs:                req.Scope.AllRefs,
+		ExcludeRefPrefixes:     append([]string(nil), req.Scope.ExcludeRefPrefixes...),
+		ExcludeRefs:            append([]string(nil), req.Scope.ExcludeRefs...),
+		IncludeTags:            req.Policy.IncludeTags,
+		DryRun:                 dryRun,
+		ShowStats:              req.CollectStats,
+		Mode:                   string(req.Policy.Mode),
+		ForceWithLease:         req.Policy.ForceWithLease,
+		ForceBlind:             req.Policy.ForceBlind,
+		Prune:                  req.Policy.Prune,
+		BestEffort:             req.Policy.BestEffort,
+		ProtocolMode:           string(req.Policy.Protocol),
+		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
+	}, nil
 }
 
 func (c *Client) authFor(ctx context.Context, endpoint Endpoint, role EndpointRole) (EndpointAuth, error) {
@@ -188,48 +192,14 @@ func (r ProbeRequest) Validate() error {
 	return nil
 }
 
-func bridgeEndpoint(ep Endpoint) internalbridge.Endpoint {
-	return internalbridge.Endpoint{
+func syncerEndpoint(ep Endpoint, auth EndpointAuth) syncer.Endpoint {
+	return syncer.Endpoint{
 		URL:                    ep.URL,
+		Username:               auth.Username,
+		Token:                  auth.Token,
+		BearerToken:            auth.BearerToken,
+		SkipTLSVerify:          auth.SkipTLSVerify,
 		FollowInfoRefsRedirect: ep.FollowInfoRefsRedirect,
-	}
-}
-
-func bridgeEndpointAuth(auth EndpointAuth) internalbridge.EndpointAuth {
-	return internalbridge.EndpointAuth{
-		Username:      auth.Username,
-		Token:         auth.Token,
-		BearerToken:   auth.BearerToken,
-		SkipTLSVerify: auth.SkipTLSVerify,
-	}
-}
-
-func bridgeScope(scope RefScope) internalbridge.RefScope {
-	mappings := make([]internalbridge.RefMapping, 0, len(scope.Mappings))
-	for _, mapping := range scope.Mappings {
-		mappings = append(mappings, internalbridge.RefMapping{
-			Source: mapping.Source,
-			Target: mapping.Target,
-		})
-	}
-	return internalbridge.RefScope{
-		Branches:           append([]string(nil), scope.Branches...),
-		Mappings:           mappings,
-		AllRefs:            scope.AllRefs,
-		ExcludeRefPrefixes: append([]string(nil), scope.ExcludeRefPrefixes...),
-		ExcludeRefs:        append([]string(nil), scope.ExcludeRefs...),
-	}
-}
-
-func bridgePolicy(policy SyncPolicy) internalbridge.SyncPolicy {
-	return internalbridge.SyncPolicy{
-		Mode:           internalbridge.OperationMode(policy.Mode),
-		IncludeTags:    policy.IncludeTags,
-		ForceWithLease: policy.ForceWithLease,
-		ForceBlind:     policy.ForceBlind,
-		Prune:          policy.Prune,
-		BestEffort:     policy.BestEffort,
-		Protocol:       internalbridge.ProtocolMode(policy.Protocol),
 	}
 }
 
@@ -240,10 +210,6 @@ func validateOperationMode(mode OperationMode) error {
 	default:
 		return fmt.Errorf("unsupported operation mode %q", mode)
 	}
-}
-
-func ptr[T any](v T) *T {
-	return &v
 }
 
 func validationMappings(mappings []RefMapping) []validation.RefMapping {
