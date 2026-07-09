@@ -1,0 +1,5 @@
+can you check https://github.com/entireio/git-sync/security/dependabot
+
+---
+
+let's check if bumping our direct dependencies solves this, it's probably good hygiene anyway?
