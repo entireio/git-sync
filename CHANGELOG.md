@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-09
+
 ### Added
 
 - `gitsync.SetIdentity(service, version)` — lets an embedding service name itself in every request git-sync makes. The HTTP User-Agent and the git-protocol `agent=` capability become `<service>/<version> git-sync/<git-sync-version> go-git/<go-git-version>` (non-git provider requests carry the same string without the go-git token). Previously an embedder had no way to identify itself: the advertised version lives in an internal package, and the old doc comment claiming "SDK consumers may overwrite it" was unimplementable from outside the module.
