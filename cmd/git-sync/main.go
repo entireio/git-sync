@@ -13,7 +13,13 @@ import (
 )
 
 func main() {
-	useragent.Version = versioninfo.Version
+	// Prefer the goreleaser-stamped version; a plain `go build` leaves
+	// versioninfo at "dev", and overwriting would clobber the version
+	// useragent already resolved from the binary's build info (which is
+	// the real one for a `go install ...@version` build).
+	if versioninfo.Version != "dev" {
+		useragent.Version = versioninfo.Version
+	}
 	err := run(context.Background(), os.Args[1:])
 	if err == nil {
 		return

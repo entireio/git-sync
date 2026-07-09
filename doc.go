@@ -8,6 +8,7 @@
 //   - inject an HTTP client for transport, OTEL, proxy, TLS, and timeout control
 //   - inject an auth provider that resolves source and target credentials
 //   - inspect structured results for per-ref outcomes and aggregate counters
+//   - advertise their own service identity in the User-Agent via SetIdentity
 //
 // Current advanced engine tuning such as batch sizing, max pack thresholds, and
 // heap measurement remains outside this stable public surface.

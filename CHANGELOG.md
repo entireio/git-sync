@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `gitsync.SetIdentity(service, version)` — lets an embedding service name itself in every request git-sync makes. The HTTP User-Agent and the git-protocol `agent=` capability become `<service>/<version> git-sync/<git-sync-version> go-git/<go-git-version>` (non-git provider requests carry the same string without the go-git token). Previously an embedder had no way to identify itself: the advertised version lives in an internal package, and the old doc comment claiming "SDK consumers may overwrite it" was unimplementable from outside the module.
+
 - `RefScope.ExcludeRefs` — exact ref-name exclusion, alongside the existing prefix-based `ExcludeRefPrefixes`. An excluded exact name is not pulled, pushed, or pruned, but — unlike a prefix — its children are unaffected, so a caller can reserve a directory-anchor ref like `refs/heads/entire` while still mirroring `refs/heads/entire/foo`. Threaded through `RefScope` → planner `PlanConfig`; `IsRefExcluded` now takes both prefix and exact lists.
+
+### Changed
+
+- The default advertised git-sync version is now resolved from the binary's embedded build info instead of the hardcoded `"dev"`: embedders automatically advertise the git-sync module version they built against, and a `go install ...@version` CLI build advertises that version. `"dev"` remains only for builds with no usable version (e.g. a plain `go build` of this repo). The goreleaser-stamped CLI version still takes precedence when present.
 
 ### Removed
 
