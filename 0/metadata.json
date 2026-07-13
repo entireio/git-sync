@@ -1,0 +1,77 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "01KXDKNGABW47M7NK1W0RF1VMR",
+  "session_id": "0708a5fa-06bd-4274-b1fe-513c7202217e",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-13T11:26:51.45816361Z",
+  "branch": "bump-go-git",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "client_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "ac14656ce64f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 13686,
+    "cache_creation_tokens": 63046,
+    "cache_read_tokens": 1196300,
+    "output_tokens": 9951,
+    "api_call_count": 33
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-13T11:26:51.444395503Z",
+    "agent_lines": 2,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 3,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 35,
+      "user_lines_removed": 12,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23,
+        "go.mod": 4,
+        "go.sum": 8
+      },
+      "user_removed_per_file": {
+        "go.mod": 4,
+        "go.sum": 8
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    }
+  ]
+}

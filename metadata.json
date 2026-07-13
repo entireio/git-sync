@@ -1,0 +1,26 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "01KXDKNGABW47M7NK1W0RF1VMR",
+  "strategy": "manual-commit",
+  "branch": "bump-go-git",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "client_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13686,
+    "cache_creation_tokens": 63046,
+    "cache_read_tokens": 1196300,
+    "output_tokens": 9951,
+    "api_call_count": 33
+  }
+}

@@ -1,0 +1,15 @@
+Fix the compilation issues due to go-git bump.
+
+---
+
+Fix the linting issues:
+
+[lint:shellcheck] Finished in 171.1ms
+[lint:gofmt] These .go files need to be formatted:
+[lint:gofmt] 
+[lint:gofmt] client_test.go
+[lint:gofmt] 
+[lint:gofmt] To fix: mise run fmt
+Finished in 179.5ms
+[lint:gofmt] ERROR task failed
+Error: Process completed with exit code 1.
