@@ -1,0 +1,37 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "01KXDM08H2V0SZREV3NDG2R38M",
+  "session_id": "0708a5fa-06bd-4274-b1fe-513c7202217e",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-13T11:32:46.472174149Z",
+  "branch": "bump-go-git",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "12f6cbc66629",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 13831,
+    "cache_creation_tokens": 70555,
+    "cache_read_tokens": 1640180,
+    "output_tokens": 11692,
+    "api_call_count": 41
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    }
+  ]
+}
