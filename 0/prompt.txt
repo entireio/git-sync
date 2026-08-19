@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>b401ezfrs</task-id>
+<tool-use-id>toolu_01M5eF9tiWyhaco1311GZsqE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/9f1c8ebe-1a05-4632-9630-d373eac3e09b/tasks/b401ezfrs.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on the rebuilt stack" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+110 and 111 have comments too
