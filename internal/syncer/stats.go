@@ -223,6 +223,11 @@ type countingRoundTripper struct {
 	stats *statsCollector
 }
 
+// Unwrap exposes the wrapped transport so checks that need to inspect the real
+// transport — notably whether TLS verification is disabled — are not blinded by
+// this instrumentation layer.
+func (rt *countingRoundTripper) Unwrap() http.RoundTripper { return rt.base }
+
 func (rt *countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	side := rt.stats.side(rt.label)
 

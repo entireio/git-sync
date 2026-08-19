@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"entire.io/entire/git-sync/internal/sanitize"
 )
 
 // SSHLookPath is replaceable in tests.
@@ -355,10 +357,13 @@ func (e *sshCommandError) Write(p []byte) (int, error) {
 	return e.buf.Write(p) //nolint:wrapcheck // io.Writer implementation forwards buffer write errors verbatim
 }
 
+// String returns the captured stderr. It is sanitized because ssh relays the
+// server's own messages ("remote: ...") through this channel, and the result is
+// embedded in errors that reach terminals and logs.
 func (e *sshCommandError) String() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return strings.TrimSpace(e.buf.String())
+	return sanitize.Text(strings.TrimSpace(e.buf.String()))
 }
 
 func (e *sshCommandError) wrap(err error) error {

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"entire.io/entire/git-sync/internal/sanitize"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/hash"
@@ -372,8 +373,14 @@ func asRefRejectedError(err error) error {
 		return err
 	}
 	return &RefRejectedError{
-		Ref:    cs.ReferenceName.String(),
-		Reason: cs.Status,
+		Ref: cs.ReferenceName.String(),
+		// The reason is free-form text authored by the target server, and it
+		// travels into terminal output and --json results. Strip control
+		// characters so an escape sequence cannot redraw the line a rejection
+		// was printed on. Classification still runs on the raw status, so
+		// filtering cannot change whether a rejection counts as a concurrent
+		// move.
+		Reason: sanitize.Text(cs.Status),
 		moved:  isConcurrentMove(cs.Status),
 		err:    err,
 	}
@@ -838,7 +845,10 @@ func progressSink(verbose bool, prefix string, dest io.Writer) io.Writer {
 	if dest == nil {
 		dest = os.Stderr
 	}
-	return &prefixedLineWriter{w: dest, prefix: prefix, atLineStart: true}
+	// Sideband progress is written by the remote. Filter it before it reaches a
+	// terminal: the line prefix limits how much a hostile server can spoof, but
+	// an escape sequence could still redraw earlier output.
+	return &prefixedLineWriter{w: sanitize.Writer(dest), prefix: prefix, atLineStart: true}
 }
 
 // prefixedLineWriter prepends a fixed prefix to each line of input written
