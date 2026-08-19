@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0D4SC7ZGNMK28004MYM9WTA",
+  "strategy": "manual-commit",
+  "branch": "soph/security-bound-materialization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CHANGELOG.md",
+    "internal/gitproto/fetch.go",
+    "internal/syncer/objectlimit.go",
+    "internal/syncer/objectlimit_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 5898,
+    "cache_read_tokens": 2832246,
+    "output_tokens": 4719,
+    "api_call_count": 5
+  }
+}
