@@ -1,0 +1,9 @@
+can you do a full security review on the code base, look for anything that could cause a bug bounty claim for us or result in a CVE
+
+---
+
+how much of those could we do in one PR?
+
+---
+
+ok, do those two you can just do
