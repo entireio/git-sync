@@ -1,0 +1,33 @@
+name: Vulnerability Scan
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+  # Advisories are published against versions we already depend on, so a
+  # code-change-only trigger would leave a newly disclosed vulnerability
+  # unreported until the next PR. Re-scan weekly.
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Symbol-level scan: fails only on vulnerabilities git-sync actually
+      # calls, so an advisory in an unreachable corner of a dependency
+      # doesn't block the queue. Pinned rather than @latest — the scanner
+      # runs in CI with repo checkout access like any other dependency.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...

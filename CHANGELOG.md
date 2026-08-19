@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Bumped go-git to `v6.0.0-alpha.5` (from an `alpha.4`-based pseudo-version), clearing two advisories `govulncheck` reported as reachable from git-sync's own call graph: **GO-2026-6214**, path traversal via crafted reference names, reached where `convert-sha256` writes advertised refs to disk with `SetReference`; and **GO-2026-6213**, worktree operations following symlinks. Pulls `go-billy` to `v6.0.0-alpha.2` transitively.
+
+- Bumped the Go toolchain to `1.26.6` (go.mod `toolchain` and the mise pin), clearing ten standard-library advisories reachable from the HTTP transport and the `convert-sha256` filesystem paths — among them quadratic complexity in `net/url` `resolvePath`, an `os` root escape via symlink plus trailing slash, and an HTTP/2 infinite loop on a bad `SETTINGS_MAX_FRAME_SIZE`. Released binaries are built from the go.mod toolchain, so they carried these until now. `govulncheck ./...` goes from 12 called vulnerabilities to 0.
+
+### Added
+
+- A `Vulnerability Scan` workflow running `govulncheck ./...` on pull requests, pushes to main, and a weekly schedule. The existing lint suite cannot see this class of issue, and the weekly run matters because advisories are published against versions already in go.mod — without it, a newly disclosed vulnerability goes unreported until someone happens to open a PR.
+
 ## [0.8.0] - 2026-07-09
 
 ### Added
