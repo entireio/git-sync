@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0DBA8KN6ZDB8RPQCTR8GRBF",
+  "strategy": "manual-commit",
+  "branch": "soph/security-sanitize-and-tls",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "internal/gitproto/push.go",
+    "internal/gitproto/push_test.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 10300,
+    "cache_read_tokens": 7774010,
+    "output_tokens": 7545,
+    "api_call_count": 12
+  }
+}
