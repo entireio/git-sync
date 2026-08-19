@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0D37M8N0R7G8BG03EAF6BGT",
+  "strategy": "manual-commit",
+  "branch": "soph/security-release-provenance",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release.yml",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 7300,
+    "cache_read_tokens": 2665051,
+    "output_tokens": 6043,
+    "api_call_count": 5
+  }
+}
