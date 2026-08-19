@@ -13,7 +13,11 @@ func TestTextStripsTerminalControlSequences(t *testing.T) {
 		want string
 	}{
 		{"plain text untouched", "Enumerating objects: 42, done.", "Enumerating objects: 42, done."},
-		{"tab, newline and CR survive", "a\tb\nc\rd", "a\tb\nc\rd"},
+		{"tab and newline survive", "a\tb\nc", "a\tb\nc"},
+		// CR is dropped here but kept by Writer: a one-shot message has no need
+		// to move the cursor, and a bare CR rewrites the line on its own.
+		{"CR dropped", "rejected\rok refs/heads/main", "rejectedok refs/heads/main"},
+		{"CRLF becomes LF", "line one\r\nline two", "line one\nline two"},
 		{"escape removed", "before\x1b[2Kafter", "before[2Kafter"},
 		{"OSC introducer removed", "x\x1b]0;titley", "x]0;titley"},
 		{"NUL removed", "a\x00b", "ab"},
@@ -37,15 +41,30 @@ func TestTextStripsTerminalControlSequences(t *testing.T) {
 }
 
 // The spoofing case the filter exists for: a rejection reason that clears the
-// line and rewrites it to look like success.
+// line and rewrites it to look like success. Stripping ESC alone is not enough,
+// because a bare CR repositions the cursor to the start of the line by itself.
 func TestTextDefeatsLineRewriteSpoofing(t *testing.T) {
 	hostile := "rejected\x1b[2K\rok refs/heads/main"
 	got := Text(hostile)
-	if strings.Contains(got, "\x1b") {
-		t.Errorf("escape survived: %q", got)
+	if strings.ContainsAny(got, "\x1b\r") {
+		t.Errorf("cursor-moving characters survived: %q", got)
 	}
 	if !strings.HasPrefix(got, "rejected") {
 		t.Errorf("the real message must still lead: %q", got)
+	}
+}
+
+// Writer keeps CR because git's in-place progress depends on it, and the line
+// prefix bounds what overwriting a row can achieve. This is the deliberate
+// asymmetry with Text.
+func TestWriterKeepsCarriageReturnForProgress(t *testing.T) {
+	var buf bytes.Buffer
+	w := Writer(&buf)
+	if _, err := w.Write([]byte("Resolving deltas:  50%\r")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got, want := buf.String(), "Resolving deltas:  50%\r"; got != want {
+		t.Errorf("Writer dropped the progress CR: got %q, want %q", got, want)
 	}
 }
 

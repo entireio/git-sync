@@ -9,10 +9,21 @@
 // read like a successful one; the same bytes in a log file mislead whoever reads
 // it later.
 //
-// The filter keeps tab, newline and carriage return, because git's own progress
-// output relies on them — a '\r'-terminated line is how in-place progress
-// updates work. Everything else below 0x20, plus DEL, is dropped. That covers
-// the sequences a terminal acts on, since both ANSI CSI and OSC begin with ESC
+// The policy differs between the two entry points, because carriage return is
+// both necessary and dangerous depending on context.
+//
+// Writer, used for streamed sideband progress, keeps '\r': git's in-place
+// progress updates are built from it, and the "source:"/"target:" prefix each
+// line carries bounds what overwriting a row can achieve.
+//
+// Text, used for one-shot strings — HTTP error bodies, diagnostic headers, ssh
+// "remote:" output, receive-pack rejection reasons — drops it. Those strings are
+// not prefixed and have no need to move the cursor, and a bare '\r' is enough to
+// rewrite the line on its own: "rejected\rok refs/heads/main" reads as a success
+// without any escape sequence involved.
+//
+// Both keep tab and newline, and drop everything else below 0x20 plus DEL. That
+// covers what a terminal acts on, since ANSI CSI and OSC both begin with ESC
 // (0x1b). The single-byte C1 introducers are not handled: in a UTF-8 stream they
 // are not valid standalone bytes, and terminals in UTF-8 mode do not act on
 // them.
@@ -23,12 +34,23 @@ import (
 	"strings"
 )
 
-func allowed(b byte) bool {
+func printable(b byte) bool { return b >= 0x20 && b != 0x7f }
+
+// allowedInText keeps only the whitespace a one-shot message needs.
+func allowedInText(b byte) bool {
 	switch b {
-	case '\t', '\n', '\r':
+	case '\t', '\n':
 		return true
 	}
-	return b >= 0x20 && b != 0x7f
+	return printable(b)
+}
+
+// allowedInStream additionally keeps '\r' for in-place progress updates.
+func allowedInStream(b byte) bool {
+	if b == '\r' {
+		return true
+	}
+	return allowedInText(b)
 }
 
 // Text returns s with disallowed control characters removed. Text that has none
@@ -36,7 +58,7 @@ func allowed(b byte) bool {
 func Text(s string) string {
 	clean := true
 	for i := range len(s) {
-		if !allowed(s[i]) {
+		if !allowedInText(s[i]) {
 			clean = false
 			break
 		}
@@ -47,7 +69,7 @@ func Text(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := range len(s) {
-		if allowed(s[i]) {
+		if allowedInText(s[i]) {
 			b.WriteByte(s[i])
 		}
 	}
@@ -71,7 +93,7 @@ func (f *filteringWriter) Write(p []byte) (int, error) {
 		f.buf = make([]byte, 0, len(p))
 	}
 	for _, b := range p {
-		if allowed(b) {
+		if allowedInStream(b) {
 			f.buf = append(f.buf, b)
 		}
 	}

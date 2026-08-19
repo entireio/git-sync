@@ -273,7 +273,11 @@ func (e *RefRejectedError) Error() string {
 	if e.err == nil {
 		return fmt.Sprintf("ref %s rejected: %s", e.Ref, e.Reason)
 	}
-	return e.err.Error()
+	// The wrapped error renders the server's raw status, and this is the string
+	// the CLI prints — sanitizing only the Reason field would leave the path
+	// users actually see unfiltered. Unwrap still exposes the original error,
+	// so errors.Is/As behaviour is unchanged.
+	return sanitize.Text(e.err.Error())
 }
 
 // Unwrap exposes the underlying receive-pack error so existing
@@ -370,7 +374,10 @@ func commandStatusErr(err error) (packp.CommandStatusErr, bool) {
 func asRefRejectedError(err error) error {
 	cs, ok := commandStatusErr(err)
 	if !ok {
-		return err
+		// Not a per-ref status — an unpack failure, say. Still text the server
+		// wrote, so filter how it renders while leaving the chain intact for
+		// errors.Is/As.
+		return &sanitizedError{err: err}
 	}
 	return &RefRejectedError{
 		Ref: cs.ReferenceName.String(),
@@ -385,6 +392,14 @@ func asRefRejectedError(err error) error {
 		err:    err,
 	}
 }
+
+// sanitizedError renders a server-authored error with control characters
+// stripped while leaving the original reachable through Unwrap, so errors.Is
+// and errors.As keep matching exactly what they matched before.
+type sanitizedError struct{ err error }
+
+func (e *sanitizedError) Error() string { return sanitize.Text(e.err.Error()) }
+func (e *sanitizedError) Unwrap() error { return e.err }
 
 // sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
 func sendReceivePack(
