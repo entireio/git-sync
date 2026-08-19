@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Whether TLS verification is disabled is now derived from the transport.** `HTTPConn.InsecureSkipTLSVerify` was documented as a field callers must set to match the client they pass in, and the cross-host credential guard depends on it — so a caller who disabled verification on their transport but forgot the field silently lost that protection, which is the wrong direction for a security check to fail. The transport is now inspected directly, following `Unwrap` through wrappers (the syncer's instrumented round-tripper gained one) so an instrumentation layer cannot hide the setting. The explicit field still forces the guard on, for transports that cannot be inspected.
 
+- **Release artifacts now carry signed build provenance.** `checksums.txt` was the only integrity signal and was itself unsigned, so someone downloading a Linux archive plus its checksum had no way to establish that either came from this repository — macOS binaries were signed and notarized, but nothing else was. The release workflow now attests the archives and the checksum file via `actions/attest-build-provenance`, verifiable with `gh attestation verify <file> --repo entireio/git-sync`. README documents the check.
+
 - Added `permissions: contents: read` to the `Tests` and `License Check` workflows, which previously inherited the repository default while running PR-controlled code. `lint.yml` already declared it. Defence in depth — GitHub already restricts the token for fork PRs — but same-repo branches are not restricted.
 
 ### Added

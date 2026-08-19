@@ -62,6 +62,18 @@ cd git-sync
 go build -o git-sync ./cmd/git-sync
 ```
 
+### Verifying a download
+
+Release archives and `checksums.txt` carry signed build provenance tied to this
+repository and the workflow that produced them. Check a download before running
+it:
+
+```bash
+gh attestation verify git-sync_<version>_<os>_<arch>.tar.gz --repo entireio/git-sync
+```
+
+Homebrew verifies the archive checksum from the tap automatically.
+
 ## Quick Start
 
 ```bash
