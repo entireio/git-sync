@@ -135,6 +135,12 @@ func NormalizeMapping(m RefMapping, allowOther bool) (NormalizedMapping, error) 
 	if srcFQ && dstFQ {
 		sourceRef := plumbing.ReferenceName(src)
 		targetRef := plumbing.ReferenceName(dst)
+		if err := validateRefName("source", sourceRef); err != nil {
+			return NormalizedMapping{}, err
+		}
+		if err := validateRefName("target", targetRef); err != nil {
+			return NormalizedMapping{}, err
+		}
 		srcKind := refKind(sourceRef)
 		dstKind := refKind(targetRef)
 		if !allowOther && srcKind == kindOther {
@@ -150,10 +156,15 @@ func NormalizeMapping(m RefMapping, allowOther bool) (NormalizedMapping, error) 
 	}
 
 	if !srcFQ && !dstFQ {
-		return NormalizedMapping{
-			SourceRef: plumbing.NewBranchReferenceName(src),
-			TargetRef: plumbing.NewBranchReferenceName(dst),
-		}, nil
+		sourceRef := plumbing.NewBranchReferenceName(src)
+		targetRef := plumbing.NewBranchReferenceName(dst)
+		if err := validateRefName("source", sourceRef); err != nil {
+			return NormalizedMapping{}, err
+		}
+		if err := validateRefName("target", targetRef); err != nil {
+			return NormalizedMapping{}, err
+		}
+		return NormalizedMapping{SourceRef: sourceRef, TargetRef: targetRef}, nil
 	}
 
 	return NormalizedMapping{}, fmt.Errorf("ambiguous mapping: cannot mix fully-qualified and short ref names: %q -> %q", src, dst)
@@ -180,6 +191,22 @@ func ValidateMappings(mappings []RefMapping, allowOther bool) ([]NormalizedMappi
 		normalized = append(normalized, nm)
 	}
 	return normalized, nil
+}
+
+// validateRefName rejects a mapping ref name that git itself would not accept.
+//
+// A mapped target ref reaches the same places an advertised one does — written
+// to disk by convert-sha256, embedded in receive-pack command lines — so a name
+// containing "..", NUL, or control characters carries the same risk regardless
+// of whether a remote or a caller supplied it. Unlike advertised names, which
+// are skipped so one bad ref upstream cannot stop a mirror, a bad mapping is
+// rejected outright: it is configuration, and failing at startup is more useful
+// than silently not mirroring what was asked for.
+func validateRefName(side string, name plumbing.ReferenceName) error {
+	if err := name.Validate(); err != nil {
+		return fmt.Errorf("invalid %s ref %q in mapping: %w", side, name.String(), err)
+	}
+	return nil
 }
 
 const (

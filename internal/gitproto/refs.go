@@ -77,10 +77,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 		if err != nil {
 			return nil, nil, err
 		}
-		refs, err := AdvRefsToSlice(adv)
+		refs, skipped, err := AdvRefsToSlice(adv)
 		if err != nil {
 			return nil, nil, err
 		}
+		WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
 		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
 
 	default:
@@ -123,19 +124,24 @@ func AdvertisedRefsV1(ctx context.Context, conn Conn, service string) (*packp.Ad
 // Including them in target ref maps causes the planner to schedule a delete
 // for a non-existent ref, which receive-pack rejects with HTTP 400
 // "invalid reference name".
-func AdvRefsToSlice(ar *packp.AdvRefs) ([]*plumbing.Reference, error) {
-	refs, err := ar.ResolvedReferences()
+// Names a remote advertises are untrusted, so anything git would reject is
+// dropped here and returned as skipped for the caller to report. Filtering at
+// the decode boundary means every path that reads an advertisement is covered
+// without each one remembering to ask.
+func AdvRefsToSlice(ar *packp.AdvRefs) (refs []*plumbing.Reference, skipped []string, err error) {
+	resolved, err := ar.ResolvedReferences()
 	if err != nil {
-		return nil, fmt.Errorf("resolved references: %w", err)
+		return nil, nil, fmt.Errorf("resolved references: %w", err)
 	}
-	out := refs[:0]
-	for _, ref := range refs {
+	out := resolved[:0]
+	for _, ref := range resolved {
 		if ref.Name().IsPeeled() {
 			continue
 		}
 		out = append(out, ref)
 	}
-	return out, nil
+	refs, skipped = PartitionRefNames(out)
+	return refs, skipped, nil
 }
 
 // AdvRefsCaps returns the sorted capability list from an AdvRefs.
@@ -163,10 +169,11 @@ func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbi
 	if err != nil {
 		return nil, nil, err
 	}
-	refs, err := AdvRefsToSlice(adv)
+	refs, skipped, err := AdvRefsToSlice(adv)
 	if err != nil {
 		return nil, nil, err
 	}
+	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
 	return adv, refs, nil
 }
 
@@ -187,27 +194,35 @@ func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, pref
 	if err != nil {
 		return nil, "", err
 	}
-	return decodeV2LSRefs(bytes.NewReader(data))
+	refs, headTarget, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
+	return refs, headTarget, nil
 }
 
-func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
+func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, []string, error) {
 	reader := NewPacketReader(r)
 	var refs []*plumbing.Reference
 	var headTarget plumbing.ReferenceName
 	for {
 		kind, payload, err := reader.ReadPacket()
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		if kind == PacketFlush {
-			return refs, headTarget, nil
+			// Names come from the remote, so drop anything git would reject
+			// and hand the list back for the caller to report.
+			valid, skipped := PartitionRefNames(refs)
+			return valid, headTarget, skipped, nil
 		}
 		if kind != PacketData {
-			return nil, "", fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
+			return nil, "", nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
 		}
 		fields := strings.Fields(strings.TrimSpace(string(payload)))
 		if len(fields) < 2 {
-			return nil, "", fmt.Errorf("malformed ls-refs response line %q", payload)
+			return nil, "", nil, fmt.Errorf("malformed ls-refs response line %q", payload)
 		}
 		if fields[0] == "unborn" {
 			continue

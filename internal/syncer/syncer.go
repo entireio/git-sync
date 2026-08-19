@@ -772,10 +772,14 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
-		targetRefSlice, err := gitproto.AdvRefsToSlice(targetAdv)
+		targetRefSlice, skippedTargetRefs, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
 			return nil, fmt.Errorf("decode target refs: %w", err)
 		}
+		// A skipped target ref is also one the planner will not see, so it is
+		// never picked as a prune candidate — the safe direction, but the
+		// operator should know the target holds a name git would reject.
+		gitproto.WarnSkippedRefNames(targetConn.ProgressWriter(), "target", skippedTargetRefs)
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
 		s.target.adv = targetAdv
