@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"entire.io/entire/git-sync/internal/sanitize"
 	"errors"
 	"os"
 	"path/filepath"
@@ -320,5 +321,40 @@ func TestSSHStatsWarning(t *testing.T) {
 				t.Fatalf("sshStatsWarning() = %q, want warning=%t", got, tt.want)
 			}
 		})
+	}
+}
+
+// Under --all-refs the push runs BestEffort, so per-ref rejections become
+// warnings and the server's "ng" text is surfaced by design — into the printed
+// plan line and into the "reason" field of --json. That path never goes through
+// asRefRejectedError, so the text has to be filtered where it is captured.
+func TestBestEffortRejectionReasonIsSanitized(t *testing.T) {
+	hostile := "rejected\x1b[2K\rok refs/heads/main"
+	ref := plumbing.NewBranchReferenceName("main")
+
+	s := &syncSession{rejections: map[plumbing.ReferenceName]string{}}
+	// Exactly what the OnRejection callback installed in newSession does.
+	capture := func(name plumbing.ReferenceName, status string) {
+		s.rejections[name] = sanitize.Text(status)
+	}
+	capture(ref, hostile)
+
+	plans := []BranchPlan{{TargetRef: ref, Action: ActionUpdate}}
+	if warned := s.applyRejections(plans); warned != 1 {
+		t.Fatalf("applyRejections warned %d plans, want 1", warned)
+	}
+
+	if strings.ContainsAny(plans[0].Reason, "\x1b\r") {
+		t.Errorf("plan reason carries cursor-moving characters: %q", plans[0].Reason)
+	}
+	if !strings.Contains(plans[0].Reason, "rejected") {
+		t.Errorf("the real reason must survive: %q", plans[0].Reason)
+	}
+	// Classification is substring-based, so filtering must not change it.
+	if gitproto.IsLeaseFailure(s.rejections[ref]) {
+		t.Error("a non-lease rejection must not become a lease failure after filtering")
+	}
+	if !gitproto.IsLeaseFailure(sanitize.Text("stale info")) {
+		t.Error("filtering must not stop a real lease marker from matching")
 	}
 }

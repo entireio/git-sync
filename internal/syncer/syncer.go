@@ -29,6 +29,7 @@ import (
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
 	"entire.io/entire/git-sync/internal/redact"
+	"entire.io/entire/git-sync/internal/sanitize"
 	bstrap "entire.io/entire/git-sync/internal/strategy/bootstrap"
 	"entire.io/entire/git-sync/internal/strategy/incremental"
 	"entire.io/entire/git-sync/internal/strategy/materialized"
@@ -804,7 +805,15 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
 			s.target.pusher.OnRejection = func(name plumbing.ReferenceName, status string) {
-				s.rejections[name] = status
+				// Server-authored text that becomes BranchPlan.Reason, which is
+				// printed by FormatPlanLine and marshalled as "reason". This is
+				// the designed path under --all-refs, where per-ref rejections
+				// surface as warnings rather than errors, so it carries hostile
+				// text to the terminal and to --json by intent. It never passes
+				// through asRefRejectedError, so filtering has to happen here.
+				// IsLeaseFailure and applyRejections only substring-match, so
+				// this cannot change how a rejection is classified.
+				s.rejections[name] = sanitize.Text(status)
 			}
 		}
 	}

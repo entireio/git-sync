@@ -457,7 +457,10 @@ func sendReceivePack(
 			return nil
 		}
 		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
-			return fmt.Errorf("report-status: unpack error: %s", report.UnpackStatus)
+			// Server-authored, and formatted directly rather than wrapped, so
+			// it needs filtering here — the sibling branch below gets it from
+			// sanitizedError.
+			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
 		}
 		for _, cs := range report.CommandStatuses {
 			if cs.Status == "" || cs.Status == "ok" {

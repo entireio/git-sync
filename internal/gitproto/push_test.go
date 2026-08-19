@@ -973,3 +973,35 @@ func TestNonRefRejectionErrorIsSanitizedForDisplay(t *testing.T) {
 		t.Error("the original error must stay reachable through Unwrap")
 	}
 }
+
+// The best-effort branch formats the server's unpack status directly rather than
+// wrapping it, so it needs its own filtering — the strict branch above gets it
+// from sanitizedError. Driven end to end through PushPack against a server that
+// reports a hostile unpack status.
+func TestPushPackSanitizesUnpackStatusOnBestEffortPath(t *testing.T) {
+	srv := fakeReceivePackServer(t, "failed\x1b[2K\runpack ok")
+	defer srv.Close()
+
+	conn := connForServer(t, srv)
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(conn, adv, false)
+	// A non-nil OnRejection is what selects the best-effort branch.
+	pusher.OnRejection = func(plumbing.ReferenceName, string) {}
+
+	err := pusher.PushPack(t.Context(), []PushCommand{{
+		Name: plumbing.ReferenceName("refs/heads/main"),
+		Old:  plumbing.ZeroHash,
+		New:  plumbing.NewHash("1111111111111111111111111111111111111111"),
+	}}, io.NopCloser(bytes.NewBufferString("PACK")))
+
+	if err == nil {
+		t.Fatal("expected an unpack error")
+	}
+	if strings.ContainsAny(err.Error(), "\x1b\r") {
+		t.Errorf("unpack status reached the error unfiltered: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Errorf("the real status must survive filtering: %q", err.Error())
+	}
+}
