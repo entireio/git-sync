@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0D0SS9HH9AVZME1XB200NVJ",
+  "strategy": "manual-commit",
+  "branch": "soph/security-bounds-and-redaction",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 68,
+    "cache_creation_tokens": 736798,
+    "cache_read_tokens": 12370745,
+    "output_tokens": 25739,
+    "api_call_count": 34
+  }
+}

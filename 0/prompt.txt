@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>bllafh5lq</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph-Work-entire-devenv-git-sync/9f1c8ebe-1a05-4632-9630-d373eac3e09b/tasks/bllafh5lq.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll PR 107 CI to completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok, 107 has a comment on the PR, I also removed the "left out" section from the PR since that already flagged other issues that should have been not disclosed yet
