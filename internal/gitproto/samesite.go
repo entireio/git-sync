@@ -24,8 +24,12 @@ import (
 // same domain) while refusing an unrelated host. It is deliberately stricter
 // than Go's version in two ways:
 //
-//   - The scheme must match, so an https endpoint never leaks a token over
-//     plaintext http.
+//   - The scheme must not be downgraded, so an https endpoint never leaks a
+//     token over plaintext http. An http endpoint redirecting to https on the
+//     same host is allowed: that is an upgrade, it is what GitHub and most
+//     reverse proxies do, and refusing it would withhold credentials from a
+//     configuration that works today — the credentials were already going to
+//     that host in the clear.
 //   - The port must match. Same host on a different port is a different
 //     service, which on shared infrastructure can be a different tenant. An
 //     explicitly written default port is the same port as an omitted one, so a
@@ -40,7 +44,7 @@ func sameSite(orig, dest *url.URL) bool {
 	if orig == nil || dest == nil {
 		return false
 	}
-	if !strings.EqualFold(orig.Scheme, dest.Scheme) {
+	if !schemeCompatible(orig.Scheme, dest.Scheme) {
 		return false
 	}
 	if effectivePort(orig) != effectivePort(dest) {
@@ -61,6 +65,19 @@ func sameSite(orig, dest *url.URL) bool {
 		return false
 	}
 	return strings.HasSuffix(destHost, "."+origHost)
+}
+
+// schemeCompatible reports whether moving from src to dst keeps credentials at
+// least as protected. Identical schemes qualify, and so does http -> https.
+// The reverse does not: a downgrade would put the credential on the wire in
+// plaintext, which is the case the scheme check exists for.
+func schemeCompatible(src, dst string) bool {
+	src = strings.ToLower(src)
+	dst = strings.ToLower(dst)
+	if src == dst {
+		return true
+	}
+	return src == "http" && dst == "https"
 }
 
 // effectivePort returns the port u addresses, with a default port for the

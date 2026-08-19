@@ -375,8 +375,9 @@ That means local testing against a dummy GitHub repo can reuse your regular Git 
 
 Credentials you supply explicitly — `--source-token`, `--target-token`, their
 bearer equivalents, or userinfo in the URL — are bound to the host you named.
-They are sent to that host, and to subdomains of it on the same scheme and port,
-and nowhere else.
+They are sent to that host, and to subdomains of it on the same port, and
+nowhere else. A redirect from `http` to `https` on the same host keeps them —
+that is an upgrade — but a redirect from `https` to `http` does not.
 
 This matters with `--source-follow-info-refs-redirect` /
 `--target-follow-info-refs-redirect`, which send follow-up RPCs to the host that

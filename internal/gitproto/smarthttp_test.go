@@ -1761,3 +1761,98 @@ func TestHTTPConnWithholdsURLUserinfoFromCrossSiteRedirect(t *testing.T) {
 		}
 	}
 }
+
+// The redirect guard must anchor on the request that was issued, not on the
+// connection's user-typed endpoint. A connection's effective endpoint moves:
+// setResolvedEndpoint adopts a redirect host, and credential-helper credentials
+// are then looked up for that host. Anchoring on the original endpoint strips
+// those credentials on a later hop that never leaves the adopted host, which
+// breaks the exact remedy the withheld-credentials warning recommends.
+func TestGuardRedirectsAnchorsOnTheIssuedRequest(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+
+	adopted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path] = r.Header.Get("Authorization")
+		mu.Unlock()
+		// Bounce once within this same host, the way a hosting replica does.
+		if r.URL.Path == "/repo.git/git-upload-pack" {
+			http.Redirect(w, r, "/final/repo.git/git-upload-pack", http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer adopted.Close()
+
+	// A conn whose typed endpoint is somewhere else entirely — modelling the
+	// state after a cross-site redirect has been adopted.
+	elsewhere, err := url.Parse("https://typed.example/repo.git")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	conn := NewHTTPConnWithClient(elsewhere, "source", nil, adopted.Client())
+
+	// Aim a request directly at the adopted host, carrying credentials the
+	// helper resolved for it.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, adopted.URL+"/repo.git/git-upload-pack", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.SetBasicAuth("git", "HELPERCRED")
+	res, err := conn.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	_ = res.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if seen["/repo.git/git-upload-pack"] == "" {
+		t.Fatal("the first request should carry the helper credentials")
+	}
+	if seen["/final/repo.git/git-upload-pack"] == "" {
+		t.Error("credentials were stripped on a hop that never left the adopted host")
+	}
+}
+
+// The guard must still strip on a hop that genuinely leaves the site of the
+// request that was issued.
+func TestGuardRedirectsStripsOnCrossSiteHop(t *testing.T) {
+	var mu sync.Mutex
+	var gotAuth string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer other.Close()
+	start := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/elsewhere", http.StatusTemporaryRedirect)
+	}))
+	defer start.Close()
+
+	ep, err := url.Parse(start.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	conn := NewHTTPConnWithClient(ep, "source", nil, start.Client())
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, start.URL+"/repo.git/info/refs", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.SetBasicAuth("git", "SECRET")
+	res, err := conn.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	_ = res.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "" {
+		t.Errorf("credentials followed a cross-site hop: %q", gotAuth)
+	}
+}

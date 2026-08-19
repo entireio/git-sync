@@ -324,7 +324,7 @@ func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClien
 	return &HTTPConn{
 		Label:          label,
 		EndpointURL:    ep,
-		HTTP:           guardRedirects(httpClient, ep),
+		HTTP:           guardRedirects(httpClient),
 		Auth:           auth,
 		authIsExplicit: auth != nil,
 	}
@@ -336,7 +336,7 @@ func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClien
 const maxRedirects = 10
 
 // guardRedirects returns a shallow copy of client whose redirect policy strips
-// credentials on a hop that leaves the endpoint's site.
+// credentials on a hop that leaves the site of the request that was issued.
 //
 // The stdlib already refuses to carry Authorization across a redirect, but its
 // notion of "same host" compares hostnames and ignores the port and scheme, so
@@ -345,10 +345,19 @@ const maxRedirects = 10
 // closes the hop that outgoingAuth cannot see: the redirect is followed inside
 // a single http.Client.Do, so by then the header is already on the wire.
 //
+// The comparison anchors on via[0].URL — the URL this redirect chain started
+// from — rather than on the connection's endpoint. A connection's effective
+// endpoint moves: setResolvedEndpoint adopts a redirect host, and helper
+// credentials are then looked up for that host. Anchoring on the user-typed
+// endpoint would strip those credentials on a later hop that never leaves the
+// adopted host, breaking the very remedy the withheld-credentials warning
+// recommends. Anchoring per request is accurate in both cases, since via[0] is
+// whatever requestURL() or the helper-retry target pointed at.
+//
 // The copy shares the caller's Transport and only differs in redirect policy,
 // so this neither mutates nor reconfigures the client that was passed in. Any
 // CheckRedirect the caller already set still runs, and still gets to veto.
-func guardRedirects(client *http.Client, endpoint *url.URL) *http.Client {
+func guardRedirects(client *http.Client) *http.Client {
 	clone := *client
 	prev := clone.CheckRedirect
 	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -360,7 +369,14 @@ func guardRedirects(client *http.Client, endpoint *url.URL) *http.Client {
 				return err
 			}
 		}
-		if !sameSite(endpoint, req.URL) {
+		// A nil anchor cannot be compared, so sameSite returns false and the
+		// header is stripped: unknown provenance fails closed. Go always
+		// supplies at least one entry in via, so this is defensive only.
+		var from *url.URL
+		if len(via) > 0 {
+			from = via[0].URL
+		}
+		if !sameSite(from, req.URL) {
 			req.Header.Del("Authorization")
 		}
 		return nil

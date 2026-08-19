@@ -30,9 +30,16 @@ func TestSameSite(t *testing.T) {
 		{"suffix without dot boundary", "https://github.com/r.git", "https://notgithub.com/r.git", false},
 		{"attacker-controlled prefix domain", "https://github.com/r.git", "https://github.com.evil.example/r.git", false},
 
-		// Scheme must not downgrade.
+		// A downgrade would put the credential on the wire in plaintext.
 		{"https to http", "https://github.com/r.git", "http://github.com/r.git", false},
-		{"http to https", "http://github.com/r.git", "https://github.com/r.git", false},
+		// An upgrade is allowed: the credential was already going to that host
+		// in the clear, and GitHub and most reverse proxies redirect this way.
+		{"http to https same host", "http://github.com/r.git", "https://github.com/r.git", true},
+		{"http to https with default ports spelled out", "http://host:80/r.git", "https://host:443/r.git", true},
+		{"http to https on a subdomain", "http://example.com/r.git", "https://replica.example.com/r.git", true},
+		// The upgrade allowance must not smuggle in a host change.
+		{"http to https different host", "http://github.com/r.git", "https://evil.example/r.git", false},
+		{"http to https different port", "http://host/r.git", "https://host:8443/r.git", false},
 
 		// Port must match: same host on another port is another service.
 		{"different explicit port", "https://host:8443/r.git", "https://host:9443/r.git", false},
