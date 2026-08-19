@@ -2,11 +2,11 @@ module entire.io/entire/git-sync
 
 go 1.26
 
-toolchain go1.26.2
+toolchain go1.26.6
 
 require (
-	github.com/go-git/go-billy/v6 v6.0.0-alpha.1.0.20260519112248-0095b064a6c6
-	github.com/go-git/go-git/v6 v6.0.0-alpha.4.0.20260713100844-d5e9b9c7895b
+	github.com/go-git/go-billy/v6 v6.0.0-alpha.2
+	github.com/go-git/go-git/v6 v6.0.0-alpha.5
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 )
