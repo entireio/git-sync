@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 )
@@ -72,6 +73,20 @@ func runFakeHelper(mode string, stdin io.Reader, stdout io.Writer) error {
 
 	if err := write("\n"); err != nil { // ack: empty line = connection established
 		return err
+	}
+
+	if mode == "endless" {
+		// Well-formed pkt-lines forever, with no flush to terminate the
+		// advertisement. The write fails once the client closes the pipe,
+		// which is the teardown this mode exists to exercise.
+		frame := FormatPktLine(strings.Repeat("x", pktline.MaxSize-4))
+		for {
+			if err := write(frame); err != nil {
+				// The client closed the pipe, which is exactly the teardown
+				// this mode exists to exercise — a success, not a failure.
+				return nil //nolint:nilerr // pipe teardown is this mode's success condition
+			}
+		}
 	}
 
 	switch service {
@@ -300,5 +315,30 @@ func TestReadAdvertisementRejectsEndlessStream(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "byte limit") {
 		t.Errorf("error %q does not mention the limit", err)
+	}
+}
+
+// The remote-helper mirror of the SSH case: readAdvertisement's limit must
+// surface as an error rather than a hang. finish() drains trailing output
+// before Wait, and an unbounded drain against a helper that keeps writing
+// never returns.
+func TestHelperConnRequestInfoRefsDoesNotHangOnEndlessAdvertisement(t *testing.T) {
+	c := fakeHelperConn(t, "endless")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.RequestInfoRefs(context.Background(), "git-upload-pack", GitProtocolV2)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an advertisement-limit error, got nil")
+		}
+		if !strings.Contains(err.Error(), "byte limit") {
+			t.Errorf("error %q does not mention the limit", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("RequestInfoRefs did not return: the helper transport hung after the read limit was reached")
 	}
 }

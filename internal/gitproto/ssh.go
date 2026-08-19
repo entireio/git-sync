@@ -60,12 +60,24 @@ func requestInfoRefsWithCommand(ctx context.Context, service string, cmd *sshCom
 		return nil, fmt.Errorf("close ssh stdin for %s: %w", service, errors.Join(err, cleanupSSHCommand(cmd)))
 	}
 	data, readErr := readCappedAdvertisement(cmd.Stdout, service+" advertisement")
+	if readErr != nil {
+		// Tear the command down before returning. We have stopped reading, so
+		// a remote that is still writing blocks forever on a full pipe and
+		// cmd.Wait never returns — which would turn the read limit into a
+		// hang. cleanupSSHCommand closes stdout first, so the write side fails
+		// and the process exits. Its resulting non-zero exit is the expected
+		// consequence of that teardown rather than the cause, so readErr stays
+		// the reported failure; stderr.wrap still attaches ssh's own output.
+		//nolint:errcheck // teardown status is a side effect of readErr, not the cause
+		_ = cleanupSSHCommand(cmd)
+		if ctx.Err() != nil {
+			return nil, errors.Join(ctx.Err(), readErr)
+		}
+		return nil, fmt.Errorf("%s info-refs: %w", service, stderr.wrap(readErr))
+	}
 	waitErr := cmd.wait()
 	if ctx.Err() != nil {
-		return nil, errors.Join(ctx.Err(), readErr, stderr.wrap(waitErr))
-	}
-	if readErr != nil {
-		return nil, fmt.Errorf("%s info-refs: %w", service, readErr)
+		return nil, errors.Join(ctx.Err(), stderr.wrap(waitErr))
 	}
 	if len(data) > 0 {
 		return data, nil

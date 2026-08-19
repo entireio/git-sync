@@ -101,9 +101,14 @@ func (c *HelperConn) RequestInfoRefs(ctx context.Context, service string, gitPro
 		return nil, err
 	}
 	adv, readErr := readAdvertisement(proc.out)
-	// errors.Join drops nils, so this covers the readErr-only, finishErr-only,
-	// and both-set cases in one branch.
-	if err := errors.Join(readErr, proc.finish()); err != nil {
+	if readErr != nil {
+		// cleanup, not finish: cleanup closes stdout, which makes a helper that
+		// is still writing fail and exit. finish would try to drain first, and
+		// against an endless stream that turns readAdvertisement's limit into a
+		// hang rather than the error we want to report.
+		return nil, fmt.Errorf("%s advertisement: %w", service, errors.Join(readErr, proc.cleanup()))
+	}
+	if err := proc.finish(); err != nil {
 		return nil, fmt.Errorf("%s advertisement: %w", service, err)
 	}
 	return adv, nil
@@ -266,12 +271,26 @@ func (p *helperProcess) wait() error {
 	return nil
 }
 
+// maxDrainBytes bounds finish's trailing-output drain. A compliant helper
+// writes nothing of consequence after the advertisement, so this only ever
+// absorbs a small tail. The bound matters because an unbounded drain against a
+// helper that keeps writing never returns — which would defeat
+// readAdvertisement's own limit by hanging here instead of reporting it.
+const maxDrainBytes = 1 << 20
+
 // finish closes the request side and waits for the helper to exit cleanly,
 // draining any trailing output so cmd.Wait doesn't race the stdout pipe. Used
 // by RequestInfoRefs, which needs only the advertisement.
 func (p *helperProcess) finish() error {
 	closeErr := p.closeStdin()
-	_, _ = io.Copy(io.Discard, p.out) //nolint:errcheck // best-effort drain before Wait; exit status is authoritative
+	//nolint:errcheck // best-effort drain before Wait; exit status is authoritative
+	drained, _ := io.Copy(io.Discard, io.LimitReader(p.out, maxDrainBytes+1))
+	if drained > maxDrainBytes {
+		// Still producing well past any legitimate tail. Close the pipe so the
+		// write side fails and the process can exit, instead of blocking
+		// forever on a full pipe and taking p.wait() with it.
+		_ = p.stdout.Close()
+	}
 	return errors.Join(closeErr, p.wait())
 }
 

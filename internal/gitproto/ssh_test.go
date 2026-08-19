@@ -456,3 +456,34 @@ func (e sshShimEnv) body(t *testing.T, count int) string {
 	}
 	return string(data)
 }
+
+// A remote that streams without end must produce the advertisement-limit
+// error, not block. Reading stops at the cap, but the ssh process is still
+// writing: unless its stdout is closed before Wait, it blocks forever on a
+// full pipe and Wait never returns.
+func TestSSHConnRequestInfoRefsDoesNotHangOnEndlessAdvertisement(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "endless-ssh.sh")
+	// Ignores its arguments and streams zeros until the pipe is closed.
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec cat /dev/zero\n"), 0o755); err != nil {
+		t.Fatalf("write shim: %v", err)
+	}
+	conn := newSSHTestConn(t, "git@example.com:repo.git", script)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an advertisement-limit error, got nil")
+		}
+		if !strings.Contains(err.Error(), "byte limit") {
+			t.Errorf("error %q does not mention the limit", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("RequestInfoRefs did not return: the transport hung after the read limit was reached")
+	}
+}
