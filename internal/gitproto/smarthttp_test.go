@@ -1699,3 +1699,65 @@ func TestHTTPConnKeepsTokenForSameSiteRedirect(t *testing.T) {
 		t.Error("credentials must still be sent when no cross-site redirect happened")
 	}
 }
+
+// Credentials in the URL's userinfo must be bound to the endpoint's site the
+// same way an explicit token is. net/http derives Basic auth from req.URL.User,
+// so carrying userinfo into the resolved (post-redirect) endpoint hands the
+// credential to the redirect host without any Authorization header being set by
+// git-sync at all — a silent leak, since outgoingAuth never sees it.
+func TestHTTPConnWithholdsURLUserinfoFromCrossSiteRedirect(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen["elsewhere "+r.Method] = r.Header.Get("Authorization")
+		mu.Unlock()
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			if _, err := io.WriteString(w, FormatPktLine("version 2\n")+FormatPktLine("ls-refs\n")+"0000"); err != nil {
+				t.Errorf("advertisement write: %v", err)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+		if _, err := io.WriteString(w, "0000"); err != nil {
+			t.Errorf("result write: %v", err)
+		}
+	}))
+	defer elsewhere.Close()
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer endpoint.Close()
+
+	// Credentials live only in the URL — no explicit Auth is configured.
+	withCreds := strings.Replace(endpoint.URL, "http://", "http://user:URLSECRET@", 1)
+	ep, err := url.Parse(withCreds + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewHTTPConnWithClient(ep, "source", nil, endpoint.Client())
+	conn.FollowInfoRefsRedirect = true
+	conn.ProgressOut = io.Discard
+
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", GitProtocolV2); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	body, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", bytes.NewReader([]byte("0000")), true, "test")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	_ = body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := seen["elsewhere POST"]; !ok {
+		t.Fatal("the POST never reached the redirect target, so the leak path was not exercised")
+	}
+	for tag, auth := range seen {
+		if auth != "" {
+			t.Errorf("%s carried URL-derived credentials to the redirect target: %q", tag, auth)
+		}
+	}
+}

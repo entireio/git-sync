@@ -396,9 +396,13 @@ func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http
 	conn := gitproto.NewHTTPConnWithClient(ep, label, authMethod, client)
 	conn.FollowInfoRefsRedirect = raw.FollowInfoRefsRedirect
 	conn.InsecureSkipTLSVerify = raw.SkipTLSVerify
-	if authMethod == nil {
-		conn.CredentialHelper = auth.GitCredentialHelper{}
-	}
+	// Installed even alongside an explicit token. Explicit credentials are
+	// withheld from a redirect target outside the endpoint's site, and with no
+	// helper there would be nothing to fall back to — the 401 would be final,
+	// contradicting both the warning git-sync prints and the documented
+	// remedy. For same-site requests the explicit token still wins, so the
+	// helper is only ever consulted where the token is deliberately not sent.
+	conn.CredentialHelper = auth.GitCredentialHelper{}
 	return conn, nil
 }
 

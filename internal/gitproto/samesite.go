@@ -27,7 +27,9 @@ import (
 //   - The scheme must match, so an https endpoint never leaks a token over
 //     plaintext http.
 //   - The port must match. Same host on a different port is a different
-//     service, which on shared infrastructure can be a different tenant.
+//     service, which on shared infrastructure can be a different tenant. An
+//     explicitly written default port is the same port as an omitted one, so a
+//     redirect that only spells out ":443" is still same-site.
 //
 // A literal IP address has no subdomains, so those must match exactly.
 //
@@ -41,7 +43,7 @@ func sameSite(orig, dest *url.URL) bool {
 	if !strings.EqualFold(orig.Scheme, dest.Scheme) {
 		return false
 	}
-	if orig.Port() != dest.Port() {
+	if effectivePort(orig) != effectivePort(dest) {
 		return false
 	}
 
@@ -59,4 +61,24 @@ func sameSite(orig, dest *url.URL) bool {
 		return false
 	}
 	return strings.HasSuffix(destHost, "."+origHost)
+}
+
+// effectivePort returns the port u addresses, with a default port for the
+// scheme normalized to the empty string so "https://host" and
+// "https://host:443" compare equal. Load balancers and proxies do sometimes
+// spell the default port out in a Location header, and treating that as a
+// different site would withhold credentials from a genuinely same-origin
+// replica.
+func effectivePort(u *url.URL) string {
+	port := u.Port()
+	switch {
+	case port == "":
+		return ""
+	case strings.EqualFold(u.Scheme, "https") && port == "443":
+		return ""
+	case strings.EqualFold(u.Scheme, "http") && port == "80":
+		return ""
+	default:
+		return port
+	}
 }

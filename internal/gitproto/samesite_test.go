@@ -36,7 +36,15 @@ func TestSameSite(t *testing.T) {
 
 		// Port must match: same host on another port is another service.
 		{"different explicit port", "https://host:8443/r.git", "https://host:9443/r.git", false},
-		{"explicit vs default port", "https://host/r.git", "https://host:8443/r.git", false},
+		{"explicit non-default vs implicit", "https://host/r.git", "https://host:8443/r.git", false},
+		// A proxy or load balancer may spell the default port out in a Location
+		// header; that is the same origin, not a different site.
+		{"explicit default port https", "https://host/r.git", "https://host:443/r.git", true},
+		{"implicit from explicit default https", "https://host:443/r.git", "https://host/r.git", true},
+		{"explicit default port http", "http://host/r.git", "http://host:80/r.git", true},
+		{"default port on a subdomain", "https://example.com/r.git", "https://replica.example.com:443/r.git", true},
+		// The default port for the *other* scheme is not a default here.
+		{"http default port on https", "https://host/r.git", "https://host:80/r.git", false},
 		// This is the case that made the original proof-of-concept leak: Go's
 		// own redirect rule compares hostnames only, so two ports on loopback
 		// looked like the same host to it.

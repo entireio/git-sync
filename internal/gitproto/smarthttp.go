@@ -403,9 +403,12 @@ func (c *HTTPConn) warnAuthWithheld(target *url.URL) {
 	if w == nil {
 		w = os.Stderr
 	}
-	fmt.Fprintf(w, "%s: withholding the configured credentials from %s: /info/refs redirected outside %s. "+
-		"Consulting the git credential helper for that host instead.\n",
-		c.Label, redact.Endpoint(target), c.EndpointURL.Hostname())
+	next := "Store credentials for that host in your git credential helper if it needs them."
+	if c.CredentialHelper != nil {
+		next = "Consulting the git credential helper for that host instead."
+	}
+	fmt.Fprintf(w, "%s: withholding the configured credentials from %s: /info/refs redirected outside %s. %s\n",
+		c.Label, redact.Endpoint(target), c.EndpointURL.Hostname(), next)
 }
 
 func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
@@ -521,10 +524,7 @@ func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]b
 			// display/logging/telemetry. Path/userinfo carry over from
 			// EndpointURL (same assumption as before: the redirect target
 			// serves the same repo path).
-			resolved := *c.EndpointURL
-			resolved.Scheme = final.Scheme
-			resolved.Host = final.Host
-			c.resolvedEndpoint = &resolved
+			c.setResolvedEndpoint(final.Scheme, final.Host)
 		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
@@ -872,9 +872,26 @@ func (c *HTTPConn) adoptChallengeHost(challengeURL *url.URL) {
 	if challengeURL.Host == current.Host && challengeURL.Scheme == current.Scheme {
 		return
 	}
+	c.setResolvedEndpoint(challengeURL.Scheme, challengeURL.Host)
+}
+
+// setResolvedEndpoint records scheme/host as this connection's effective
+// endpoint, keeping EndpointURL as the user-typed value.
+//
+// Userinfo is dropped when the result leaves the endpoint's site. net/http
+// derives Basic auth from req.URL.User, so a resolved endpoint that kept
+// "user:token@" would authenticate against the redirect host with no
+// Authorization header of git-sync's own involved — outgoingAuth would never
+// see it, making the leak silent. Path carries over as before: the redirect
+// target is assumed to serve the same repository path.
+func (c *HTTPConn) setResolvedEndpoint(scheme, host string) {
 	resolved := *c.EndpointURL
-	resolved.Scheme = challengeURL.Scheme
-	resolved.Host = challengeURL.Host
+	resolved.Scheme = scheme
+	resolved.Host = host
+	if resolved.User != nil && !sameSite(c.EndpointURL, &resolved) {
+		resolved.User = nil
+		c.warnAuthWithheld(&resolved)
+	}
 	c.resolvedEndpoint = &resolved
 }
 
