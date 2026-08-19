@@ -177,3 +177,27 @@ func TestBoundedStorerBudgetResetsPerFetch(t *testing.T) {
 		t.Errorf("expected ErrObjectLimit, got %v", err)
 	}
 }
+
+// Fetch must not acquire a default object ceiling. It exists to exercise
+// source-side negotiation and, without --have, deliberately pulls a full pack;
+// the CLI registers no --materialized-max-objects flag for it, so a default cap
+// would fail a previously working operation with no way to raise it.
+func TestFetchAppliesNoDefaultObjectCap(t *testing.T) {
+	// The fetch path reads cfg.MaterializedMaxObjects directly rather than
+	// through effectiveMaxObjects, so an unset config means unlimited.
+	if got := newBoundedStorer(memory.NewStorage(), Config{}.MaterializedMaxObjects); got == nil {
+		t.Fatal("expected a usable store")
+	}
+	inner := memory.NewStorage()
+	if newBoundedStorer(inner, Config{}.MaterializedMaxObjects) != inner {
+		t.Error("an unset MaterializedMaxObjects must leave the store unwrapped on the fetch path")
+	}
+
+	// The sync path keeps its default, since that fetch is have-bounded.
+	if effectiveMaxObjects(Config{}) != DefaultMaterializedMaxObjects {
+		t.Error("the sync path should still fall back to the documented default")
+	}
+	if got, want := effectiveMaxObjects(Config{MaterializedMaxObjects: 7}), 7; got != want {
+		t.Errorf("explicit limit = %d, want %d", got, want)
+	}
+}

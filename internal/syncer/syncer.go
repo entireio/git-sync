@@ -1141,7 +1141,13 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	}
 	defer s.finish()
 
-	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), effectiveMaxObjects(cfg)), nil)
+	// Bounded only when the caller asks, with no default — unlike the sync path
+	// above. Fetch exists to exercise source-side negotiation and, without
+	// --have, deliberately pulls a full pack, so a default ceiling would fail a
+	// previously working operation at the limit. The sync path's fetch is
+	// have-bounded by the target's refs, so there the cap tracks the diff being
+	// pushed, which is what the limit is for.
+	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), cfg.MaterializedMaxObjects), nil)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("init in-memory repository: %w", err)
 	}

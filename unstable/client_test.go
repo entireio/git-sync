@@ -134,3 +134,19 @@ func TestBuildFetchConfigCopiesHaveHashesAtCallSite(t *testing.T) {
 		t.Fatalf("source URL not set")
 	}
 }
+
+// AdvancedOptions carries MaterializedMaxObjects, and the fetch path is the one
+// place it can be set — so silently dropping it left callers with no way to
+// bound a fetch at all.
+func TestBuildFetchConfigThreadsMaterializedMaxObjects(t *testing.T) {
+	cfg, err := New(Options{}).buildFetchConfig(context.Background(), FetchRequest{
+		Source:  gitsync.Endpoint{URL: "https://example.test/r.git"},
+		Options: AdvancedOptions{MaterializedMaxObjects: 1234},
+	})
+	if err != nil {
+		t.Fatalf("buildFetchConfig: %v", err)
+	}
+	if cfg.MaterializedMaxObjects != 1234 {
+		t.Errorf("MaterializedMaxObjects = %d, want 1234", cfg.MaterializedMaxObjects)
+	}
+}
