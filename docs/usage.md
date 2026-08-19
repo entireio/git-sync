@@ -371,6 +371,27 @@ Bearer auth is also available:
 
 That means local testing against a dummy GitHub repo can reuse your regular Git credential helper setup without passing tokens on every command.
 
+### Credentials and redirects
+
+Credentials you supply explicitly — `--source-token`, `--target-token`, their
+bearer equivalents, or userinfo in the URL — are bound to the host you named.
+They are sent to that host, and to subdomains of it on the same scheme and port,
+and nowhere else.
+
+This matters with `--source-follow-info-refs-redirect` /
+`--target-follow-info-refs-redirect`, which send follow-up RPCs to the host that
+`/info/refs` redirected to. A redirect within the same site (say `example.com`
+to `replica.example.com`, the hosting-replica case the flag exists for) keeps
+your credentials. A redirect to an unrelated host does not: git-sync withholds
+them, prints a warning naming the host, and consults the git credential helper
+for that host instead. So a redirect you did not intend — an open redirect on the
+real host, a hostile mirror, or a man-in-the-middle on a plain-`http` source —
+cannot collect your token.
+
+If a redirect target legitimately needs credentials and is not same-site, store
+them in your git credential helper against that host; git-sync will find them
+there.
+
 ## Protocol Notes
 
 - Source-side discovery and fetch can use protocol v2 when supported. Push stays on the existing v1 `receive-pack` path. `--protocol auto` tries v2 first and falls back to v1. `--protocol v2` requires the source to negotiate v2.
