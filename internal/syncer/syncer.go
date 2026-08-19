@@ -350,6 +350,16 @@ func measurementLine(m Measurement) []string {
 	)}
 }
 
+// effectiveMaxObjects resolves the materialized object ceiling for a config:
+// the caller's value when set, otherwise the same default the materialized
+// strategy applies, so the streaming guard and the closure check agree.
+func effectiveMaxObjects(cfg Config) int {
+	if cfg.MaterializedMaxObjects > 0 {
+		return cfg.MaterializedMaxObjects
+	}
+	return DefaultMaterializedMaxObjects
+}
+
 // --- Session setup ---
 
 func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (gitproto.Conn, error) {
@@ -877,7 +887,10 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	// Pure skip/create plans that take incremental relay never decode
 	// source objects locally, so the upfront fetch would be a wasted
 	// full-pack round trip.
-	repo, err := git.Init(memory.NewStorage(), nil)
+	// Bound the store before anything is fetched into it: the object limit used
+	// to be checked on the closure afterwards, which cannot prevent the memory
+	// growth it exists to prevent.
+	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), effectiveMaxObjects(s.cfg)), nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
@@ -1128,7 +1141,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	}
 	defer s.finish()
 
-	repo, err := git.Init(memory.NewStorage(), nil)
+	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), effectiveMaxObjects(cfg)), nil)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
