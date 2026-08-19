@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0D4P9499AAACJ0WNVWMQCR2",
+  "strategy": "manual-commit",
+  "branch": "soph/security-bind-token-to-host",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/samesite.go",
+    "internal/gitproto/samesite_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 26059,
+    "cache_read_tokens": 7149393,
+    "output_tokens": 18913,
+    "api_call_count": 13
+  }
+}
