@@ -285,3 +285,76 @@ func assertParentsEqual(t *testing.T, got, want map[plumbing.Hash][]plumbing.Has
 		}
 	}
 }
+
+// craftPackWithObjectHeader builds a minimal packfile whose single object
+// header carries the given type and declared size. The payload is a valid but
+// empty zlib stream, so the declared size is a claim the pack never backs up —
+// exactly the shape a hostile source would send.
+func craftPackWithObjectHeader(typ byte, declaredSize uint64) []byte {
+	var b bytes.Buffer
+	b.WriteString("PACK")
+	b.Write([]byte{0, 0, 0, 2}) // version 2
+	b.Write([]byte{0, 0, 0, 1}) // one object
+
+	// Pack object header: first byte holds the continuation bit, the 3-bit
+	// type, and the low 4 bits of the size; each following byte adds 7 more
+	// significant bits.
+	first := (typ&7)<<4 | byte(declaredSize&0x0f)
+	size := declaredSize >> 4
+	var hdr []byte
+	for size > 0 {
+		hdr = append(hdr, first|0x80)
+		first = byte(size & 0x7f)
+		size >>= 7
+	}
+	b.Write(append(hdr, first))
+
+	b.Write([]byte{0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01}) // empty zlib stream
+	b.Write(make([]byte, 20))                                       // trailer
+	return b.Bytes()
+}
+
+// A packfile header may declare any size the varint encoding can hold. Before
+// this was bounded, the declared size was passed straight to make(), so a
+// 48-byte pack declaring a 128 TiB object triggered `fatal error: out of
+// memory` — a runtime fatal, not a panic, so an embedding process could not
+// contain it with recover(). The parse must fail cheaply instead.
+func TestExtractCommitParentsRejectsOversizedDeclaredObject(t *testing.T) {
+	const commitType = 1
+	for _, declared := range []uint64{
+		maxDeclaredObjectSize + 1,
+		1 << 36, // 64 GiB — allocated 65,536 MiB before the fix
+		1 << 47, // 128 TiB — killed the process before the fix
+	} {
+		pack := craftPackWithObjectHeader(commitType, declared)
+		if len(pack) > 64 {
+			t.Fatalf("expected a tiny pack, got %d bytes", len(pack))
+		}
+		_, err := ExtractCommitParents(bytes.NewReader(pack))
+		if err == nil {
+			t.Fatalf("declared size %d: expected an error, got nil", declared)
+		}
+		if !strings.Contains(err.Error(), "over the") {
+			t.Errorf("declared size %d: error %q does not mention the size limit", declared, err)
+		}
+	}
+}
+
+// A legitimate object under the ceiling must still parse, so the bound cannot
+// be satisfied by rejecting everything.
+func TestExtractCommitParentsAcceptsNormalObjectSizes(t *testing.T) {
+	storer := newCommitParentsStorer(DefaultCommitParentsCacheBytes)
+	for _, sz := range []int64{0, 1, maxObjectPrealloc, maxObjectPrealloc + 1, maxDeclaredObjectSize} {
+		w, err := storer.RawObjectWriter(plumbing.CommitObject, sz)
+		if err != nil {
+			t.Errorf("RawObjectWriter(commit, %d) = %v, want no error", sz, err)
+			continue
+		}
+		if err := w.Close(); err != nil {
+			t.Errorf("Close() for size %d: %v", sz, err)
+		}
+	}
+	if _, err := storer.RawObjectWriter(plumbing.CommitObject, -1); err == nil {
+		t.Error("RawObjectWriter(commit, -1) = nil error, want a rejection")
+	}
+}

@@ -181,3 +181,46 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+// zeroReader yields an endless stream of NUL bytes. Stands in for a remote that
+// never stops sending: the read must terminate on the cap rather than growing
+// the buffer until the process dies.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+func TestReadCappedAdvertisementUnderLimit(t *testing.T) {
+	data, err := readCappedAdvertisement(strings.NewReader("0008abc\n0000"), "test advertisement")
+	if err != nil {
+		t.Fatalf("readCappedAdvertisement: %v", err)
+	}
+	if got, want := string(data), "0008abc\n0000"; got != want {
+		t.Fatalf("data = %q, want %q", got, want)
+	}
+}
+
+func TestReadCappedAdvertisementAtLimit(t *testing.T) {
+	exact := io.LimitReader(zeroReader{}, MaxAdvertisementBytes)
+	data, err := readCappedAdvertisement(exact, "test advertisement")
+	if err != nil {
+		t.Fatalf("a response exactly at the limit must be accepted: %v", err)
+	}
+	if int64(len(data)) != MaxAdvertisementBytes {
+		t.Fatalf("read %d bytes, want %d", len(data), MaxAdvertisementBytes)
+	}
+}
+
+func TestReadCappedAdvertisementRejectsEndlessStream(t *testing.T) {
+	_, err := readCappedAdvertisement(zeroReader{}, "test advertisement")
+	if err == nil {
+		t.Fatal("expected an error for an unbounded stream, got nil")
+	}
+	if !strings.Contains(err.Error(), "byte limit") {
+		t.Errorf("error %q does not mention the limit", err)
+	}
+}

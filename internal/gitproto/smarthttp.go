@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"entire.io/entire/git-sync/internal/redact"
 	"entire.io/entire/git-sync/internal/useragent"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
@@ -57,10 +58,24 @@ func httpError(res *http.Response) error {
 			diag = append(diag, h+"="+v)
 		}
 	}
+	// redact.Endpoint, not URL.Redacted: the latter masks only the password,
+	// leaving a token in the username position (https://<token>@host/...) in
+	// the clear — the form GitHub App and PAT URLs normally take.
+	loc := redact.Endpoint(res.Request.URL)
 	if len(diag) > 0 {
-		return fmt.Errorf("http %d: %s [%s] %s", res.StatusCode, res.Request.URL.Redacted(), strings.Join(diag, ", "), reason)
+		return fmt.Errorf("http %d: %s [%s] %s", res.StatusCode, loc, strings.Join(diag, ", "), reason)
 	}
-	return fmt.Errorf("http %d: %s %s", res.StatusCode, res.Request.URL.Redacted(), reason)
+	return fmt.Errorf("http %d: %s %s", res.StatusCode, loc, reason)
+}
+
+// redactRequestError rewrites a transport-level failure (connection refused,
+// DNS, TLS) so it cannot echo credentials. net/http returns these as a
+// *url.Error whose URL field has been through stripPassword, which masks the
+// password but leaves a token in the username position
+// (https://<token>@host/...) in the clear. httpError does not cover this path:
+// there is no response to inspect. Keeps the reason and a redacted location.
+func redactRequestError(req *http.Request, err error) error {
+	return fmt.Errorf("%s: %w", redact.Endpoint(req.URL), redact.URLError(err))
 }
 
 // StatsPhaseHeader is the HTTP header used to annotate requests with the
@@ -422,16 +437,9 @@ func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]b
 		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
-	const maxInfoRefsSize = 64 * 1024 * 1024 // 64 MiB
-	lr := io.LimitReader(res.Body, maxInfoRefsSize+1)
-	data, err := io.ReadAll(lr)
-	if err != nil {
-		return nil, fmt.Errorf("read info-refs response: %w", err)
-	}
-	if int64(len(data)) > maxInfoRefsSize {
-		return nil, fmt.Errorf("info/refs response exceeds %d byte limit", maxInfoRefsSize)
-	}
-	return data, nil
+	// MaxAdvertisementBytes is shared with the SSH and remote-helper
+	// transports so all three carry the same ceiling.
+	return readCappedAdvertisement(res.Body, "info/refs response")
 }
 
 // PostRPC sends a buffered POST to the given service and returns the full response body.
@@ -541,7 +549,7 @@ func (c *HTTPConn) doPostRPCRequest(ctx context.Context, service string, body io
 
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("post RPC: %w", err)
+		return nil, fmt.Errorf("post RPC: %w", redactRequestError(req, err))
 	}
 	return res, nil
 }
@@ -667,7 +675,7 @@ func (c *HTTPConn) doServiceProbe(ctx context.Context, service string) (*http.Re
 	req.Header.Set(StatsPhaseHeader, service+" auth-probe")
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("auth-probe request: %w", err)
+		return nil, fmt.Errorf("auth-probe request: %w", redactRequestError(req, err))
 	}
 	return res, nil
 }
@@ -831,7 +839,7 @@ func (c *HTTPConn) doInfoRefsRequest(ctx context.Context, service, gitProtocol s
 	ApplyAuth(req, auth)
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request info-refs: %w", err)
+		return nil, fmt.Errorf("request info-refs: %w", redactRequestError(req, err))
 	}
 	return res, nil
 }

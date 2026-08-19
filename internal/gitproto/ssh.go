@@ -59,13 +59,25 @@ func requestInfoRefsWithCommand(ctx context.Context, service string, cmd *sshCom
 	if err := cmd.Stdin.Close(); err != nil {
 		return nil, fmt.Errorf("close ssh stdin for %s: %w", service, errors.Join(err, cleanupSSHCommand(cmd)))
 	}
-	data, readErr := io.ReadAll(cmd.Stdout)
+	data, readErr := readCappedAdvertisement(cmd.Stdout, service+" advertisement")
+	if readErr != nil {
+		// Tear the command down before returning. We have stopped reading, so
+		// a remote that is still writing blocks forever on a full pipe and
+		// cmd.Wait never returns — which would turn the read limit into a
+		// hang. cleanupSSHCommand closes stdout first, so the write side fails
+		// and the process exits. Its resulting non-zero exit is the expected
+		// consequence of that teardown rather than the cause, so readErr stays
+		// the reported failure; stderr.wrap still attaches ssh's own output.
+		//nolint:errcheck // teardown status is a side effect of readErr, not the cause
+		_ = cleanupSSHCommand(cmd)
+		if ctx.Err() != nil {
+			return nil, errors.Join(ctx.Err(), readErr)
+		}
+		return nil, fmt.Errorf("%s info-refs: %w", service, stderr.wrap(readErr))
+	}
 	waitErr := cmd.wait()
 	if ctx.Err() != nil {
-		return nil, errors.Join(ctx.Err(), readErr, stderr.wrap(waitErr))
-	}
-	if readErr != nil {
-		return nil, fmt.Errorf("%s info-refs: %w", service, readErr)
+		return nil, errors.Join(ctx.Err(), stderr.wrap(waitErr))
 	}
 	if len(data) > 0 {
 		return data, nil
@@ -186,11 +198,23 @@ func rejectOptionLike(what, value string) error {
 	return nil
 }
 
+// sshRemoteCommand builds the command string sshd hands to the remote login
+// shell. Every interpolated component must therefore be shell-quoted.
+//
+// The path is quoted in full, including any leading "~". Exempting the tilde
+// segment so the remote shell would expand it — as this used to — left
+// everything up to the first slash unquoted, and a SCP-style URL puts
+// attacker-influenced text there: "git@host:~a;id/repo.git" produced the
+// remote command `git-upload-pack ~a;id/'repo.git'`, executing `id` on the
+// remote host. Quoting costs nothing, because "~" expansion does not depend on
+// the shell here: git-upload-pack resolves the path through enter_repo(),
+// which interpolates a leading "~" itself. Canonical git quotes the whole path
+// for the same reason.
 func sshRemoteCommand(ep *url.URL, service string, gitProtocol string) (string, error) {
 	if ep == nil || ep.Path == "" {
 		return "", errors.New("missing SSH repository path")
 	}
-	path := shellQuotePath(ep.Path)
+	path := shellQuote(ep.Path)
 	if gitProtocol != "" {
 		return gitProtocolEnv(gitProtocol) + " " + service + " " + path, nil
 	}
@@ -203,17 +227,6 @@ func gitProtocolEnv(gitProtocol string) string {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
-}
-
-func shellQuotePath(path string) string {
-	if !strings.HasPrefix(path, "~") {
-		return shellQuote(path)
-	}
-	slash := strings.IndexByte(path, '/')
-	if slash < 0 {
-		return path
-	}
-	return path[:slash+1] + shellQuote(path[slash+1:])
 }
 
 type sshCommand struct {

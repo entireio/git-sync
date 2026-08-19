@@ -49,6 +49,7 @@ import (
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/redact"
 )
 
 // Request describes a single SHA1 → SHA256 conversion.
@@ -280,7 +281,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// signed attestation tag message, which is permanent and gets pushed.
 	// The fetch path keeps the original req.SourceURL; only these
 	// human-facing / persisted copies are redacted.
-	redactedSourceURL := redactSourceURL(req.SourceURL)
+	redactedSourceURL := redact.URL(req.SourceURL)
 
 	// Build the result struct early so error paths can surface
 	// what little ran successfully. In particular, --keep-source-objects
@@ -907,39 +908,13 @@ func removeDirContents(dir string) {
 	}
 }
 
-// redactSourceURL removes any credentials embedded in a source URL so
-// they never reach status output, the JSON result, or the signed
-// attestation tag message. The entire userinfo component is stripped,
-// not just the password: token auth commonly carries the secret in the
-// username position (https://<token>@host/...), which url.URL.Redacted()
-// would leave intact. The fetch path keeps the original req.SourceURL,
-// so stripping here does not affect authentication.
-//
-// If the URL cannot be parsed (openSource parses the same string and
-// fails the run otherwise), we return a placeholder rather than risk
-// echoing credentials we could not locate.
-func redactSourceURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "<source url redacted>"
-	}
-	u.User = nil
-	return u.String()
-}
-
 func openSource(ctx context.Context, req Request, planCfg planner.PlanConfig) (gitproto.Conn, *gitproto.RefService, []*plumbing.Reference, error) {
 	ep, err := url.Parse(req.SourceURL)
 	if err != nil {
 		// url.Parse wraps the raw URL in its error (`parse "<url>": ...`),
 		// which would leak embedded credentials (https://user:token@host)
-		// into status output, logs, and CI. Surface only the underlying
-		// reason — *url.Error.Err carries the cause without the URL string.
-		reason := err
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			reason = ue.Err
-		}
-		return nil, nil, nil, fmt.Errorf("parse source URL: %w", reason)
+		// into status output, logs, and CI. Surface only the underlying reason.
+		return nil, nil, nil, fmt.Errorf("parse source URL: %w", redact.URLError(err))
 	}
 	if ep.Scheme != "http" && ep.Scheme != "https" {
 		return nil, nil, nil, fmt.Errorf("convert-sha256 currently supports HTTP/HTTPS sources only; got %q", ep.Scheme)
