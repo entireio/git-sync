@@ -28,6 +28,7 @@ import (
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/redact"
 	bstrap "entire.io/entire/git-sync/internal/strategy/bootstrap"
 	"entire.io/entire/git-sync/internal/strategy/incremental"
 	"entire.io/entire/git-sync/internal/strategy/materialized"
@@ -354,7 +355,10 @@ func measurementLine(m Measurement) []string {
 func newConn(raw Endpoint, label string, stats *statsCollector, httpClient *http.Client) (gitproto.Conn, error) {
 	ep, err := transport.ParseURL(raw.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse endpoint: %w", err)
+		// url.Parse wraps the raw URL in its error (`parse "<url>": ...`),
+		// which would echo credentials embedded in userinfo into status
+		// output, logs, and CI. Report the cause without the URL string.
+		return nil, fmt.Errorf("parse endpoint: %w", redact.URLError(err))
 	}
 	// Dispatch on scheme: ssh has a native transport; http/https fall through
 	// to the HTTP builder below. Any other scheme (e.g. entire://) is handed to
@@ -1270,7 +1274,10 @@ func (s *syncSession) newProbeResult() ProbeResult {
 	sort.Slice(refInfos, func(i, j int) bool { return refInfos[i].Name < refInfos[j].Name })
 
 	result := ProbeResult{
-		SourceURL:     s.cfg.Source.URL,
+		// Redacted: an endpoint URL may carry credentials in its userinfo
+		// (https://user:token@host, or the token-as-username form), and this
+		// value is printed to stdout and serialized into --json output.
+		SourceURL:     redact.URL(s.cfg.Source.URL),
 		RequestedMode: s.cfg.ProtocolMode,
 		Protocol:      s.sourceService.Protocol,
 		RefPrefixes:   planner.RefPrefixes(planConfig(s.cfg)),
@@ -1281,7 +1288,7 @@ func (s *syncSession) newProbeResult() ProbeResult {
 		Measurement:   s.measurementDone(),
 	}
 	if s.target != nil {
-		result.TargetURL = s.cfg.Target.URL
+		result.TargetURL = redact.URL(s.cfg.Target.URL)
 		result.TargetCaps = gitproto.AdvRefsCaps(s.target.adv)
 	}
 	return result
@@ -1306,7 +1313,7 @@ func (s *syncSession) newFetchResult(
 	}
 
 	return FetchResult{
-		SourceURL:      s.cfg.Source.URL,
+		SourceURL:      redact.URL(s.cfg.Source.URL),
 		RequestedMode:  s.cfg.ProtocolMode,
 		Protocol:       s.sourceService.Protocol,
 		Wants:          wants,

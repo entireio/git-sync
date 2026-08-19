@@ -286,6 +286,10 @@ func (p *helperProcess) cleanup() error {
 // (0000) and returns them verbatim. This is the helper's service advertisement;
 // the trailing flush is preserved because both advertisement decoders consume
 // it as the section terminator.
+//
+// Accumulation is bounded by MaxAdvertisementBytes, the same ceiling the HTTP
+// and SSH transports use: a helper that streams pkt-lines and never sends the
+// flush would otherwise grow this buffer until the process died.
 func readAdvertisement(br *bufio.Reader) ([]byte, error) {
 	var buf bytes.Buffer
 	var scratch []byte
@@ -295,6 +299,9 @@ func readAdvertisement(br *bufio.Reader) ([]byte, error) {
 			return nil, fmt.Errorf("read advertisement pkt-line: %w", err)
 		}
 		buf.Write(frame)
+		if buf.Len() > MaxAdvertisementBytes {
+			return nil, fmt.Errorf("helper advertisement exceeds %d byte limit", MaxAdvertisementBytes)
+		}
 		scratch = frame // reuse the (possibly grown) backing buffer next iteration
 		if kind == PacketFlush {
 			return buf.Bytes(), nil

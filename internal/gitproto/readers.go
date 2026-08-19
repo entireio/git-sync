@@ -42,6 +42,28 @@ func (c *closeOnceReadCloser) Close() error {
 	return nil
 }
 
+// MaxAdvertisementBytes bounds a ref/capability advertisement read from a
+// remote. The advertisement is accumulated in memory before it can be parsed,
+// and its length is entirely up to the far end, so every transport needs the
+// same ceiling: an endless stream would otherwise grow the buffer until the
+// process died. 64 MiB is far above any real advertisement — a repository with
+// a million refs advertises on the order of a few tens of MiB.
+const MaxAdvertisementBytes = 64 << 20
+
+// readCappedAdvertisement reads r to EOF, failing rather than allocating
+// without bound if it yields more than MaxAdvertisementBytes. what names the
+// thing being read, for the error message.
+func readCappedAdvertisement(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxAdvertisementBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", what, err)
+	}
+	if int64(len(data)) > MaxAdvertisementBytes {
+		return nil, fmt.Errorf("%s exceeds %d byte limit", what, MaxAdvertisementBytes)
+	}
+	return data, nil
+}
+
 // LimitPackReader wraps a ReadCloser with a byte limit. Shared across strategies.
 func LimitPackReader(r io.ReadCloser, maxBytes int64) io.ReadCloser {
 	if maxBytes <= 0 {

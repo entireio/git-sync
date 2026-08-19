@@ -19,6 +19,32 @@ import (
 // (typically tens of objects of working set).
 const DefaultCommitParentsCacheBytes = 64 * 1024 * 1024
 
+// maxDeclaredObjectSize bounds the object size this path will accept from a
+// packfile object header. The size is read off the wire before any content
+// arrives and go-git validates only that the varint does not overflow, so a
+// header is free to claim an arbitrary length — honoring it verbatim let a
+// 48-byte pack request a 128 TiB allocation, which the Go runtime reports as
+// an unrecoverable `fatal error: out of memory` that no recover() can contain.
+//
+// This path only ever reads tree:0-filtered packs, whose object kinds are
+// commits and annotated tags: objects measured in kilobytes. 64 MiB is orders
+// of magnitude above any real commit while still bounding the allocation a
+// hostile or corrupt header can request.
+const maxDeclaredObjectSize = 64 << 20
+
+// maxObjectPrealloc caps how much buffer is reserved up front for one object.
+// Beyond this the buffer grows on demand, so allocation tracks the bytes
+// actually received rather than the bytes a remote claims it will send — a
+// lying header under maxDeclaredObjectSize costs one small allocation.
+const maxObjectPrealloc = 64 << 10
+
+// maxSpilledPackBytes bounds the temp-file spill below. A tree:0 pack carries
+// only commits and tags; even a history the size of the Linux kernel
+// (~1.3M commits) lands in the low hundreds of MiB, so this leaves an order of
+// magnitude of headroom while keeping an endless stream from filling the disk
+// during what is only a planning round trip.
+const maxSpilledPackBytes = 4 << 30
+
 // ExtractCommitParents reads a Git packfile from r and returns a map
 // of commit hash → parent hashes for every commit object encountered.
 // Non-commit objects (tags, etc.) and the raw bytes of commits are
@@ -58,8 +84,12 @@ func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int) (map[plumbing
 		defer os.Remove(tmp.Name())
 		defer tmp.Close()
 
-		if _, err := io.Copy(tmp, r); err != nil {
+		spilled, err := io.Copy(tmp, io.LimitReader(r, maxSpilledPackBytes+1))
+		if err != nil {
 			return nil, fmt.Errorf("spill pack to temp: %w", err)
+		}
+		if spilled > maxSpilledPackBytes {
+			return nil, fmt.Errorf("commit-graph pack exceeds %d byte limit", maxSpilledPackBytes)
 		}
 		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 			return nil, fmt.Errorf("seek temp pack: %w", err)
@@ -105,11 +135,18 @@ func (s *commitParentsStorer) LowMemoryMode() bool { return true }
 // RawObjectWriter returns a sink for one inflated object. The writer's
 // Close captures commit parents and caches the bytes for potential
 // future delta lookups.
+//
+// sz is the size the packfile header declares, not a size we have observed, so
+// it is remote-controlled input: it is rejected above maxDeclaredObjectSize and
+// otherwise only used to size the initial buffer, capped at maxObjectPrealloc.
 func (s *commitParentsStorer) RawObjectWriter(typ plumbing.ObjectType, sz int64) (io.WriteCloser, error) {
+	if sz < 0 || sz > maxDeclaredObjectSize {
+		return nil, fmt.Errorf("packfile declares %s object of %d bytes, over the %d byte limit", typ, sz, maxDeclaredObjectSize)
+	}
 	return &commitParentsWriter{
 		s:   s,
 		typ: typ,
-		buf: bytes.NewBuffer(make([]byte, 0, sz)),
+		buf: bytes.NewBuffer(make([]byte, 0, min(sz, maxObjectPrealloc))),
 	}, nil
 }
 

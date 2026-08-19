@@ -2,6 +2,7 @@ package gitproto
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 )
 
 // TestHelperRemoteHelperProcess is not a real test: it is re-executed as a fake
@@ -265,5 +268,37 @@ func TestRemoteHelperLookPath_Default(t *testing.T) {
 	}
 	if _, ok := LookupRemoteHelper(""); ok {
 		t.Fatal("empty scheme must not resolve")
+	}
+}
+
+// endlessPktLineReader emits valid, maximum-size pkt-lines forever and never
+// sends the flush that terminates an advertisement — a helper that streams
+// without end, whether buggy or hostile.
+type endlessPktLineReader struct {
+	frame []byte
+	off   int
+}
+
+func newEndlessPktLineReader() *endlessPktLineReader {
+	payload := bytes.Repeat([]byte("x"), pktline.MaxSize-4)
+	return &endlessPktLineReader{frame: []byte(FormatPktLine(string(payload)))}
+}
+
+func (r *endlessPktLineReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.frame[r.off]
+		r.off = (r.off + 1) % len(r.frame)
+	}
+	return len(p), nil
+}
+
+func TestReadAdvertisementRejectsEndlessStream(t *testing.T) {
+	br := bufio.NewReaderSize(newEndlessPktLineReader(), 65536)
+	_, err := readAdvertisement(br)
+	if err == nil {
+		t.Fatal("expected an error for an advertisement with no flush, got nil")
+	}
+	if !strings.Contains(err.Error(), "byte limit") {
+		t.Errorf("error %q does not mention the limit", err)
 	}
 }

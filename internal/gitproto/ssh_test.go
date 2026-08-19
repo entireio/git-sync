@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -114,15 +115,137 @@ func TestSSHConnRequestInfoRefsSupportsSCPStyleAndPort(t *testing.T) {
 	}
 }
 
-func TestSSHConnRequestInfoRefsPreservesTildePaths(t *testing.T) {
+// A "~" path is quoted along with the rest of the path. The remote side still
+// expands it: git-upload-pack resolves the path through enter_repo(), which
+// interpolates a leading "~" itself, so quoting does not break tilde paths.
+func TestSSHConnRequestInfoRefsQuotesTildePaths(t *testing.T) {
 	env := newSSHShimEnv(t)
 
 	conn := newSSHTestConn(t, "git@example.com:~/repo with spaces.git", env.script)
 	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
-	if got, want := env.logLines(t)[0], "git@example.com\tgit-upload-pack ~/'repo with spaces.git'"; got != want {
+	if got, want := env.logLines(t)[0], "git@example.com\tgit-upload-pack '~/repo with spaces.git'"; got != want {
 		t.Fatalf("ssh invocation = %q, want %q", got, want)
+	}
+}
+
+// The remote command string is interpreted by the remote login shell, so shell
+// metacharacters in the path must never escape their quotes. A "~" prefix used
+// to be exempt from quoting so the remote shell would expand it, which let a
+// SCP-style URL smuggle commands past the quoting: "git@host:~a;id/repo.git"
+// produced `git-upload-pack ~a;id/'repo.git'`, running `id` on the remote host.
+func TestSSHRemoteCommandQuotesShellMetacharacters(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "tilde prefix with command separator",
+			raw:  "git@example.com:~a;id/repo.git",
+			want: "git-upload-pack '~a;id/repo.git'",
+		},
+		{
+			name: "tilde prefix with backticks",
+			raw:  "git@example.com:~`id`/repo.git",
+			want: "git-upload-pack '~`id`/repo.git'",
+		},
+		{
+			name: "tilde prefix with command substitution",
+			raw:  "git@example.com:~$(id)/repo.git",
+			want: "git-upload-pack '~$(id)/repo.git'",
+		},
+		{
+			name: "tilde path with no slash at all",
+			raw:  "git@example.com:~a;id",
+			want: "git-upload-pack '~a;id'",
+		},
+		{
+			name: "embedded single quote is escaped, not terminated",
+			raw:  "git@example.com:~'; id; '/repo.git",
+			want: `git-upload-pack '~'"'"'; id; '"'"'/repo.git'`,
+		},
+		{
+			name: "plain tilde path still works",
+			raw:  "git@example.com:~/repo.git",
+			want: "git-upload-pack '~/repo.git'",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ep, err := transport.ParseURL(tc.raw)
+			if err != nil {
+				t.Fatalf("ParseURL(%q): %v", tc.raw, err)
+			}
+			got, err := sshRemoteCommand(ep, "git-upload-pack", "")
+			if err != nil {
+				t.Fatalf("sshRemoteCommand: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("sshRemoteCommand = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The authority on whether the quoting holds is a shell, not a string
+// comparison: sshd hands this command to the remote login shell. Run it against
+// a stubbed git-upload-pack and assert the shell passes the path through as one
+// literal argument, with no injected command executed.
+func TestSSHRemoteCommandSurvivesShellInterpretation(t *testing.T) {
+	for _, raw := range []string{
+		"git@example.com:~a;id/repo.git",
+		"git@example.com:~`id`/repo.git",
+		"git@example.com:~$(id)/repo.git",
+		"git@example.com:~a;id",
+		"git@example.com:~'; id; '/repo.git",
+		"git@example.com:~/repo with spaces.git",
+		"git@example.com:~/repo.git",
+		"git@example.com:normal/repo.git",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			ep, err := transport.ParseURL(raw)
+			if err != nil {
+				t.Fatalf("ParseURL(%q): %v", raw, err)
+			}
+			remoteCommand, err := sshRemoteCommand(ep, "git-upload-pack", "")
+			if err != nil {
+				t.Fatalf("sshRemoteCommand: %v", err)
+			}
+
+			dir := t.TempDir()
+			argvFile := filepath.Join(dir, "argv")
+			marker := filepath.Join(dir, "injected")
+			// Stubs use only shell builtins and redirection so PATH can be
+			// restricted to dir alone.
+			writeShellStub(t, filepath.Join(dir, "git-upload-pack"), "printf '%s\\n' \"$@\" > "+argvFile)
+			writeShellStub(t, filepath.Join(dir, "id"), ": > "+marker)
+
+			cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", remoteCommand)
+			cmd.Env = []string{"PATH=" + dir}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("run %q: %v (output %q)", remoteCommand, err, out)
+			}
+
+			if _, err := os.Stat(marker); err == nil {
+				t.Fatalf("injected command ran: %q executed `id`", remoteCommand)
+			}
+			argv, err := os.ReadFile(argvFile)
+			if err != nil {
+				t.Fatalf("read recorded argv: %v", err)
+			}
+			if got, want := string(argv), ep.Path+"\n"; got != want {
+				t.Fatalf("remote received argv %q, want the path verbatim %q", got, want)
+			}
+		})
+	}
+}
+
+func writeShellStub(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+		t.Fatalf("write stub %s: %v", path, err)
 	}
 }
 
