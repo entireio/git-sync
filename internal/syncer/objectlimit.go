@@ -41,6 +41,15 @@ func (e *ObjectLimitError) Is(target error) bool { return target == ErrObjectLim
 // internal closer, which never passes back through this wrapper. Counting in
 // both places would therefore risk double-counting rather than adding coverage.
 //
+// The cap applies per fetch, not cumulatively: gitproto.FetchToStore resets it
+// before streaming. A store outlives one fetch — the materialized strategy
+// refills tag objects into the same store with no "have" lines, so the source
+// resends objects already present — and counting those again would fail a run
+// whose distinct object count is within the limit. The consequence is that
+// worst-case residency is the limit times the number of fetches, which is two
+// on the sync path (closure, then the tag refill). Still bounded, and without
+// the false failures a cumulative count would produce.
+//
 // Reads are untouched, so planning and the push path see the store as they
 // always did.
 type boundedStorer struct {
@@ -71,3 +80,7 @@ func (s *boundedStorer) RawObjectWriter(typ plumbing.ObjectType, sz int64) (io.W
 	}
 	return w, nil
 }
+
+// ResetObjectBudget starts a fresh per-fetch allowance. Implements
+// gitproto.ObjectBudget.
+func (s *boundedStorer) ResetObjectBudget() { s.count = 0 }

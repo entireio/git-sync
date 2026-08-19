@@ -142,3 +142,38 @@ func TestBoundedStorerPassesReadsThrough(t *testing.T) {
 		t.Errorf("object did not reach the underlying store: %v", err)
 	}
 }
+
+// The store outlives a single fetch, and the materialized tag refill streams
+// into it again with no "have" lines — so the source resends objects already
+// present. A cumulative count would charge for those twice and fail a run whose
+// distinct object count is within the limit. The budget therefore resets per
+// fetch, which gitproto.FetchToStore drives via the ObjectBudget interface.
+func TestBoundedStorerBudgetResetsPerFetch(t *testing.T) {
+	const limit = 10
+	pack := buildPack(t, 8)
+
+	inner := memory.NewStorage()
+	bounded := newBoundedStorer(inner, limit)
+
+	budget, ok := bounded.(interface{ ResetObjectBudget() })
+	if !ok {
+		t.Fatal("bounded store must expose ResetObjectBudget for FetchToStore to reset")
+	}
+
+	// Two fetches of 8 objects each: cumulatively 16, over the limit of 10.
+	// With a per-fetch budget both must succeed.
+	for i := range 2 {
+		budget.ResetObjectBudget()
+		if err := packfile.UpdateObjectStorage(bounded, bytes.NewReader(pack)); err != nil {
+			t.Fatalf("fetch %d of a pack within the per-fetch limit failed: %v", i+1, err)
+		}
+	}
+
+	// Without a reset, the same second pass must still be refused, so the cap
+	// is genuinely enforced within a fetch.
+	if err := packfile.UpdateObjectStorage(bounded, bytes.NewReader(pack)); err == nil {
+		t.Error("a single fetch exceeding the limit must still fail")
+	} else if !errors.Is(err, ErrObjectLimit) {
+		t.Errorf("expected ErrObjectLimit, got %v", err)
+	}
+}
