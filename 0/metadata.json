@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0D8T9MSEKBDHAQV2D6P5N3T",
+  "session_id": "9f1c8ebe-1a05-4632-9630-d373eac3e09b",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-19T15:04:15.658025Z",
+  "branch": "soph/security-bind-token-to-host",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "docs/usage.md",
+    "internal/gitproto/samesite.go",
+    "internal/gitproto/samesite_test.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "ab7dcc6af434",
+  "checkpoint_transcript_start": 1685,
+  "transcript_lines_at_start": 1685,
+  "compact_transcript_start": 333,
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 14596,
+    "cache_read_tokens": 6606061,
+    "output_tokens": 12209,
+    "api_call_count": 11
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Q4Z79tuywSjPJkVn47qY99",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "artifact-design"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ab7dcc6af434",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 378,
+        "end": 379,
+        "entry_ids": [
+          "f266bd5f-e5d4-4a62-83ee-2eb61a9e5fa4"
+        ],
+        "tool_use_id": "toolu_01Q4Z79tuywSjPJkVn47qY99"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Q4Z79tuywSjPJkVn47qY99"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: artifact-design",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-19T15:04:15.537842Z",
+    "agent_lines": 135,
+    "agent_removed": 138,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 135,
+    "total_lines_changed": 273,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 56,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 56
+      }
+    }
+  ]
+}
