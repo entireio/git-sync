@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.10.1-nightly.202608180612.e2de3d346.0.20260818084510-79404192b272",
+  "checkpoint_id": "01M0CXHDFSB6FPV2AN0R6WNHRG",
+  "strategy": "manual-commit",
+  "branch": "soph/security-bounds-and-redaction",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "internal/gitproto/commitparents.go",
+    "internal/gitproto/commitparents_test.go",
+    "internal/gitproto/helper.go",
+    "internal/gitproto/readers.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/ssh.go",
+    "internal/redact/redact.go",
+    "internal/redact/redact_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 72898,
+    "cache_read_tokens": 16766645,
+    "output_tokens": 44354,
+    "api_call_count": 52
+  }
+}
