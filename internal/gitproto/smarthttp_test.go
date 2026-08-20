@@ -1,6 +1,7 @@
 package gitproto
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1575,3 +1577,282 @@ func (r *roundTripReader) Read(p []byte) (int, error) {
 }
 
 func (r *roundTripReader) Close() error { return nil }
+
+// An explicit token must not follow an /info/refs redirect to a host outside
+// the endpoint's site. Go's http.Client strips Authorization on the cross-host
+// hop; before this was gated, git-sync re-attached the token to the follow-up
+// RPC aimed at the redirect target, handing the credential to whoever caused
+// the redirect.
+func TestHTTPConnWithholdsExplicitTokenFromCrossSiteRedirect(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{} // "METHOD path" -> Authorization
+
+	record := func(tag string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			seen[tag+" "+r.Method] = r.Header.Get("Authorization")
+			mu.Unlock()
+			if r.Method == http.MethodGet {
+				w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+				if _, err := io.WriteString(w, FormatPktLine("version 2\n")+FormatPktLine("ls-refs\n")+"0000"); err != nil {
+					t.Errorf("advertisement write: %v", err)
+				}
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+			if _, err := io.WriteString(w, "0000"); err != nil {
+				t.Errorf("result write: %v", err)
+			}
+		}
+	}
+
+	elsewhere := httptest.NewServer(record("elsewhere"))
+	defer elsewhere.Close()
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen["endpoint "+r.Method] = r.Header.Get("Authorization")
+		mu.Unlock()
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer endpoint.Close()
+
+	ep, err := url.Parse(endpoint.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewHTTPConnWithClient(ep, "source", &transporthttp.BasicAuth{
+		Username: "git", Password: "SUPER_SECRET_TOKEN",
+	}, endpoint.Client())
+	conn.FollowInfoRefsRedirect = true
+	conn.ProgressOut = io.Discard
+
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", GitProtocolV2); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	// The follow-up RPC is the one that used to leak: it addresses the redirect
+	// host directly, so no stdlib redirect stripping applies.
+	body, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", bytes.NewReader([]byte("0000")), true, "test")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	_ = body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for tag, auth := range seen {
+		if strings.HasPrefix(tag, "elsewhere") && auth != "" {
+			t.Errorf("%s carried credentials to the redirect target: %q", tag, auth)
+		}
+	}
+	if _, ok := seen["elsewhere POST"]; !ok {
+		t.Fatal("the POST never reached the redirect target, so the leak path was not exercised")
+	}
+	if seen["endpoint GET"] == "" {
+		t.Error("the endpoint the user typed should still receive credentials")
+	}
+}
+
+// The redirect flag exists for hosting replicas under the same domain, so a
+// subdomain redirect must keep working with credentials attached.
+func TestHTTPConnKeepsTokenForSameSiteRedirect(t *testing.T) {
+	var mu sync.Mutex
+	var postAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			mu.Lock()
+			postAuth = r.Header.Get("Authorization")
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+			if _, err := io.WriteString(w, "0000"); err != nil {
+				t.Errorf("result write: %v", err)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		if _, err := io.WriteString(w, FormatPktLine("version 2\n")+FormatPktLine("ls-refs\n")+"0000"); err != nil {
+			t.Errorf("advertisement write: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	ep, err := url.Parse(srv.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewHTTPConnWithClient(ep, "source", &transporthttp.BasicAuth{
+		Username: "git", Password: "SUPER_SECRET_TOKEN",
+	}, srv.Client())
+	conn.FollowInfoRefsRedirect = true
+
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", GitProtocolV2); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	body, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", bytes.NewReader([]byte("0000")), true, "test")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	_ = body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if postAuth == "" {
+		t.Error("credentials must still be sent when no cross-site redirect happened")
+	}
+}
+
+// Credentials in the URL's userinfo must be bound to the endpoint's site the
+// same way an explicit token is. net/http derives Basic auth from req.URL.User,
+// so carrying userinfo into the resolved (post-redirect) endpoint hands the
+// credential to the redirect host without any Authorization header being set by
+// git-sync at all — a silent leak, since outgoingAuth never sees it.
+func TestHTTPConnWithholdsURLUserinfoFromCrossSiteRedirect(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen["elsewhere "+r.Method] = r.Header.Get("Authorization")
+		mu.Unlock()
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			if _, err := io.WriteString(w, FormatPktLine("version 2\n")+FormatPktLine("ls-refs\n")+"0000"); err != nil {
+				t.Errorf("advertisement write: %v", err)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+		if _, err := io.WriteString(w, "0000"); err != nil {
+			t.Errorf("result write: %v", err)
+		}
+	}))
+	defer elsewhere.Close()
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer endpoint.Close()
+
+	// Credentials live only in the URL — no explicit Auth is configured.
+	withCreds := strings.Replace(endpoint.URL, "http://", "http://user:URLSECRET@", 1)
+	ep, err := url.Parse(withCreds + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewHTTPConnWithClient(ep, "source", nil, endpoint.Client())
+	conn.FollowInfoRefsRedirect = true
+	conn.ProgressOut = io.Discard
+
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", GitProtocolV2); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	body, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", bytes.NewReader([]byte("0000")), true, "test")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	_ = body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := seen["elsewhere POST"]; !ok {
+		t.Fatal("the POST never reached the redirect target, so the leak path was not exercised")
+	}
+	for tag, auth := range seen {
+		if auth != "" {
+			t.Errorf("%s carried URL-derived credentials to the redirect target: %q", tag, auth)
+		}
+	}
+}
+
+// The redirect guard must anchor on the request that was issued, not on the
+// connection's user-typed endpoint. A connection's effective endpoint moves:
+// setResolvedEndpoint adopts a redirect host, and credential-helper credentials
+// are then looked up for that host. Anchoring on the original endpoint strips
+// those credentials on a later hop that never leaves the adopted host, which
+// breaks the exact remedy the withheld-credentials warning recommends.
+func TestGuardRedirectsAnchorsOnTheIssuedRequest(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+
+	adopted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path] = r.Header.Get("Authorization")
+		mu.Unlock()
+		// Bounce once within this same host, the way a hosting replica does.
+		if r.URL.Path == "/repo.git/git-upload-pack" {
+			http.Redirect(w, r, "/final/repo.git/git-upload-pack", http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer adopted.Close()
+
+	// A conn whose typed endpoint is somewhere else entirely — modelling the
+	// state after a cross-site redirect has been adopted.
+	elsewhere, err := url.Parse("https://typed.example/repo.git")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	conn := NewHTTPConnWithClient(elsewhere, "source", nil, adopted.Client())
+
+	// Aim a request directly at the adopted host, carrying credentials the
+	// helper resolved for it.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, adopted.URL+"/repo.git/git-upload-pack", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.SetBasicAuth("git", "HELPERCRED")
+	res, err := conn.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	_ = res.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if seen["/repo.git/git-upload-pack"] == "" {
+		t.Fatal("the first request should carry the helper credentials")
+	}
+	if seen["/final/repo.git/git-upload-pack"] == "" {
+		t.Error("credentials were stripped on a hop that never left the adopted host")
+	}
+}
+
+// The guard must still strip on a hop that genuinely leaves the site of the
+// request that was issued.
+func TestGuardRedirectsStripsOnCrossSiteHop(t *testing.T) {
+	var mu sync.Mutex
+	var gotAuth string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer other.Close()
+	start := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/elsewhere", http.StatusTemporaryRedirect)
+	}))
+	defer start.Close()
+
+	ep, err := url.Parse(start.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	conn := NewHTTPConnWithClient(ep, "source", nil, start.Client())
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, start.URL+"/repo.git/info/refs", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.SetBasicAuth("git", "SECRET")
+	res, err := conn.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	_ = res.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "" {
+		t.Errorf("credentials followed a cross-site hop: %q", gotAuth)
+	}
+}

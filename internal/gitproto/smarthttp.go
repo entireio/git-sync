@@ -253,6 +253,18 @@ type HTTPConn struct {
 	// clobber the in-place ticker frame.
 	ProgressOut io.Writer
 
+	// authIsExplicit records that Auth was supplied by the caller — a
+	// --source-token/--target-token style flag — rather than resolved from the
+	// git credential helper. The distinction decides where those credentials
+	// may travel: explicit ones are bound to EndpointURL's site (see
+	// outgoingAuth), while helper-resolved ones are looked up keyed on the host
+	// actually being challenged and so are already bound to their destination.
+	authIsExplicit bool
+
+	// authWithheldWarned keeps the withheld-credentials notice to once per
+	// connection; the same redirect repeats on every RPC.
+	authWithheldWarned bool
+
 	// pendingHelperCreds tracks credentials supplied by the helper via
 	// EnsureAuthForService but not yet validated against a real operation.
 	// The next RequestInfoRefs/PostRPCStreamBody approves on 2xx or rejects
@@ -310,11 +322,109 @@ func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClien
 	}
 	normalizeEndpointPath(ep)
 	return &HTTPConn{
-		Label:       label,
-		EndpointURL: ep,
-		HTTP:        httpClient,
-		Auth:        auth,
+		Label:          label,
+		EndpointURL:    ep,
+		HTTP:           guardRedirects(httpClient),
+		Auth:           auth,
+		authIsExplicit: auth != nil,
 	}
+}
+
+// maxRedirects mirrors the cap Go's http.Client applies by default. Setting
+// CheckRedirect replaces that default, so the limit has to be reimposed here or
+// a redirect loop would spin forever.
+const maxRedirects = 10
+
+// guardRedirects returns a shallow copy of client whose redirect policy strips
+// credentials on a hop that leaves the site of the request that was issued.
+//
+// The stdlib already refuses to carry Authorization across a redirect, but its
+// notion of "same host" compares hostnames and ignores the port and scheme, so
+// it will forward the header from host:443 to host:9999 — a different service,
+// potentially a different tenant. sameSite is stricter, and applying it here
+// closes the hop that outgoingAuth cannot see: the redirect is followed inside
+// a single http.Client.Do, so by then the header is already on the wire.
+//
+// The comparison anchors on via[0].URL — the URL this redirect chain started
+// from — rather than on the connection's endpoint. A connection's effective
+// endpoint moves: setResolvedEndpoint adopts a redirect host, and helper
+// credentials are then looked up for that host. Anchoring on the user-typed
+// endpoint would strip those credentials on a later hop that never leaves the
+// adopted host, breaking the very remedy the withheld-credentials warning
+// recommends. Anchoring per request is accurate in both cases, since via[0] is
+// whatever requestURL() or the helper-retry target pointed at.
+//
+// The copy shares the caller's Transport and only differs in redirect policy,
+// so this neither mutates nor reconfigures the client that was passed in. Any
+// CheckRedirect the caller already set still runs, and still gets to veto.
+func guardRedirects(client *http.Client) *http.Client {
+	clone := *client
+	prev := clone.CheckRedirect
+	clone.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		if prev != nil {
+			if err := prev(req, via); err != nil {
+				return err
+			}
+		}
+		// A nil anchor cannot be compared, so sameSite returns false and the
+		// header is stripped: unknown provenance fails closed. Go always
+		// supplies at least one entry in via, so this is defensive only.
+		var from *url.URL
+		if len(via) > 0 {
+			from = via[0].URL
+		}
+		if !sameSite(from, req.URL) {
+			req.Header.Del("Authorization")
+		}
+		return nil
+	}
+	return &clone
+}
+
+// outgoingAuth returns the credentials to attach to a request aimed at target.
+//
+// Explicit credentials are withheld when target is not same-site with the URL
+// the user typed. git-sync follows /info/refs redirects and then addresses the
+// redirect host directly, which bypasses the protection Go's http.Client
+// provides by stripping Authorization on a cross-host redirect: without this
+// check, any 30x an attacker can cause — an open redirect on the real host, a
+// hostile mirror, a MITM on a plain-http source — collects the token. With the
+// token withheld, the credential helper still gets a chance on the resulting
+// 401, keyed on the host actually being challenged.
+//
+// Helper-resolved credentials pass through unchanged: they were looked up for
+// the host they are being sent to.
+func (c *HTTPConn) outgoingAuth(target *url.URL) AuthMethod {
+	if c.Auth == nil || !c.authIsExplicit {
+		return c.Auth
+	}
+	if sameSite(c.EndpointURL, target) {
+		return c.Auth
+	}
+	c.warnAuthWithheld(target)
+	return nil
+}
+
+// warnAuthWithheld tells the operator why their token stopped being sent. A
+// silent drop would surface only as an unexplained 401.
+func (c *HTTPConn) warnAuthWithheld(target *url.URL) {
+	if c.authWithheldWarned {
+		return
+	}
+	c.authWithheldWarned = true
+	w := c.ProgressOut
+	if w == nil {
+		w = os.Stderr
+	}
+	next := "Store credentials for that host in your git credential helper if it needs them."
+	if c.CredentialHelper != nil {
+		next = "Consulting the git credential helper for that host instead."
+	}
+	fmt.Fprintf(w, "%s: withholding the configured credentials from %s: /info/refs redirected outside %s. %s\n",
+		c.Label, redact.Endpoint(target), c.EndpointURL.Hostname(), next)
 }
 
 func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
@@ -378,7 +488,7 @@ func RequestInfoRefs(ctx context.Context, conn Conn, service string, gitProtocol
 
 // RequestInfoRefs fetches /info/refs for the given service.
 func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProtocol string) ([]byte, error) {
-	res, err := c.doInfoRefsRequest(ctx, service, gitProtocol, c.Auth, nil)
+	res, err := c.doInfoRefsRequest(ctx, service, gitProtocol, c.outgoingAuth(c.requestURL()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -430,10 +540,7 @@ func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]b
 			// display/logging/telemetry. Path/userinfo carry over from
 			// EndpointURL (same assumption as before: the redirect target
 			// serves the same repo path).
-			resolved := *c.EndpointURL
-			resolved.Scheme = final.Scheme
-			resolved.Host = final.Host
-			c.resolvedEndpoint = &resolved
+			c.setResolvedEndpoint(final.Scheme, final.Host)
 		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
@@ -489,7 +596,7 @@ func PostRPCStreamBody(ctx context.Context, conn Conn, service string, body io.R
 // when body is an io.Seeker (so we can rewind it); callers that pass a raw
 // non-seekable Reader will see the 401 surface as-is.
 func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body io.Reader, v2 bool, phase string) (io.ReadCloser, error) {
-	res, err := c.doPostRPCRequest(ctx, service, body, v2, phase, c.Auth, nil)
+	res, err := c.doPostRPCRequest(ctx, service, body, v2, phase, c.outgoingAuth(c.requestURL()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +706,7 @@ func ApplyAuth(req *http.Request, auth AuthMethod) {
 // server either accepts anonymous POSTs here or returns ambiguously,
 // and either way attaching unvalidated credentials could leak them.
 func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
-	if c.Auth != nil || c.CredentialHelper == nil {
+	if c.outgoingAuth(c.requestURL()) != nil || c.CredentialHelper == nil {
 		return
 	}
 	res, err := c.doServiceProbe(ctx, service)
@@ -623,6 +730,7 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 		return
 	}
 	c.Auth = &transporthttp.BasicAuth{Username: user, Password: pass}
+	c.authIsExplicit = false // looked up for challengeURL, so bound to it
 	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 	c.adoptChallengeHost(challengeURL)
 }
@@ -702,7 +810,10 @@ func (c *HTTPConn) doServiceProbe(ctx context.Context, service string) (*http.Re
 //
 // Caller is responsible for closing the returned response body.
 func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry func(AuthMethod, *url.URL) (*http.Response, error)) (*http.Response, error) {
-	if res.StatusCode != http.StatusUnauthorized || c.Auth != nil || c.CredentialHelper == nil {
+	// Gate on the credentials actually sent, not on c.Auth: when an explicit
+	// token was withheld from a cross-site redirect target, nothing
+	// authenticated this request and the helper should get its turn.
+	if res.StatusCode != http.StatusUnauthorized || c.outgoingAuth(c.requestURL()) != nil || c.CredentialHelper == nil {
 		return res, nil
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
@@ -745,6 +856,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		// which runs after the caller validates the response body — a 2xx
 		// status alone isn't proof the operation succeeded.
 		c.Auth = retryAuth
+		c.authIsExplicit = false // looked up for challengeURL, so bound to it
 		c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 		c.adoptChallengeHost(challengeURL)
 	}
@@ -776,9 +888,26 @@ func (c *HTTPConn) adoptChallengeHost(challengeURL *url.URL) {
 	if challengeURL.Host == current.Host && challengeURL.Scheme == current.Scheme {
 		return
 	}
+	c.setResolvedEndpoint(challengeURL.Scheme, challengeURL.Host)
+}
+
+// setResolvedEndpoint records scheme/host as this connection's effective
+// endpoint, keeping EndpointURL as the user-typed value.
+//
+// Userinfo is dropped when the result leaves the endpoint's site. net/http
+// derives Basic auth from req.URL.User, so a resolved endpoint that kept
+// "user:token@" would authenticate against the redirect host with no
+// Authorization header of git-sync's own involved — outgoingAuth would never
+// see it, making the leak silent. Path carries over as before: the redirect
+// target is assumed to serve the same repository path.
+func (c *HTTPConn) setResolvedEndpoint(scheme, host string) {
 	resolved := *c.EndpointURL
-	resolved.Scheme = challengeURL.Scheme
-	resolved.Host = challengeURL.Host
+	resolved.Scheme = scheme
+	resolved.Host = host
+	if resolved.User != nil && !sameSite(c.EndpointURL, &resolved) {
+		resolved.User = nil
+		c.warnAuthWithheld(&resolved)
+	}
 	c.resolvedEndpoint = &resolved
 }
 
