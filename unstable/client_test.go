@@ -3,6 +3,7 @@ package unstable
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -148,5 +149,59 @@ func TestBuildFetchConfigThreadsMaterializedMaxObjects(t *testing.T) {
 	}
 	if cfg.MaterializedMaxObjects != 1234 {
 		t.Errorf("MaterializedMaxObjects = %d, want 1234", cfg.MaterializedMaxObjects)
+	}
+}
+
+// Every bool on gitsync.SyncPolicy must reach the syncer config, checked by
+// reflection rather than by an enumerated list.
+//
+// This exists because the hand-written test above did not catch three policy
+// fields that buildSyncConfig silently dropped: a list of fields only covers
+// what someone remembered to add to it, so the failure mode is a new policy
+// field that is accepted by the API and then ignored, with no test going red.
+// Reflection inverts that — a new bool is covered the moment it is declared,
+// and this fails until it is threaded.
+//
+// Matching is by identical field name in syncer.Config, which is the
+// convention every policy bool follows today. A future policy field whose
+// config counterpart is deliberately named differently (or deliberately
+// absent) will fail here and should be added to skip with a reason, not
+// renamed to satisfy the test.
+func TestBuildSyncConfigThreadsEveryPolicyBool(t *testing.T) {
+	skip := map[string]string{}
+
+	policyType := reflect.TypeOf(gitsync.SyncPolicy{})
+	for i := range policyType.NumField() {
+		field := policyType.Field(i)
+		if field.Type.Kind() != reflect.Bool {
+			continue
+		}
+		if reason, ok := skip[field.Name]; ok {
+			t.Logf("skipping %s: %s", field.Name, reason)
+			continue
+		}
+		t.Run(field.Name, func(t *testing.T) {
+			// One field at a time, so a failure names the culprit and no
+			// mutually-exclusive pair is ever set together.
+			policy := gitsync.SyncPolicy{}
+			reflect.ValueOf(&policy).Elem().FieldByName(field.Name).SetBool(true)
+
+			cfg, err := New(Options{HTTPClient: &http.Client{}}).buildSyncConfig(context.Background(), SyncRequest{
+				Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+				Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+				Policy: policy,
+			})
+			if err != nil {
+				t.Fatalf("buildSyncConfig: %v", err)
+			}
+
+			got := reflect.ValueOf(cfg).FieldByName(field.Name)
+			if !got.IsValid() {
+				t.Fatalf("syncer.Config has no %s field; thread it, or add it to skip with a reason", field.Name)
+			}
+			if !got.Bool() {
+				t.Errorf("SyncPolicy.%s = true was dropped by buildSyncConfig", field.Name)
+			}
+		})
 	}
 }

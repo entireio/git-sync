@@ -35,10 +35,11 @@ type RefRejectedError = gitproto.RefRejectedError
 // repository whose only refs are under refs/pull/* selects nothing once that
 // namespace is excluded. Test for it with errors.Is.
 //
-// It is deliberately distinct from the empty-source errors below, which mean
-// the source has no refs AT ALL. Before these existed both cases shared one
-// message and callers could not tell "nothing to mirror" from "nothing
-// matched".
+// It is deliberately distinct from the empty-source errors below, which cover
+// a source that ADVERTISED no refs — a weaker statement on purpose, since
+// whether such a repository really holds none is not something a client can
+// determine. Before these existed both cases shared one message and callers
+// could not tell "nothing was advertised" from "nothing matched".
 var ErrNoRefsSelected = syncer.ErrNoRefsSelected
 
 // ErrSourceEmptyUnverified is returned (wrapped) by Replicate under
