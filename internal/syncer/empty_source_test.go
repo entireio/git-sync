@@ -683,6 +683,43 @@ func TestResolveEmptySourceRespectsMappingScope(t *testing.T) {
 		}
 	})
 
+	// The case that matters most, and the one an "unmapped refs are out of
+	// scope" reading silently drops: the target still holds the very ref the
+	// request maps. Converging here would mean deleting it.
+	t.Run("the mapped ref itself is divergence", func(t *testing.T) {
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/heads/main": hash}
+		s := emptySourceSession(mapped(), nil, target, unbornSource())
+		_, err := s.resolveEmptySource()
+		if !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Fatalf("expected ErrSourceEmptyTargetPopulated for a populated mapping target, got %v", err)
+		}
+	})
+
+	// A mapping target is managed regardless of exclusions, matching the
+	// mapping pass in BuildDesiredRefs, which applies exclusions only to
+	// auto-discovery.
+	t.Run("a mapped ref stays in scope even when excluded", func(t *testing.T) {
+		cfg := mapped()
+		cfg.ExcludeRefPrefixes = []string{"refs/heads/"}
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/heads/main": hash}
+		s := emptySourceSession(cfg, nil, target, unbornSource())
+		if _, err := s.resolveEmptySource(); !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Fatalf("expected an excluded-but-mapped target ref to still be divergence, got %v", err)
+		}
+	})
+
+	// Mapping targets are compared by resolved name, so a short-form mapping
+	// must match the full ref the target advertises.
+	t.Run("short-form mapping names resolve", func(t *testing.T) {
+		cfg := converged()
+		cfg.Mappings = []validation.RefMapping{{Source: "main", Target: "trunk"}}
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/heads/trunk": hash}
+		s := emptySourceSession(cfg, nil, target, unbornSource())
+		if _, err := s.resolveEmptySource(); !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Fatalf("expected a short-form mapping target to resolve to refs/heads/trunk, got %v", err)
+		}
+	})
+
 	// Tags stay in scope under a mapping, because prune still selects them —
 	// the check must track what the planner does, not a simpler story.
 	t.Run("tags remain divergence", func(t *testing.T) {

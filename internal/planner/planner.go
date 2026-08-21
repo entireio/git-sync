@@ -250,9 +250,58 @@ func BuildReplicationPlans(
 	return plans, nil
 }
 
-// PruneTarget reports whether a request would manage an unmanaged target ref —
-// equivalently, whether prune could select it for deletion — and with what
-// classification.
+// TargetScope answers whether a target ref is a request's responsibility at
+// all. Build it once per request with NewTargetScope; Manages is then O(1).
+//
+// Two ways a ref qualifies, and both are needed. It may be a ref the request
+// explicitly MANAGES — a mapping target, which BuildDesiredRefs adds to the
+// managed set — or one prune could select. PruneTarget alone answers only the
+// second, and deliberately reports false for every branch once Mappings is set,
+// because addPruneCandidates consults it only for refs already known to be
+// unmanaged. Reading it as the whole answer silently drops the mapping targets,
+// which is the worst direction for anything deciding divergence: a target still
+// holding the mapped ref looks like nothing to worry about.
+type TargetScope struct {
+	cfg    PlanConfig
+	mapped map[plumbing.ReferenceName]struct{}
+}
+
+// NewTargetScope precomputes the mapping targets a request declares. It
+// normalizes cfg and resolves mapping names the same way BuildDesiredRefs
+// does, so the two cannot disagree about what a mapping names.
+func NewTargetScope(cfg PlanConfig) (TargetScope, error) {
+	cfg = normalizeAllRefs(cfg)
+	scope := TargetScope{cfg: cfg, mapped: map[plumbing.ReferenceName]struct{}{}}
+	if len(cfg.Mappings) == 0 {
+		return scope, nil
+	}
+	normalized, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs)
+	if err != nil {
+		return TargetScope{}, fmt.Errorf("validate ref mappings: %w", err)
+	}
+	for _, nm := range normalized {
+		scope.mapped[nm.TargetRef] = struct{}{}
+	}
+	return scope, nil
+}
+
+// Manages reports whether the request would push to, or prune, this target ref.
+func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
+	// Mapping targets are not subject to exclusions, matching the mapping pass
+	// in BuildDesiredRefs, which applies exclusions only to auto-discovery.
+	if _, ok := s.mapped[targetRef]; ok {
+		return true
+	}
+	_, prunable := PruneTarget(targetRef, s.cfg)
+	return prunable
+}
+
+// PruneTarget reports whether prune could select an ALREADY-UNMANAGED target
+// ref for deletion, and with what classification.
+//
+// It is not the answer to "is this ref in scope" — with Mappings set it reports
+// false for every branch, because its only caller has already excluded the
+// managed ones. Use TargetScope.Manages for that question.
 //
 // It normalizes cfg itself rather than assuming a normalized one. Callers
 // inside planning have already normalized (this is then a no-op), but the

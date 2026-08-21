@@ -231,8 +231,12 @@ func (s *syncSession) resolveEmptySource() (Result, error) {
 	// A target that advertises refs this request manages is populated, full
 	// stop — hiding can only ever conceal refs, never invent them, so anything
 	// visible here is real and this is divergence.
-	if n := s.targetRefsInScope(); n > 0 {
-		return Result{}, fmt.Errorf("%w (%d in scope)", ErrSourceEmptyTargetPopulated, n)
+	inScope, err := s.targetRefsInScope()
+	if err != nil {
+		return Result{}, err
+	}
+	if inScope > 0 {
+		return Result{}, fmt.Errorf("%w (%d in scope)", ErrSourceEmptyTargetPopulated, inScope)
 	}
 	// An EMPTY target advertisement proves nothing on its own, for the same
 	// reason the source's did not, so it needs the same authoritative
@@ -284,28 +288,34 @@ func (s *syncSession) sourceCannotReportUnborn() (string, bool) {
 	return "", false
 }
 
-// targetRefsInScope counts the target refs this request would actually manage.
+// targetRefsInScope counts the target refs this request is responsible for.
 //
 // It must ask exactly the question the planner asks, so it delegates to
-// planner.PruneTarget rather than re-deriving the answer — a divergence check
-// with its own idea of scope reports refs the request has disclaimed, and
-// "excluded names only" was such an idea: with Mappings set, an unmapped branch
-// is equally untouchable, and counting it left a mapping-pinned mirror
-// permanently diverged over a ref it would neither push nor prune.
+// planner.TargetScope rather than re-deriving the answer. Both directions of
+// getting this wrong are real, and they fail oppositely: too narrow a scope
+// leaves a mirror permanently diverged over a ref it would never touch, while
+// too wide a scope — or, worse, a predicate that silently omits the mapping
+// targets — converges over a target that still holds refs the source does not.
 //
 // The zero-hash skip stays here because it is about the value rather than the
 // name: a zero hash is a deletion sentinel, not a ref that exists.
-func (s *syncSession) targetRefsInScope() int {
-	cfg := planConfig(s.cfg)
+func (s *syncSession) targetRefsInScope() (int, error) {
+	scope, err := planner.NewTargetScope(planConfig(s.cfg))
+	if err != nil {
+		// Unreachable in practice: newSession validates mappings before any
+		// session exists. Surfaced rather than swallowed, because guessing a
+		// scope here would mean guessing at divergence.
+		return 0, fmt.Errorf("resolve target scope: %w", err)
+	}
 	n := 0
 	for name, hash := range s.target.refMap {
 		if hash.IsZero() {
 			continue
 		}
-		if _, managed := planner.PruneTarget(name, cfg); !managed {
+		if !scope.Manages(name) {
 			continue
 		}
 		n++
 	}
-	return n
+	return n, nil
 }
