@@ -286,18 +286,23 @@ func (s *syncSession) sourceCannotReportUnborn() (string, bool) {
 
 // targetRefsInScope counts the target refs this request would actually manage.
 //
-// Every other consumer of the target ref map filters the same two ways before
-// acting (syncer.replicateCanBootstrap, planner.addPruneCandidates): a zero
-// hash is a deletion sentinel rather than a ref, and an excluded name is one
-// the run would neither push nor prune. A divergence check that skipped those
-// filters would report refs the request has explicitly disclaimed.
+// It must ask exactly the question the planner asks, so it delegates to
+// planner.PruneTarget rather than re-deriving the answer — a divergence check
+// with its own idea of scope reports refs the request has disclaimed, and
+// "excluded names only" was such an idea: with Mappings set, an unmapped branch
+// is equally untouchable, and counting it left a mapping-pinned mirror
+// permanently diverged over a ref it would neither push nor prune.
+//
+// The zero-hash skip stays here because it is about the value rather than the
+// name: a zero hash is a deletion sentinel, not a ref that exists.
 func (s *syncSession) targetRefsInScope() int {
+	cfg := planConfig(s.cfg)
 	n := 0
 	for name, hash := range s.target.refMap {
 		if hash.IsZero() {
 			continue
 		}
-		if planner.IsRefExcluded(name, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		if _, managed := planner.PruneTarget(name, cfg); !managed {
 			continue
 		}
 		n++

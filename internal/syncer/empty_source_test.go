@@ -648,3 +648,64 @@ func TestLSRefsUnbornWithheldWhenUnadvertised(t *testing.T) {
 		t.Errorf("ls-refs args = %v; sent an argument the server did not advertise", args)
 	}
 }
+
+// Scope is not only exclusions. A mapping-scoped request manages the refs it
+// mapped and, for prune, tags — but not unmapped branches and not other
+// namespaces. Counting those left a mapping-pinned mirror permanently diverged
+// over a ref it would neither push nor prune, which is the same false
+// divergence exclusions produced and defeats the very case the pre-planning
+// path was added to serve.
+func TestResolveEmptySourceRespectsMappingScope(t *testing.T) {
+	hash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	mapped := func() Config {
+		c := converged()
+		c.Mappings = []validation.RefMapping{{Source: "refs/heads/main", Target: "refs/heads/main"}}
+		return c
+	}
+
+	t.Run("unmapped branch is not this request's business", func(t *testing.T) {
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/heads/other": hash}
+		s := emptySourceSession(mapped(), nil, target, unbornSource())
+		result, err := s.resolveEmptySource()
+		if err != nil {
+			t.Fatalf("expected convergence over an unmapped target branch, got %v", err)
+		}
+		if !result.Converged {
+			t.Error("Converged = false")
+		}
+	})
+
+	t.Run("other namespaces likewise", func(t *testing.T) {
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/notes/commits": hash}
+		s := emptySourceSession(mapped(), nil, target, unbornSource())
+		if _, err := s.resolveEmptySource(); err != nil {
+			t.Fatalf("expected convergence over an unmapped namespace, got %v", err)
+		}
+	})
+
+	// Tags stay in scope under a mapping, because prune still selects them —
+	// the check must track what the planner does, not a simpler story.
+	t.Run("tags remain divergence", func(t *testing.T) {
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/tags/v1": hash}
+		s := emptySourceSession(mapped(), nil, target, unbornSource())
+		if _, err := s.resolveEmptySource(); !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Fatalf("expected ErrSourceEmptyTargetPopulated for a target tag, got %v", err)
+		}
+	})
+}
+
+// planConfig does not normalize, and un-normalized AllRefs configs still carry
+// the caller's Branches filter. Reading that raw would report a branch as
+// unmanaged when the request would in fact prune it — an undercount, so it
+// converges over a populated target rather than refusing.
+func TestResolveEmptySourceNormalizesScopeBeforeJudging(t *testing.T) {
+	cfg := converged()
+	cfg.Branches = []string{"main"} // AllRefs is set, so this is cleared by normalization
+	target := map[plumbing.ReferenceName]plumbing.Hash{
+		"refs/heads/other": plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	}
+	s := emptySourceSession(cfg, nil, target, unbornSource())
+	if _, err := s.resolveEmptySource(); !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+		t.Fatalf("a populated target must refuse regardless of a stale Branches filter, got %v", err)
+	}
+}
