@@ -8,6 +8,13 @@ import (
 // ProtocolMode controls source-side protocol negotiation.
 type ProtocolMode string
 
+// ProtocolAuto negotiates v2 and falls back to v1; ProtocolV1 and ProtocolV2
+// pin the choice.
+//
+// ProtocolV1 is incompatible with SyncPolicy.AllowEmptySource: the unborn-HEAD
+// cross-check that policy requires exists only in v2's ls-refs, so pinning v1
+// is rejected at the request edge rather than failing every run with an error
+// that looks like the source is withholding refs.
 const (
 	ProtocolAuto ProtocolMode = "auto"
 	ProtocolV1   ProtocolMode = "v1"
@@ -142,13 +149,26 @@ type SyncPolicy struct {
 	TargetAssertedEmpty bool `json:"targetAssertedEmpty,omitempty"`
 
 	// AllowEmptySource opts into treating a verified-empty source as an
-	// outcome instead of an error. Replicate only. When source and target are
-	// both verified empty (see the asserted-empty fields above) Replicate
-	// succeeds with zero plans and ExecutionSummary.SourceEmpty set; when the
-	// target holds refs the two have diverged and it fails with
-	// ErrSourceEmptyTargetPopulated rather than deleting them; when either
-	// side's emptiness cannot be established it fails with the matching
-	// unverified error.
+	// outcome instead of an error. When source and target are both verified
+	// empty (see the asserted-empty fields above) Replicate succeeds with zero
+	// plans and ExecutionSummary.Converged set; when the target holds refs the
+	// two have diverged and it fails with ErrSourceEmptyTargetPopulated rather
+	// than deleting them; when either side's emptiness cannot be established it
+	// fails with the matching unverified error.
+	//
+	// Two requirements, both rejected at the request edge rather than silently
+	// ignored:
+	//
+	//   - Mode must be ModeReplicate. Sync, Bootstrap and Fetch have no
+	//     convergence outcome to report.
+	//   - RefScope.AllRefs must be set. Under a narrower scope the source ref
+	//     listing is itself narrowed, so an empty result says nothing about the
+	//     repository as a whole, and the target's refs — which are never
+	//     scope-filtered — cannot be judged against a partial view of the
+	//     source.
+	//
+	// Convergence additionally requires protocol v2 on the source leg, because
+	// the unborn-HEAD cross-check has no v1 equivalent. See ProtocolV1.
 	//
 	// Off by default: leave it unset and an empty source errors exactly as it
 	// always has.
@@ -162,6 +182,22 @@ func (p SyncPolicy) Validate() error {
 	}
 	if p.Mode == ModeReplicate && (p.ForceWithLease || p.ForceBlind) {
 		return errors.New("replicate does not support force flags; use sync instead")
+	}
+	// Sync, Bootstrap and Fetch have no convergence outcome, so they would
+	// accept the policy, carry it all the way into the syncer, and then fail
+	// with the historical "no source refs matched" — leaving the caller no way
+	// to learn their safety policy was a no-op. The AllRefs half of the same
+	// requirement needs the scope and is enforced where both are in view.
+	if p.AllowEmptySource && p.Mode != ModeReplicate {
+		return errors.New("AllowEmptySource applies to replicate only; set Mode to ModeReplicate or use Replicate")
+	}
+	// v1 has no unborn-HEAD signal, so the cross-check this policy requires can
+	// never be satisfied over it: every run would fail, and the failure would
+	// read as the source withholding refs rather than as the caller's own
+	// protocol choice. ProtocolAuto is fine — it negotiates v2 wherever the
+	// server supports it.
+	if p.AllowEmptySource && p.Protocol == ProtocolV1 {
+		return errors.New("AllowEmptySource requires protocol v2 on the source; v1 cannot report an unborn HEAD, so emptiness can never be corroborated")
 	}
 	return nil
 }

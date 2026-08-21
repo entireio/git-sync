@@ -3644,6 +3644,20 @@ type smartHTTPRepoServer struct {
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
+	// lsRefsArgs is the argument list of the most recent ls-refs request, so a
+	// test can assert on what actually went on the wire.
+	lsRefsArgs []string
+
+	// lsRefsNoUnborn drops "unborn" from the advertised ls-refs features, for
+	// testing that the client does not send an unadvertised argument.
+	lsRefsNoUnborn bool
+}
+
+// LastLSRefsArgs returns the arguments of the most recent ls-refs request.
+func (s *smartHTTPRepoServer) LastLSRefsArgs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.lsRefsArgs...)
 }
 
 func newSmartHTTPRepoServer(tb testing.TB, repo *git.Repository) *smartHTTPRepoServer {
@@ -3844,9 +3858,13 @@ func rewriteReceivePackAdvertisement(data []byte, mutate func(*capability.List))
 
 func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, _ *http.Request) {
 	var buf bytes.Buffer
+	lsRefs := "ls-refs=unborn\n"
+	if s.lsRefsNoUnborn {
+		lsRefs = "ls-refs\n"
+	}
 	lines := []string{
 		"version 2\n",
-		"ls-refs=unborn\n",
+		lsRefs,
 		"fetch=thin-pack filter\n",
 		"agent=test-server\n",
 	}
@@ -3923,13 +3941,21 @@ func (s *smartHTTPRepoServer) handleUploadPackV2(w http.ResponseWriter, _ *http.
 }
 
 func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {
+	s.mu.Lock()
+	s.lsRefsArgs = append([]string(nil), req.Args...)
+	s.mu.Unlock()
+
 	prefixes := make([]string, 0, len(req.Args))
 	wantSymrefs := false
+	wantUnborn := false
 	for _, arg := range req.Args {
-		if strings.HasPrefix(arg, "ref-prefix ") {
+		switch {
+		case strings.HasPrefix(arg, "ref-prefix "):
 			prefixes = append(prefixes, strings.TrimPrefix(arg, "ref-prefix "))
-		} else if arg == "symrefs" {
+		case arg == "symrefs":
 			wantSymrefs = true
+		case arg == "unborn":
+			wantUnborn = true
 		}
 	}
 
@@ -3943,7 +3969,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	// Real git emits HEAD with symref-target attribute under "symrefs", as
 	// long as a ref-prefix covers HEAD (or no prefixes are given).
 	if wantSymrefs && coversHead(prefixes) {
-		if line, ok := s.lsRefsHeadLine(); ok {
+		if line, ok := s.lsRefsHeadLine(wantUnborn); ok {
 			if _, err := pktline.WriteString(&buf, line); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -4211,13 +4237,23 @@ func coversHead(prefixes []string) bool {
 
 // lsRefsHeadLine formats a v2 ls-refs HEAD line with the symref-target
 // attribute, matching what real git advertises under "symrefs".
-func (s *smartHTTPRepoServer) lsRefsHeadLine() (string, bool) {
+//
+// When HEAD's target does not exist, real git emits an "unborn HEAD" line if
+// the client asked for the unborn argument and says nothing at all if it did
+// not — which is precisely the ambiguity that argument exists to remove. The
+// fake reproduced only the silent half, which is why nothing here exercised
+// RefService.HeadUnborn end to end: deleting the request argument left the
+// whole suite green.
+func (s *smartHTTPRepoServer) lsRefsHeadLine(wantUnborn bool) (string, bool) {
 	head, err := s.repo.Storer.Reference(plumbing.HEAD)
 	if err != nil || head.Type() != plumbing.SymbolicReference {
 		return "", false
 	}
 	resolved, err := s.repo.Reference(head.Target(), true)
 	if err != nil {
+		if wantUnborn {
+			return fmt.Sprintf("unborn %s symref-target:%s\n", plumbing.HEAD, head.Target()), true
+		}
 		return "", false
 	}
 	return fmt.Sprintf("%s HEAD symref-target:%s\n", resolved.Hash(), head.Target()), true

@@ -182,11 +182,22 @@ type Result struct {
 	Stats              Stats                  `json:"stats"`
 	Measurement        Measurement            `json:"measurement"`
 	Protocol           string                 `json:"protocol"`
-	// SourceEmpty is true when the source was verified to have no refs and
-	// the target had none either, so the two are converged with nothing to
-	// apply. Only ever set on a successful zero-plan replicate; see
-	// resolveEmptyDesiredSet.
-	SourceEmpty bool `json:"sourceEmpty,omitempty"`
+	// Converged is true when the source was verified to have no refs and the
+	// target had none either, so the two already agree with nothing to apply.
+	// Only ever set on a successful zero-plan replicate; see
+	// resolveEmptySource.
+	//
+	// Named for what it reports rather than for the source alone: it requires
+	// BOTH sides verified, so it is false in every other empty-source outcome
+	// — including the diverged one, where the source WAS verified empty. A
+	// "SourceEmpty" that is false on a verified-empty source is a field that
+	// invites the wrong read.
+	//
+	// Emitted unconditionally (no omitempty) like every other discriminating
+	// bool here: this is the field that separates a converged run from an
+	// ordinary no-op, so "false" and "this binary has no such field" must not
+	// be the same JSON.
+	Converged bool `json:"converged"`
 }
 
 func (r Result) Lines() []string {
@@ -212,6 +223,13 @@ func (r Result) Lines() []string {
 	}
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
+	}
+	// Without this the text output of a converged empty replicate is
+	// byte-identical to an ordinary sync that had no work to do — the one
+	// distinction this field exists to draw, dropped on the path that
+	// cmd/git-sync and every non-JSON consumer actually render.
+	if r.Converged {
+		lines = append(lines, "converged: source and target both verified empty; nothing to apply")
 	}
 	return lines
 }
@@ -715,11 +733,14 @@ type targetSession struct {
 	features gitproto.TargetFeatures
 	policy   planner.RelayTargetPolicy
 	pusher   *gitproto.Pusher
-	// skippedRefNames are advertised target ref names dropped as invalid.
-	// Retained, not just warned about, because their absence is load-bearing
-	// for any caller reasoning about an EMPTY target: names dropped here
-	// leave refMap empty while the target plainly holds refs.
-	skippedRefNames []string
+	// skippedRefCount is how many advertised target ref names were dropped as
+	// invalid. Retained, not just warned about, because a non-zero count is
+	// load-bearing for any caller reasoning about an EMPTY target: names
+	// dropped here leave refMap empty while the target plainly holds refs.
+	// A count rather than the names, for the reason on
+	// gitproto.RefService.SkippedRefCount — this struct outlives the pack
+	// transfer and only a boolean is ever read from it.
+	skippedRefCount int
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -736,6 +757,9 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	case modeReplicate:
 	default:
 		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
+	}
+	if err := validateEmptySourcePolicy(cfg); err != nil {
+		return nil, err
 	}
 	if _, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs); err != nil {
 		return nil, fmt.Errorf("validate mappings: %w", err)
@@ -827,7 +851,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		// never picked as a prune candidate — the safe direction, but the
 		// operator should know the target holds a name git would reject.
 		gitproto.WarnSkippedRefNames(targetConn.ProgressWriter(), "target", skippedTargetRefs)
-		s.target.skippedRefNames = skippedTargetRefs
+		s.target.skippedRefCount = len(skippedTargetRefs)
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
 		s.target.adv = targetAdv
@@ -1013,6 +1037,20 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 }
 
 func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
+	// An empty source advertisement is resolved BEFORE planning. Under AllRefs
+	// the advertisement covers refs/, so "nothing advertised" is already a
+	// complete observation and planning cannot add to it — while
+	// BuildDesiredRefs errors on a mapping whose source ref is absent, which
+	// on a genuinely empty source is every mapping. Deciding after planning
+	// left the whole policy inert for any request that pinned refs by mapping:
+	// the caller got "source ref X not found" matching no sentinel, on exactly
+	// the state the policy exists to make succeed.
+	//
+	// Gated on the opt-in so a caller that never asked for this still gets the
+	// planner's error verbatim.
+	if s.cfg.AllowEmptySource && s.cfg.AllRefs && len(s.sourceRefMap) == 0 {
+		return s.resolveEmptySource()
+	}
 	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
 	if err != nil {
 		return Result{}, fmt.Errorf("build desired refs: %w", err)

@@ -3,10 +3,13 @@ package syncer
 import (
 	"errors"
 	"fmt"
+
+	"entire.io/entire/git-sync/internal/planner"
 )
 
-// The empty-desired-set outcomes. Replicate reaches this family whenever
-// planning produces no desired refs, which happens for unrelated reasons the
+// The empty-desired-set outcomes. Replicate reaches this family whenever it
+// finds nothing to act on — either the source advertised no refs at all, or
+// planning produced no desired refs — which happens for unrelated reasons the
 // wire signal alone cannot tell apart: the source has no refs, the source has
 // refs the requested scope excluded, or the source has refs this reader was
 // never shown. Collapsing them into one error (as this package did before)
@@ -14,11 +17,16 @@ import (
 // a converged state, the others never are.
 var (
 	// ErrNoRefsSelected means the source DOES advertise refs, but the
-	// requested scope (branch selection, mappings, exclude prefixes) matched
-	// none of them. Nothing is wrong with the source; the request asked for
-	// refs it does not have. Benign and expected for some sources — e.g. a
-	// GitHub repository whose only refs live under refs/pull/*, which mirror
-	// callers deliberately exclude.
+	// requested exclusions (ExcludeRefPrefixes, ExcludeRefs) subtracted all of
+	// them. Nothing is wrong with the source; the request asked for refs it
+	// does not have. Benign and expected for some sources — e.g. a GitHub
+	// repository whose only refs live under refs/pull/*, which mirror callers
+	// deliberately exclude.
+	//
+	// Exclusions are the only scoping mechanism that can reach it. Branch
+	// selection cannot: this family requires AllRefs, and normalizeAllRefs
+	// clears cfg.Branches whenever AllRefs is set. Nor can a mapping, whose
+	// absent source ref fails inside BuildDesiredRefs first.
 	//
 	// Its message deliberately avoids the historical "no source refs matched"
 	// text. A caller that substring-matches that phrase (mirror-pipeline does,
@@ -76,8 +84,63 @@ var (
 	ErrSourceEmptyTargetPopulated = errors.New("source is empty but the target still has refs")
 )
 
-// resolveEmptyDesiredSet decides what an empty desired set means, and is the
-// only place that may conclude "the source is empty and we are converged".
+// validateEmptySourcePolicy rejects an empty-source policy that no path would
+// consult, at the one point every entry (Run, Bootstrap, Fetch, Probe) shares.
+//
+// Both conditions were previously accepted, threaded into this package, and
+// then silently discarded: the caller set the policy, got the historical
+// "no source refs matched", and had no way to learn the policy did nothing.
+// Failing at the edge is the same treatment SyncPolicy.Validate already gives
+// mode-specific force flags.
+func validateEmptySourcePolicy(cfg Config) error {
+	if !cfg.AllowEmptySource {
+		// The assertions are inputs to this policy alone. Set without it they
+		// are inert by design — the opt-in is what makes the outcome
+		// reachable — so they are not an error on their own.
+		return nil
+	}
+	if cfg.Mode != modeReplicate {
+		return fmt.Errorf("AllowEmptySource applies to replicate only, got mode %q", cfg.Mode)
+	}
+	// Protocol v1 has no unborn-HEAD signal at all, so the corroboration this
+	// policy requires can never be satisfied over it: every run would fail,
+	// and with a message that reads as the source withholding refs. Refusing
+	// the combination up front names the real cause — the caller's own
+	// protocol selection. "auto" is accepted: it negotiates v2 wherever the
+	// server supports it, and the SSH fallback to v1 is only discoverable
+	// mid-run (see resolveEmptySource).
+	if cfg.ProtocolMode == protocolModeV1 {
+		return errors.New("AllowEmptySource requires protocol v2 on the source; v1 cannot report an unborn HEAD, so emptiness can never be corroborated")
+	}
+	// Under a narrower scope the source advertisement is itself narrowed (see
+	// planner.RefPrefixes), so an empty one says nothing about the repository
+	// as a whole — and the target's refs, which are never scope-filtered, are
+	// not ours to judge against a partial view of the source.
+	if !cfg.AllRefs {
+		return errors.New("AllowEmptySource requires an unscoped request (AllRefs); a narrowed scope cannot establish that a repository is empty")
+	}
+	return nil
+}
+
+// resolveEmptyDesiredSet decides what an empty desired set means when planning
+// produced no refs to act on.
+//
+// It is the post-planning entry point only. An empty source ADVERTISEMENT is
+// intercepted before planning (see runReplicate), because a mapping whose
+// source ref is absent errors inside BuildDesiredRefs and would never let this
+// run; both entry points share resolveEmptySource so they cannot disagree.
+func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
+	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
+		return Result{}, errors.New("no source refs matched")
+	}
+	if len(s.sourceRefMap) > 0 {
+		return Result{}, ErrNoRefsSelected
+	}
+	return s.resolveEmptySource()
+}
+
+// resolveEmptySource is the only place that may conclude "the source is empty
+// and we are converged".
 //
 // Emptiness is NOT established here. Git offers no way to prove it: ref hiding
 // is designed to be invisible to the client, so a hidden ref and an absent one
@@ -109,9 +172,13 @@ var (
 //     these can only ever REFUSE — none can promote an absent assertion into a
 //     success — so the git signal is a consistency check on the caller's
 //     claim, never a substitute for it.
-//  5. The target advertises no refs — anything visible there is real, since
-//     hiding can conceal refs but never invent them, so a visible ref means
-//     divergence.
+//  5. The target advertises no refs THIS REQUEST WOULD MANAGE — anything
+//     visible there is real, since hiding can conceal refs but never invent
+//     them, so a visible ref means divergence. Refs the request excludes are
+//     not ours to judge: the run would neither push nor prune them, and a
+//     mirror that excludes refs/pull/* while its target holds only refs/pull/*
+//     is converged over everything it manages. Counting them would make such a
+//     mirror permanently unconvergeable over a ref it never touches.
 //  6. The target's emptiness is asserted too (TargetAssertedEmpty) and
 //     corroborated the same way. An empty receive-pack advertisement proves no
 //     more than an empty ls-refs one: receive.hideRefs omits matching refs
@@ -123,29 +190,49 @@ var (
 // ErrTargetEmptyUnverified for the target half, ErrSourceEmptyTargetPopulated
 // for a target known to hold refs. Only condition 5 reports divergence; every
 // other failure is "unknown".
-func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
+func (s *syncSession) resolveEmptySource() (Result, error) {
 	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
 		return Result{}, errors.New("no source refs matched")
-	}
-	if len(s.sourceRefMap) > 0 {
-		return Result{}, ErrNoRefsSelected
 	}
 	if !s.cfg.SourceAssertedEmpty {
 		return Result{}, fmt.Errorf("%w: no authoritative assertion from the source", ErrSourceEmptyUnverified)
 	}
-	if s.sourceService == nil || !s.sourceService.HeadUnborn {
+	if s.sourceService == nil {
+		return Result{}, fmt.Errorf("%w: the source ref listing is unavailable", ErrSourceEmptyUnverified)
+	}
+	// Distinguish "the source COULD NOT report unborn" from "the source DID NOT
+	// report it". Only the second says anything about the repository; the first
+	// is a property of the protocol, and reporting it as the second tells the
+	// operator their server is withholding refs — implying a hideRefs
+	// misconfiguration or a compromised source — when nothing is wrong with it.
+	//
+	// A v1 request is refused before any I/O (see validateEmptySourcePolicy);
+	// this catches what validation cannot see: an "auto" SSH source whose v2
+	// probe failed and fell back to v1 mid-run.
+	if reason, cannot := s.sourceCannotReportUnborn(); cannot {
+		return Result{}, fmt.Errorf("%w: %s, so emptiness cannot be corroborated over this connection", ErrSourceEmptyUnverified, reason)
+	}
+	if !s.sourceService.HeadUnborn {
 		// HEAD's target exists while nothing was advertised, so a ref is being
 		// withheld — the caller's assertion disagrees with the wire and loses.
 		return Result{}, fmt.Errorf("%w: source asserted empty but did not report an unborn HEAD", ErrSourceEmptyUnverified)
 	}
-	if n := len(s.sourceService.SkippedRefNames); n > 0 {
+	if n := s.sourceService.SkippedRefCount; n > 0 {
 		return Result{}, fmt.Errorf("%w: source asserted empty but %d advertised ref name(s) were dropped as invalid", ErrSourceEmptyUnverified, n)
 	}
-	// A target that advertises refs is populated, full stop — hiding can only
-	// ever conceal refs, never invent them, so anything visible here is real
-	// and this is divergence.
-	if len(s.target.refMap) > 0 {
-		return Result{}, fmt.Errorf("%w (%d)", ErrSourceEmptyTargetPopulated, len(s.target.refMap))
+	// Every remaining condition is about the target, and this function is
+	// billed as the one place that may conclude convergence — so a session
+	// built without a target (Fetch, a target-less Probe) must be refused
+	// rather than dereferenced. runReplicate always has one; a future reuse
+	// might not.
+	if s.target == nil {
+		return Result{}, fmt.Errorf("%w: no target was listed to compare against", ErrTargetEmptyUnverified)
+	}
+	// A target that advertises refs this request manages is populated, full
+	// stop — hiding can only ever conceal refs, never invent them, so anything
+	// visible here is real and this is divergence.
+	if n := s.targetRefsInScope(); n > 0 {
+		return Result{}, fmt.Errorf("%w (%d in scope)", ErrSourceEmptyTargetPopulated, n)
 	}
 	// An EMPTY target advertisement proves nothing on its own, for the same
 	// reason the source's did not, so it needs the same authoritative
@@ -153,7 +240,7 @@ func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
 	if !s.cfg.TargetAssertedEmpty {
 		return Result{}, fmt.Errorf("%w: no authoritative assertion from the target", ErrTargetEmptyUnverified)
 	}
-	if n := len(s.target.skippedRefNames); n > 0 {
+	if n := s.target.skippedRefCount; n > 0 {
 		return Result{}, fmt.Errorf("%w: target asserted empty but %d advertised ref name(s) were dropped as invalid", ErrTargetEmptyUnverified, n)
 	}
 	return Result{
@@ -161,8 +248,59 @@ func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
 		DryRun:        s.cfg.DryRun,
 		OperationMode: modeReplicate,
 		Protocol:      s.sourceService.Protocol,
-		SourceEmpty:   true,
-		Stats:         s.stats.snapshot(),
-		Measurement:   s.measurementDone(),
+		Converged:     true,
+		// Replicate refuses a non-relay target outright, so every successful
+		// replicate reports a relay; a consumer reading Relay=false with an
+		// empty RelayMode would file this under "materialized fallback" or
+		// "malformed". The reason names why nothing moved. SourceHEAD stays
+		// empty on purpose: an unborn HEAD has no existing target branch, and
+		// consumers read a non-empty SourceHEAD as one that exists.
+		Relay:       true,
+		RelayMode:   modeReplicate,
+		RelayReason: "source-empty-converged",
+		Stats:       s.stats.snapshot(),
+		Measurement: s.measurementDone(),
 	}, nil
+}
+
+// sourceCannotReportUnborn reports whether this connection is structurally
+// incapable of carrying an unborn-HEAD signal, and why.
+//
+// HeadUnborn being false means only "not reported", which covers two very
+// different situations. Over a connection that CAN report it, false is evidence
+// against the caller's assertion — HEAD's target exists, so a ref is hidden.
+// Over one that cannot, false is no evidence at all, and treating it as the
+// former blames the server for the client's protocol.
+func (s *syncSession) sourceCannotReportUnborn() (string, bool) {
+	if s.sourceService.Protocol == protocolModeV1 {
+		return "the source negotiated protocol v1, which has no unborn-HEAD signal", true
+	}
+	// Nil caps means a caller assembled this session without an advertisement
+	// (tests do); only an advertisement that is present and lacks the feature
+	// is evidence the server cannot report it.
+	if caps := s.sourceService.V2Caps; caps != nil && !caps.LSRefsSupports("unborn") {
+		return "the source does not advertise ls-refs=unborn", true
+	}
+	return "", false
+}
+
+// targetRefsInScope counts the target refs this request would actually manage.
+//
+// Every other consumer of the target ref map filters the same two ways before
+// acting (syncer.replicateCanBootstrap, planner.addPruneCandidates): a zero
+// hash is a deletion sentinel rather than a ref, and an excluded name is one
+// the run would neither push nor prune. A divergence check that skipped those
+// filters would report refs the request has explicitly disclaimed.
+func (s *syncSession) targetRefsInScope() int {
+	n := 0
+	for name, hash := range s.target.refMap {
+		if hash.IsZero() {
+			continue
+		}
+		if planner.IsRefExcluded(name, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+			continue
+		}
+		n++
+	}
+	return n
 }

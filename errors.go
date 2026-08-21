@@ -28,12 +28,19 @@ var ErrTargetRefMoved = gitproto.ErrTargetRefMoved
 // target-ref moves also satisfy errors.Is(err, ErrTargetRefMoved).
 type RefRejectedError = gitproto.RefRejectedError
 
-// ErrNoRefsSelected is returned (wrapped) by Replicate when the source
-// advertises refs but the requested scope — branch selection, ref mappings,
-// exclude prefixes — matched none of them. The source is healthy; the request
-// asked for refs it does not have. Benign for some sources by design: a GitHub
-// repository whose only refs are under refs/pull/* selects nothing once that
-// namespace is excluded. Test for it with errors.Is.
+// ErrNoRefsSelected is returned (wrapped) by Replicate under
+// SyncPolicy.AllowEmptySource when the source advertises refs but
+// RefScope.ExcludeRefPrefixes / ExcludeRefs subtracted all of them. The source
+// is healthy; the request asked for refs it does not have. Benign for some
+// sources by design: a GitHub repository whose only refs are under refs/pull/*
+// selects nothing once that namespace is excluded. Test for it with errors.Is.
+//
+// Exclusions are the only scoping mechanism that reaches it, and the opt-in is
+// required — like every sentinel in this family, a caller that has not asked
+// for the distinction keeps receiving the historical error. Branch selection
+// cannot produce it, because AllowEmptySource requires RefScope.AllRefs and
+// that clears any branch filter; nor can a ref mapping, because a mapping whose
+// source ref is absent fails earlier, while the source is being planned.
 //
 // It is deliberately distinct from the empty-source errors below, which cover
 // a source that ADVERTISED no refs — a weaker statement on purpose, since

@@ -271,18 +271,6 @@ func TestDecodeV2LSRefsMalformed(t *testing.T) {
 	}
 }
 
-func TestDecodeV2LSRefsEmpty(t *testing.T) {
-	// Empty response (just flush).
-	wire := "0000"
-	refs, _, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
-	if err != nil {
-		t.Fatalf("decodeV2LSRefs: %v", err)
-	}
-	if len(refs) != 0 {
-		t.Fatalf("expected 0 refs, got %d", len(refs))
-	}
-}
-
 // An unborn HEAD is the whole point of requesting the capability: the
 // repository asserts it has no commits, which a caller may act on, while the
 // symref target stays out of HeadTarget because that ref does not exist.

@@ -54,12 +54,36 @@ type RefService struct {
 	// however empty it is.
 	HeadUnborn bool
 
-	// SkippedRefNames are advertised ref names dropped as invalid (see
-	// PartitionRefNames). Surfaced because their absence is load-bearing for
-	// any caller reasoning about an empty ref set: names dropped here leave
-	// refs empty while the repository plainly has some, which is
-	// indistinguishable from emptiness by ref count alone.
-	SkippedRefNames []string
+	// SkippedRefCount is how many advertised ref names were dropped as invalid
+	// (see PartitionRefNames). Surfaced because a non-zero count is
+	// load-bearing for any caller reasoning about an empty ref set: names
+	// dropped here leave refs empty while the repository plainly has some,
+	// which is indistinguishable from emptiness by ref count alone.
+	//
+	// A count, not the names: every consumer asks only whether any were
+	// dropped, and the names are already reported to the operator by
+	// WarnSkippedRefNames at the decode boundary. Retaining the slice pinned
+	// it to this struct — which outlives the pack fetch and push — for the
+	// whole run, megabytes of it on a source advertising many invalid names,
+	// purely to answer a boolean.
+	//
+	// Set on every construction path, v1 and v2 alike. It was populated at
+	// only one of four before, leaving the corroboration silently vacuous on
+	// v1; newV1RefService exists so a new path cannot forget.
+	SkippedRefCount int
+}
+
+// newV1RefService builds the v1 RefService. All three v1 construction sites go
+// through it: hand-built literals are how SkippedRefCount came to be set on one
+// path and silently left zero on the others, which reads to a caller as
+// "nothing was dropped".
+func newV1RefService(adv *packp.AdvRefs, skippedRefCount int) *RefService {
+	return &RefService{
+		Protocol:        "v1",
+		V1Adv:           adv,
+		HeadTarget:      headTargetFromAdv(adv),
+		SkippedRefCount: skippedRefCount,
+	}
 }
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
@@ -67,11 +91,11 @@ type RefService struct {
 func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
-		adv, refs, err := listSourceRefsV1(ctx, conn)
+		adv, refs, skippedCount, err := listSourceRefsV1(ctx, conn)
 		if err != nil {
 			return nil, nil, err
 		}
-		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+		return refs, newV1RefService(adv, skippedCount), nil
 
 	case "auto", "v2":
 		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, GitProtocolV2)
@@ -89,11 +113,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
 			}
-			refs, headTarget, unborn, skipped, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
+			refs, headTarget, unborn, skippedCount, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
 				return nil, nil, err
 			}
-			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget, HeadUnborn: unborn, SkippedRefNames: skipped}, nil
+			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget, HeadUnborn: unborn, SkippedRefCount: skippedCount}, nil
 		}
 		if protocolMode == "v2" {
 			return nil, nil, errors.New("source did not negotiate protocol v2")
@@ -108,7 +132,7 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 			return nil, nil, err
 		}
 		WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+		return refs, newV1RefService(adv, len(skipped)), nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported protocol mode %q", protocolMode)
@@ -116,11 +140,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 }
 
 func listSourceRefsAutoV1(ctx context.Context, conn Conn) ([]*plumbing.Reference, *RefService, error) {
-	adv, refs, err := listSourceRefsV1(ctx, conn)
+	adv, refs, skippedCount, err := listSourceRefsV1(ctx, conn)
 	if err != nil {
 		return nil, nil, err
 	}
-	return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+	return refs, newV1RefService(adv, skippedCount), nil
 }
 
 func isSSHScheme(conn Conn) bool {
@@ -190,20 +214,23 @@ func AdvRefsCaps(adv *packp.AdvRefs) []string {
 	return items
 }
 
-func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
+// listSourceRefsV1 returns the advertisement, its valid refs, and how many
+// names were dropped as invalid — the count travels back so the caller can put
+// it on the RefService, rather than being warned about and then discarded.
+func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbing.Reference, int, error) {
 	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackService)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	refs, skipped, err := AdvRefsToSlice(adv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-	return adv, refs, nil
+	return adv, refs, len(skipped), nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, bool, []string, error) {
+func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, bool, int, error) {
 	// Always include "HEAD" so the server returns the symref-target attribute
 	// for HEAD. Without this, callers that pass only "refs/heads/" or
 	// "refs/tags/" prefixes filter HEAD out of the response and lose the
@@ -223,18 +250,18 @@ func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, pref
 	}
 	body, err := EncodeCommand("ls-refs", caps.RequestCapabilities(), args)
 	if err != nil {
-		return nil, "", false, nil, err
+		return nil, "", false, 0, err
 	}
 	data, err := PostRPC(ctx, conn, transport.UploadPackService, body, true, "upload-pack ls-refs")
 	if err != nil {
-		return nil, "", false, nil, err
+		return nil, "", false, 0, err
 	}
 	refs, headTarget, unborn, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", false, nil, err
+		return nil, "", false, 0, err
 	}
 	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-	return refs, headTarget, unborn, skipped, nil
+	return refs, headTarget, unborn, len(skipped), nil
 }
 
 // decodeV2LSRefs decodes an ls-refs response into its refs, the branch HEAD

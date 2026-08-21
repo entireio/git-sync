@@ -329,3 +329,44 @@ func TestBuildSyncConfigThreadsEveryScopeField(t *testing.T) {
 		return cfg
 	})
 }
+
+// AllowEmptySource has two requirements that no path would otherwise report:
+// the policy is replicate-only, and it needs an unscoped request. Both were
+// accepted at the edge, threaded into the syncer, and then discarded — the
+// caller got the historical "no source refs matched" with no hint that their
+// safety policy had been ignored.
+func TestValidateRejectsUnusableAllowEmptySource(t *testing.T) {
+	base := SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+	}
+
+	replicateUnscoped := base
+	replicateUnscoped.Policy = SyncPolicy{Mode: ModeReplicate, AllowEmptySource: true}
+	if err := replicateUnscoped.Validate(); err == nil {
+		t.Error("expected a scoped AllowEmptySource replicate to be rejected")
+	}
+
+	syncMode := base
+	syncMode.Scope = RefScope{AllRefs: true}
+	syncMode.Policy = SyncPolicy{Mode: ModeSync, AllowEmptySource: true}
+	if err := syncMode.Validate(); err == nil {
+		t.Error("expected AllowEmptySource outside replicate to be rejected")
+	}
+
+	// Mode unset defaults to sync, so it must be rejected the same way rather
+	// than slipping through on the zero value.
+	modeUnset := base
+	modeUnset.Scope = RefScope{AllRefs: true}
+	modeUnset.Policy = SyncPolicy{AllowEmptySource: true}
+	if err := modeUnset.Validate(); err == nil {
+		t.Error("expected AllowEmptySource with an unset mode to be rejected")
+	}
+
+	ok := base
+	ok.Scope = RefScope{AllRefs: true}
+	ok.Policy = SyncPolicy{Mode: ModeReplicate, AllowEmptySource: true, SourceAssertedEmpty: true, TargetAssertedEmpty: true}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("an unscoped replicate with the policy set must validate, got %v", err)
+	}
+}
