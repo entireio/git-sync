@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M0JPYDW1P7C7KB0TS9JM24P7",
+  "session_id": "7b1b6289-0823-4ca1-99d7-ae87659a5bd8",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-21T17:47:21.865263Z",
+  "branch": "nodo/cor-1300-empty-source-converged",
+  "checkpoints_count": 7,
+  "save_step_count": 1,
+  "files_touched": [
+    "CHANGELOG.md",
+    "client.go",
+    "docs/protocol.md",
+    "errors.go",
+    "internal/gitproto/fetch_test.go",
+    "internal/gitproto/refs.go",
+    "internal/syncer/empty_source.go",
+    "internal/syncer/empty_source_test.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go",
+    "results.go",
+    "types.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "ed69d896c8d8",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 248,
+    "cache_creation_tokens": 266372,
+    "cache_read_tokens": 23199426,
+    "output_tokens": 97052,
+    "api_call_count": 124
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-code-review-2026-08-21T15:39:33.531696Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5fe2221e302",
+      "timestamp": "2026-08-21T15:39:33.531696Z",
+      "native": {
+        "command": "/code-review"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-21T17:47:21.807747Z",
+    "agent_lines": 811,
+    "agent_removed": 111,
+    "human_added": 41,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 852,
+    "total_lines_changed": 963,
+    "agent_percentage": 95.74247144340602,
+    "metric_version": 2
+  }
+}

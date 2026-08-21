@@ -1,0 +1,357 @@
+/code-review max
+
+---
+
+is the review done?
+
+---
+
+do you have the findings?
+
+---
+
+All finder angles have reported and I've empirically confirmed the top findings against real git 2.53. Finalizing (the gap sweep is still running; with 26 candidates already competing for 15 slots, it can only add items below the cut).
+
+[
+  {
+    "file": "unstable/client.go",
+    "line": 269,
+    "summary": "buildSyncConfig — the function this PR edits — silently drops req.Scope.ExcludeRefs while forwarding ExcludeRefPrefixes; buildBootstrapConfig:309 and buildFetchConfig:335 drop it too, and the stable client.go:125 does thread it.",
+    "failure_scenario": "Empirically confirmed: unstable.Client.buildSyncConfig with Scope{AllRefs:true, ExcludeRefs:[\"refs/heads/entire\"], ExcludeRefPrefixes:[\"refs/pull/\"]} returns syncer.Config{ExcludeRefs:[], ExcludeRefPrefixes:[refs/pull/]}. With Policy{Prune:true}, planner.IsRefExcluded (syncer.go:1114, planner.go:260) never matches, so the caller's reserved refs/heads/entire becomes a prune candidate and is DELETED from the target, and is overwritten from the source when present. This is exactly the silent-field-drop class the PR's new reflection guard was written to prevent; it cannot catch it because it only walks bool fields on SyncPolicy, never RefScope."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 147,
+    "summary": "The target-populated divergence check counts every advertised target ref, ignoring ExcludeRefPrefixes/ExcludeRefs and zero hashes — unlike every other consumer of s.target.refMap (syncer.go:1100/1114, planner.go:260).",
+    "failure_scenario": "Empirically confirmed: Config{AllowEmptySource, AllRefs, SourceAssertedEmpty, TargetAssertedEmpty, ExcludeRefPrefixes:[\"refs/pull/\"]} with a verified-empty source and a target holding only refs/pull/1/head returns `source is empty but the target still has refs (1)` (errors.Is ErrSourceEmptyTargetPopulated); same for a target entry at plumbing.ZeroHash. errors.go tells callers to escalate that as real divergence, so a mirror is permanently unconvergeable over a ref the run would never touch — and refs/pull/* is the very namespace errors.go cites as the benign case. Leftover refs/gitsync/bootstrap/heads/* temp refs from an interrupted bootstrap trip it too."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 1016,
+    "summary": "AllowEmptySource is entirely inert for any request using Scope.Mappings: planner.BuildDesiredRefs errors on the missing mapped source ref (planner.go:51) before the len(desiredRefs)==0 branch can reach resolveEmptyDesiredSet.",
+    "failure_scenario": "Empirically confirmed: Config{Mode:replicate, AllRefs:true, AllowEmptySource:true, SourceAssertedEmpty:true, TargetAssertedEmpty:true, Mappings:[{refs/heads/main->refs/heads/main}]} against a genuinely empty source returns `source ref refs/heads/main not found`, with errors.Is false for all four new sentinels and SourceEmpty false. The identical config without Mappings converges. A mirror caller that pins refs by mapping gets a hard, unclassifiable failure on precisely the state the feature exists to make succeed."
+  },
+  {
+    "file": "internal/gitproto/refs.go",
+    "line": 111,
+    "summary": "SkippedRefNames is populated at only one of four &RefService{} sites; all three v1 literals (74, 111, 123) leave it nil, and the auto->v1 fallback at :111 computes `skipped` at :106, warns with it at :110, then throws it away — so resolveEmptyDesiredSet's invalid-name corroboration is structurally vacuous on v1.",
+    "failure_scenario": "A v1 (or auto-fallback-to-v1) source advertising only names PartitionRefNames rejects, e.g. \"refs/heads/bad name\": refs is empty and RefService.SkippedRefNames is nil, so the guard at empty_source.go:141 — which exists precisely to catch \"a repository full of refs git would reject arrives looking empty\" — reads it as \"nothing was dropped\". It fails closed today only because the !HeadUnborn check at :136 runs first and v1 can never set HeadUnborn. Reorder those guards, relax the unborn requirement (a plausible follow-up given v1 can never converge), or add any new reader of the field, and a populated repository converges as empty. The field's godoc (refs.go:57-62) promises the data unconditionally, unlike HeadUnborn's which explicitly documents its v1 caveat. Threading it out of listSourceRefsV1 / setting it at :111, or replacing the 5-tuple with a *RefService constructor, makes it structural." omits that the sentinel needs the AllowEmptySource opt-in at all, unlike its three siblings. Same wording at internal/syncer/empty_source.go:17."
+  },
+  {
+    "file": "types.go",
+    "line": 159,
+    "summary": "SyncPolicy.Validate does not reject AllowEmptySource / SourceAssertedEmpty / TargetAssertedEmpty outside replicate mode, so all three are validated, threaded into syncer.Config, and then silently discarded.",
+    "failure_scenario": "Client.Sync (Mode unset or ModeSync) with all three flags set against an empty source hits runSync's own errors.New(\"no source refs matched\") at syncer.go:910; Bootstrap hits the same at 1155 and Fetch at 1318. No validation error, no warning, no sentinel — the safety policy is a no-op. Validate already rejects mode-specific combinations four lines below (`replicate does not support force flags`), so the precedent for edge-time rejection exists. The new reflection guards pass because they assert only that the bool reached syncer.Config, never that a path reads it."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 136,
+    "summary": "Convergence is unreachable on protocol v1 and on the SSH auto->v1 fallback (HeadUnborn is only ever set on the v2 ls-refs path), yet no public doc says the policy requires v2 and Validate does not reject Protocol:ProtocolV1 + AllowEmptySource.",
+    "failure_scenario": "Verified against real git 2.53 over git-http-backend: two genuinely empty repos converge with SourceEmpty=true under Protocol \"\" and \"v2\", but Protocol \"v1\" fails with `source advertised no refs but its emptiness could not be verified: source asserted empty but did not report an unborn HEAD`. That message tells the operator the server is withholding refs — implying a hideRefs misconfiguration or a compromised source — when the real cause is the client's own protocol selection. The same trap fires silently for an SSH source that fails the v2 probe and falls back to v1 at refs.go:78-84."
+  },
+  {
+    "file": "internal/syncer/empty_source_test.go",
+    "line": 19,
+    "summary": "Every test for the feature hand-builds a &syncSession{} literal, so the wiring the whole design rests on (ls-refs `unborn` argument -> decodeV2LSRefs -> RefService.HeadUnborn -> Config -> converged Result) has zero coverage.",
+    "failure_scenario": "Mutation-verified: replacing `args = append(args, \"unborn\")` (internal/gitproto/refs.go:219) with a no-op leaves `go test ./...` entirely green, while every real empty-source run silently degrades to ErrSourceEmptyUnverified forever. Dropping HeadUnborn/SkippedRefNames from the RefService literal at refs.go:96 is equally invisible — which is how finding 4 above stays green. The in-repo fake v2 servers advertise `ls-refs=unborn` (integration_test.go:3849, gitproto/helper_test.go:126) but never emit an unborn line. The harness to pin it already sits in the same package: git_http_backend_test.go drives real git-http-backend over `git init --bare`, and a bare repo with no commits is exactly this case."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 192,syncer.go:185-189, results.go:131-137 and empty_source_test.go:55 all say the field exists to make is dropped on that path."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 159,
+    "summary": "The converged Result omits Relay / RelayMode / RelayReason (and SourceHEAD), which every other successful replicate return path sets (syncer.go:1059, 1253).",
+    "failure_scenario": "fromSyncResult yields ExecutionSummary{OperationMode:\"replicate\", Relay:false, TransferMode:\"\", Reason:\"\", SourceEmpty:true}. A consumer relying on the invariant \"a successful replicate always reports Relay=true with a non-empty TransferMode\" — true at both other return sites, and the reason replicate refuses non-relay targets at syncer.go:1024 — classifies the converged run as a materialized/fallback replicate or as a malformed result."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 147,
+    "summary": "Nil-guard asymmetry: s.sourceService is nil-checked at line 136 on a path where it can never be nil (newSession already dereferences it at syncer.go:804), while s.target is dereferenced unguarded at 147 and 156 on a session type that legitimately has target == nil.",
+    "failure_scenario": "newSession only builds s.target when needTarget is true (syncer.go:815). Safe today only by accident of call graph — runReplicate is the sole caller and Run always passes true — but Fetch (syncer.go:1189) and target-less Probe build needTarget=false sessions and hit the sibling `no source refs matched` errors this function is billed as superseding (\"the only place that may conclude the source is empty\"). Any such reuse panics with a nil-pointer deref at len(s.target.refMap) instead of returning an error, and only on the empty-desired-set branch, so no test that syncs a non-empty source catches it. The dead guard plus the missing one reads as an oversight rather than an invariant."
+  },
+  {
+    "file": "client_test.go",
+    "line": 299,
+    "summary": "The new reflection guard has no field.IsExported() filter and no kind check on the Config side, so it panics with an opaque reflect error instead of reporting the field; it is also duplicated near-verbatim in unstable/client_test.go:170 and both open with an always-empty `skip` map whose lookup branch is dead.",
+    "failure_scenario": "Verified empirically: policyType.Field(i) enumerates unexported fields, so adding any unexported bool to SyncPolicy makes both copies panic `reflect: reflect.Value.SetBool using value obtained using unexported field` rather than naming the field. Symmetrically, a future SyncPolicy bool with a same-named non-bool counterpart in syncer.Config panics at got.Bool() instead of reaching the intended t.Fatalf that tells the author to thread it or add a skip reason. ~30 of the ~36 lines are byte-identical between the two files and must be edited in lockstep; they have already drifted (the unstable copy carries a \"One field at a time\" comment the root copy lacks). internal/syncertest exists and is already imported by client_test.go."
+  },
+  {
+    "file": "internal/gitproto/refs.go",
+    "line": 62,
+    "summary": "SkippedRefNames and its twin targetSession.skippedRefNames (syncer.go:722) retain the full []string for the whole run when every non-test read is len(...) > 0 (empty_source.go:141, 156); before this diff the slice was consumed by WarnSkippedRefNames and dropped.",
+    "failure_scenario": "The slices are pinned on RefService and targetSession, which live on syncSession across the pack fetch and push — the minutes-long part of a run. A source or target advertising N invalid ref names now holds roughly N x (16 + len(name)) bytes for that whole window purely to answer a boolean: at 100k dropped names of ~40 bytes, ~5-6 MB retained per side per concurrent sync. An int count (or a bool) gives both guards everything they use and lets the names go right after the warning."
+  },
+  {
+    "file": "docs/protocol.md",
+    "line": 147,
+    "summary": "The verbatim ls-refs request block and the paragraph enumerating its arguments were not updated for the conditionally appended `unborn` argument or for RefService.HeadUnborn — and the argument goes on the wire for every v2 source listing, not just AllowEmptySource callers.",
+    "failure_scenario": "The doc sthen describes decodeV2LSRefs as extracting symref-target with no mention of the unborn line. This is the section that exists to record wire behavior, so a maintainer diffing it against listSourceRefsV2 concludes the request is unchanged. It also masks that the change is not as inert as the CHANGELOG's \"nothing changes for existing callers\" claims: every v2 server advertising ls-refs=unborn now receives an extra argument on every sync, probe, fetch and bootstrap, whether or not the caller opted in."
+  }
+]
+
+Scope note: local main was stale, so the review base is origin/main (2a61c8c7) — the four empty-source commits, not the 12 commits main...HEAD would have shown.
+
+Findings 1, 2, 3, 8, 9, and 13 were confirmed empirically (unit probes, a real git-http-backend end-to-end run against git 2.53, a mutation test, and a standalone reflect repro); the working tree is clean and go test ./..., go vet, and golangci-lint all pass on the branch as committed. Findings 1–3 are the ones I would block on: each is a live wrong answer, and 2 and 3 defeat the feature on its own headline use cases (an excluded-namespace mirror, and a mapping-pinned mirror). No CLAUDE.md exists at user, repo, or directory level, so the conventions angle returned nothing.
+
+⏺ Background command "Wait for sweep agent" completed (exit code 0)
+
+That notification was one of my own wait timers finishing, not new review data. The review is complete and the findings above stand — no changes.
+
+⏺ Background command "Continue waiting for sweep" completed (exit code 0)
+
+Those two notifications were my own wait timers, not the sweep agent — the Phase 3 gap sweep is still running. The review output I delivered in my previous message stands as final: 15 findings, ranked, with findings 1, 2, 3, 8, 9, and 13 confirmed empirically.
+
+If the sweep returns anything, it can only compete for slots already oversubscribed (26 surviving candidates for 15 slots), and I'll only revise the report if it surfaces something more severe than the current #15. Nothing to add otherwise.
+
+⏺ Background command "Continue waiting for sweep" completed (exit code 0)
+
+Another wait timer, not the sweep. Let me cancel the remaining timers so they stop generating noise.
+
+⏺ Stop Task
+sleep 300; echo waited · stopped
+
+⏺ Stop Task
+sleep 300; echo waited · stopped
+
+⏺ Stop Task
+sleep 300; echo waited · stopped
+
+⏺ Stop Task
+sleep 300; echo waited · stopped
+
+⏺ Stop Task
+sleep 300; echo waited · stopped
+
+  Ran 1 shell command
+
+Wait timers cancelled; working tree confirmed clean (no leftover probe files from any agent). The review is complete and the findings I delivered earlier are final.
+
+Review summary
+
+Scope correction worth flagging: l
+
+The three I would block on:
+
+1. unstable/client.go:269 — buildSyncConfig, the function this PR edits, drops Scope.ExcludeRefs while forwarding ExcludeRefPrefixes; the stable client.go:125 threads it. Under Prune the caller's excluded refs become prune candidates and get deleted. This is precisely the silent-field-drop class the PR's new reflection guard was written to prevent — it can't catch it because it only walks bool fields on SyncPolicy.
+2. internal/syncer/empty_source.go:147 — the divergence check counts every advertised target ref, ignoring ExcludeRefPrefixes/ExcludeRefs and zero hashes, unlike every other consumer of s.target.refMap. A mirror whose target holds only excluded refs is permanently unconvergeable, and refs/pull/* is the namespace errors.go itself cites as benign.
+3. internal/syncer/syncer.go:1016 — AllowEmptySource is inert for any request using Scope.Mappings: BuildDesiredRefs errors with source ref X not found before the empty-desired-set branch is reachable, matching no sentinel.
+
+Findings 2 and 3 defeat the feature on its own headline use cases, which is what makes them worse than their line counts suggest. Behind them: the undocumented AllRefs requirement, two unreachable documented causes for ErrNoRefsSelected, v1/SSH-fallback convergence being impossible with a misleading error, and a coverage gap decisive enough that deleting the unborn ls-refs argument leaves the entire suite green.
+
+go test ./..., go vet, and golangci-lint all pass on the branch as committed — none of these surface through the existing gates.
+
+❯ Please restate your final review result for me (the main session did not receive it): the list of verified findings with file:line, severity ordering, and a one-line statement of each defect plus its failure scenario. If nothing survived verification, say so explicitly.
+
+Restating the final review result. The output contract is a JSON array of at most 15 findings, ranked most-severe first. Nothing was empty — 15 findings survived verification.
+
+Scope: local main was stale (4e816de7), so the review base is origin/main (2a61c8c7) — the four empty-source commits, 858 insertions across 15 files. Not the 12 commits main...HEAD would have shown.
+
+[
+  {
+    "file": "unstable/client.go",
+    "line": 269,
+    "summary": "buildSyncConfig — the function this PR edits — silently drops req.Scope.ExcludeRefs while forwarding ExcludeRefPrefixes; buildBootstrapConfig:309 and buildFetchConfig:335 drop it too, and the stable client.go:125 does thread it.",
+    "failure_scenario": "Empirically confirmed: unstable.Client.buildSyncConfig with Scope{AllRefs:true, ExcludeRefs:[\"refs/heads/entire\"], ExcludeRefPrefixes:[\"refs/pull/\"]} returns syncer.Config{ExcludeRefs:[], ExcludeRefPrefixes:[refs/pull/]}. With Policy{Prune:true}, planner.IsRefExcluded (syncer.go:1114, planner.go:260) never matches, so the caller's reserved refs/heads/entire becomes a prune candidate and is DELETED from the target, and is overwritten from the source when present. This is exactly the silent-field-drop class the PR's new reflection guard was written to prevent; it cannot catch it because it only walks bool fields on SyncPolicy, never RefScope."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 147,
+    "summary": "The target-populated divergence check counts every advertised target ref, ignoring ExcludeRefPrefixes/ExcludeRefs and zero hashes — unlike every other consumer of s.target.refMap (syncer.go:1100/1114, planner.go:260).",
+    "failure_scenario": "Empirically confirmed: Config{AllowEmptySource, AllRefs, SourceAssertedEmpty, TargetAssertedEmpty, ExcludeRefPrefixes:[\"refs/pull/\"]} with a verified-empty source and a target holding only refs/pull/1/head returns `source is empty but the target still has refs (1)` (errors.Is ErrSourceEmptyTargetPopulated); same for a target entry at plumbing.ZeroHash. errors.go tells callers to escalate that as real divergence, so a mirror is permanently unconvergeable over a ref the run would never touch — and refs/pull/* is the very namespace errors.go cites as the benign case. Leftover refs/gitsync/bootstrap/heads/* temp refs from an interrupted bootstrap trip it too."
+  },
+  {
+  {
+    "file": "types.go",
+    "line": 155,
+    "summary": "AllowEmptySource silently requires Scope.AllRefs (empty_source.go:127), but the public godoc never says so and neither SyncPolicy.Validate (types.go:159) nor client.go's validateSyncFields — which sees both scope and policy — rejects the combination.",
+    "failure_scenario": "Replicate with the default Scope{} (AllRefs false) plus Policy{AllowEmptySource:true, SourceAssertedEmpty:true, TargetAssertedEmpty:true} against two genuinely empty repos returns the bare historical `sync: no source refs matched`, matching none of the four sentinels, with ExecutionSummary.SourceEmpty false — while types.go:144-155 documents that it \"succeeds with zero plans and ExecutionSummary.SourceEmpty set\". A caller that opts in, follows the doc, and switches to errors.Is sees an unclassifiable hard failure and never learns the policy did nothing."
+  },
+  {
+    "file": "errors.go",
+    "line": 32,
+    "summary": "ErrNoRefsSelected's public godoc names three scoping mechanisms — \"branch selection, ref mappings, exclude prefixes\" — of which two are unreachable by construction; only exclude prefixes/refs can ever produce it.",
+    "failure_scenario": "empty_source.go:127 returns the plain historical error unless AllRefs is set, and planner.normalizeAllRefs (planner.go:125-129) nils cfg.Branches whenever AllRefs is set, so branch selection and the gate are mutually exclusive; a mapping whose source ref is absent errors earlier in addManaged (planner.go:51). A caller who follows the doc and writes errors.Is(err, ErrNoRefsSelected) for Scope{Branches:[\"release\"]} against a source holding only refs/heads/main never matches — they get `no source refs matched` and must keep substring-matching the historical text forever, which is the exact fragility the sentinels were introduced to retire. The doc also omits that the sentinel needs the AllowEmptySource opt-in at all, unlike its three siblings. Same wording at internal/syncer/empty_source.go:17."
+  },
+  {
+    "file": "types.go",
+    "line": 159,
+    "summary": "SyncPolicy.Validate does not reject AllowEmptySource / SourceAssertedEmpty / TargetAssertedEmpty outside replicate mode, so all three are validated, threaded into syncer.Config, and then silently discarded.",
+    "failure_scenario": "Client.Sync (Mode unset or ModeSync) with all three flags set against an empty source hits runSync's own errors.New(\"no source refs matched\") at syncer.go:910; Bootstrap hits the same at 1155 and Fetch at 1318. No validation error, no warning, no sentinel — the safety policy is a no-op. Validate already rejects mode-specific combinations four lines below (`replicate does not support force flags`), so the precedent for edge-time rejection exists. The new reflection guards pass because they assert only that the bool reached syncer.Config, never that a path reads it."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 136,
+    "summary": "Convergence is unrthe real cause is the client's own protocol selection. The same trap fires silently for an SSH source that fails the v2 probe and falls back to v1 at refs.go:78-84."
+  },
+  {
+    "file": "internal/syncer/empty_source_test.go",
+    "line": 19,
+    "summary": "Every test for the feature hand-builds a &syncSession{} literal, so the wiring the whole design rests on (ls-refs `unborn` argument -> decodeV2LSRefs -> RefService.HeadUnborn -> Config -> converged Result) has zero coverage.",
+    "failure_scenario": "Mutation-verified: replacing `args = append(args, \"unborn\")` (internal/gitproto/refs.go:219) with a no-op leaves `go test ./...` entirely green, while every real empty-source run silently degrades to ErrSourceEmptyUnverified forever. Dropping HeadUnborn/SkippedRefNames from the RefService literal at refs.go:96 is equally invisible — which is how finding 4 above stays green. The in-repo fake v2 servers advertise `ls-refs=unborn` (integration_test.go:3849, gitproto/helper_test.go:126) but never emit an unborn line. The harness to pin it already sits in the same package: git_http_backend_test.go drives real git-http-backend over `git init --bare`, and a bare repo with no commits is exactly this case."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 192,
+    "summary": "Result.Lines() renders every other discriminating field (DryRun:201, BootstrapSuggested:207, Batching:210, SourceHEAD:213) but was not updated for SourceEmpty, so the text output of a converged empty replicate is byte-identical to an ordinary zero-work sync.",
+    "failure_scenario": "A converged run prints only `summary: pushed=0 deleted=0 skipped=0 blocked=0 warned=0 mode=replicate protocol=v2 relay=false relay-mode= relay-reason= batching=false batch-count=0 planned-batches=0` — the same line a no-op sync prints. Only --json carries sourceEmpty. cmd/git-sync/root.go:43 printOutput and every unstable consumer (unstable.Result aliases syncer.Result) use Lines() for non-JSON output, so the exact distinction syncer.go:185-189, results.go:131-137 and empty_source_test.go:55 all say the field exists to make is dropped on that path."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 159,
+    "summary": "The converged Result omits Relay / RelayMode / RelayReason (and SourceHEAD), which every other successful replicate return path sets (syncer.go:1059, 1253).",
+    "failure_scenario": "fromSyncResult yields ExecutionSummary{OperationMode:\"replicate\", Relay:false, TransferMode:\"\", Reason:\"\", SourceEmpty:true}. A consumer relying on the invariant \"a successful replicate always reports Relay=true with a non-empty TransferMode\" — true at both other return sites, and the reason replicate refuses non-relay targets at syncer.go:1024 — classifies the converged run as a materialized/fallback replicate or as a malformed result."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 147,
+    "summary": "Nil-guard asymmetry: s.sourceService is nil-checked at line 136 on a path where it can never be nil (newSession already dereferences it at syncer.go:804), while s.target is dereferenced unguarded at 147 and 156 on  malformed result."
+  },
+  {
+    "file": "internal/syncer/empty_source.go",
+    "line": 147,
+    "summary": "Nil-guard asymmetry: s.sourceService is nil-checked at line 136 on a path where it can never be nil (newSession already dereferences it at syncer.go:804), while s.target is dereferenced unguarded at 147 and 156 on a session type that legitimately has target == nil.",
+    "failure_scenario": "newSession only builds s.target when needTarget is true (syncer.go:815). Safe today only by accident of call graph — runReplicate is the sole caller and Run always passes true — but Fetch (syncer.go:1189) and target-less Probe build needTarget=false sessions and hit the sibling `no source refs matched` errors this function is billed as superseding (\"the only place that may conclude the source is empty\"). Any such reuse panics with a nil-pointer deref at len(s.target.refMap) instead of returning an error, and only on the empty-desired-set branch, so no test that syncs a non-empty source catches it. The dead guard plus the missing one reads as an oversight rather than an invariant."
+  },
+  {
+    "file": "client_test.go",
+    "line": 299,
+    "summary": "The new reflection guard has no field.IsExported() filter and no kind check on the Config side, so it panics with an opaque reflect error instead of reporting the field; it is also duplicated near-verbatim in unstable/client_test.go:170 and both open with an always-empty `skip` map whose lookup branch is dead.",
+    "failure_scenario": "Verified empirically: policyType.Field(i) enumerates unexported fields, so adding any unexported bool to SyncPolicy makes both copies panic `reflect: reflect.Value.SetBool using value obtained using unexported field` rather than naming the field. Symmetrically, a future SyncPolicy bool with a same-named non-bool counterpart in syncer.Config panics at got.Bool() instead of reaching the intended t.Fatalf that tells the author to thread it or add a skip reason. ~30 of the ~36 lines are byte-identical between the two files and must be edited in lockstep; they have already drifted (the unstable copy carries a \"One field at a time\" comment the root copy lacks). internal/syncertest exists and is already imported by client_test.go."
+  },
+  {
+    "file": "internal/gitproto/refs.go",
+    "line": 62,
+    "summary": "SkippedRefNames and its twin targetSession.skippedRefNames (syncer.go:722) retain the full []string for the whole run when every non-test read is len(...) > 0 (empty_source.go:141, 156); before this diff the slice was consumed by WarnSkippedRefNames and dropped.",
+    "failure_scenario": "The slices are pinned on RefService and targetSession, which live on syncSession across the pack fetch and push — the minutes-long part of a run. A source or target advertising N invalid ref names now holds roughly N x (16 + len(name)) bytes for that whole window purely to answer a boolean: at 100k dropped names of ~40 bytes, ~5-6 MB retained per side per concurrent sync. An int count (or a bool) gives both guards everything they use and lets the names go right after the warning."
+  },
+  {
+    "file": "docs/protocol.md",
+    "line": 147,
+    "summary": "The verbatim ls-refs request block and the paragraph enumerating its arguments were not updated for the conditionally appended `unborn` argument or for RefService.HeadUnborn — and the argument goes on the wire for every v2 source listing, not just AllowEmptySource callers.",
+    "failure_scenario": "The doc shows the request as `peel / symrefs / ref-prefix HEAD / ref-prefix refs/heads/ / ref-prefix refs/tags/` and explains only that \"The peel and symrefs arguments are ls-refs request features...\", then describes decodeV2LSRefs as extracting symref-target with no mention of the unborn line. This is the section that exists to record wire behavior, so a maintainer diffing it against listSourceRefsV2 concludes the request is unchanged. It also masks that the change is not as inert as the CHANGELOG's \"nothing changes for existing callers\" claims: every v2 server advertising ls-refs=unborn now receives an extra argument on every sync, probe, fetch and bootstrap, whether or not the caller opted in."
+  }
+]
+
+Verification status: findings 1, 2, 3, 8, 9, and 13 were confirmed empirically — unit probes against resolveEmptyDesiredSet, an end-to-end run through the repo's own git-http-backend harness against real git 2.53, a mutation test on the unborn argument, and a standalone reflect repro. The rest are confirmed by direct code reading with the quoted lines. Working tree is clean; go test ./..., go vet, and golangci-lint all pass on the branch as committed, so none of these surface through existing gates.
+
+Blockers: 1, 2, and 3. Each is a live wrong answer, and 2 and 3 defeat the feature on its own headline use cases (an excluded-namespace mirror, and a mapping-pinned mirror).
+
+Two process notes: the Phase 3 gap sweep never returned — it was still running when I finalized, and since 26 candidates were already competing for 15 slots it could only have added items below the cut. And the conventions angle returned nothing because no CLAUDE.md exists at user, repo, or directory level.
+
+❯ can you list the findings in order of priority?
+
+The JSON I returned was already ranked most-severe first, but here it is as a readable priority list.
+
+Block on these — live wrong answers
+
+1. unstable/client.go:269 — Scope.ExcludeRefs silently dropped
+The function this PR edits forwards ExcludeRefPrefixes but not ExcludeRefs; the stable client.go:125 threads both. Under Prune, the caller's excluded refs become prune candidates and get deleted. Confirmed empirically. This is the exact silent-field-drop class the PR's new reflection guard was added to prevent — it can't see it, because it only walks bool fields on SyncPolicy, never RefScope.
+
+2. internal/syncer/empty_source.go:147 — divergence check ignores exclusions
+Counts every advertised target ref, ignoring ExcludeRefPrefixes/ExcludeRefs and zero hashes, unlike every other consumer of s.target.refMap. A target holding only excluded refs is reported as permanent divergence and can never converge — and refs/pull/* is the namespace errors.go itself cites as the benign case. Confirmed empirically.
+
+3. internal/syncer/syncer.go:1016 — feature inert with Scope.Mappings
+BuildDesiredRefs errors with source ref X not found before the empty-desired-set branch is reachable, so a mapping-pinned mirror gets a hard failure matching no sentinel on exactly the state the feature makes succeed. Confirmed empirically.
+
+Should fix before merge — correctness and contract gaps
+
+4. internal/gitproto/refs.go:111 — SkippedRefNames populated at 1 of 4 sites
+All three v1 &RefService{} literals leave it nil; the :111 site computes skipped, warns with it, then discards it. The invalid-name corroboration is structurally vacuous on v1, fails closed today only because the !HeadUnborn check happens to run first.
+
+5. types.go:155 — AllowEmptySource silently requires Scope.AllRefs
+Undocumented in the godoc and unvalidated. Opting in with the default scope returns the bare historical error with SourceEmpty false, directly contradicting the documented behavior.
+
+6. errors.go:32 — two of three documented causes for ErrNoRefsSelected are unreachable
+"Branch selection" is mutually exclusive with the AllRefs gate (normalizeAllRefs nils Branches); a missing mapping errors earlier. Only exclude prefixes can produce it, so callers who follow the doc must keep substring-matching the old text — the fragility the sentinels were meant to retire.
+
+7. types.go:159 — Validate doesn't gate the new flags to replicate mode
+All three are accepted, threaded, then discarded by runSync, Bootstrap, and Fetch. Validate already rejects mode-specific combinations four lines below.
+
+8. internal/syncer/empty_source.go:136 — convergence impossible on v1 / SSH fallback
+HeadUnborn is only set on the v2 path. The error blames the server for withholding refs when the real cause is the client's own protocol choice. Verified against git 2.53.
+
+9. internal/syncer/empty_source_test.go:19 — zero end-to-end coverage
+All tests hand-build &syncSession{}. Mutation-verified: deleting the unborn ls-refs argument leaves the whole suite green. This is how finding 4 stays green. The harness to pin it is already in the same package.
+
+10. internal/syncer/syncer.go:192 — Lines() never renders SourceEmpty
+Converged text output is byte-identical to a no-op sync, dropping the exact distinction three separate doc comments say the field exists to make. Only --json carries it.
+
+11. internal/syncer/empty_source.go:159 — converged Result omits Relay/RelayMode/RelayReason
+Every other successful replicate return sets them, and replicate refuses non-relay targets — so a consumer relying on that invariant misclassifies the run.
+
+12. internal/syncer/empty_source.go:147 — nil-guard asymmetry
+s.sourceService is guarded where it can't be nil; s.target is dereferenced unguarded on a session type that legitimately has target == nil. Safe only by accident of call graph.
+
+13. client_test.go:299 — reflection guard panics instead of reporting
+No IsExported() filter, so any unexported bool on SyncPolicy makes both copies panic with an opaque reflect error; got.Bool() panics on a non-bool counterpart. Duplicated near-verbatim in unstable/client_test.go:170, already drifting, with a dead always-empty skip map.
+
+Lower priority — cleanup and docs
+
+14. internal/gitproto/refs.go:62 — full []string retained for a len() read
+Both slices are pinned on long-lived objects across the pack transfer purely to answer a boolean; before this diff they were consumed and dropped. An int gives both guards everything they use.
+
+15. docs/protocol.md:147 — wire-behavior doc not updated for unborn
+The verbatim ls-refs request block and its argument prose still omit the new argument, which goes on the wire for every v2 listing regardless of opt-in — so it also understates the CHANGELOG's "nothing changes for existing callers" claim.
+
+One caveat on the ordering: 1 through 3 are ranked by whether they produce a wrong answer today, and 2 and 3 sit that high because they defeat the feature on its own headline use cases, not because of their line counts. Findings 1, 2, 3, 8, 9, and 13 were confirmed empirically; the rest by direct code reading. Everything on this list passes go test ./..., go vet, and golangci-lint as committed.
+
+---
+
+worth fixing or should we re-evaluate the apporach?
+
+---
+
+<task-notification>
+<task-id>ae3bf4ef3f2383618</task-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-empty-repos-git-sync/7b1b6289-0823-4ca1-99d7-ae87659a5bd8/tasks/ae3bf4ef3f2383618.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review max" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The Phase 3 gap sweep just landed (it ran ~15 minutes). It surfaced 6 new candidates, none of which touch the top 13 — but two beat my weakest entries, so the tail of the priority list changes. Here is the corrected ordering.
+
+## Block on these — live wrong answers
+
+1. **`unstable/client.go:269`** — `Scope.ExcludeRefs` silently dropped; under `Prune` the caller's excluded refs get deleted. *Confirmed empirically.*
+2. **`internal/syncer/empty_source.go:147`** — divergence check ignores exclusions and zero hashes, so a target holding only excluded refs can never converge. *Confirmed empirically.*
+3. **`internal/syncer/syncer.go:1016`** — feature entirely inert with `Scope.Mappings`; hard failure matching no sentinel. *Confirmed empirically.*
+
+## Should fix before merge
+
+4. **`internal/gitproto/refs.go:111`** — `SkippedRefNames` populated at 1 of 4 sites; corroboration vacuous on v1.
+5. **`types.go:155`** — `AllowEmptySource` silently requires `Scope.AllRefs`; undocumented, unvalidated.
+6. **`errors.go:32`** — two of three documented causes for `ErrNoRefsSelected` are unreachable by construction.
+7. **`types.go:159`** — `Validate` doesn't gate the new flags to replicate mode.
+8. **`internal/syncer/empty_source.go:136`** — convergence impossible on v1/SSH fallback; error blames the server. *Verified against git 2.53.*
+9. **`internal/syncer/empty_source_test.go:19`** — zero end-to-end coverage. *Mutation-verified.*
+10. **`internal/syncer/syncer.go:192`** — `Lines()` never renders `SourceEmpty`.
+11. **`internal/syncer/empty_source.go:159`** — converged `Result` omits `Relay`/`RelayMode`/`RelayReason`.
+12. **`internal/syncer/empty_source.go:147`** — nil-guard asymmetry; `s.target` dereferenced unguarded.
+13. **`client_test.go:299`** — reflection guard panics instead of reporting; duplicated verbatim in `unstable/client_test.go:170`. *Panic verified.*
+
+## Changed by the sweep
+
+**14. `internal/gitproto/refs.go:219` — the `unborn` argument is ungated (NEW, replaces the docs item)**
+`listSourceRefsV2` takes no `Config`, so `unborn` goes on the wire for probe, plan, sync, replicate, bootstrap, fetch and convert-sha256 alike — while `HeadUnborn` is read only by `resolveEmptyDesiredSet` under `AllowEmptySource`. Confirmed by inspection: there is no parameter through which the opt-in could reach that line. This falsifies the CHANGELOG's and `types.go`'s central claim that with the opt-in unset "nothing changes for existing callers" — the wire request changes for every v2 caller, with no way to suppress it. My earlier `docs/protocol.md:147` finding is the documentation half of this same change and folds in here.
+
+**15. `internal/syncer/syncer.go:189` + `results.go:137` — the new public field's contract (NEW, merged from two sweep items)**
+Two permanent-once-released problems on one field. The name says "source" but the flag is set only when source *and* target are both verified empty, so `false` does not mean "the source has refs" — it is false in all three of the other empty-desired-set outcomes, including `ErrSourceEmptyTargetPopulated` where the source *was* verified empty. `Converged` would carry the actual meaning. Separately it is the only bool in `ExecutionSummary` (and in `syncer.Result`) tagged `omitempty` — `DryRun`, `Relay`, `BootstrapSuggested`, `Batching` are all emitted unconditionally — so for the field whose whole purpose is to discriminate converged from no-op, "false" and "this binary has no such field" are the same JSON.
+
+**Displaced below the cut:** the `SkippedRefNames` retention issue (`refs.go:62`, full `[]string` held for a `len()` read) and the standalone `docs/protocol.md` gap, plus three minor sweep items — a nil `err.Error()` deref in `empty_source_test.go:203` that panics in exactly the case the assertion exists to catch, `fetch_test.go:308` being a strict superset of the pre-existing `TestDecodeV2LSRefsEmpty`, and the unlabelled `(%d)` count in the divergence error at `empty_source.go:148` while both sibling messages label theirs.
+
+Blockers remain 1, 2, 3. The sweep confirmed the top of the list independently and reported `go vet`, `go test ./...` and `golangci-lint` clean with a clean working tree, which matches what I saw — none of these 15 surface through existing gates.</result>
+<usage><subagent_tokens>209034</subagent_tokens><tool_uses>94</tool_uses><duration_ms>1849331</duration_ms></usage>
+</task-notification>
+
+---
+
+Fix everything that doesn't requiere a decision from me
+
+---
+
+Do what you must in the remaining issues
+
+---
+
+Commit and push, update the github pr description if needed
