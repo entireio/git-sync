@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M0JDDWHVPD92X8NY6EH6YNKR",
+  "strategy": "manual-commit",
+  "branch": "nodo/cor-1300-empty-source-converged",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/syncer/empty_source.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 162,
+    "cache_creation_tokens": 141857,
+    "cache_read_tokens": 31721194,
+    "output_tokens": 77407,
+    "api_call_count": 81
+  }
+}
