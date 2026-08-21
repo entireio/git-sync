@@ -675,11 +675,29 @@ func TestResolveEmptySourceRespectsMappingScope(t *testing.T) {
 		}
 	})
 
-	t.Run("other namespaces likewise", func(t *testing.T) {
+	// Other namespaces are NOT like unmapped branches, which is what an
+	// earlier revision of this test got wrong. BuildDesiredRefs' tag and
+	// other-kind pass sits outside the mapping branch, so an AllRefs request
+	// mirrors refs/notes/* even with Mappings set — prune is what skips them,
+	// and push scope is the wider of the two.
+	t.Run("other namespaces are mirrored under AllRefs, so they diverge", func(t *testing.T) {
 		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/notes/commits": hash}
 		s := emptySourceSession(mapped(), nil, target, unbornSource())
+		if _, err := s.resolveEmptySource(); !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Fatalf("expected ErrSourceEmptyTargetPopulated for a mirrored namespace, got %v", err)
+		}
+	})
+
+	// Same reasoning, and it is what keeps the exclusion behaviour honest: an
+	// EXCLUDED other-kind ref is genuinely out of scope, since auto-discovery
+	// applies exclusions.
+	t.Run("an excluded namespace stays out of scope", func(t *testing.T) {
+		cfg := mapped()
+		cfg.ExcludeRefPrefixes = []string{"refs/notes/"}
+		target := map[plumbing.ReferenceName]plumbing.Hash{"refs/notes/commits": hash}
+		s := emptySourceSession(cfg, nil, target, unbornSource())
 		if _, err := s.resolveEmptySource(); err != nil {
-			t.Fatalf("expected convergence over an unmapped namespace, got %v", err)
+			t.Fatalf("expected convergence over an excluded namespace, got %v", err)
 		}
 	})
 

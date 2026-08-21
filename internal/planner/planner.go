@@ -286,12 +286,32 @@ func NewTargetScope(cfg PlanConfig) (TargetScope, error) {
 }
 
 // Manages reports whether the request would push to, or prune, this target ref.
+//
+// Push scope and prune scope are not the same set, and this is their union.
+// Delegating wholly to PruneTarget was wrong twice over, in the direction that
+// under-reports: it omits mapping targets, and it omits the refs
+// BuildDesiredRefs auto-discovers under Mappings. That pass — tags, and
+// other-kind names under AllRefs — sits OUTSIDE the mapping/branch branch, so
+// a mapping-scoped AllRefs request still mirrors refs/notes/* and tags even
+// though prune leaves them alone.
 func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
 	// Mapping targets are not subject to exclusions, matching the mapping pass
 	// in BuildDesiredRefs, which applies exclusions only to auto-discovery.
 	if _, ok := s.mapped[targetRef]; ok {
 		return true
 	}
+	if IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		return false
+	}
+	// The auto-discovery half: what BuildDesiredRefs would push, regardless of
+	// whether prune would also take it.
+	switch kind := RefKindFromName(targetRef); {
+	case kind == RefKindTag && (s.cfg.IncludeTags || s.cfg.AllRefs):
+		return true
+	case kind == RefKindOther && s.cfg.AllRefs:
+		return true
+	}
+	// The prune half, which is what additionally covers unmapped branches.
 	_, prunable := PruneTarget(targetRef, s.cfg)
 	return prunable
 }
