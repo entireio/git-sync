@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bidjs3n5r</task-id>
+<tool-use-id>toolu_011UAMLxKUYNuB1JRt2ymRB1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-empty-repos-git-sync/7b1b6289-0823-4ca1-99d7-ae87659a5bd8/tasks/bidjs3n5r.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll for the next Bugbot verdict" completed (exit code 0)</summary>
+</task-notification>
