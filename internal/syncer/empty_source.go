@@ -48,6 +48,22 @@ var (
 	// Callers must treat this as "unknown", never as "converged".
 	ErrSourceEmptyUnverified = errors.New("source advertised no refs but its emptiness could not be verified")
 
+	// ErrTargetEmptyUnverified means the source was verified empty but the
+	// TARGET's emptiness could not be established, so whether the two are
+	// converged is unknown. Distinct from ErrSourceEmptyTargetPopulated,
+	// which is a target KNOWN to hold refs: this is a target that advertised
+	// none and could not confirm it.
+	//
+	// The same asymmetry applies as on the source side, and it bites harder:
+	// receive.hideRefs omits matching refs from receive-pack's advertisement,
+	// so a populated target can advertise nothing but the capabilities^{}
+	// sentinel. And because receive.hideRefs and uploadpack.hideRefs are
+	// separate settings, such a ref is still served to fetchers — a target
+	// wrongly judged empty is one whose readers see refs the source does not
+	// have, which is precisely the divergence a convergence claim must never
+	// paper over.
+	ErrTargetEmptyUnverified = errors.New("target advertised no refs but its emptiness could not be verified")
+
 	// ErrSourceEmptyTargetPopulated means the source is VERIFIED empty while
 	// the target still holds refs. The two have genuinely diverged: whatever
 	// the target serves does not exist on the source. Replicate refuses
@@ -74,7 +90,7 @@ var (
 // does is refuse to act on that assertion unless everything git CAN observe
 // agrees with it.
 //
-// Five conditions must all hold before this returns success:
+// Six conditions must all hold before this returns success:
 //
 //  1. The caller opted in (AllowEmptySource). Checked FIRST so that "off" is
 //     structurally identical to the behavior that predates this function — one
@@ -93,12 +109,20 @@ var (
 //     these can only ever REFUSE — none can promote an absent assertion into a
 //     success — so the git signal is a consistency check on the caller's
 //     claim, never a substitute for it.
-//  5. The target has no refs either, which is what makes the state converged
-//     rather than divergent.
+//  5. The target advertises no refs — anything visible there is real, since
+//     hiding can conceal refs but never invent them, so a visible ref means
+//     divergence.
+//  6. The target's emptiness is asserted too (TargetAssertedEmpty) and
+//     corroborated the same way. An empty receive-pack advertisement proves no
+//     more than an empty ls-refs one: receive.hideRefs omits matching refs
+//     from it, and since that is a separate setting from uploadpack.hideRefs,
+//     a target wrongly judged empty may still be serving those refs to its
+//     readers.
 //
-// Anything unmet fails closed, to ErrSourceEmptyUnverified or (for a populated
-// target) ErrSourceEmptyTargetPopulated. Only condition 5 distinguishes
-// "converged" from "diverged"; every other failure is "unknown".
+// Anything unmet fails closed: ErrSourceEmptyUnverified for the source half,
+// ErrTargetEmptyUnverified for the target half, ErrSourceEmptyTargetPopulated
+// for a target known to hold refs. Only condition 5 reports divergence; every
+// other failure is "unknown".
 func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
 	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
 		return Result{}, errors.New("no source refs matched")
@@ -117,8 +141,20 @@ func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
 	if n := len(s.sourceService.SkippedRefNames); n > 0 {
 		return Result{}, fmt.Errorf("%w: source asserted empty but %d advertised ref name(s) were dropped as invalid", ErrSourceEmptyUnverified, n)
 	}
+	// A target that advertises refs is populated, full stop — hiding can only
+	// ever conceal refs, never invent them, so anything visible here is real
+	// and this is divergence.
 	if len(s.target.refMap) > 0 {
 		return Result{}, fmt.Errorf("%w (%d)", ErrSourceEmptyTargetPopulated, len(s.target.refMap))
+	}
+	// An EMPTY target advertisement proves nothing on its own, for the same
+	// reason the source's did not, so it needs the same authoritative
+	// assertion and the same corroboration.
+	if !s.cfg.TargetAssertedEmpty {
+		return Result{}, fmt.Errorf("%w: no authoritative assertion from the target", ErrTargetEmptyUnverified)
+	}
+	if n := len(s.target.skippedRefNames); n > 0 {
+		return Result{}, fmt.Errorf("%w: target asserted empty but %d advertised ref name(s) were dropped as invalid", ErrTargetEmptyUnverified, n)
 	}
 	return Result{
 		Plans:         []BranchPlan{},

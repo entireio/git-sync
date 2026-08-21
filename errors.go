@@ -42,13 +42,35 @@ type RefRejectedError = gitproto.RefRejectedError
 var ErrNoRefsSelected = syncer.ErrNoRefsSelected
 
 // ErrSourceEmptyUnverified is returned (wrapped) by Replicate under
-// SyncPolicy.AllowEmptySource when the source advertised no refs but never
-// confirmed that it is empty — no protocol v2 unborn-HEAD assertion. The
-// response's silence has several possible causes besides an empty repository
-// (a blank body behind a valid header, a server-side ref-listing or
-// hide-pattern regression), so the state is reported as unknown rather than
-// converged. Test for it with errors.Is.
+// SyncPolicy.AllowEmptySource when the source advertised no refs but its
+// emptiness could not be established. It covers every way the evidence can
+// fall short, not one of them:
+//
+//   - SyncPolicy.SourceAssertedEmpty was not supplied, so there is no
+//     authoritative claim to act on;
+//   - the source did not report an unborn HEAD, meaning HEAD's target exists
+//     and a ref is therefore being withheld;
+//   - ref-name validation dropped every advertised name, so a repository full
+//     of refs git would reject arrives looking empty;
+//   - a blank body behind a valid header, a server-side ref-listing or
+//     hide-pattern regression, or a narrowed ref-prefix.
+//
+// Treat it as "unknown", never as "converged". Test for it with errors.Is.
 var ErrSourceEmptyUnverified = syncer.ErrSourceEmptyUnverified
+
+// ErrTargetEmptyUnverified is returned (wrapped) by Replicate under
+// SyncPolicy.AllowEmptySource when the source was verified empty but the
+// TARGET's emptiness could not be established — no SyncPolicy.TargetAssertedEmpty,
+// or a target ref name dropped as invalid. Distinct from
+// ErrSourceEmptyTargetPopulated, which is a target KNOWN to hold refs.
+//
+// An empty receive-pack advertisement proves no more than an empty ls-refs
+// one: receive.hideRefs omits matching refs from it. And because
+// receive.hideRefs and uploadpack.hideRefs are separate settings, a ref hidden
+// from the push side is still served to fetchers — so a target wrongly judged
+// empty is one whose readers see refs the source does not have. Test for it
+// with errors.Is.
+var ErrTargetEmptyUnverified = syncer.ErrTargetEmptyUnverified
 
 // ErrSourceEmptyTargetPopulated is returned (wrapped) by Replicate under
 // SyncPolicy.AllowEmptySource when the source is confirmed empty while the

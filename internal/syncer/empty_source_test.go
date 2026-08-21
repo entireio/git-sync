@@ -13,7 +13,7 @@ import (
 // converged is the one input that may succeed: opted in, unscoped, the caller
 // asserted emptiness, and every git-side observation agrees.
 func converged() Config {
-	return Config{AllowEmptySource: true, AllRefs: true, SourceAssertedEmpty: true}
+	return Config{AllowEmptySource: true, AllRefs: true, SourceAssertedEmpty: true, TargetAssertedEmpty: true}
 }
 
 func emptySourceSession(cfg Config, sourceRefs, targetRefs map[plumbing.ReferenceName]plumbing.Hash, svc *gitproto.RefService) *syncSession {
@@ -25,6 +25,14 @@ func emptySourceSession(cfg Config, sourceRefs, targetRefs map[plumbing.Referenc
 		sourceRefMap:    sourceRefs,
 		target:          &targetSession{refMap: targetRefs},
 	}
+}
+
+// withTargetSkipped marks the target as having advertised a ref name that
+// validation dropped, which leaves its refMap empty while it plainly holds a
+// ref.
+func withTargetSkipped(s *syncSession, names ...string) *syncSession {
+	s.target.skippedRefNames = names
+	return s
 }
 
 func unbornSource() *gitproto.RefService {
@@ -132,6 +140,48 @@ func TestResolveEmptyDesiredSetUnverified(t *testing.T) {
 	}
 }
 
+// The target half needs the same evidence as the source, and for a sharper
+// reason: receive.hideRefs omits matching refs from receive-pack's
+// advertisement, so a populated target can advertise nothing but the
+// capabilities^{} sentinel (verified against git 2.53) — and since that is a
+// separate setting from uploadpack.hideRefs, such a ref is still served to the
+// mirror's readers. An unverifiable target must therefore never read as
+// converged.
+func TestResolveEmptyDesiredSetTargetUnverified(t *testing.T) {
+	noTargetAssertion := converged()
+	noTargetAssertion.TargetAssertedEmpty = false
+
+	t.Run("no authoritative assertion", func(t *testing.T) {
+		s := emptySourceSession(noTargetAssertion, nil, nil, unbornSource())
+		_, err := s.resolveEmptyDesiredSet()
+		if !errors.Is(err, ErrTargetEmptyUnverified) {
+			t.Fatalf("expected ErrTargetEmptyUnverified, got %v", err)
+		}
+		// Must not be mistaken for either neighbouring outcome.
+		if errors.Is(err, ErrSourceEmptyUnverified) || errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Errorf("target-unverified conflated with another outcome: %v", err)
+		}
+	})
+
+	t.Run("advertised target names dropped as invalid", func(t *testing.T) {
+		s := withTargetSkipped(emptySourceSession(converged(), nil, nil, unbornSource()), "refs/heads/bad name")
+		_, err := s.resolveEmptyDesiredSet()
+		if !errors.Is(err, ErrTargetEmptyUnverified) {
+			t.Fatalf("expected ErrTargetEmptyUnverified, got %v", err)
+		}
+	})
+
+	// A VISIBLE target ref is still divergence rather than an unknown: hiding
+	// can conceal refs but never invent them, so anything advertised is real.
+	t.Run("visible target refs stay divergence", func(t *testing.T) {
+		s := emptySourceSession(noTargetAssertion, nil, oneRef(), unbornSource())
+		_, err := s.resolveEmptyDesiredSet()
+		if !errors.Is(err, ErrSourceEmptyTargetPopulated) {
+			t.Fatalf("expected ErrSourceEmptyTargetPopulated, got %v", err)
+		}
+	})
+}
+
 // A source that HAS refs whose scope selected none of them is a different
 // condition entirely, and must not be reported as an empty source however the
 // policy is set — a caller acting on emptiness here would be acting on a repo
@@ -175,7 +225,7 @@ func TestResolveEmptyDesiredSetFallsBackToHistoricalError(t *testing.T) {
 			if err.Error() != "no source refs matched" {
 				t.Errorf("error = %q, want the historical %q", err, "no source refs matched")
 			}
-			for _, sentinel := range []error{ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrSourceEmptyTargetPopulated} {
+			for _, sentinel := range []error{ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrTargetEmptyUnverified, ErrSourceEmptyTargetPopulated} {
 				if errors.Is(err, sentinel) {
 					t.Errorf("fallback error satisfies errors.Is(%v)", sentinel)
 				}
@@ -188,7 +238,7 @@ func TestResolveEmptyDesiredSetFallsBackToHistoricalError(t *testing.T) {
 // substring-matching it (mirror-pipeline does, across a vendor bump) would
 // classify a divergence or an unknown state as the old benign no-op.
 func TestEmptySourceSentinelsDoNotCarryHistoricalMessage(t *testing.T) {
-	for _, sentinel := range []error{ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrSourceEmptyTargetPopulated} {
+	for _, sentinel := range []error{ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrTargetEmptyUnverified, ErrSourceEmptyTargetPopulated} {
 		// Substring, not equality: a sentinel that merely CONTAINS the phrase
 		// is matched by such a caller just as surely as one that equals it.
 		if strings.Contains(sentinel.Error(), "no source refs matched") {

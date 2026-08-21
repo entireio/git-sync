@@ -101,6 +101,17 @@ type Config struct {
 	// observation to corroborate it.
 	SourceAssertedEmpty bool
 
+	// TargetAssertedEmpty is the same statement about the TARGET, required for
+	// the same reason rather than as belt-and-braces: receive.hideRefs omits
+	// matching refs from receive-pack's advertisement, so a populated target
+	// can advertise nothing but the capabilities^{} sentinel and read as
+	// empty. Worse than the source case, because receive.hideRefs and
+	// uploadpack.hideRefs are separate settings — a ref hidden from the push
+	// side is still served to fetchers, so a target wrongly judged empty is
+	// one whose readers see refs the source does not have. Verified against
+	// git 2.53.
+	TargetAssertedEmpty bool
+
 	// AllowEmptySource opts into treating a VERIFIED-empty source as an
 	// outcome rather than an error, in replicate mode only. Off by default:
 	// with it unset, an empty source fails exactly as it always has, so no
@@ -704,6 +715,11 @@ type targetSession struct {
 	features gitproto.TargetFeatures
 	policy   planner.RelayTargetPolicy
 	pusher   *gitproto.Pusher
+	// skippedRefNames are advertised target ref names dropped as invalid.
+	// Retained, not just warned about, because their absence is load-bearing
+	// for any caller reasoning about an EMPTY target: names dropped here
+	// leave refMap empty while the target plainly holds refs.
+	skippedRefNames []string
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -811,6 +827,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		// never picked as a prune candidate — the safe direction, but the
 		// operator should know the target holds a name git would reject.
 		gitproto.WarnSkippedRefNames(targetConn.ProgressWriter(), "target", skippedTargetRefs)
+		s.target.skippedRefNames = skippedTargetRefs
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
 		s.target.adv = targetAdv

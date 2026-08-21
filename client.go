@@ -133,6 +133,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		BestEffort:             req.Policy.BestEffort,
 		AllowEmptySource:       req.Policy.AllowEmptySource,
 		SourceAssertedEmpty:    req.Policy.SourceAssertedEmpty,
+		TargetAssertedEmpty:    req.Policy.TargetAssertedEmpty,
 		ProtocolMode:           string(req.Policy.Protocol),
 		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
 	}, nil

@@ -114,33 +114,44 @@ type SyncPolicy struct {
 	Prune          bool          `json:"prune"`
 	BestEffort     bool          `json:"bestEffort,omitempty"`
 	Protocol       ProtocolMode  `json:"protocol"`
-	// SourceAssertedEmpty is your authoritative statement that the source
-	// repository holds no refs at all — from a repository-state query, not
-	// from a ref listing. git-sync cannot determine this and will not guess:
-	// ref hiding is invisible to the client, so an unborn HEAD and an empty
-	// advertisement are consistent with a repository that holds refs you were
-	// not shown. Supply this only from a source of truth that sees past
-	// hiding; without it Replicate reports ErrSourceEmptyUnverified.
+	// SourceAssertedEmpty and TargetAssertedEmpty are your authoritative
+	// statements that the source and target repositories hold no refs at all
+	// — from a repository-state query on each side, not from a ref listing.
 	//
-	// It is a necessary input, never a sufficient one: Replicate independently
-	// requires an empty advertisement, an unborn HEAD, no ref names dropped as
-	// invalid, and an empty target before it will report convergence. Those
-	// checks can only refuse — they never turn an absent assertion into a
-	// success.
+	// git-sync cannot determine either and will not guess. Ref hiding is
+	// invisible to the client by design, on both legs and independently:
+	// uploadpack.hideRefs can reduce a populated source's ls-refs response to
+	// an unborn-HEAD line alone, and receive.hideRefs can reduce a populated
+	// target's receive-pack advertisement to the bare capabilities^{}
+	// sentinel. Neither is distinguishable from a genuinely empty repository.
+	// The target case is the sharper one: receive.hideRefs and
+	// uploadpack.hideRefs are separate settings, so a ref hidden from the push
+	// side is still served to fetchers — a target wrongly judged empty is one
+	// whose readers see refs the source does not have.
+	//
+	// Supply these only from a source of truth that sees past hiding. Without
+	// them Replicate reports ErrSourceEmptyUnverified or
+	// ErrTargetEmptyUnverified and never claims convergence.
+	//
+	// They are necessary inputs, never sufficient ones: Replicate
+	// independently requires an empty advertisement on each side, an unborn
+	// HEAD on the source, no ref names dropped as invalid on either, and no
+	// visible target ref, before it will report convergence. Those checks can
+	// only refuse — they never turn an absent assertion into a success.
 	SourceAssertedEmpty bool `json:"sourceAssertedEmpty,omitempty"`
+	TargetAssertedEmpty bool `json:"targetAssertedEmpty,omitempty"`
 
 	// AllowEmptySource opts into treating a verified-empty source as an
-	// outcome instead of an error. Replicate only, and only when the source
-	// itself confirms it has no commits (protocol v2 ls-refs=unborn) under
-	// an all-refs scope; a source that merely advertises no refs does not
-	// qualify. When the source is confirmed empty AND the target has no
-	// refs either, Replicate succeeds with zero plans and
-	// ExecutionSummary.SourceEmpty set. When the target still has refs the
-	// two have diverged and Replicate fails with
-	// ErrSourceEmptyTargetPopulated rather than deleting them.
+	// outcome instead of an error. Replicate only. When source and target are
+	// both verified empty (see the asserted-empty fields above) Replicate
+	// succeeds with zero plans and ExecutionSummary.SourceEmpty set; when the
+	// target holds refs the two have diverged and it fails with
+	// ErrSourceEmptyTargetPopulated rather than deleting them; when either
+	// side's emptiness cannot be established it fails with the matching
+	// unverified error.
 	//
-	// Off by default: leave it unset and an empty source errors exactly as
-	// it always has.
+	// Off by default: leave it unset and an empty source errors exactly as it
+	// always has.
 	AllowEmptySource bool `json:"allowEmptySource,omitempty"`
 }
 
