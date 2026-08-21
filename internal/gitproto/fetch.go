@@ -34,6 +34,19 @@ func (s *RefService) SupportsBootstrapBatch() bool {
 	return s != nil && s.Protocol == "v2" && s.V2Caps != nil && s.V2Caps.FetchSupports("filter")
 }
 
+// ObjectBudget is implemented by stores that cap how many objects a single
+// fetch may add to them. FetchToStore resets the budget before it streams, so
+// the cap applies per fetch rather than cumulatively.
+//
+// That distinction matters because a store outlives a single fetch: the
+// materialized strategy refills tag objects into the same store the closure was
+// fetched into, and does so with no "have" lines, so the source resends objects
+// the store already holds. Counting those against a cumulative budget would
+// fail a run whose distinct object count is comfortably within the limit.
+type ObjectBudget interface {
+	ResetObjectBudget()
+}
+
 // FetchToStore fetches objects from source into the given store, using the
 // appropriate protocol version.
 func (s *RefService) FetchToStore(
@@ -43,6 +56,9 @@ func (s *RefService) FetchToStore(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 ) error {
+	if b, ok := store.(ObjectBudget); ok {
+		b.ResetObjectBudget()
+	}
 	var err error
 	switch s.Protocol {
 	case "v2":

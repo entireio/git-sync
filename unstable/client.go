@@ -336,6 +336,10 @@ func (c *Client) buildFetchConfig(ctx context.Context, req FetchRequest) (syncer
 		Progress:           req.Options.Progress,
 		ProtocolMode:       string(req.Protocol),
 		Verbose:            req.Options.Verbose,
+		// Was silently dropped: AdvancedOptions carries the field, so a caller
+		// setting it had no way to tell it was being ignored. It is the only
+		// way to bound a fetch, since the fetch path applies no default.
+		MaterializedMaxObjects: req.Options.MaterializedMaxObjects,
 	}, nil
 }
 

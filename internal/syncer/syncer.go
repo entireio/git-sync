@@ -29,6 +29,7 @@ import (
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
 	"entire.io/entire/git-sync/internal/redact"
+	"entire.io/entire/git-sync/internal/sanitize"
 	bstrap "entire.io/entire/git-sync/internal/strategy/bootstrap"
 	"entire.io/entire/git-sync/internal/strategy/incremental"
 	"entire.io/entire/git-sync/internal/strategy/materialized"
@@ -348,6 +349,16 @@ func measurementLine(m Measurement) []string {
 		"measurement: elapsed-ms=%d peak-alloc-bytes=%d peak-heap-inuse-bytes=%d total-alloc-bytes=%d gc-count=%d",
 		m.ElapsedMillis, m.PeakAllocBytes, m.PeakHeapInuseBytes, m.TotalAllocBytes, m.GCCount,
 	)}
+}
+
+// effectiveMaxObjects resolves the materialized object ceiling for a config:
+// the caller's value when set, otherwise the same default the materialized
+// strategy applies, so the streaming guard and the closure check agree.
+func effectiveMaxObjects(cfg Config) int {
+	if cfg.MaterializedMaxObjects > 0 {
+		return cfg.MaterializedMaxObjects
+	}
+	return DefaultMaterializedMaxObjects
 }
 
 // --- Session setup ---
@@ -772,10 +783,14 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
-		targetRefSlice, err := gitproto.AdvRefsToSlice(targetAdv)
+		targetRefSlice, skippedTargetRefs, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
 			return nil, fmt.Errorf("decode target refs: %w", err)
 		}
+		// A skipped target ref is also one the planner will not see, so it is
+		// never picked as a prune candidate — the safe direction, but the
+		// operator should know the target holds a name git would reject.
+		gitproto.WarnSkippedRefNames(targetConn.ProgressWriter(), "target", skippedTargetRefs)
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
 		s.target.adv = targetAdv
@@ -790,7 +805,15 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
 			s.target.pusher.OnRejection = func(name plumbing.ReferenceName, status string) {
-				s.rejections[name] = status
+				// Server-authored text that becomes BranchPlan.Reason, which is
+				// printed by FormatPlanLine and marshalled as "reason". This is
+				// the designed path under --all-refs, where per-ref rejections
+				// surface as warnings rather than errors, so it carries hostile
+				// text to the terminal and to --json by intent. It never passes
+				// through asRefRejectedError, so filtering has to happen here.
+				// IsLeaseFailure and applyRejections only substring-match, so
+				// this cannot change how a rejection is classified.
+				s.rejections[name] = sanitize.Text(status)
 			}
 		}
 	}
@@ -873,7 +896,10 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	// Pure skip/create plans that take incremental relay never decode
 	// source objects locally, so the upfront fetch would be a wasted
 	// full-pack round trip.
-	repo, err := git.Init(memory.NewStorage(), nil)
+	// Bound the store before anything is fetched into it: the object limit used
+	// to be checked on the closure afterwards, which cannot prevent the memory
+	// growth it exists to prevent.
+	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), effectiveMaxObjects(s.cfg)), nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
@@ -1124,7 +1150,13 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	}
 	defer s.finish()
 
-	repo, err := git.Init(memory.NewStorage(), nil)
+	// Bounded only when the caller asks, with no default — unlike the sync path
+	// above. Fetch exists to exercise source-side negotiation and, without
+	// --have, deliberately pulls a full pack, so a default ceiling would fail a
+	// previously working operation at the limit. The sync path's fetch is
+	// have-bounded by the target's refs, so there the cap tracks the diff being
+	// pushed, which is what the limit is for.
+	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), cfg.MaterializedMaxObjects), nil)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("init in-memory repository: %w", err)
 	}

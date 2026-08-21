@@ -159,6 +159,10 @@ func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
 	// Force=true disables incremental relay (and bootstrap), so the sync
 	// has to materialize the closure. With MaterializedMaxObjects=1 the
 	// limit fires and the test verifies the error message is clear.
+	//
+	// The limit is now enforced as the pack streams into the store rather
+	// than on the closure afterwards, so this surfaces during the fetch and
+	// carries the ErrObjectLimit sentinel.
 	_, err = Run(context.Background(), Config{
 		Source:                 Endpoint{URL: sourceServer.RepoURL()},
 		Target:                 Endpoint{URL: targetServer.RepoURL()},
@@ -169,8 +173,13 @@ func TestRun_IntegrationMaterializedLimitFailsClearly(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected materialized limit failure")
 	}
-	if !strings.Contains(err.Error(), "materialized push requires") {
-		t.Fatalf("expected materialized limit error, got %v", err)
+	if !errors.Is(err, ErrObjectLimit) {
+		t.Fatalf("expected an error satisfying errors.Is(err, ErrObjectLimit), got %v", err)
+	}
+	// The message has to tell the operator what to do about it.
+	if !strings.Contains(err.Error(), "materialized object limit") ||
+		!strings.Contains(err.Error(), "--materialized-max-objects") {
+		t.Fatalf("expected an actionable limit message, got %v", err)
 	}
 }
 

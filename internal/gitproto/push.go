@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"entire.io/entire/git-sync/internal/sanitize"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/hash"
@@ -272,7 +273,11 @@ func (e *RefRejectedError) Error() string {
 	if e.err == nil {
 		return fmt.Sprintf("ref %s rejected: %s", e.Ref, e.Reason)
 	}
-	return e.err.Error()
+	// The wrapped error renders the server's raw status, and this is the string
+	// the CLI prints — sanitizing only the Reason field would leave the path
+	// users actually see unfiltered. Unwrap still exposes the original error,
+	// so errors.Is/As behaviour is unchanged.
+	return sanitize.Text(e.err.Error())
 }
 
 // Unwrap exposes the underlying receive-pack error so existing
@@ -369,15 +374,32 @@ func commandStatusErr(err error) (packp.CommandStatusErr, bool) {
 func asRefRejectedError(err error) error {
 	cs, ok := commandStatusErr(err)
 	if !ok {
-		return err
+		// Not a per-ref status — an unpack failure, say. Still text the server
+		// wrote, so filter how it renders while leaving the chain intact for
+		// errors.Is/As.
+		return &sanitizedError{err: err}
 	}
 	return &RefRejectedError{
-		Ref:    cs.ReferenceName.String(),
-		Reason: cs.Status,
+		Ref: cs.ReferenceName.String(),
+		// The reason is free-form text authored by the target server, and it
+		// travels into terminal output and --json results. Strip control
+		// characters so an escape sequence cannot redraw the line a rejection
+		// was printed on. Classification still runs on the raw status, so
+		// filtering cannot change whether a rejection counts as a concurrent
+		// move.
+		Reason: sanitize.Text(cs.Status),
 		moved:  isConcurrentMove(cs.Status),
 		err:    err,
 	}
 }
+
+// sanitizedError renders a server-authored error with control characters
+// stripped while leaving the original reachable through Unwrap, so errors.Is
+// and errors.As keep matching exactly what they matched before.
+type sanitizedError struct{ err error }
+
+func (e *sanitizedError) Error() string { return sanitize.Text(e.err.Error()) }
+func (e *sanitizedError) Unwrap() error { return e.err }
 
 // sendReceivePack encodes and POSTs a receive-pack request, then decodes the report.
 func sendReceivePack(
@@ -435,7 +457,10 @@ func sendReceivePack(
 			return nil
 		}
 		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
-			return fmt.Errorf("report-status: unpack error: %s", report.UnpackStatus)
+			// Server-authored, and formatted directly rather than wrapped, so
+			// it needs filtering here — the sibling branch below gets it from
+			// sanitizedError.
+			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
 		}
 		for _, cs := range report.CommandStatuses {
 			if cs.Status == "" || cs.Status == "ok" {
@@ -838,7 +863,10 @@ func progressSink(verbose bool, prefix string, dest io.Writer) io.Writer {
 	if dest == nil {
 		dest = os.Stderr
 	}
-	return &prefixedLineWriter{w: dest, prefix: prefix, atLineStart: true}
+	// Sideband progress is written by the remote. Filter it before it reaches a
+	// terminal: the line prefix limits how much a hostile server can spoof, but
+	// an escape sequence could still redraw earlier output.
+	return &prefixedLineWriter{w: sanitize.Writer(dest), prefix: prefix, atLineStart: true}
 }
 
 // prefixedLineWriter prepends a fixed prefix to each line of input written

@@ -3,6 +3,7 @@ package gitproto
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -1855,4 +1856,87 @@ func TestGuardRedirectsStripsOnCrossSiteHop(t *testing.T) {
 	if gotAuth != "" {
 		t.Errorf("credentials followed a cross-site hop: %q", gotAuth)
 	}
+}
+
+// The cross-host credential guard depends on knowing whether TLS verification
+// is off. A caller who disables it on their transport but forgets to mirror the
+// flag must not silently lose that protection, so the state is derived from the
+// transport as well.
+func TestTransportSkipsTLSVerify(t *testing.T) {
+	insecure := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	secure := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+	bare := &http.Transport{}
+
+	tests := []struct {
+		name string
+		rt   http.RoundTripper
+		want bool
+	}{
+		{"nil transport", nil, false},
+		{"verification on", secure, false},
+		{"no TLS config at all", bare, false},
+		{"verification off", insecure, true},
+		{"wrapped once, off", &unwrappableRT{base: insecure}, true},
+		{"wrapped twice, off", &unwrappableRT{base: &unwrappableRT{base: insecure}}, true},
+		{"wrapped, on", &unwrappableRT{base: secure}, false},
+		{"opaque wrapper hides it", opaqueRT{}, false},
+		{"cycle terminates", newCyclicRT(), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transportSkipsTLSVerify(tt.rt); got != tt.want {
+				t.Errorf("transportSkipsTLSVerify() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPConnSkipsTLSVerifyPrefersEitherSignal(t *testing.T) {
+	insecure := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	ep, err := url.Parse("https://example.test/r.git")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Derived from the transport, with the field left unset — the case a caller
+	// would previously have had to remember.
+	derived := NewHTTPConnWithClient(ep, "source", nil, &http.Client{Transport: insecure})
+	if !derived.skipsTLSVerify() {
+		t.Error("expected the transport's InsecureSkipVerify to be detected")
+	}
+
+	// Explicit field still wins when the transport cannot be inspected.
+	explicit := NewHTTPConnWithClient(ep, "source", nil, &http.Client{Transport: opaqueRT{}})
+	explicit.InsecureSkipTLSVerify = true
+	if !explicit.skipsTLSVerify() {
+		t.Error("expected the explicit field to be honored")
+	}
+
+	secure := NewHTTPConnWithClient(ep, "source", nil, &http.Client{Transport: &http.Transport{}})
+	if secure.skipsTLSVerify() {
+		t.Error("a verifying transport must not report otherwise")
+	}
+}
+
+type unwrappableRT struct{ base http.RoundTripper }
+
+// errNotDialed marks these stubs as never meant to carry a request: the tests
+// only care about their type identity and Unwrap behavior.
+var errNotDialed = errors.New("test transport is not meant to be used")
+
+func (rt *unwrappableRT) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errNotDialed
+}
+func (rt *unwrappableRT) Unwrap() http.RoundTripper { return rt.base }
+
+type opaqueRT struct{}
+
+func (opaqueRT) RoundTrip(*http.Request) (*http.Response, error) { return nil, errNotDialed }
+
+// newCyclicRT builds a wrapper chain that unwraps to itself, so the walk must
+// stop on its own rather than loop.
+func newCyclicRT() http.RoundTripper {
+	rt := &unwrappableRT{}
+	rt.base = rt
+	return rt
 }

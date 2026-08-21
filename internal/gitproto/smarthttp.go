@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"entire.io/entire/git-sync/internal/redact"
+	"entire.io/entire/git-sync/internal/sanitize"
 	"entire.io/entire/git-sync/internal/useragent"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
@@ -49,13 +50,15 @@ func httpError(res *http.Response) error {
 			if len(data) > maxHTTPErrorBody {
 				data = append(data[:maxHTTPErrorBody], []byte("...")...)
 			}
-			reason = strings.TrimSpace(string(data))
+			// The body is server-authored and lands in error messages, logs
+			// and --json output, so strip control characters from it.
+			reason = sanitize.Text(strings.TrimSpace(string(data)))
 		}
 	}
 	var diag []string
 	for _, h := range diagnosticHeaders {
 		if v := res.Header.Get(h); v != "" {
-			diag = append(diag, h+"="+v)
+			diag = append(diag, h+"="+sanitize.Text(v))
 		}
 	}
 	// redact.Endpoint, not URL.Redacted: the latter masks only the password,
@@ -328,6 +331,50 @@ func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClien
 		Auth:           auth,
 		authIsExplicit: auth != nil,
 	}
+}
+
+// skipsTLSVerify reports whether this connection's TLS verification is off,
+// from either the explicitly mirrored field or the transport itself.
+//
+// InsecureSkipTLSVerify is documented as something callers must set to match
+// their transport, and the cross-host credential guard depends on it. A caller
+// who passes a client with InsecureSkipVerify set but forgets the field silently
+// loses that protection, which is the wrong way for a security check to fail.
+// Inspecting the transport removes the need to remember.
+func (c *HTTPConn) skipsTLSVerify() bool {
+	if c.InsecureSkipTLSVerify {
+		return true
+	}
+	if c.HTTP == nil {
+		return false
+	}
+	return transportSkipsTLSVerify(c.HTTP.Transport)
+}
+
+// maxTransportUnwraps bounds the walk through RoundTripper wrappers. A cyclic
+// or pathologically deep chain should not hang the check.
+const maxTransportUnwraps = 16
+
+// transportSkipsTLSVerify walks a RoundTripper chain looking for an
+// *http.Transport with certificate verification disabled. Wrappers are followed
+// through an Unwrap method, the convention errors use, so an instrumented
+// transport does not hide the setting underneath it. An unrecognized wrapper
+// that offers no way through reports false — this can only ever be
+// best-effort, which is why the explicit field stays available as an override.
+func transportSkipsTLSVerify(rt http.RoundTripper) bool {
+	for range maxTransportUnwraps {
+		switch t := rt.(type) {
+		case nil:
+			return false
+		case *http.Transport:
+			return t.TLSClientConfig != nil && t.TLSClientConfig.InsecureSkipVerify
+		case interface{ Unwrap() http.RoundTripper }:
+			rt = t.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // maxRedirects mirrors the cap Go's http.Client applies by default. Setting
@@ -718,7 +765,7 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 		return
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.InsecureSkipTLSVerify && challengeURL.Host != c.requestURL().Host {
+	if c.skipsTLSVerify() && challengeURL.Host != c.requestURL().Host {
 		// See tryHelperRetry: with TLS verification off we can't tell a
 		// real challenger from a MITM, so we won't attach helper creds
 		// after a cross-host probe redirect. The real op will surface
@@ -817,7 +864,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		return res, nil
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.InsecureSkipTLSVerify && challengeURL.Host != c.requestURL().Host {
+	if c.skipsTLSVerify() && challengeURL.Host != c.requestURL().Host {
 		// Refuse to hand helper-stored credentials to a redirect target we
 		// can't authenticate. With TLS verification off, the post-redirect
 		// host could be anyone presenting a self-signed cert for the host

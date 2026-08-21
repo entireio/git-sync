@@ -922,3 +922,86 @@ func TestPushPackUsesDefaultLimitWhenZero(t *testing.T) {
 	require.Len(t, rec.pushes, 1)
 	require.Equal(t, 3, rec.pushes[0].commands)
 }
+
+// What users see is Error(), not the Reason field. Error() renders the wrapped
+// server error, so sanitizing only Reason left the path the CLI prints
+// unfiltered — a hostile "ng" reason could still rewrite the terminal line.
+func TestRefRejectedErrorSanitizesPrintedText(t *testing.T) {
+	hostile := "rejected\x1b[2K\rok refs/heads/main"
+	cs := packp.CommandStatusErr{
+		ReferenceName: plumbing.ReferenceName("refs/heads/main"),
+		Status:        hostile,
+	}
+
+	err := asRefRejectedError(cs)
+
+	printed := fmt.Sprintf("%v", err)
+	if strings.ContainsAny(printed, "\x1b\r") {
+		t.Errorf("printed error still carries cursor-moving characters: %q", printed)
+	}
+	// Wrapping it, as the push path does, must not reintroduce the raw text.
+	wrapped := fmt.Sprintf("%v", fmt.Errorf("report-status: %w", err))
+	if strings.ContainsAny(wrapped, "\x1b\r") {
+		t.Errorf("wrapped error still carries cursor-moving characters: %q", wrapped)
+	}
+
+	var rejected *RefRejectedError
+	if !errors.As(err, &rejected) {
+		t.Fatal("expected a *RefRejectedError")
+	}
+	if strings.ContainsAny(rejected.Reason, "\x1b\r") {
+		t.Errorf("Reason still carries cursor-moving characters: %q", rejected.Reason)
+	}
+	// Unwrapping must still reach the original, so existing errors.As checks on
+	// the go-git type keep working.
+	var csErr packp.CommandStatusErr
+	if !errors.As(err, &csErr) {
+		t.Error("the underlying packp.CommandStatusErr must stay reachable")
+	}
+}
+
+// An unpack failure is not a per-ref status but is still server-authored text,
+// so it must be filtered for display while staying intact for errors.As.
+func TestNonRefRejectionErrorIsSanitizedForDisplay(t *testing.T) {
+	inner := errors.New("unpack error: \x1b[2K\rall good")
+	err := asRefRejectedError(inner)
+
+	if strings.ContainsAny(err.Error(), "\x1b\r") {
+		t.Errorf("printed error still carries cursor-moving characters: %q", err.Error())
+	}
+	if !errors.Is(err, inner) {
+		t.Error("the original error must stay reachable through Unwrap")
+	}
+}
+
+// The best-effort branch formats the server's unpack status directly rather than
+// wrapping it, so it needs its own filtering — the strict branch above gets it
+// from sanitizedError. Driven end to end through PushPack against a server that
+// reports a hostile unpack status.
+func TestPushPackSanitizesUnpackStatusOnBestEffortPath(t *testing.T) {
+	srv := fakeReceivePackServer(t, "failed\x1b[2K\runpack ok")
+	defer srv.Close()
+
+	conn := connForServer(t, srv)
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(conn, adv, false)
+	// A non-nil OnRejection is what selects the best-effort branch.
+	pusher.OnRejection = func(plumbing.ReferenceName, string) {}
+
+	err := pusher.PushPack(t.Context(), []PushCommand{{
+		Name: plumbing.ReferenceName("refs/heads/main"),
+		Old:  plumbing.ZeroHash,
+		New:  plumbing.NewHash("1111111111111111111111111111111111111111"),
+	}}, io.NopCloser(bytes.NewBufferString("PACK")))
+
+	if err == nil {
+		t.Fatal("expected an unpack error")
+	}
+	if strings.ContainsAny(err.Error(), "\x1b\r") {
+		t.Errorf("unpack status reached the error unfiltered: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Errorf("the real status must survive filtering: %q", err.Error())
+	}
+}

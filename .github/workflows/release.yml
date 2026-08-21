@@ -13,6 +13,10 @@ on:
 
 permissions:
   contents: write
+  # Build provenance: id-token for the OIDC identity the attestation is signed
+  # against, attestations to record it against the repository.
+  id-token: write
+  attestations: write
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
@@ -68,3 +72,15 @@ jobs:
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+
+      # Signed provenance for the published artifacts. checksums.txt was
+      # previously the only integrity signal and was itself unsigned, so a
+      # downloader had no way to establish that either the archive or the
+      # checksum came from this repository. Verify with:
+      #   gh attestation verify <file> --repo entireio/git-sync
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/checksums.txt

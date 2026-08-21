@@ -194,7 +194,7 @@ func TestDecodeV2LSRefs(t *testing.T) {
 		FormatPktLine("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/dev\n") +
 		"0000" // flush
 
-	refs, head, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestDecodeV2LSRefsHeadSymref(t *testing.T) {
 		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HEAD symref-target:refs/heads/main\n") +
 		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n") +
 		"0000"
-	refs, head, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestDecodeV2LSRefsSkipsUnbornLines(t *testing.T) {
 		FormatPktLine("unborn HEAD symref-target:refs/heads/main\n") +
 		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n") +
 		"0000"
-	refs, head, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestDecodeV2LSRefsSkipsUnbornLines(t *testing.T) {
 func TestDecodeV2LSRefsMalformed(t *testing.T) {
 	// Line with only one field (no refname).
 	wire := FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n") + "0000"
-	_, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	_, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err == nil {
 		t.Fatal("expected error for malformed ls-refs line, got nil")
 	}
@@ -271,7 +271,7 @@ func TestDecodeV2LSRefsMalformed(t *testing.T) {
 func TestDecodeV2LSRefsEmpty(t *testing.T) {
 	// Empty response (just flush).
 	wire := "0000"
-	refs, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}

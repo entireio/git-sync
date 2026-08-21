@@ -112,7 +112,7 @@ func TestAdvRefsToSlice(t *testing.T) {
 		plumbing.NewHashReference("refs/heads/dev", hashB),
 	}
 
-	refs, err := AdvRefsToSlice(adv)
+	refs, _, err := AdvRefsToSlice(adv)
 	if err != nil {
 		t.Fatalf("AdvRefsToSlice: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestAdvRefsToSliceDropsPeeledTagEntries(t *testing.T) {
 		plumbing.NewHashReference("refs/tags/v1^{}", commitHash),
 	}
 
-	refs, err := AdvRefsToSlice(adv)
+	refs, _, err := AdvRefsToSlice(adv)
 	if err != nil {
 		t.Fatalf("AdvRefsToSlice: %v", err)
 	}

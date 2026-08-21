@@ -164,3 +164,42 @@ func TestParseHaveRef(t *testing.T) {
 		})
 	}
 }
+
+// A mapped ref reaches the same places an advertised one does, so a name git
+// would reject must not get through — including via the short-name form, where
+// the "refs/heads/" prefix is added for the caller.
+func TestNormalizeMappingRejectsInvalidRefNames(t *testing.T) {
+	cases := []struct {
+		name string
+		m    RefMapping
+	}{
+		{"traversal in target", RefMapping{Source: "refs/heads/main", Target: "refs/heads/../../config"}},
+		{"traversal in source", RefMapping{Source: "refs/heads/../../config", Target: "refs/heads/main"}},
+		{"NUL in target", RefMapping{Source: "refs/heads/main", Target: "refs/heads/x\x00report-status"}},
+		{"newline in target", RefMapping{Source: "refs/heads/main", Target: "refs/heads/x\ny"}},
+		{"traversal via short name", RefMapping{Source: "main", Target: "../../config"}},
+		{"control char via short name", RefMapping{Source: "main", Target: "x\x1b[2K"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NormalizeMapping(tc.m, true); err == nil {
+				t.Fatalf("NormalizeMapping(%q -> %q) = nil error, want rejection", tc.m.Source, tc.m.Target)
+			}
+		})
+	}
+}
+
+func TestNormalizeMappingStillAcceptsLegitimateNames(t *testing.T) {
+	cases := []RefMapping{
+		{Source: "main", Target: "mirror-main"},
+		{Source: "refs/heads/main", Target: "refs/heads/main"},
+		{Source: "refs/tags/v1.0.0", Target: "refs/tags/v1.0.0"},
+		{Source: "refs/heads/feature/nested-1.2", Target: "refs/heads/feature/nested-1.2"},
+		{Source: "refs/notes/commits", Target: "refs/notes/commits"},
+	}
+	for _, m := range cases {
+		if _, err := NormalizeMapping(m, true); err != nil {
+			t.Errorf("NormalizeMapping(%q -> %q) = %v, want no error", m.Source, m.Target, err)
+		}
+	}
+}
