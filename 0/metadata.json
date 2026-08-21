@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "01M0JF4F1CK0PDKS2AG0JF5DYN",
+  "session_id": "fe1a3254-4030-497d-b179-67f77941e36f",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-21T15:30:52.388756Z",
+  "branch": "nodo/cor-1300-empty-source-converged",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "client_test.go",
+    "errors.go",
+    "unstable/client.go",
+    "unstable/client_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "3689f1fa0401",
+  "checkpoint_transcript_start": 1410,
+  "transcript_lines_at_start": 1410,
+  "compact_transcript_start": 243,
+  "token_usage": {
+    "input_tokens": 108,
+    "cache_creation_tokens": 63296,
+    "cache_read_tokens": 26280938,
+    "output_tokens": 45436,
+    "api_call_count": 54
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-21T15:30:52.290314Z",
+    "agent_lines": 107,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 107,
+    "total_lines_changed": 111,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
