@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"reflect"
 	"testing"
 
 	git "github.com/go-git/go-git/v6"
@@ -301,40 +300,32 @@ func (nopWriteCloser) Close() error { return nil }
 // what someone remembered to add, so a newly declared policy bool can be
 // accepted by the API and silently ignored with every test still green. See
 // unstable's TestBuildSyncConfigThreadsEveryPolicyBool — that is where this
-// class of omission was actually found.
+// class of omission was actually found. Both call one shared implementation so
+// the two copies cannot drift.
 func TestBuildSyncConfigThreadsEveryPolicyBool(t *testing.T) {
-	skip := map[string]string{}
-
-	policyType := reflect.TypeOf(SyncPolicy{})
-	for i := range policyType.NumField() {
-		field := policyType.Field(i)
-		if field.Type.Kind() != reflect.Bool {
-			continue
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, policy SyncPolicy) any {
+		cfg, err := New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
+			Source: Endpoint{URL: "https://source.example/repo.git"},
+			Target: Endpoint{URL: "https://target.example/repo.git"},
+			Policy: policy,
+		}, false)
+		if err != nil {
+			t.Fatalf("buildSyncConfig: %v", err)
 		}
-		if reason, ok := skip[field.Name]; ok {
-			t.Logf("skipping %s: %s", field.Name, reason)
-			continue
+		return cfg
+	})
+}
+
+func TestBuildSyncConfigThreadsEveryScopeField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, scope RefScope) any {
+		cfg, err := New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
+			Source: Endpoint{URL: "https://source.example/repo.git"},
+			Target: Endpoint{URL: "https://target.example/repo.git"},
+			Scope:  scope,
+		}, false)
+		if err != nil {
+			t.Fatalf("buildSyncConfig: %v", err)
 		}
-		t.Run(field.Name, func(t *testing.T) {
-			policy := SyncPolicy{}
-			reflect.ValueOf(&policy).Elem().FieldByName(field.Name).SetBool(true)
-
-			cfg, err := New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
-				Source: Endpoint{URL: "https://source.example/repo.git"},
-				Target: Endpoint{URL: "https://target.example/repo.git"},
-				Policy: policy,
-			}, false)
-			if err != nil {
-				t.Fatalf("buildSyncConfig: %v", err)
-			}
-
-			got := reflect.ValueOf(cfg).FieldByName(field.Name)
-			if !got.IsValid() {
-				t.Fatalf("syncer.Config has no %s field; thread it, or add it to skip with a reason", field.Name)
-			}
-			if !got.Bool() {
-				t.Errorf("SyncPolicy.%s = true was dropped by buildSyncConfig", field.Name)
-			}
-		})
-	}
+		return cfg
+	})
 }
