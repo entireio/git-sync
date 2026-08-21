@@ -92,6 +92,12 @@ type Config struct {
 	MaterializedMaxObjects int
 	ProtocolMode           string
 	BootstrapStrategy      string // "" | "first-parent" | "topo"
+	// AllowEmptySource opts into treating a VERIFIED-empty source as an
+	// outcome rather than an error, in replicate mode only. Off by default:
+	// with it unset, an empty source fails exactly as it always has, so no
+	// existing caller changes behavior. See resolveEmptyDesiredSet for what
+	// "verified" requires and which outcome each case produces.
+	AllowEmptySource bool
 
 	// progressOut overrides the writer used by the live progress ticker.
 	// Defaults to os.Stderr when nil. Exposed for tests.
@@ -156,6 +162,11 @@ type Result struct {
 	Stats              Stats                  `json:"stats"`
 	Measurement        Measurement            `json:"measurement"`
 	Protocol           string                 `json:"protocol"`
+	// SourceEmpty is true when the source was verified to have no refs and
+	// the target had none either, so the two are converged with nothing to
+	// apply. Only ever set on a successful zero-plan replicate; see
+	// resolveEmptyDesiredSet.
+	SourceEmpty bool `json:"sourceEmpty,omitempty"`
 }
 
 func (r Result) Lines() []string {
@@ -981,7 +992,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
 	if len(desiredRefs) == 0 {
-		return Result{}, errors.New("no source refs matched")
+		return s.resolveEmptyDesiredSet()
 	}
 
 	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {

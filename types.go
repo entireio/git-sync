@@ -114,6 +114,19 @@ type SyncPolicy struct {
 	Prune          bool          `json:"prune"`
 	BestEffort     bool          `json:"bestEffort,omitempty"`
 	Protocol       ProtocolMode  `json:"protocol"`
+	// AllowEmptySource opts into treating a verified-empty source as an
+	// outcome instead of an error. Replicate only, and only when the source
+	// itself confirms it has no commits (protocol v2 ls-refs=unborn) under
+	// an all-refs scope; a source that merely advertises no refs does not
+	// qualify. When the source is confirmed empty AND the target has no
+	// refs either, Replicate succeeds with zero plans and
+	// ExecutionSummary.SourceEmpty set. When the target still has refs the
+	// two have diverged and Replicate fails with
+	// ErrSourceEmptyTargetPopulated rather than deleting them.
+	//
+	// Off by default: leave it unset and an empty source errors exactly as
+	// it always has.
+	AllowEmptySource bool `json:"allowEmptySource,omitempty"`
 }
 
 // Validate enforces SyncPolicy invariants at the request edge.

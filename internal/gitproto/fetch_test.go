@@ -194,7 +194,7 @@ func TestDecodeV2LSRefs(t *testing.T) {
 		FormatPktLine("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/dev\n") +
 		"0000" // flush
 
-	refs, head, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestDecodeV2LSRefsHeadSymref(t *testing.T) {
 		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HEAD symref-target:refs/heads/main\n") +
 		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n") +
 		"0000"
-	refs, head, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -241,7 +241,10 @@ func TestDecodeV2LSRefsSkipsUnbornLines(t *testing.T) {
 		FormatPktLine("unborn HEAD symref-target:refs/heads/main\n") +
 		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n") +
 		"0000"
-	refs, head, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, head, unborn, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	if !unborn {
+		t.Error("unborn = false, want true: the response carried an unborn HEAD line")
+	}
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
@@ -262,7 +265,7 @@ func TestDecodeV2LSRefsSkipsUnbornLines(t *testing.T) {
 func TestDecodeV2LSRefsMalformed(t *testing.T) {
 	// Line with only one field (no refname).
 	wire := FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n") + "0000"
-	_, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	_, _, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err == nil {
 		t.Fatal("expected error for malformed ls-refs line, got nil")
 	}
@@ -271,12 +274,47 @@ func TestDecodeV2LSRefsMalformed(t *testing.T) {
 func TestDecodeV2LSRefsEmpty(t *testing.T) {
 	// Empty response (just flush).
 	wire := "0000"
-	refs, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	refs, _, _, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
 	if err != nil {
 		t.Fatalf("decodeV2LSRefs: %v", err)
 	}
 	if len(refs) != 0 {
 		t.Fatalf("expected 0 refs, got %d", len(refs))
+	}
+}
+
+// An unborn HEAD is the whole point of requesting the capability: the
+// repository asserts it has no commits, which a caller may act on, while the
+// symref target stays out of HeadTarget because that ref does not exist.
+func TestDecodeV2LSRefsUnbornOnly(t *testing.T) {
+	wire := FormatPktLine("unborn HEAD symref-target:refs/heads/main\n") + "0000"
+	refs, head, unborn, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	if err != nil {
+		t.Fatalf("decodeV2LSRefs: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("expected 0 refs, got %d", len(refs))
+	}
+	if !unborn {
+		t.Error("unborn = false, want true")
+	}
+	if head != "" {
+		t.Errorf("head target = %q, want empty: an unborn target is not a ref that exists", head)
+	}
+}
+
+// A response carrying no lines at all must NOT read as "the repository is
+// empty" — that is the ambiguity the unborn capability exists to remove.
+func TestDecodeV2LSRefsEmptyIsNotUnborn(t *testing.T) {
+	refs, _, unborn, _, err := decodeV2LSRefs(bytes.NewReader([]byte("0000")))
+	if err != nil {
+		t.Fatalf("decodeV2LSRefs: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("expected 0 refs, got %d", len(refs))
+	}
+	if unborn {
+		t.Error("unborn = true for a response with no lines; silence must not assert emptiness")
 	}
 }
 

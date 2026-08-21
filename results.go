@@ -129,6 +129,12 @@ type ExecutionSummary struct {
 	BootstrapSuggested bool         `json:"bootstrapSuggested"`
 	SourceHEAD         string       `json:"sourceHead,omitempty"`
 	Batch              BatchSummary `json:"batch"`
+	// SourceEmpty reports that this run applied nothing because the source
+	// was confirmed to have no refs and the target had none either — the two
+	// are converged. Only ever set under SyncPolicy.AllowEmptySource, and it
+	// is what distinguishes that converged state from an ordinary sync that
+	// happened to have no work to do.
+	SourceEmpty bool `json:"sourceEmpty,omitempty"`
 }
 
 // SyncResult is the outcome of a Sync or Replicate.
@@ -182,6 +188,7 @@ func fromSyncResult(result syncer.Result) SyncResult {
 			Reason:             result.RelayReason,
 			BootstrapSuggested: result.BootstrapSuggested,
 			SourceHEAD:         result.SourceHEAD.String(),
+			SourceEmpty:        result.SourceEmpty,
 			Batch: BatchSummary{
 				Enabled: result.Batching,
 				Planned: result.PlannedBatchCount,

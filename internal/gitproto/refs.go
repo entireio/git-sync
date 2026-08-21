@@ -34,6 +34,20 @@ type RefService struct {
 	// objects", "Compressing objects", ...) to stderr and asks the source
 	// upload-pack to emit progress by not sending the no-progress option.
 	Verbose bool
+	// SourceUnborn is true when the source ASSERTED that its HEAD is unborn
+	// — i.e. the repository exists but has no commits yet. It is positive
+	// evidence of emptiness, not an inference: only a v2 source advertising
+	// ls-refs=unborn (which we then request) can set it, and it arrives as
+	// an explicit "unborn HEAD" line rather than as the absence of ref
+	// lines. Callers that must not confuse "this repo is empty" with "this
+	// response carried no refs" (a blank proxy body, a ref-listing or
+	// hide-pattern regression, a narrowed prefix) gate on this rather than
+	// on len(refs) == 0.
+	//
+	// False therefore means "not asserted", NOT "the source has commits":
+	// a v1 source, or a v2 source that does not advertise the feature,
+	// leaves it false however empty it is.
+	SourceUnborn bool
 }
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
@@ -63,11 +77,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
 			}
-			refs, headTarget, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
+			refs, headTarget, unborn, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
 				return nil, nil, err
 			}
-			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget}, nil
+			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget, SourceUnborn: unborn}, nil
 		}
 		if protocolMode == "v2" {
 			return nil, nil, errors.New("source did not negotiate protocol v2")
@@ -177,54 +191,79 @@ func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbi
 	return adv, refs, nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
+func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, bool, error) {
 	// Always include "HEAD" so the server returns the symref-target attribute
 	// for HEAD. Without this, callers that pass only "refs/heads/" or
 	// "refs/tags/" prefixes filter HEAD out of the response and lose the
 	// default-branch hint that bootstrap planning uses as a trunk cutoff.
 	args := []string{"peel", "symrefs", "ref-prefix HEAD"}
+	// Ask the server to report an unborn HEAD explicitly, so a repository
+	// with no commits says so instead of answering with no ref lines at all.
+	// Gated on the advertisement: protocol v2 forbids sending an argument the
+	// server did not advertise, and a stricter server may fail the command.
+	// Costs nothing — no extra round trip, and a source WITH commits answers
+	// exactly as before.
+	if caps.LSRefsSupports("unborn") {
+		args = append(args, "unborn")
+	}
 	for _, prefix := range prefixes {
 		args = append(args, "ref-prefix "+prefix)
 	}
 	body, err := EncodeCommand("ls-refs", caps.RequestCapabilities(), args)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	data, err := PostRPC(ctx, conn, transport.UploadPackService, body, true, "upload-pack ls-refs")
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
-	refs, headTarget, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
+	refs, headTarget, unborn, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-	return refs, headTarget, nil
+	return refs, headTarget, unborn, nil
 }
 
-func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, []string, error) {
+// decodeV2LSRefs decodes an ls-refs response into its refs, the branch HEAD
+// points at, whether the server reported HEAD as unborn, and the ref names
+// dropped as invalid for the caller to report.
+func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, bool, []string, error) {
 	reader := NewPacketReader(r)
 	var refs []*plumbing.Reference
 	var headTarget plumbing.ReferenceName
+	var unborn bool
 	for {
 		kind, payload, err := reader.ReadPacket()
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", false, nil, err
 		}
 		if kind == PacketFlush {
 			// Names come from the remote, so drop anything git would reject
-			// and hand the list back for the caller to report.
+			// and hand the list back for the caller to report. unborn rides
+			// alongside rather than through this filter: it is a property of
+			// the repository, not a ref, and the line that carries it is
+			// consumed below without ever entering refs.
 			valid, skipped := PartitionRefNames(refs)
-			return valid, headTarget, skipped, nil
+			return valid, headTarget, unborn, skipped, nil
 		}
 		if kind != PacketData {
-			return nil, "", nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
+			return nil, "", false, nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
 		}
 		fields := strings.Fields(strings.TrimSpace(string(payload)))
 		if len(fields) < 2 {
-			return nil, "", nil, fmt.Errorf("malformed ls-refs response line %q", payload)
+			return nil, "", false, nil, fmt.Errorf("malformed ls-refs response line %q", payload)
 		}
 		if fields[0] == "unborn" {
+			// "unborn HEAD symref-target:refs/heads/main": the repository has
+			// no commits. Recorded as a flag only — headTarget deliberately
+			// stays empty, because consumers treat a non-empty HeadTarget as
+			// a branch that exists on the source (mirror-pipeline's
+			// default-branch reconcile drives SetDefaultBranch off it), and
+			// an unborn target does not.
+			if fields[1] == string(plumbing.HEAD) {
+				unborn = true
+			}
 			continue
 		}
 		hash := plumbing.NewHash(fields[0])
