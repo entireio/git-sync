@@ -318,6 +318,31 @@ func TestDecodeV2LSRefsEmptyIsNotUnborn(t *testing.T) {
 	}
 }
 
+// The counterexample that makes unborn insufficient as evidence of emptiness:
+// git emits the unborn line for ANY dangling HEAD, so a repository holding a
+// branch reports it too. Reproduced against git 2.53 with a repo containing
+// refs/heads/other and HEAD pointed at a never-created refs/heads/main.
+// Decoding must report both facts and never let one imply the other.
+func TestDecodeV2LSRefsUnbornCoexistsWithRefs(t *testing.T) {
+	wire := "" +
+		FormatPktLine("unborn HEAD symref-target:refs/heads/main\n") +
+		FormatPktLine("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/other\n") +
+		"0000"
+	refs, head, unborn, _, err := decodeV2LSRefs(bytes.NewReader([]byte(wire)))
+	if err != nil {
+		t.Fatalf("decodeV2LSRefs: %v", err)
+	}
+	if !unborn {
+		t.Error("unborn = false, want true")
+	}
+	if len(refs) != 1 || refs[0].Name().String() != "refs/heads/other" {
+		t.Fatalf("expected refs/heads/other to survive alongside the unborn line, got %v", refs)
+	}
+	if head != "" {
+		t.Errorf("head target = %q, want empty: refs/heads/main does not exist", head)
+	}
+}
+
 func TestBufReader(t *testing.T) {
 	input := bytes.NewBufferString("test data")
 	pr := NewPacketReader(input)

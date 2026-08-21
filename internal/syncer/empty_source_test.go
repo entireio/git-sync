@@ -10,17 +10,25 @@ import (
 	"entire.io/entire/git-sync/internal/gitproto"
 )
 
-// emptySourceSession builds the session state resolveEmptyDesiredSet reads,
-// with the same non-nil stats/measurement fields newSession always installs.
-func emptySourceSession(cfg Config, sourceRefs, targetRefs map[plumbing.ReferenceName]plumbing.Hash, unborn bool) *syncSession {
+// converged is the one input that may succeed: opted in, unscoped, the caller
+// asserted emptiness, and every git-side observation agrees.
+func converged() Config {
+	return Config{AllowEmptySource: true, AllRefs: true, SourceAssertedEmpty: true}
+}
+
+func emptySourceSession(cfg Config, sourceRefs, targetRefs map[plumbing.ReferenceName]plumbing.Hash, svc *gitproto.RefService) *syncSession {
 	return &syncSession{
 		cfg:             cfg,
 		stats:           newStats(false),
 		measurementDone: startMeasurement(false),
-		sourceService:   &gitproto.RefService{Protocol: "v2", SourceUnborn: unborn},
+		sourceService:   svc,
 		sourceRefMap:    sourceRefs,
 		target:          &targetSession{refMap: targetRefs},
 	}
+}
+
+func unbornSource() *gitproto.RefService {
+	return &gitproto.RefService{Protocol: "v2", HeadUnborn: true}
 }
 
 func oneRef() map[plumbing.ReferenceName]plumbing.Hash {
@@ -29,51 +37,98 @@ func oneRef() map[plumbing.ReferenceName]plumbing.Hash {
 	}
 }
 
-// The converged case: the source confirmed it is empty and the target holds
-// nothing either. This is the only input that may succeed, and it must be
-// distinguishable from an ordinary no-work sync via SourceEmpty.
 func TestResolveEmptyDesiredSetConverged(t *testing.T) {
-	s := emptySourceSession(Config{AllowEmptySource: true, AllRefs: true}, nil, nil, true)
+	s := emptySourceSession(converged(), nil, nil, unbornSource())
 	result, err := s.resolveEmptyDesiredSet()
 	if err != nil {
-		t.Fatalf("expected success for empty source + empty target, got %v", err)
+		t.Fatalf("expected success for an asserted-empty source and empty target, got %v", err)
 	}
 	if !result.SourceEmpty {
 		t.Error("SourceEmpty = false; the caller cannot tell this from a no-op sync")
 	}
-	if len(result.Plans) != 0 {
-		t.Errorf("expected 0 plans, got %d", len(result.Plans))
-	}
-	if result.Pushed != 0 || result.Deleted != 0 {
-		t.Errorf("expected nothing applied, got pushed=%d deleted=%d", result.Pushed, result.Deleted)
+	if len(result.Plans) != 0 || result.Pushed != 0 || result.Deleted != 0 {
+		t.Errorf("expected nothing applied, got plans=%d pushed=%d deleted=%d", len(result.Plans), result.Pushed, result.Deleted)
 	}
 	if result.OperationMode != modeReplicate {
 		t.Errorf("OperationMode = %q, want %q", result.OperationMode, modeReplicate)
 	}
 }
 
+// A plan must report itself as one. Client.Plan runs replicate with DryRun set,
+// and the result is what the caller renders, so dropping the flag makes a plan
+// of two empty repos read as a sync that really ran.
+func TestResolveEmptyDesiredSetKeepsDryRun(t *testing.T) {
+	cfg := converged()
+	cfg.DryRun = true
+	s := emptySourceSession(cfg, nil, nil, unbornSource())
+	result, err := s.resolveEmptyDesiredSet()
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if !result.DryRun {
+		t.Error("DryRun = false on a dry-run session")
+	}
+	if !result.SourceEmpty {
+		t.Error("SourceEmpty = false; a plan should still report what it found")
+	}
+}
+
 // Real divergence: refuse rather than converge, because converging here means
 // deleting the target's refs.
 func TestResolveEmptyDesiredSetTargetPopulated(t *testing.T) {
-	s := emptySourceSession(Config{AllowEmptySource: true, AllRefs: true}, nil, oneRef(), true)
+	s := emptySourceSession(converged(), nil, oneRef(), unbornSource())
 	_, err := s.resolveEmptyDesiredSet()
 	if !errors.Is(err, ErrSourceEmptyTargetPopulated) {
 		t.Fatalf("expected ErrSourceEmptyTargetPopulated, got %v", err)
 	}
 }
 
-// Silence is not an assertion of emptiness. Without the source's unborn-HEAD
-// confirmation the state is unknown, even with an empty target — this is the
-// case a blank proxy body or a server-side ref-listing regression lands in,
-// and treating it as converged would advance a caller's watermark over a
-// source that may well have refs.
+// Every way the evidence can fall short lands on "unknown", never "converged".
+// These are the cases where acting on emptiness would advance a watermark over
+// a repository that may well hold refs.
 func TestResolveEmptyDesiredSetUnverified(t *testing.T) {
-	for _, target := range []map[plumbing.ReferenceName]plumbing.Hash{nil, oneRef()} {
-		s := emptySourceSession(Config{AllowEmptySource: true, AllRefs: true}, nil, target, false)
-		_, err := s.resolveEmptyDesiredSet()
-		if !errors.Is(err, ErrSourceEmptyUnverified) {
-			t.Fatalf("target=%v: expected ErrSourceEmptyUnverified, got %v", target, err)
-		}
+	noAssertion := converged()
+	noAssertion.SourceAssertedEmpty = false
+
+	cases := map[string]struct {
+		cfg Config
+		svc *gitproto.RefService
+	}{
+		// The caller never asserted emptiness, so there is nothing to
+		// corroborate — an unborn HEAD on its own proves only that HEAD's
+		// target does not exist.
+		"no authoritative assertion": {noAssertion, unbornSource()},
+
+		// The assertion disagrees with the wire: HEAD's target exists, so a
+		// ref is being withheld. git 2.53 emits no unborn line here.
+		"asserted empty but HEAD is born": {converged(), &gitproto.RefService{Protocol: "v2"}},
+
+		// A v1 source, or a v2 source not advertising ls-refs=unborn, cannot
+		// report unborn at all — so it can never corroborate, however empty.
+		"source cannot report unborn": {converged(), &gitproto.RefService{Protocol: "v1"}},
+
+		// Ref-name validation ate the whole advertisement: the repository
+		// plainly has refs, and by ref count alone it looks empty.
+		"advertised names dropped as invalid": {converged(), &gitproto.RefService{
+			Protocol: "v2", HeadUnborn: true, SkippedRefNames: []string{"refs/heads/bad name"},
+		}},
+
+		// No ref service at all (a listing that failed upstream of here).
+		"no source service": {converged(), nil},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			// Asserted against BOTH target states: an empty target must not
+			// rescue missing evidence, and a populated one must not be
+			// reported as divergence when emptiness was never established.
+			for _, target := range []map[plumbing.ReferenceName]plumbing.Hash{nil, oneRef()} {
+				s := emptySourceSession(tc.cfg, nil, target, tc.svc)
+				_, err := s.resolveEmptyDesiredSet()
+				if !errors.Is(err, ErrSourceEmptyUnverified) {
+					t.Fatalf("target=%v: expected ErrSourceEmptyUnverified, got %v", target, err)
+				}
+			}
+		})
 	}
 }
 
@@ -82,13 +137,11 @@ func TestResolveEmptyDesiredSetUnverified(t *testing.T) {
 // policy is set — a caller acting on emptiness here would be acting on a repo
 // full of refs.
 func TestResolveEmptyDesiredSetSelectionEmpty(t *testing.T) {
-	s := emptySourceSession(Config{AllowEmptySource: true, AllRefs: true}, oneRef(), nil, true)
+	s := emptySourceSession(converged(), oneRef(), nil, unbornSource())
 	_, err := s.resolveEmptyDesiredSet()
 	if !errors.Is(err, ErrNoRefsSelected) {
 		t.Fatalf("expected ErrNoRefsSelected, got %v", err)
 	}
-	// An empty target does not soften it: the source has refs, so there is
-	// nothing here that could be called converged.
 	if errors.Is(err, ErrSourceEmptyUnverified) || errors.Is(err, ErrSourceEmptyTargetPopulated) {
 		t.Errorf("selection-empty misreported as an empty-source case: %v", err)
 	}
@@ -96,7 +149,7 @@ func TestResolveEmptyDesiredSetSelectionEmpty(t *testing.T) {
 	// Without the opt-in it stays the historical error, like every other case
 	// in this family — a caller that never asked for the distinction cannot
 	// receive a sentinel it does not know how to classify.
-	s = emptySourceSession(Config{}, oneRef(), nil, true)
+	s = emptySourceSession(Config{}, oneRef(), nil, unbornSource())
 	if _, err := s.resolveEmptyDesiredSet(); err.Error() != "no source refs matched" {
 		t.Errorf("un-opted-in error = %q, want the historical message", err)
 	}
@@ -104,16 +157,17 @@ func TestResolveEmptyDesiredSetSelectionEmpty(t *testing.T) {
 
 // Without the opt-in — or under a narrowed scope, where an empty desired set
 // says nothing about the repository as a whole — behavior is byte-identical to
-// before this logic existed, including the message callers match on.
+// before this logic existed, including the message callers match on. Note the
+// assertion is set in every case: opting out must win over it.
 func TestResolveEmptyDesiredSetFallsBackToHistoricalError(t *testing.T) {
 	cases := map[string]Config{
-		"no opt-in":      {AllRefs: true},
-		"scoped request": {AllowEmptySource: true},
-		"neither":        {},
+		"no opt-in":      {AllRefs: true, SourceAssertedEmpty: true},
+		"scoped request": {AllowEmptySource: true, SourceAssertedEmpty: true},
+		"neither":        {SourceAssertedEmpty: true},
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {
-			s := emptySourceSession(cfg, nil, nil, true)
+			s := emptySourceSession(cfg, nil, nil, unbornSource())
 			_, err := s.resolveEmptyDesiredSet()
 			if err == nil {
 				t.Fatal("expected an error, got nil")
@@ -121,8 +175,6 @@ func TestResolveEmptyDesiredSetFallsBackToHistoricalError(t *testing.T) {
 			if err.Error() != "no source refs matched" {
 				t.Errorf("error = %q, want the historical %q", err, "no source refs matched")
 			}
-			// The new sentinels must not leak into the fallback: callers
-			// matching the old message must not also match these.
 			for _, sentinel := range []error{ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrSourceEmptyTargetPopulated} {
 				if errors.Is(err, sentinel) {
 					t.Errorf("fallback error satisfies errors.Is(%v)", sentinel)

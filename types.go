@@ -114,6 +114,21 @@ type SyncPolicy struct {
 	Prune          bool          `json:"prune"`
 	BestEffort     bool          `json:"bestEffort,omitempty"`
 	Protocol       ProtocolMode  `json:"protocol"`
+	// SourceAssertedEmpty is your authoritative statement that the source
+	// repository holds no refs at all — from a repository-state query, not
+	// from a ref listing. git-sync cannot determine this and will not guess:
+	// ref hiding is invisible to the client, so an unborn HEAD and an empty
+	// advertisement are consistent with a repository that holds refs you were
+	// not shown. Supply this only from a source of truth that sees past
+	// hiding; without it Replicate reports ErrSourceEmptyUnverified.
+	//
+	// It is a necessary input, never a sufficient one: Replicate independently
+	// requires an empty advertisement, an unborn HEAD, no ref names dropped as
+	// invalid, and an empty target before it will report convergence. Those
+	// checks can only refuse — they never turn an absent assertion into a
+	// success.
+	SourceAssertedEmpty bool `json:"sourceAssertedEmpty,omitempty"`
+
 	// AllowEmptySource opts into treating a verified-empty source as an
 	// outcome instead of an error. Replicate only, and only when the source
 	// itself confirms it has no commits (protocol v2 ls-refs=unborn) under

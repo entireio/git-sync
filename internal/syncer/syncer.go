@@ -92,6 +92,15 @@ type Config struct {
 	MaterializedMaxObjects int
 	ProtocolMode           string
 	BootstrapStrategy      string // "" | "first-parent" | "topo"
+	// SourceAssertedEmpty is the caller's authoritative statement that the
+	// source repository holds no refs at all, obtained from something that
+	// sees the repository's real state rather than its advertisement — git
+	// cannot supply this, because ref hiding is invisible to the client by
+	// design. Only consulted under AllowEmptySource, and never sufficient on
+	// its own: resolveEmptyDesiredSet still requires every git-side
+	// observation to corroborate it.
+	SourceAssertedEmpty bool
+
 	// AllowEmptySource opts into treating a VERIFIED-empty source as an
 	// outcome rather than an error, in replicate mode only. Off by default:
 	// with it unset, an empty source fails exactly as it always has, so no

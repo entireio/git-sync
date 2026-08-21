@@ -6,12 +6,12 @@ import (
 )
 
 // The empty-desired-set outcomes. Replicate reaches this family whenever
-// planning produces no desired refs, which happens for two unrelated reasons
-// that the wire signal alone cannot tell apart: the source has no refs, or the
-// source has refs and the requested scope excluded all of them. Collapsing
-// them into one error (as this package did before) forces every caller to
-// guess, and the two demand opposite handling — one may be a converged state,
-// the other never is.
+// planning produces no desired refs, which happens for unrelated reasons the
+// wire signal alone cannot tell apart: the source has no refs, the source has
+// refs the requested scope excluded, or the source has refs this reader was
+// never shown. Collapsing them into one error (as this package did before)
+// forces every caller to guess, and they demand opposite handling — one may be
+// a converged state, the others never are.
 var (
 	// ErrNoRefsSelected means the source DOES advertise refs, but the
 	// requested scope (branch selection, mappings, exclude prefixes) matched
@@ -27,19 +27,26 @@ var (
 	// checks run in is not load-bearing.
 	ErrNoRefsSelected = errors.New("source has refs but none matched the requested scope")
 
-	// ErrSourceEmptyUnverified means planning found no desired refs AND the
-	// source advertised no refs, but nothing asserted that the source is
-	// actually empty, so the emptiness cannot be trusted. Absence of refs in
-	// a response is not the same claim as a repository reporting it has no
-	// commits: a blank body behind a valid header, a server-side ref-listing
-	// or hide-pattern regression, or a narrowed ref-prefix all produce the
-	// same silence. So does ref-name validation dropping every advertised
-	// name (gitproto.PartitionRefNames) — a repository full of refs whose
-	// names git would reject arrives here indistinguishable from an empty
-	// one, which is exactly why the unborn assertion and not the ref count
-	// is what decides. Callers must treat this as "unknown", never as
-	// "converged".
-	ErrSourceEmptyUnverified = errors.New("source advertised no refs but did not confirm it is empty")
+	// ErrSourceEmptyUnverified means planning found no desired refs and
+	// nothing established that the source is actually empty, so emptiness
+	// cannot be concluded. This is the default outcome, and deliberately the
+	// wide one: an advertisement carrying no refs is not a claim that a
+	// repository has none.
+	//
+	// The cases that land here are all real and all indistinguishable from an
+	// empty repository by ref count alone:
+	//
+	//   - the caller supplied no authoritative assertion (SourceAssertedEmpty);
+	//   - the source did not report an unborn HEAD, so HEAD's target exists
+	//     and some ref is therefore being withheld;
+	//   - ref-name validation dropped every advertised name
+	//     (gitproto.PartitionRefNames), so a repository full of refs git would
+	//     reject arrives looking empty;
+	//   - a blank body behind a valid header, a server-side ref-listing or
+	//     hide-pattern regression, or a narrowed ref-prefix.
+	//
+	// Callers must treat this as "unknown", never as "converged".
+	ErrSourceEmptyUnverified = errors.New("source advertised no refs but its emptiness could not be verified")
 
 	// ErrSourceEmptyTargetPopulated means the source is VERIFIED empty while
 	// the target still holds refs. The two have genuinely diverged: whatever
@@ -56,53 +63,66 @@ var (
 // resolveEmptyDesiredSet decides what an empty desired set means, and is the
 // only place that may conclude "the source is empty and we are converged".
 //
-// Emptiness is established from positive evidence, never inferred from a
-// response carrying no refs (see ErrSourceEmptyUnverified). Three conditions
-// must all hold before this returns success:
+// Emptiness is NOT established here. Git offers no way to prove it: ref hiding
+// is designed to be invisible to the client, so a hidden ref and an absent one
+// are the same observation, and an unborn HEAD says only that HEAD's target
+// does not exist (a repository holding refs/heads/other with HEAD pointed at a
+// never-created refs/heads/main reports unborn, and hiding that branch reduces
+// its whole advertisement to the unborn line — verified against git 2.53). The
+// assertion therefore has to come from the server's own repository state,
+// which the caller supplies via Config.SourceAssertedEmpty; what this function
+// does is refuse to act on that assertion unless everything git CAN observe
+// agrees with it.
 //
-//  1. The caller opted in (AllowEmptySource). Off by default so no existing
-//     caller's contract changes.
+// Five conditions must all hold before this returns success:
+//
+//  1. The caller opted in (AllowEmptySource). Checked FIRST so that "off" is
+//     structurally identical to the behavior that predates this function — one
+//     error, one message — and not merely identical in the cases someone
+//     thought to test. A caller that has not opted in cannot receive a
+//     sentinel it has never heard of, which is what makes these errors safe to
+//     introduce.
 //  2. The request was unscoped (AllRefs). Under a narrower scope an empty
 //     desired set says nothing about the repository as a whole, and the
 //     target's refs — which are never scope-filtered — are not ours to judge
 //     against a partial view of the source.
-//  3. The source asserted an unborn HEAD (RefService.SourceUnborn), i.e. the
-//     server itself reported that the repository has no commits.
+//  3. The caller asserted emptiness (SourceAssertedEmpty) from a source of
+//     truth that sees past hiding.
+//  4. Every git-side observation corroborates it: nothing advertised, HEAD
+//     reported unborn, and no advertised name dropped as invalid. Each of
+//     these can only ever REFUSE — none can promote an absent assertion into a
+//     success — so the git signal is a consistency check on the caller's
+//     claim, never a substitute for it.
+//  5. The target has no refs either, which is what makes the state converged
+//     rather than divergent.
 //
-// With all three satisfied, the source is known to hold nothing; whether that
-// is a converged state then depends on the target, which the session has
-// already listed. An empty target means the two match with nothing to apply,
-// and the zero-plan success carries SourceEmpty so the caller can tell this
-// apart from an ordinary no-op sync. A populated target means real divergence
-// and returns ErrSourceEmptyTargetPopulated.
-//
-// A caller that has not opted in (or asked for a narrower scope) falls back to
-// the historical error text and sees byte-identical behavior to before this
-// existed. An opted-in caller talking to a source that cannot make the
-// assertion gets ErrSourceEmptyUnverified instead — same refusal to conclude
-// anything, but named, because for such a caller the missing assertion is
-// itself worth knowing about.
+// Anything unmet fails closed, to ErrSourceEmptyUnverified or (for a populated
+// target) ErrSourceEmptyTargetPopulated. Only condition 5 distinguishes
+// "converged" from "diverged"; every other failure is "unknown".
 func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
-	// The opt-in gate comes FIRST so that "off" is structurally identical to
-	// the behavior that predates this function — one error, one message — and
-	// not merely identical in the cases anyone thought to check. A caller that
-	// has not opted in cannot receive a sentinel it has never heard of, which
-	// is what makes the new errors safe to introduce: only code that asked for
-	// the distinction has to know how to classify it.
 	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
 		return Result{}, errors.New("no source refs matched")
 	}
 	if len(s.sourceRefMap) > 0 {
 		return Result{}, ErrNoRefsSelected
 	}
-	if s.sourceService == nil || !s.sourceService.SourceUnborn {
-		return Result{}, ErrSourceEmptyUnverified
+	if !s.cfg.SourceAssertedEmpty {
+		return Result{}, fmt.Errorf("%w: no authoritative assertion from the source", ErrSourceEmptyUnverified)
+	}
+	if s.sourceService == nil || !s.sourceService.HeadUnborn {
+		// HEAD's target exists while nothing was advertised, so a ref is being
+		// withheld — the caller's assertion disagrees with the wire and loses.
+		return Result{}, fmt.Errorf("%w: source asserted empty but did not report an unborn HEAD", ErrSourceEmptyUnverified)
+	}
+	if n := len(s.sourceService.SkippedRefNames); n > 0 {
+		return Result{}, fmt.Errorf("%w: source asserted empty but %d advertised ref name(s) were dropped as invalid", ErrSourceEmptyUnverified, n)
 	}
 	if len(s.target.refMap) > 0 {
 		return Result{}, fmt.Errorf("%w (%d)", ErrSourceEmptyTargetPopulated, len(s.target.refMap))
 	}
 	return Result{
 		Plans:         []BranchPlan{},
+		DryRun:        s.cfg.DryRun,
 		OperationMode: modeReplicate,
 		Protocol:      s.sourceService.Protocol,
 		SourceEmpty:   true,

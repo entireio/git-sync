@@ -34,20 +34,32 @@ type RefService struct {
 	// objects", "Compressing objects", ...) to stderr and asks the source
 	// upload-pack to emit progress by not sending the no-progress option.
 	Verbose bool
-	// SourceUnborn is true when the source ASSERTED that its HEAD is unborn
-	// — i.e. the repository exists but has no commits yet. It is positive
-	// evidence of emptiness, not an inference: only a v2 source advertising
-	// ls-refs=unborn (which we then request) can set it, and it arrives as
-	// an explicit "unborn HEAD" line rather than as the absence of ref
-	// lines. Callers that must not confuse "this repo is empty" with "this
-	// response carried no refs" (a blank proxy body, a ref-listing or
-	// hide-pattern regression, a narrowed prefix) gate on this rather than
-	// on len(refs) == 0.
+	// HeadUnborn is true when the source reported HEAD as unborn — its
+	// symref target does not exist. That is ALL it means. It is emphatically
+	// NOT a statement that the repository is empty: git emits the unborn line
+	// for any dangling HEAD, so a repository holding refs/heads/other while
+	// HEAD points at a never-created refs/heads/main reports unborn too, and
+	// hiding (uploadpack.hideRefs) can reduce that repository's whole
+	// advertisement to the unborn line alone. Verified against git 2.53.
 	//
-	// False therefore means "not asserted", NOT "the source has commits":
-	// a v1 source, or a v2 source that does not advertise the feature,
-	// leaves it false however empty it is.
-	SourceUnborn bool
+	// It is therefore a NECESSARY condition for emptiness and never a
+	// sufficient one: a truly empty repository always reports unborn, so its
+	// absence is a reliable disqualifier, but its presence proves nothing
+	// about refs the reader cannot see. A caller that needs to act on
+	// emptiness must obtain that from the server's own repository state; use
+	// this only to cross-check such an assertion.
+	//
+	// False means "not reported", NOT "the source has commits": a v1 source,
+	// or a v2 source that does not advertise ls-refs=unborn, leaves it false
+	// however empty it is.
+	HeadUnborn bool
+
+	// SkippedRefNames are advertised ref names dropped as invalid (see
+	// PartitionRefNames). Surfaced because their absence is load-bearing for
+	// any caller reasoning about an empty ref set: names dropped here leave
+	// refs empty while the repository plainly has some, which is
+	// indistinguishable from emptiness by ref count alone.
+	SkippedRefNames []string
 }
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
@@ -77,11 +89,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
 			}
-			refs, headTarget, unborn, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
+			refs, headTarget, unborn, skipped, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
 				return nil, nil, err
 			}
-			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget, SourceUnborn: unborn}, nil
+			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget, HeadUnborn: unborn, SkippedRefNames: skipped}, nil
 		}
 		if protocolMode == "v2" {
 			return nil, nil, errors.New("source did not negotiate protocol v2")
@@ -191,7 +203,7 @@ func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbi
 	return adv, refs, nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, bool, error) {
+func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, bool, []string, error) {
 	// Always include "HEAD" so the server returns the symref-target attribute
 	// for HEAD. Without this, callers that pass only "refs/heads/" or
 	// "refs/tags/" prefixes filter HEAD out of the response and lose the
@@ -211,18 +223,18 @@ func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, pref
 	}
 	body, err := EncodeCommand("ls-refs", caps.RequestCapabilities(), args)
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, nil, err
 	}
 	data, err := PostRPC(ctx, conn, transport.UploadPackService, body, true, "upload-pack ls-refs")
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, nil, err
 	}
 	refs, headTarget, unborn, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", false, nil, err
 	}
 	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-	return refs, headTarget, unborn, nil
+	return refs, headTarget, unborn, skipped, nil
 }
 
 // decodeV2LSRefs decodes an ls-refs response into its refs, the branch HEAD
