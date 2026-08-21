@@ -3,7 +3,7 @@
   "checkpoint_id": "01M0JBEEG33N57NPRZ1MAT4DY6",
   "strategy": "manual-commit",
   "branch": "nodo/cor-1300-empty-source-converged",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "CHANGELOG.md",
     "client.go",
@@ -25,13 +25,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 58,
-    "cache_creation_tokens": 106673,
-    "cache_read_tokens": 2338678,
-    "output_tokens": 17086,
-    "api_call_count": 29
+    "input_tokens": 292,
+    "cache_creation_tokens": 933411,
+    "cache_read_tokens": 26966446,
+    "output_tokens": 127079,
+    "api_call_count": 146
   }
 }
