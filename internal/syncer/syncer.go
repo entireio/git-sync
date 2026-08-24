@@ -245,8 +245,21 @@ type ProbeResult struct {
 	TargetCaps    []string               `json:"targetCapabilities,omitempty"`
 	Refs          []RefInfo              `json:"refs"`
 	SourceHEAD    plumbing.ReferenceName `json:"sourceHead,omitempty"`
-	Stats         Stats                  `json:"stats"`
-	Measurement   Measurement            `json:"measurement"`
+	// SourceHeadUnborn is true when the source reported HEAD as unborn: its
+	// symref target does not exist. Diagnostic only — it is emphatically NOT a
+	// statement that the repository is empty (git emits the line for any
+	// dangling HEAD), and acting on emptiness needs the far stricter path
+	// behind SyncPolicy.AllowEmptySource.
+	//
+	// Surfaced here because probe is the diagnostic surface and the ls-refs
+	// request already carries the unborn argument on every v2 listing: an
+	// operator asking "why will this mirror not converge" can see whether the
+	// source reported unborn at all, which is otherwise invisible. False for a
+	// v1 source, or a v2 source that does not advertise ls-refs=unborn,
+	// however empty it is.
+	SourceHeadUnborn bool        `json:"sourceHeadUnborn"`
+	Stats            Stats       `json:"stats"`
+	Measurement      Measurement `json:"measurement"`
 }
 
 func (r ProbeResult) Lines() []string {
@@ -260,6 +273,9 @@ func (r ProbeResult) Lines() []string {
 	}
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
+	}
+	if r.SourceHeadUnborn {
+		lines = append(lines, "source-head-unborn: true")
 	}
 	if len(r.Capabilities) > 0 {
 		lines = append(lines, "source-capabilities: "+strings.Join(r.Capabilities, ", "))
@@ -1048,6 +1064,15 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	//
 	// Gated on the opt-in so a caller that never asked for this still gets the
 	// planner's error verbatim.
+	//
+	// The relay check runs FIRST, above both this intercept and planning. It is
+	// a property of the target, not of the work: replicate refuses a non-relay
+	// target outright, and a converged result claims Relay: true on the
+	// strength of that refusal. Deciding emptiness ahead of it would let the
+	// one path that makes the claim be the one path that never checked it.
+	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {
+		return Result{OperationMode: modeReplicate}, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+	}
 	if s.cfg.AllowEmptySource && s.cfg.AllRefs && len(s.sourceRefMap) == 0 {
 		return s.resolveEmptySource()
 	}
@@ -1057,10 +1082,6 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	}
 	if len(desiredRefs) == 0 {
 		return s.resolveEmptyDesiredSet()
-	}
-
-	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {
-		return Result{OperationMode: modeReplicate}, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
 	}
 
 	allAbsent := s.replicateCanBootstrap(desiredRefs)
@@ -1395,8 +1416,12 @@ func (s *syncSession) newProbeResult() ProbeResult {
 		Capabilities:  s.sourceService.Capabilities(),
 		Refs:          refInfos,
 		SourceHEAD:    s.sourceService.HeadTarget,
-		Stats:         s.stats.snapshot(),
-		Measurement:   s.measurementDone(),
+		// Reported even though nothing in Probe acts on it: it is the one
+		// wire fact that explains an unconvergeable empty mirror, and it is
+		// otherwise unobservable from outside.
+		SourceHeadUnborn: s.sourceService.HeadUnborn,
+		Stats:            s.stats.snapshot(),
+		Measurement:      s.measurementDone(),
 	}
 	if s.target != nil {
 		result.TargetURL = redact.URL(s.cfg.Target.URL)

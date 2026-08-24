@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v6/storage/memory"
 
 	"entire.io/entire/git-sync/internal/gitproto"
+	"entire.io/entire/git-sync/internal/planner"
 	"entire.io/entire/git-sync/internal/validation"
 )
 
@@ -762,5 +763,46 @@ func TestResolveEmptySourceNormalizesScopeBeforeJudging(t *testing.T) {
 	s := emptySourceSession(cfg, nil, target, unbornSource())
 	if _, err := s.resolveEmptySource(); !errors.Is(err, ErrSourceEmptyTargetPopulated) {
 		t.Fatalf("a populated target must refuse regardless of a stale Branches filter, got %v", err)
+	}
+}
+
+// The converged result claims Relay: true on the strength of replicate
+// refusing non-relay targets outright. That justification only holds if the
+// relay check actually runs on this path — and it did not: the empty-source
+// intercept returned first, so a target whose receive-pack advertisement
+// carries no capabilities got a success claiming a relay that the ordinary
+// path would have refused. Nothing moves either way, but the field was
+// fabricated, in a change whose whole subject is honest reporting.
+func TestRunReplicateChecksRelayBeforeResolvingEmptySource(t *testing.T) {
+	s := emptySourceSession(converged(), nil, nil, unbornSource())
+	// CapabilitiesKnown false is what an unreadable target advertisement
+	// produces; SupportsReplicateRelay rejects it.
+	s.target.policy = planner.RelayTargetPolicy{CapabilitiesKnown: false}
+
+	_, err := s.runReplicate(context.Background())
+	if err == nil {
+		t.Fatal("expected a non-relay-capable target to be refused, got convergence")
+	}
+	if !strings.Contains(err.Error(), "replicate requires relay-capable target") {
+		t.Errorf("error = %q, want the relay-capability refusal", err)
+	}
+	// It must not be reported as an empty-source outcome: the run never got
+	// far enough to judge emptiness.
+	for _, sentinel := range []error{ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrTargetEmptyUnverified, ErrSourceEmptyTargetPopulated} {
+		if errors.Is(err, sentinel) {
+			t.Errorf("relay refusal misreported as %v", sentinel)
+		}
+	}
+
+	// With a capable target the same session converges, so the new check is
+	// a gate on capability rather than a blanket refusal.
+	s = emptySourceSession(converged(), nil, nil, unbornSource())
+	s.target.policy = planner.RelayTargetPolicy{CapabilitiesKnown: true}
+	result, err := s.runReplicate(context.Background())
+	if err != nil {
+		t.Fatalf("expected convergence against a relay-capable target, got %v", err)
+	}
+	if !result.Converged || !result.Relay {
+		t.Errorf("converged=%t relay=%t; want both true", result.Converged, result.Relay)
 	}
 }

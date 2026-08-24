@@ -125,10 +125,17 @@ func validateEmptySourcePolicy(cfg Config) error {
 // resolveEmptyDesiredSet decides what an empty desired set means when planning
 // produced no refs to act on.
 //
-// It is the post-planning entry point only. An empty source ADVERTISEMENT is
+// It is the post-planning entry point. An empty source ADVERTISEMENT is
 // intercepted before planning (see runReplicate), because a mapping whose
 // source ref is absent errors inside BuildDesiredRefs and would never let this
-// run; both entry points share resolveEmptySource so they cannot disagree.
+// run.
+//
+// Given that intercept, the delegation below is currently unreachable: getting
+// here with an empty advertisement requires the opt-in to be off or the scope
+// narrowed, and either returns the historical error one line earlier. It is
+// kept rather than replaced with an assertion so the two entry points cannot
+// drift apart if that gate is ever loosened — but do not read it as evidence
+// that both are live today. Only the pre-planning path reaches convergence.
 func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
 	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
 		return Result{}, errors.New("no source refs matched")

@@ -370,3 +370,35 @@ func TestValidateRejectsUnusableAllowEmptySource(t *testing.T) {
 		t.Errorf("an unscoped replicate with the policy set must validate, got %v", err)
 	}
 }
+
+// buildProbeConfig is the one request-edge builder the guard above does not
+// cover, because ProbeRequest carries flat fields rather than a RefScope. It
+// drops nothing today — ProbeRequest has no ExcludeRefs — but it is exactly
+// where the bug class the guard exists for could recur unseen, so it gets the
+// same treatment.
+func TestBuildProbeConfigThreadsEveryField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, map[string]string{
+		"CollectStats": "deliberately renamed: reaches syncer.Config as ShowStats",
+	}, func(t *testing.T, req ProbeRequest) any {
+		req.Source = Endpoint{URL: "https://source.example/repo.git"}
+		cfg, err := New(Options{}).buildProbeConfig(context.Background(), req)
+		if err != nil {
+			t.Fatalf("buildProbeConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+// The renamed field still has to arrive, it just cannot be checked by name.
+func TestBuildProbeConfigThreadsCollectStats(t *testing.T) {
+	cfg, err := New(Options{}).buildProbeConfig(context.Background(), ProbeRequest{
+		Source:       Endpoint{URL: "https://source.example/repo.git"},
+		CollectStats: true,
+	})
+	if err != nil {
+		t.Fatalf("buildProbeConfig: %v", err)
+	}
+	if !cfg.ShowStats {
+		t.Error("ProbeRequest.CollectStats = true was dropped by buildProbeConfig")
+	}
+}

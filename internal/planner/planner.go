@@ -285,7 +285,15 @@ func NewTargetScope(cfg PlanConfig) (TargetScope, error) {
 	return scope, nil
 }
 
-// Manages reports whether the request would push to, or prune, this target ref.
+// Manages reports whether this target ref is the request's responsibility —
+// that is, whether the request would push to it, or whether prune could select
+// it were prune enabled.
+//
+// Deliberately independent of cfg.Prune. A caller asking "is this ref mine"
+// while prune is off still needs the same answer: the divergence check reads
+// it to decide whether a target ref contradicts a claim of convergence, and
+// "the source is empty but the target holds refs" is a genuine disagreement
+// whether or not this particular run would have deleted them.
 //
 // Push scope and prune scope are not the same set, and this is their union.
 // Delegating wholly to PruneTarget was wrong twice over, in the direction that
