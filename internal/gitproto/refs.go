@@ -34,6 +34,56 @@ type RefService struct {
 	// objects", "Compressing objects", ...) to stderr and asks the source
 	// upload-pack to emit progress by not sending the no-progress option.
 	Verbose bool
+	// HeadUnborn is true when the source reported HEAD as unborn — its
+	// symref target does not exist. That is ALL it means. It is emphatically
+	// NOT a statement that the repository is empty: git emits the unborn line
+	// for any dangling HEAD, so a repository holding refs/heads/other while
+	// HEAD points at a never-created refs/heads/main reports unborn too, and
+	// hiding (uploadpack.hideRefs) can reduce that repository's whole
+	// advertisement to the unborn line alone. Verified against git 2.53.
+	//
+	// It is therefore a NECESSARY condition for emptiness and never a
+	// sufficient one: a truly empty repository always reports unborn, so its
+	// absence is a reliable disqualifier, but its presence proves nothing
+	// about refs the reader cannot see. A caller that needs to act on
+	// emptiness must obtain that from the server's own repository state; use
+	// this only to cross-check such an assertion.
+	//
+	// False means "not reported", NOT "the source has commits": a v1 source,
+	// or a v2 source that does not advertise ls-refs=unborn, leaves it false
+	// however empty it is.
+	HeadUnborn bool
+
+	// SkippedRefCount is how many advertised ref names were dropped as invalid
+	// (see PartitionRefNames). Surfaced because a non-zero count is
+	// load-bearing for any caller reasoning about an empty ref set: names
+	// dropped here leave refs empty while the repository plainly has some,
+	// which is indistinguishable from emptiness by ref count alone.
+	//
+	// A count, not the names: every consumer asks only whether any were
+	// dropped, and the names are already reported to the operator by
+	// WarnSkippedRefNames at the decode boundary. Retaining the slice pinned
+	// it to this struct — which outlives the pack fetch and push — for the
+	// whole run, megabytes of it on a source advertising many invalid names,
+	// purely to answer a boolean.
+	//
+	// Set on every construction path, v1 and v2 alike. It was populated at
+	// only one of four before, leaving the corroboration silently vacuous on
+	// v1; newV1RefService exists so a new path cannot forget.
+	SkippedRefCount int
+}
+
+// newV1RefService builds the v1 RefService. All three v1 construction sites go
+// through it: hand-built literals are how SkippedRefCount came to be set on one
+// path and silently left zero on the others, which reads to a caller as
+// "nothing was dropped".
+func newV1RefService(adv *packp.AdvRefs, skippedRefCount int) *RefService {
+	return &RefService{
+		Protocol:        "v1",
+		V1Adv:           adv,
+		HeadTarget:      headTargetFromAdv(adv),
+		SkippedRefCount: skippedRefCount,
+	}
 }
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
@@ -41,11 +91,11 @@ type RefService struct {
 func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
-		adv, refs, err := listSourceRefsV1(ctx, conn)
+		adv, refs, skippedCount, err := listSourceRefsV1(ctx, conn)
 		if err != nil {
 			return nil, nil, err
 		}
-		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+		return refs, newV1RefService(adv, skippedCount), nil
 
 	case "auto", "v2":
 		data, err := RequestInfoRefs(ctx, conn, transport.UploadPackService, GitProtocolV2)
@@ -63,11 +113,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
 			}
-			refs, headTarget, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
+			refs, headTarget, unborn, skippedCount, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
 				return nil, nil, err
 			}
-			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget}, nil
+			return refs, &RefService{Protocol: "v2", V2Caps: caps, HeadTarget: headTarget, HeadUnborn: unborn, SkippedRefCount: skippedCount}, nil
 		}
 		if protocolMode == "v2" {
 			return nil, nil, errors.New("source did not negotiate protocol v2")
@@ -82,7 +132,7 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 			return nil, nil, err
 		}
 		WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-		return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+		return refs, newV1RefService(adv, len(skipped)), nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported protocol mode %q", protocolMode)
@@ -90,11 +140,11 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 }
 
 func listSourceRefsAutoV1(ctx context.Context, conn Conn) ([]*plumbing.Reference, *RefService, error) {
-	adv, refs, err := listSourceRefsV1(ctx, conn)
+	adv, refs, skippedCount, err := listSourceRefsV1(ctx, conn)
 	if err != nil {
 		return nil, nil, err
 	}
-	return refs, &RefService{Protocol: "v1", V1Adv: adv, HeadTarget: headTargetFromAdv(adv)}, nil
+	return refs, newV1RefService(adv, skippedCount), nil
 }
 
 func isSSHScheme(conn Conn) bool {
@@ -164,67 +214,95 @@ func AdvRefsCaps(adv *packp.AdvRefs) []string {
 	return items
 }
 
-func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbing.Reference, error) {
+// listSourceRefsV1 returns the advertisement, its valid refs, and how many
+// names were dropped as invalid — the count travels back so the caller can put
+// it on the RefService, rather than being warned about and then discarded.
+func listSourceRefsV1(ctx context.Context, conn Conn) (*packp.AdvRefs, []*plumbing.Reference, int, error) {
 	adv, err := AdvertisedRefsV1(ctx, conn, transport.UploadPackService)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	refs, skipped, err := AdvRefsToSlice(adv)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-	return adv, refs, nil
+	return adv, refs, len(skipped), nil
 }
 
-func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, error) {
+func listSourceRefsV2(ctx context.Context, conn Conn, caps *V2Capabilities, prefixes []string) ([]*plumbing.Reference, plumbing.ReferenceName, bool, int, error) {
 	// Always include "HEAD" so the server returns the symref-target attribute
 	// for HEAD. Without this, callers that pass only "refs/heads/" or
 	// "refs/tags/" prefixes filter HEAD out of the response and lose the
 	// default-branch hint that bootstrap planning uses as a trunk cutoff.
 	args := []string{"peel", "symrefs", "ref-prefix HEAD"}
+	// Ask the server to report an unborn HEAD explicitly, so a repository
+	// with no commits says so instead of answering with no ref lines at all.
+	// Gated on the advertisement: protocol v2 forbids sending an argument the
+	// server did not advertise, and a stricter server may fail the command.
+	// Costs nothing — no extra round trip, and a source WITH commits answers
+	// exactly as before.
+	if caps.LSRefsSupports("unborn") {
+		args = append(args, "unborn")
+	}
 	for _, prefix := range prefixes {
 		args = append(args, "ref-prefix "+prefix)
 	}
 	body, err := EncodeCommand("ls-refs", caps.RequestCapabilities(), args)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, 0, err
 	}
 	data, err := PostRPC(ctx, conn, transport.UploadPackService, body, true, "upload-pack ls-refs")
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, 0, err
 	}
-	refs, headTarget, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
+	refs, headTarget, unborn, skipped, err := decodeV2LSRefs(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, 0, err
 	}
 	WarnSkippedRefNames(conn.ProgressWriter(), "source", skipped)
-	return refs, headTarget, nil
+	return refs, headTarget, unborn, len(skipped), nil
 }
 
-func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, []string, error) {
+// decodeV2LSRefs decodes an ls-refs response into its refs, the branch HEAD
+// points at, whether the server reported HEAD as unborn, and the ref names
+// dropped as invalid for the caller to report.
+func decodeV2LSRefs(r *bytes.Reader) ([]*plumbing.Reference, plumbing.ReferenceName, bool, []string, error) {
 	reader := NewPacketReader(r)
 	var refs []*plumbing.Reference
 	var headTarget plumbing.ReferenceName
+	var unborn bool
 	for {
 		kind, payload, err := reader.ReadPacket()
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", false, nil, err
 		}
 		if kind == PacketFlush {
 			// Names come from the remote, so drop anything git would reject
-			// and hand the list back for the caller to report.
+			// and hand the list back for the caller to report. unborn rides
+			// alongside rather than through this filter: it is a property of
+			// the repository, not a ref, and the line that carries it is
+			// consumed below without ever entering refs.
 			valid, skipped := PartitionRefNames(refs)
-			return valid, headTarget, skipped, nil
+			return valid, headTarget, unborn, skipped, nil
 		}
 		if kind != PacketData {
-			return nil, "", nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
+			return nil, "", false, nil, fmt.Errorf("unexpected packet type %v in ls-refs response", kind)
 		}
 		fields := strings.Fields(strings.TrimSpace(string(payload)))
 		if len(fields) < 2 {
-			return nil, "", nil, fmt.Errorf("malformed ls-refs response line %q", payload)
+			return nil, "", false, nil, fmt.Errorf("malformed ls-refs response line %q", payload)
 		}
 		if fields[0] == "unborn" {
+			// "unborn HEAD symref-target:refs/heads/main": the repository has
+			// no commits. Recorded as a flag only — headTarget deliberately
+			// stays empty, because consumers treat a non-empty HeadTarget as
+			// a branch that exists on the source (mirror-pipeline's
+			// default-branch reconcile drives SetDefaultBranch off it), and
+			// an unborn target does not.
+			if fields[1] == string(plumbing.HEAD) {
+				unborn = true
+			}
 			continue
 		}
 		hash := plumbing.NewHash(fields[0])

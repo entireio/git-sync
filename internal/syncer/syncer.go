@@ -92,6 +92,32 @@ type Config struct {
 	MaterializedMaxObjects int
 	ProtocolMode           string
 	BootstrapStrategy      string // "" | "first-parent" | "topo"
+	// SourceAssertedEmpty is the caller's authoritative statement that the
+	// source repository holds no refs at all, obtained from something that
+	// sees the repository's real state rather than its advertisement — git
+	// cannot supply this, because ref hiding is invisible to the client by
+	// design. Only consulted under AllowEmptySource, and never sufficient on
+	// its own: resolveEmptyDesiredSet still requires every git-side
+	// observation to corroborate it.
+	SourceAssertedEmpty bool
+
+	// TargetAssertedEmpty is the same statement about the TARGET, required for
+	// the same reason rather than as belt-and-braces: receive.hideRefs omits
+	// matching refs from receive-pack's advertisement, so a populated target
+	// can advertise nothing but the capabilities^{} sentinel and read as
+	// empty. Worse than the source case, because receive.hideRefs and
+	// uploadpack.hideRefs are separate settings — a ref hidden from the push
+	// side is still served to fetchers, so a target wrongly judged empty is
+	// one whose readers see refs the source does not have. Verified against
+	// git 2.53.
+	TargetAssertedEmpty bool
+
+	// AllowEmptySource opts into treating a VERIFIED-empty source as an
+	// outcome rather than an error, in replicate mode only. Off by default:
+	// with it unset, an empty source fails exactly as it always has, so no
+	// existing caller changes behavior. See resolveEmptyDesiredSet for what
+	// "verified" requires and which outcome each case produces.
+	AllowEmptySource bool
 
 	// progressOut overrides the writer used by the live progress ticker.
 	// Defaults to os.Stderr when nil. Exposed for tests.
@@ -156,6 +182,22 @@ type Result struct {
 	Stats              Stats                  `json:"stats"`
 	Measurement        Measurement            `json:"measurement"`
 	Protocol           string                 `json:"protocol"`
+	// Converged is true when the source was verified to have no refs and the
+	// target had none either, so the two already agree with nothing to apply.
+	// Only ever set on a successful zero-plan replicate; see
+	// resolveEmptySource.
+	//
+	// Named for what it reports rather than for the source alone: it requires
+	// BOTH sides verified, so it is false in every other empty-source outcome
+	// — including the diverged one, where the source WAS verified empty. A
+	// "SourceEmpty" that is false on a verified-empty source is a field that
+	// invites the wrong read.
+	//
+	// Emitted unconditionally (no omitempty) like every other discriminating
+	// bool here: this is the field that separates a converged run from an
+	// ordinary no-op, so "false" and "this binary has no such field" must not
+	// be the same JSON.
+	Converged bool `json:"converged"`
 }
 
 func (r Result) Lines() []string {
@@ -182,6 +224,13 @@ func (r Result) Lines() []string {
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
 	}
+	// Without this the text output of a converged empty replicate is
+	// byte-identical to an ordinary sync that had no work to do — the one
+	// distinction this field exists to draw, dropped on the path that
+	// cmd/git-sync and every non-JSON consumer actually render.
+	if r.Converged {
+		lines = append(lines, "converged: source and target both verified empty; nothing to apply")
+	}
 	return lines
 }
 
@@ -196,8 +245,21 @@ type ProbeResult struct {
 	TargetCaps    []string               `json:"targetCapabilities,omitempty"`
 	Refs          []RefInfo              `json:"refs"`
 	SourceHEAD    plumbing.ReferenceName `json:"sourceHead,omitempty"`
-	Stats         Stats                  `json:"stats"`
-	Measurement   Measurement            `json:"measurement"`
+	// SourceHeadUnborn is true when the source reported HEAD as unborn: its
+	// symref target does not exist. Diagnostic only — it is emphatically NOT a
+	// statement that the repository is empty (git emits the line for any
+	// dangling HEAD), and acting on emptiness needs the far stricter path
+	// behind SyncPolicy.AllowEmptySource.
+	//
+	// Surfaced here because probe is the diagnostic surface and the ls-refs
+	// request already carries the unborn argument on every v2 listing: an
+	// operator asking "why will this mirror not converge" can see whether the
+	// source reported unborn at all, which is otherwise invisible. False for a
+	// v1 source, or a v2 source that does not advertise ls-refs=unborn,
+	// however empty it is.
+	SourceHeadUnborn bool        `json:"sourceHeadUnborn"`
+	Stats            Stats       `json:"stats"`
+	Measurement      Measurement `json:"measurement"`
 }
 
 func (r ProbeResult) Lines() []string {
@@ -211,6 +273,9 @@ func (r ProbeResult) Lines() []string {
 	}
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
+	}
+	if r.SourceHeadUnborn {
+		lines = append(lines, "source-head-unborn: true")
 	}
 	if len(r.Capabilities) > 0 {
 		lines = append(lines, "source-capabilities: "+strings.Join(r.Capabilities, ", "))
@@ -684,6 +749,14 @@ type targetSession struct {
 	features gitproto.TargetFeatures
 	policy   planner.RelayTargetPolicy
 	pusher   *gitproto.Pusher
+	// skippedRefCount is how many advertised target ref names were dropped as
+	// invalid. Retained, not just warned about, because a non-zero count is
+	// load-bearing for any caller reasoning about an EMPTY target: names
+	// dropped here leave refMap empty while the target plainly holds refs.
+	// A count rather than the names, for the reason on
+	// gitproto.RefService.SkippedRefCount — this struct outlives the pack
+	// transfer and only a boolean is ever read from it.
+	skippedRefCount int
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -700,6 +773,9 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	case modeReplicate:
 	default:
 		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
+	}
+	if err := validateEmptySourcePolicy(cfg); err != nil {
+		return nil, err
 	}
 	if _, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs); err != nil {
 		return nil, fmt.Errorf("validate mappings: %w", err)
@@ -791,6 +867,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		// never picked as a prune candidate — the safe direction, but the
 		// operator should know the target holds a name git would reject.
 		gitproto.WarnSkippedRefNames(targetConn.ProgressWriter(), "target", skippedTargetRefs)
+		s.target.skippedRefCount = len(skippedTargetRefs)
 		targetRefMap := gitproto.RefHashMap(targetRefSlice)
 		targetFeatures := gitproto.TargetFeaturesFromAdvRefs(targetAdv)
 		s.target.adv = targetAdv
@@ -976,16 +1053,35 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 }
 
 func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
+	// An empty source advertisement is resolved BEFORE planning. Under AllRefs
+	// the advertisement covers refs/, so "nothing advertised" is already a
+	// complete observation and planning cannot add to it — while
+	// BuildDesiredRefs errors on a mapping whose source ref is absent, which
+	// on a genuinely empty source is every mapping. Deciding after planning
+	// left the whole policy inert for any request that pinned refs by mapping:
+	// the caller got "source ref X not found" matching no sentinel, on exactly
+	// the state the policy exists to make succeed.
+	//
+	// Gated on the opt-in so a caller that never asked for this still gets the
+	// planner's error verbatim.
+	//
+	// The relay check runs FIRST, above both this intercept and planning. It is
+	// a property of the target, not of the work: replicate refuses a non-relay
+	// target outright, and a converged result claims Relay: true on the
+	// strength of that refusal. Deciding emptiness ahead of it would let the
+	// one path that makes the claim be the one path that never checked it.
+	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {
+		return Result{OperationMode: modeReplicate}, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+	}
+	if s.cfg.AllowEmptySource && s.cfg.AllRefs && len(s.sourceRefMap) == 0 {
+		return s.resolveEmptySource()
+	}
 	desiredRefs, managedTargets, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
 	if err != nil {
 		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
 	if len(desiredRefs) == 0 {
-		return Result{}, errors.New("no source refs matched")
-	}
-
-	if ok, reason := planner.SupportsReplicateRelay(s.target.policy); !ok {
-		return Result{OperationMode: modeReplicate}, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
+		return s.resolveEmptyDesiredSet()
 	}
 
 	allAbsent := s.replicateCanBootstrap(desiredRefs)
@@ -1320,8 +1416,12 @@ func (s *syncSession) newProbeResult() ProbeResult {
 		Capabilities:  s.sourceService.Capabilities(),
 		Refs:          refInfos,
 		SourceHEAD:    s.sourceService.HeadTarget,
-		Stats:         s.stats.snapshot(),
-		Measurement:   s.measurementDone(),
+		// Reported even though nothing in Probe acts on it: it is the one
+		// wire fact that explains an unconvergeable empty mirror, and it is
+		// otherwise unobservable from outside.
+		SourceHeadUnborn: s.sourceService.HeadUnborn,
+		Stats:            s.stats.snapshot(),
+		Measurement:      s.measurementDone(),
 	}
 	if s.target != nil {
 		result.TargetURL = redact.URL(s.cfg.Target.URL)

@@ -8,6 +8,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"entire.io/entire/git-sync"
+	"entire.io/entire/git-sync/internal/syncertest"
 )
 
 func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
@@ -149,4 +150,70 @@ func TestBuildFetchConfigThreadsMaterializedMaxObjects(t *testing.T) {
 	if cfg.MaterializedMaxObjects != 1234 {
 		t.Errorf("MaterializedMaxObjects = %d, want 1234", cfg.MaterializedMaxObjects)
 	}
+}
+
+// Every policy bool and every scope ref list must reach the syncer config,
+// checked by reflection rather than by an enumerated list. The guard itself
+// lives in internal/syncertest so this and the stable client's copy cannot
+// drift apart; see syncertest.AssertFieldsThreaded for why it is shaped this
+// way.
+//
+// Scope is covered alongside Policy because a policy-only guard is what let
+// Scope.ExcludeRefs stay dropped here (and in buildBootstrapConfig and
+// buildFetchConfig) while the stable client threaded it.
+func TestBuildSyncConfigThreadsEveryPolicyBool(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, policy gitsync.SyncPolicy) any {
+		cfg, err := New(Options{HTTPClient: &http.Client{}}).buildSyncConfig(context.Background(), SyncRequest{
+			Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+			Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+			Policy: policy,
+		})
+		if err != nil {
+			t.Fatalf("buildSyncConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+func TestBuildSyncConfigThreadsEveryScopeField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, scope gitsync.RefScope) any {
+		cfg, err := New(Options{HTTPClient: &http.Client{}}).buildSyncConfig(context.Background(), SyncRequest{
+			Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+			Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+			Scope:  scope,
+		})
+		if err != nil {
+			t.Fatalf("buildSyncConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+// Bootstrap and Fetch take the same RefScope and dropped the same field, so
+// they get the same guard rather than a comment promising someone will remember.
+func TestBuildBootstrapConfigThreadsEveryScopeField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, scope gitsync.RefScope) any {
+		cfg, err := New(Options{HTTPClient: &http.Client{}}).buildBootstrapConfig(context.Background(), BootstrapRequest{
+			Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+			Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+			Scope:  scope,
+		})
+		if err != nil {
+			t.Fatalf("buildBootstrapConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+func TestBuildFetchConfigThreadsEveryScopeField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, scope gitsync.RefScope) any {
+		cfg, err := New(Options{HTTPClient: &http.Client{}}).buildFetchConfig(context.Background(), FetchRequest{
+			Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+			Scope:  scope,
+		})
+		if err != nil {
+			t.Fatalf("buildFetchConfig: %v", err)
+		}
+		return cfg
+	})
 }

@@ -89,17 +89,24 @@ type Measurement struct {
 
 // ProbeResult is the outcome of a Probe.
 type ProbeResult struct {
-	SourceURL     string      `json:"sourceUrl"`
-	TargetURL     string      `json:"targetUrl,omitempty"`
-	RequestedMode string      `json:"requestedMode"`
-	Protocol      string      `json:"protocol"`
-	RefPrefixes   []string    `json:"refPrefixes"`
-	Capabilities  []string    `json:"sourceCapabilities"`
-	TargetCaps    []string    `json:"targetCapabilities,omitempty"`
-	Refs          []RefInfo   `json:"refs"`
-	SourceHEAD    string      `json:"sourceHead,omitempty"`
-	Stats         Stats       `json:"stats"`
-	Measurement   Measurement `json:"measurement"`
+	SourceURL     string    `json:"sourceUrl"`
+	TargetURL     string    `json:"targetUrl,omitempty"`
+	RequestedMode string    `json:"requestedMode"`
+	Protocol      string    `json:"protocol"`
+	RefPrefixes   []string  `json:"refPrefixes"`
+	Capabilities  []string  `json:"sourceCapabilities"`
+	TargetCaps    []string  `json:"targetCapabilities,omitempty"`
+	Refs          []RefInfo `json:"refs"`
+	SourceHEAD    string    `json:"sourceHead,omitempty"`
+	// SourceHeadUnborn reports that the source described HEAD as unborn — its
+	// target branch does not exist. Diagnostic only: git emits that line for
+	// any dangling HEAD, so it is never on its own evidence that a repository
+	// is empty. It answers "did the source say anything about an unborn HEAD",
+	// which is what distinguishes a source that cannot report one (protocol
+	// v1, or a v2 server not advertising ls-refs=unborn) from one that did not.
+	SourceHeadUnborn bool        `json:"sourceHeadUnborn"`
+	Stats            Stats       `json:"stats"`
+	Measurement      Measurement `json:"measurement"`
 }
 
 // SyncCounts tallies per-ref outcomes of a sync.
@@ -129,6 +136,18 @@ type ExecutionSummary struct {
 	BootstrapSuggested bool         `json:"bootstrapSuggested"`
 	SourceHEAD         string       `json:"sourceHead,omitempty"`
 	Batch              BatchSummary `json:"batch"`
+	// Converged reports that this run applied nothing because the source was
+	// confirmed to have no refs and the target had none either — the two
+	// already agree. Only ever set under SyncPolicy.AllowEmptySource, and it
+	// is what distinguishes that converged state from an ordinary sync that
+	// happened to have no work to do.
+	//
+	// It requires BOTH sides verified, so it is false in every other
+	// empty-source outcome, including ErrSourceEmptyTargetPopulated where the
+	// source was verified empty but the two have diverged. Emitted
+	// unconditionally so "false" is distinguishable from a caller running a
+	// build that predates the field.
+	Converged bool `json:"converged"`
 }
 
 // SyncResult is the outcome of a Sync or Replicate.
@@ -145,17 +164,18 @@ type PlanResult = SyncResult
 
 func fromProbeResult(result syncer.ProbeResult) ProbeResult {
 	out := ProbeResult{
-		SourceURL:     result.SourceURL,
-		TargetURL:     result.TargetURL,
-		RequestedMode: result.RequestedMode,
-		Protocol:      result.Protocol,
-		RefPrefixes:   append([]string(nil), result.RefPrefixes...),
-		Capabilities:  append([]string(nil), result.Capabilities...),
-		TargetCaps:    append([]string(nil), result.TargetCaps...),
-		Refs:          make([]RefInfo, 0, len(result.Refs)),
-		SourceHEAD:    result.SourceHEAD.String(),
-		Stats:         fromStats(result.Stats),
-		Measurement:   fromMeasurement(result.Measurement),
+		SourceURL:        result.SourceURL,
+		TargetURL:        result.TargetURL,
+		RequestedMode:    result.RequestedMode,
+		Protocol:         result.Protocol,
+		RefPrefixes:      append([]string(nil), result.RefPrefixes...),
+		Capabilities:     append([]string(nil), result.Capabilities...),
+		TargetCaps:       append([]string(nil), result.TargetCaps...),
+		Refs:             make([]RefInfo, 0, len(result.Refs)),
+		SourceHEAD:       result.SourceHEAD.String(),
+		SourceHeadUnborn: result.SourceHeadUnborn,
+		Stats:            fromStats(result.Stats),
+		Measurement:      fromMeasurement(result.Measurement),
 	}
 	for _, ref := range result.Refs {
 		out.Refs = append(out.Refs, RefInfo{Name: ref.Name, Hash: ref.Hash.String()})
@@ -182,6 +202,7 @@ func fromSyncResult(result syncer.Result) SyncResult {
 			Reason:             result.RelayReason,
 			BootstrapSuggested: result.BootstrapSuggested,
 			SourceHEAD:         result.SourceHEAD.String(),
+			Converged:          result.Converged,
 			Batch: BatchSummary{
 				Enabled: result.Batching,
 				Planned: result.PlannedBatchCount,

@@ -35,10 +35,27 @@ func (c *V2Capabilities) Value(name string) string {
 // FetchSupports checks whether a specific feature is listed in the
 // "fetch" capability value (space-separated feature list).
 func (c *V2Capabilities) FetchSupports(feature string) bool {
+	return c.commandSupports("fetch", feature)
+}
+
+// LSRefsSupports checks whether a specific feature is listed in the "ls-refs"
+// capability value (space-separated feature list). The only feature defined
+// today is "unborn": a server advertising it will report an unborn HEAD as an
+// explicit "unborn HEAD symref-target:<ref>" line, which is the difference
+// between a repository asserting it has no commits and a response that merely
+// carries no ref lines. Protocol v2 forbids sending a command argument the
+// server did not advertise, so callers MUST gate the request on this.
+func (c *V2Capabilities) LSRefsSupports(feature string) bool {
+	return c.commandSupports("ls-refs", feature)
+}
+
+// commandSupports reports whether feature appears in command's advertised
+// space-separated feature list.
+func (c *V2Capabilities) commandSupports(command, feature string) bool {
 	if c == nil {
 		return false
 	}
-	for _, f := range strings.Fields(c.Value("fetch")) {
+	for _, f := range strings.Fields(c.Value(command)) {
 		if f == feature {
 			return true
 		}

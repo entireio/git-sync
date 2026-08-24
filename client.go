@@ -131,6 +131,9 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		ForceBlind:             req.Policy.ForceBlind,
 		Prune:                  req.Policy.Prune,
 		BestEffort:             req.Policy.BestEffort,
+		AllowEmptySource:       req.Policy.AllowEmptySource,
+		SourceAssertedEmpty:    req.Policy.SourceAssertedEmpty,
+		TargetAssertedEmpty:    req.Policy.TargetAssertedEmpty,
 		ProtocolMode:           string(req.Policy.Protocol),
 		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
 	}, nil
@@ -175,6 +178,13 @@ func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPoli
 	}
 	if _, err := validation.ValidateMappings(validationMappings(scope.Mappings), scope.AllRefs); err != nil {
 		return fmt.Errorf("validate mappings: %w", err)
+	}
+	// The half of the AllowEmptySource contract that needs the scope as well as
+	// the policy, so it cannot live on SyncPolicy.Validate. Silently accepting
+	// it left the caller with the historical "no source refs matched" and no
+	// hint that their policy had been discarded.
+	if policy.AllowEmptySource && !scope.AllRefs {
+		return errors.New("AllowEmptySource requires Scope.AllRefs; a narrowed scope cannot establish that a repository is empty")
 	}
 	return nil
 }

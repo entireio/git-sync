@@ -42,6 +42,39 @@ func TestV2CapabilitiesFetchSupports(t *testing.T) {
 	}
 }
 
+func TestV2CapabilitiesLSRefsSupports(t *testing.T) {
+	caps := &V2Capabilities{
+		Caps: map[string]string{
+			"ls-refs": "unborn",
+			"fetch":   "thin-pack",
+		},
+	}
+	if !caps.LSRefsSupports("unborn") {
+		t.Error(`LSRefsSupports("unborn") = false, want true`)
+	}
+	// Features are per-command: ls-refs must not answer for fetch's list, or
+	// we would send an argument the server never advertised for this command.
+	if caps.LSRefsSupports("thin-pack") {
+		t.Error(`LSRefsSupports("thin-pack") = true; fetch features must not leak into ls-refs`)
+	}
+	if caps.FetchSupports("unborn") {
+		t.Error(`FetchSupports("unborn") = true; ls-refs features must not leak into fetch`)
+	}
+
+	// A server advertising ls-refs with no feature list supports no features
+	// — the common case for older servers, and the one that must keep the
+	// unborn argument off the wire.
+	bare := &V2Capabilities{Caps: map[string]string{"ls-refs": ""}}
+	if bare.LSRefsSupports("unborn") {
+		t.Error("bare ls-refs advertisement reported unborn support")
+	}
+
+	var nilCaps *V2Capabilities
+	if nilCaps.LSRefsSupports("unborn") {
+		t.Error("nil V2Capabilities.LSRefsSupports should return false")
+	}
+}
+
 func TestV2CapabilitiesSortedKeys(t *testing.T) {
 	caps := &V2Capabilities{
 		Caps: map[string]string{

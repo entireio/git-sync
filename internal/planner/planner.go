@@ -250,6 +250,120 @@ func BuildReplicationPlans(
 	return plans, nil
 }
 
+// TargetScope answers whether a target ref is a request's responsibility at
+// all. Build it once per request with NewTargetScope; Manages is then O(1).
+//
+// Two ways a ref qualifies, and both are needed. It may be a ref the request
+// explicitly MANAGES — a mapping target, which BuildDesiredRefs adds to the
+// managed set — or one prune could select. PruneTarget alone answers only the
+// second, and deliberately reports false for every branch once Mappings is set,
+// because addPruneCandidates consults it only for refs already known to be
+// unmanaged. Reading it as the whole answer silently drops the mapping targets,
+// which is the worst direction for anything deciding divergence: a target still
+// holding the mapped ref looks like nothing to worry about.
+type TargetScope struct {
+	cfg    PlanConfig
+	mapped map[plumbing.ReferenceName]struct{}
+}
+
+// NewTargetScope precomputes the mapping targets a request declares. It
+// normalizes cfg and resolves mapping names the same way BuildDesiredRefs
+// does, so the two cannot disagree about what a mapping names.
+func NewTargetScope(cfg PlanConfig) (TargetScope, error) {
+	cfg = normalizeAllRefs(cfg)
+	scope := TargetScope{cfg: cfg, mapped: map[plumbing.ReferenceName]struct{}{}}
+	if len(cfg.Mappings) == 0 {
+		return scope, nil
+	}
+	normalized, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs)
+	if err != nil {
+		return TargetScope{}, fmt.Errorf("validate ref mappings: %w", err)
+	}
+	for _, nm := range normalized {
+		scope.mapped[nm.TargetRef] = struct{}{}
+	}
+	return scope, nil
+}
+
+// Manages reports whether this target ref is the request's responsibility —
+// that is, whether the request would push to it, or whether prune could select
+// it were prune enabled.
+//
+// Deliberately independent of cfg.Prune. A caller asking "is this ref mine"
+// while prune is off still needs the same answer: the divergence check reads
+// it to decide whether a target ref contradicts a claim of convergence, and
+// "the source is empty but the target holds refs" is a genuine disagreement
+// whether or not this particular run would have deleted them.
+//
+// Push scope and prune scope are not the same set, and this is their union.
+// Delegating wholly to PruneTarget was wrong twice over, in the direction that
+// under-reports: it omits mapping targets, and it omits the refs
+// BuildDesiredRefs auto-discovers under Mappings. That pass — tags, and
+// other-kind names under AllRefs — sits OUTSIDE the mapping/branch branch, so
+// a mapping-scoped AllRefs request still mirrors refs/notes/* and tags even
+// though prune leaves them alone.
+func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
+	// Mapping targets are not subject to exclusions, matching the mapping pass
+	// in BuildDesiredRefs, which applies exclusions only to auto-discovery.
+	if _, ok := s.mapped[targetRef]; ok {
+		return true
+	}
+	if IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		return false
+	}
+	// The auto-discovery half: what BuildDesiredRefs would push, regardless of
+	// whether prune would also take it.
+	switch kind := RefKindFromName(targetRef); {
+	case kind == RefKindTag && (s.cfg.IncludeTags || s.cfg.AllRefs):
+		return true
+	case kind == RefKindOther && s.cfg.AllRefs:
+		return true
+	}
+	// The prune half, which is what additionally covers unmapped branches.
+	_, prunable := PruneTarget(targetRef, s.cfg)
+	return prunable
+}
+
+// PruneTarget reports whether prune could select an ALREADY-UNMANAGED target
+// ref for deletion, and with what classification.
+//
+// It is not the answer to "is this ref in scope" — with Mappings set it reports
+// false for every branch, because its only caller has already excluded the
+// managed ones. Use TargetScope.Manages for that question.
+//
+// It normalizes cfg itself rather than assuming a normalized one. Callers
+// inside planning have already normalized (this is then a no-op), but the
+// planner's own entry points normalize on the way in, so an outside caller
+// holding a raw config has no obvious cue that it must. Getting it wrong is
+// silent and one-directional: an un-normalized AllRefs config still carrying a
+// Branches filter reports a branch as unmanaged when the request would in fact
+// prune it.
+//
+// This is the single answer to "is this target ref ours to act on", and callers
+// outside planning need it too: anything reasoning about what the target holds
+// must ask the same question the planner will, or it reports refs the request
+// has disclaimed. Exclusions are part of the answer, not a separate pre-filter,
+// for the same reason.
+//
+// Note what mappings do here: a mapping-scoped request manages the refs it
+// mapped and, for prune purposes, tags — but not unmapped branches and not
+// other namespaces, which it neither pushes nor prunes.
+func PruneTarget(targetRef plumbing.ReferenceName, cfg PlanConfig) (ManagedTarget, bool) {
+	cfg = normalizeAllRefs(cfg)
+	if IsRefExcluded(targetRef, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs) {
+		return ManagedTarget{}, false
+	}
+	switch {
+	case targetRef.IsTag() && (cfg.IncludeTags || cfg.AllRefs):
+		return ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}, true
+	case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
+		return ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}, true
+	case cfg.AllRefs && RefKindFromName(targetRef) == RefKindOther && len(cfg.Mappings) == 0:
+		return ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}, true
+	}
+	return ManagedTarget{}, false
+}
+
 // addPruneCandidates registers unmanaged target refs as deletion candidates
 // within the user's current scope. cfg is assumed normalized.
 func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, targetRefs map[plumbing.ReferenceName]plumbing.Hash, cfg PlanConfig) {
@@ -257,16 +371,8 @@ func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, target
 		if _, ok := managed[targetRef]; ok {
 			continue
 		}
-		if IsRefExcluded(targetRef, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs) {
-			continue
-		}
-		switch {
-		case targetRef.IsTag() && (cfg.IncludeTags || cfg.AllRefs):
-			managed[targetRef] = ManagedTarget{Kind: RefKindTag, Label: targetRef.Short()}
-		case targetRef.IsBranch() && len(cfg.Mappings) == 0 && len(cfg.Branches) == 0:
-			managed[targetRef] = ManagedTarget{Kind: RefKindBranch, Label: targetRef.Short()}
-		case cfg.AllRefs && RefKindFromName(targetRef) == RefKindOther && len(cfg.Mappings) == 0:
-			managed[targetRef] = ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}
+		if target, prunable := PruneTarget(targetRef, cfg); prunable {
+			managed[targetRef] = target
 		}
 	}
 }

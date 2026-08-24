@@ -151,6 +151,7 @@ agent=git-sync/...
 0001
 peel
 symrefs
+unborn
 ref-prefix HEAD
 ref-prefix refs/heads/
 ref-prefix refs/tags/
@@ -159,13 +160,25 @@ ref-prefix refs/tags/
 
 The `peel` and `symrefs` arguments are ls-refs request features that ask the server to include peeled object IDs (for tags) and symref-target attributes. `ref-prefix HEAD` is unconditionally included so HEAD shows up in the response even when the caller only asked for `refs/heads/` or `refs/tags/`.
 
+`unborn` asks the server to report a HEAD whose target does not exist, instead of answering with no ref lines at all. It is appended only when the server advertised `ls-refs=unborn` (protocol v2 forbids sending an unadvertised argument, and a strict server may fail the command), and it is **not** gated on any caller policy: every v2 source listing sends it — probe, plan, sync, replicate, bootstrap, fetch and convert-sha256 alike. It costs no extra round trip, and a source with commits answers exactly as it did before. Only the reader of the resulting flag is policy-gated (see `SyncPolicy.AllowEmptySource`).
+
 The server's HEAD line then looks like:
 
 ```
 <hash> HEAD symref-target:refs/heads/main
 ```
 
-`decodeV2LSRefs` parses the line, extracts the `symref-target:` attribute, and returns it as `headTarget` alongside the ref slice. HEAD itself is filtered out of the returned refs because it is a symbolic ref, not a real one — matching v1 behavior where symrefs are filtered out by the downstream `RefHashMap`.
+For an unborn HEAD the server instead emits:
+
+```
+unborn HEAD symref-target:refs/heads/main
+```
+
+`decodeV2LSRefs` parses the born line, extracts the `symref-target:` attribute, and returns it as `headTarget` alongside the ref slice. HEAD itself is filtered out of the returned refs because it is a symbolic ref, not a real one — matching v1 behavior where symrefs are filtered out by the downstream `RefHashMap`.
+
+The unborn line is recorded as `RefService.HeadUnborn` and deliberately does **not** populate `headTarget`: consumers read a non-empty `HeadTarget` as a branch that exists on the source, and an unborn target does not. `HeadUnborn` is only ever a *disqualifier* for a caller's emptiness assertion — a repository holding `refs/heads/other` with HEAD pointed at a never-created `refs/heads/main` reports unborn too, so its presence proves nothing on its own. There is no v1 equivalent, so a v1 source (or an SSH source that falls back to v1) always leaves it false.
+
+Because convergence cannot be corroborated without it, `SyncPolicy.AllowEmptySource` rejects `ProtocolV1` at the request edge. `ProtocolAuto` is accepted — it negotiates v2 wherever the server supports it — but an SSH source whose v2 probe fails and falls back to v1 can only be caught mid-run, where it reports that the *protocol* cannot carry the signal rather than implying the server withheld refs. A v2 source that does not advertise `ls-refs=unborn` is reported the same way.
 
 ### Consumers
 

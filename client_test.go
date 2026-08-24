@@ -294,3 +294,111 @@ func (s *smartHTTPRepoServer) writeReceivePackReport(w http.ResponseWriter, repo
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
+
+// The stable Client's config builder gets the same reflection guard as
+// unstable's, for the same reason: an enumerated list of fields only covers
+// what someone remembered to add, so a newly declared policy bool can be
+// accepted by the API and silently ignored with every test still green. See
+// unstable's TestBuildSyncConfigThreadsEveryPolicyBool — that is where this
+// class of omission was actually found. Both call one shared implementation so
+// the two copies cannot drift.
+func TestBuildSyncConfigThreadsEveryPolicyBool(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, policy SyncPolicy) any {
+		cfg, err := New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
+			Source: Endpoint{URL: "https://source.example/repo.git"},
+			Target: Endpoint{URL: "https://target.example/repo.git"},
+			Policy: policy,
+		}, false)
+		if err != nil {
+			t.Fatalf("buildSyncConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+func TestBuildSyncConfigThreadsEveryScopeField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, nil, func(t *testing.T, scope RefScope) any {
+		cfg, err := New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
+			Source: Endpoint{URL: "https://source.example/repo.git"},
+			Target: Endpoint{URL: "https://target.example/repo.git"},
+			Scope:  scope,
+		}, false)
+		if err != nil {
+			t.Fatalf("buildSyncConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+// AllowEmptySource has two requirements that no path would otherwise report:
+// the policy is replicate-only, and it needs an unscoped request. Both were
+// accepted at the edge, threaded into the syncer, and then discarded — the
+// caller got the historical "no source refs matched" with no hint that their
+// safety policy had been ignored.
+func TestValidateRejectsUnusableAllowEmptySource(t *testing.T) {
+	base := SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+	}
+
+	replicateUnscoped := base
+	replicateUnscoped.Policy = SyncPolicy{Mode: ModeReplicate, AllowEmptySource: true}
+	if err := replicateUnscoped.Validate(); err == nil {
+		t.Error("expected a scoped AllowEmptySource replicate to be rejected")
+	}
+
+	syncMode := base
+	syncMode.Scope = RefScope{AllRefs: true}
+	syncMode.Policy = SyncPolicy{Mode: ModeSync, AllowEmptySource: true}
+	if err := syncMode.Validate(); err == nil {
+		t.Error("expected AllowEmptySource outside replicate to be rejected")
+	}
+
+	// Mode unset defaults to sync, so it must be rejected the same way rather
+	// than slipping through on the zero value.
+	modeUnset := base
+	modeUnset.Scope = RefScope{AllRefs: true}
+	modeUnset.Policy = SyncPolicy{AllowEmptySource: true}
+	if err := modeUnset.Validate(); err == nil {
+		t.Error("expected AllowEmptySource with an unset mode to be rejected")
+	}
+
+	ok := base
+	ok.Scope = RefScope{AllRefs: true}
+	ok.Policy = SyncPolicy{Mode: ModeReplicate, AllowEmptySource: true, SourceAssertedEmpty: true, TargetAssertedEmpty: true}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("an unscoped replicate with the policy set must validate, got %v", err)
+	}
+}
+
+// buildProbeConfig is the one request-edge builder the guard above does not
+// cover, because ProbeRequest carries flat fields rather than a RefScope. It
+// drops nothing today — ProbeRequest has no ExcludeRefs — but it is exactly
+// where the bug class the guard exists for could recur unseen, so it gets the
+// same treatment.
+func TestBuildProbeConfigThreadsEveryField(t *testing.T) {
+	syncertest.AssertFieldsThreaded(t, map[string]string{
+		"CollectStats": "deliberately renamed: reaches syncer.Config as ShowStats",
+	}, func(t *testing.T, req ProbeRequest) any {
+		req.Source = Endpoint{URL: "https://source.example/repo.git"}
+		cfg, err := New(Options{}).buildProbeConfig(context.Background(), req)
+		if err != nil {
+			t.Fatalf("buildProbeConfig: %v", err)
+		}
+		return cfg
+	})
+}
+
+// The renamed field still has to arrive, it just cannot be checked by name.
+func TestBuildProbeConfigThreadsCollectStats(t *testing.T) {
+	cfg, err := New(Options{}).buildProbeConfig(context.Background(), ProbeRequest{
+		Source:       Endpoint{URL: "https://source.example/repo.git"},
+		CollectStats: true,
+	})
+	if err != nil {
+		t.Fatalf("buildProbeConfig: %v", err)
+	}
+	if !cfg.ShowStats {
+		t.Error("ProbeRequest.CollectStats = true was dropped by buildProbeConfig")
+	}
+}
