@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.10.3-nightly.202608260614.6561a64b8",
+  "checkpoint_id": "01M149WYF5ZR7CYDA7R34VMH2Z",
+  "session_id": "b003a6fd-81dc-429d-b52f-0cbf83d27c43",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-28T13:45:42.891922Z",
+  "branch": "nodo/ent-2054-interrupted-batched-bootstrap-can-never-resume-the-resume",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/planner/types.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "602f79c3598d",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 205183,
+    "cache_read_tokens": 7768876,
+    "output_tokens": 55933,
+    "api_call_count": 55
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-28T13:45:42.860853Z",
+    "agent_lines": 356,
+    "agent_removed": 6,
+    "human_added": 22,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 378,
+    "total_lines_changed": 384,
+    "agent_percentage": 94.27083333333334,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

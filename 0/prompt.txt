@@ -1,0 +1,1 @@
+let's fix https://linear.app/entirehq/issue/ENT-2054/interrupted-batched-bootstrap-can-never-resume-the-resume-ref
