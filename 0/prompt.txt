@@ -1,0 +1,42 @@
+<cross-session-message from="uds:/tmp/cc-socks/55621.sock" from-name="git-sync-49" from-mode="prompting">
+Task: adopt go-git's exported transport API in git-sync to delete ~900 LOC of reimplemented protocol code. Work on a new branch off main.
+
+REPOS
+- git-sync: /Users/soph/Work/entire/devenv/git-sync (main @ d4e1cfa6, tagged v0.9.0, clean tree)
+- go-git checkout for reference: /Users/soph/Work/entire/go-git (fork, main = v6.0.0-alpha.5+60)
+- git-sync pins go-git v6.0.0-alpha.5. Target that version's API, NOT the +60 main.
+
+WHY
+v0.9.0 shipped fixes for two security advisories that existed only because git-sync reimplemented behavior go-git already had correctly in alpha.5:
+- SSH argument injection: git-sync's shellQuotePath exempted a leading "~" from quoting. go-git's writeShellQuote (plumbing/transport/ssh/ssh.go:302) quotes the whole path, a port of git's sq_quote_buf.
+- Credential leak across redirect: git-sync re-attached the auth token after the stdlib stripped it cross-host. go-git clears credentials on cross-host redirect (plumbing/transport/http/handshake.go:92-106) and rejects scheme downgrades + caps redirects (checkRedirect, plumbing/transport/http/http.go:138).
+The goal is to stop maintaining that code, not to save lines.
+
+KEY API FINDING (all exported in alpha.5, verified by reading the source)
+- transport.Conn (plumbing/transport/transport.go:19) is 3 methods: io.Closer, Reader() io.Reader, Writer() io.WriteCloser
+- transport.NewStreamSession(conn Conn, service string) (*StreamSession, error) — plumbing/transport/pack_stream.go:35
+- transport.Commander (plumbing/transport/pack_session.go:24): Command(ctx, cmd string, req packp.CommandArgs, resp packp.Decoder) error — arbitrary protocol v2 command dispatch. Implemented by BOTH *StreamSession (pack_stream.go:190) and HTTP's *smartPackSession (transport/http/handshake.go:276).
+- packp.Decoder (plumbing/protocol/packp/packp.go:13) is just Decode(r io.Reader) error — so a pass-through implementation captures the RAW stream. This is what makes relay-fetch expressible without materializing into a storage.Storer.
+- transport.Transport.Handshake(ctx, req) (Session, error) — pack_session.go:31
+
+DO THIS FIRST (gating spike, ~half day)
+Validate that a pass-through packp.Decoder cleanly yields the pack stream on the HTTP path. smartPackSession.Command handles the v2 response-end packet; confirm that does not conflict with holding the reader open to relay bytes onward. If this does not work, item 3 below is blocked — report back before proceeding on it. Items 1, 2 and 4 are independent of the spike.
+
+TIER A WORK ITEMS
+1. internal/gitproto/helper.go (412 LOC, the entire:// remote-helper transport) -> implement transport.Conn over the helper process stdio (it is already full-duplex) and use transport.NewStreamSession. go-git has no remote-helper support, but it does not need it — the Conn interface is the seam.
+2. internal/gitproto/samesite.go (101 LOC) + guardRedirects/maxRedirects in internal/gitproto/smarthttp.go (~40 LOC) -> delete, use go-git's Handshake. Note: go-git's applyRedirect (transport/http/common.go:81) already implements git-sync's --source/target-follow-info-refs-redirect feature (adopt the redirected host for follow-up RPCs), minus the credential bug. You get the feature and the fix together.
+3. HTTP fetch + ls-refs path (~300 LOC of smarthttp.go's 1021) -> Handshake + Commander.Command(ctx, "fetch"/"ls-refs", args, passthroughDecoder). Replaces RequestInfoRefs and the fetch half of PostRPCStreamBody.
+4. V2Capabilities in internal/gitproto/capability.go (~50 LOC) -> Session.Capabilities()
+
+OUT OF SCOPE — do not touch
+- internal/gitproto/ssh.go: needs an SSH dialer seam in go-git that does not exist yet (sshConn is hardwired to x/crypto/ssh, and supplying your own Conn means rebuilding the command string, which is how the quoting bug happened). Upstream ask, not local work.
+- The relay half of internal/gitproto/push.go: receive-pack has no protocol v2 path, so Commander cannot reach push, and Session.Push demands a storage.Storer. Needs a new PackPusher capability interface upstream.
+- Keep as-is: internal/syncer, internal/planner, internal/strategy, internal/sanitize, the buffer-reusing pktline wrapper, v1 fallback, batching, progress reporting.
+
+CONSTRAINTS
+- Commander is protocol v2 only. The v1 fallback path must keep working — do not route v1 through it.
+- internal/redact must stay. go-git's own redactedURL (transport/http/common.go:146) has an unfixed bug: it returns the URL verbatim when there is no password, so https://TOKEN@host/ leaks the token. Verified empirically. Do not replace git-sync's redaction with go-git's.
+- Run the existing test suite (mise run test) plus the integration tests. The security regression tests added in v0.9.0 must still pass.
+
+Report back with: spike result first, then a summary of what landed and actual LOC delta.
+</cross-session-message>
