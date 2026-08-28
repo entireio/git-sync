@@ -1084,7 +1084,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		return s.resolveEmptyDesiredSet()
 	}
 
-	takeBootstrap, bootstrapReason := s.replicateBootstrapRoute(desiredRefs)
+	takeBootstrap, bootstrapReason := s.replicateBootstrapRoute(desiredRefs, s.sourceService.SupportsBootstrapBatch())
 	if takeBootstrap {
 		if s.cfg.DryRun {
 			plans, err := planner.BuildBootstrapPlans(desiredRefs, s.target.refMap)
@@ -1110,7 +1110,6 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("build replication plans: %w", err)
 	}
-	plans = dropLiveBootstrapMarkerDeletes(plans, desiredRefs, s.target.refMap)
 
 	result := Result{
 		Plans:         plans,
@@ -1175,53 +1174,54 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 // the bootstrap planner refuses targets whose desired refs exist. A marker
 // surviving next to its completed branch is stale; that state takes the
 // replicate path, which prunes it.
-func (s *syncSession) replicateBootstrapRoute(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) (bool, string) {
-	if s.replicateCanBootstrap(desiredRefs) {
-		return true, "empty-target-managed-refs"
-	}
+//
+// The marker check runs before the emptiness heuristic so a resume is
+// labeled bootstrap-resume-marker even in configs where both would route to
+// bootstrap (without prune the heuristic has no walk to disqualify it).
+//
+// batchableSource gates the marker route on the source supporting batched
+// bootstrap (protocol v2 + fetch filter). Markers are only ever written by
+// batched bootstrap, so a non-batchable source seeing one is a corner (the
+// capability regressed since the marker was written) — but routing it to
+// bootstrap would trade replicate's marker-anchored delta pack for a
+// one-shot full pack, failing where the old path could heal. It falls
+// through to replicate instead, which keeps the marker as a fetch have (the
+// planner's live-marker prune guard preserves it).
+func (s *syncSession) replicateBootstrapRoute(
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	batchableSource bool,
+) (bool, string) {
 	if !s.desiredTargetRefsAbsent(desiredRefs) {
 		return false, ""
 	}
-	for targetRef, hash := range s.target.refMap {
-		if hash.IsZero() {
-			continue
-		}
-		if _, ok := planner.BootstrapTempRefTarget(targetRef); ok {
-			return true, "bootstrap-resume-marker"
-		}
+	if batchableSource && s.hasBootstrapResumeMarker() {
+		return true, planner.ReasonBootstrapResumeMarker
+	}
+	if s.replicateCanBootstrap(desiredRefs) {
+		return true, planner.ReasonEmptyTargetManagedRefs
 	}
 	return false, ""
 }
 
-// dropLiveBootstrapMarkerDeletes removes prune deletes for bootstrap temp
-// refs that still carry resume state — markers whose branch is desired but
-// absent on the target. That state is reachable only on a partially
-// bootstrapped target (some desired branch already complete, another still
-// mid-flight), which replicateBootstrapRoute cannot send to bootstrap: the
-// replicate run that handles it must never prune the resume position, which
-// doubles as a fetch have shrinking this run's own pack. The executor runs
-// deletes only after the update pack landed, so the plan-time guard bites
-// when the pack push "succeeds" but the branch create is individually
-// rejected under BestEffort — and it keeps replicate's contract independent
-// of that execution order. A marker whose branch exists or is no longer
-// desired is stale and stays prunable.
-func dropLiveBootstrapMarkerDeletes(
-	plans []planner.BranchPlan,
-	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
-	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
-) []planner.BranchPlan {
-	out := plans[:0]
-	for _, plan := range plans {
-		if plan.Action == planner.ActionDelete {
-			if branch, ok := planner.BootstrapTempRefTarget(plan.TargetRef); ok {
-				if _, desired := desiredRefs[branch]; desired && targetRefs[branch].IsZero() {
-					continue
-				}
-			}
+// hasBootstrapResumeMarker reports whether the target carries any batched-
+// bootstrap temp ref. Exclusions are honored so a caller that carved the
+// namespace out of its scope keeps the routing it asked for (the emptiness
+// heuristic then skips the marker for the same reason, and the bootstrap it
+// selects still resumes — the marker stays in the target ref map).
+func (s *syncSession) hasBootstrapResumeMarker() bool {
+	for targetRef, hash := range s.target.refMap {
+		if hash.IsZero() {
+			continue
 		}
-		out = append(out, plan)
+		if _, ok := planner.BootstrapTempRefTarget(targetRef); !ok {
+			continue
+		}
+		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+			continue
+		}
+		return true
 	}
-	return out
+	return false
 }
 
 func (s *syncSession) desiredTargetRefsAbsent(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {

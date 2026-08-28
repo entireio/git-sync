@@ -102,6 +102,16 @@ func BuildDesiredRefs(
 			switch {
 			case kind == RefKindTag && wantTags:
 			case kind == RefKindOther && cfg.AllRefs:
+				// refs/gitsync/* on a source is leftover scaffolding from that
+				// repo being someone else's sync target — never content to
+				// mirror. Worse, a source-side bootstrap marker shares its name
+				// with this target's own resume marker, so replicating it would
+				// block the resume route and overwrite the checkpoint it
+				// records. Explicit Mappings bypass this like every other
+				// discovery exclusion.
+				if isGitSyncScaffoldingRef(refName) {
+					continue
+				}
 			default:
 				continue
 			}
@@ -158,7 +168,7 @@ func BuildPlans(
 		targetHash, existsOnTarget := targetRefs[targetRef]
 
 		if !existsInDesired {
-			if cfg.Prune && existsOnTarget {
+			if cfg.Prune && existsOnTarget && !isLiveBootstrapMarker(targetRef, desired, targetRefs) {
 				plans = append(plans, BranchPlan{
 					Branch:     info.Label,
 					TargetRef:  targetRef,
@@ -228,7 +238,7 @@ func BuildReplicationPlans(
 		targetHash, existsOnTarget := targetRefs[targetRef]
 
 		if !existsInDesired {
-			if cfg.Prune && existsOnTarget {
+			if cfg.Prune && existsOnTarget && !isLiveBootstrapMarker(targetRef, desired, targetRefs) {
 				plans = append(plans, BranchPlan{
 					Branch:     info.Label,
 					TargetRef:  targetRef,
@@ -362,6 +372,30 @@ func PruneTarget(targetRef plumbing.ReferenceName, cfg PlanConfig) (ManagedTarge
 		return ManagedTarget{Kind: RefKindOther, Label: targetRef.Short()}, true
 	}
 	return ManagedTarget{}, false
+}
+
+// isLiveBootstrapMarker reports whether targetRef is a batched-bootstrap
+// resume marker that still carries live state: its branch is in the desired
+// set but absent on the target — an interrupted bootstrap that has not been
+// resumed yet. Prune must never delete one, from ANY mode: the marker is the
+// only record of how far the bootstrap got, and it doubles as a fetch have
+// that keeps the interim replicate/sync packs incremental (ENT-2054). A
+// marker whose branch exists on the target, or whose branch left the desired
+// set, is stale scaffolding and stays prunable — prune is the only cleaner a
+// stale marker has.
+func isLiveBootstrapMarker(
+	targetRef plumbing.ReferenceName,
+	desired map[plumbing.ReferenceName]DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) bool {
+	branch, ok := BootstrapTempRefTarget(targetRef)
+	if !ok {
+		return false
+	}
+	if _, isDesired := desired[branch]; !isDesired {
+		return false
+	}
+	return targetRefs[branch].IsZero()
 }
 
 // addPruneCandidates registers unmanaged target refs as deletion candidates

@@ -1391,8 +1391,11 @@ func TestExecuteOneShotUsesTargetPusher(t *testing.T) {
 		SourceService: fakeBootstrapSource{
 			fetchPack: func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, targetRefs map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				gotDesired = desired
-				if targetRefs != nil {
-					t.Fatalf("expected nil target refs during one-shot bootstrap fetch, got %v", targetRefs)
+				// Target refs ride along as haves so a resume-marker route
+				// landing on the one-shot path only transfers the remainder;
+				// on the designed empty-target path the map is empty anyway.
+				if len(targetRefs) != 0 {
+					t.Fatalf("expected empty target-ref haves during empty-target one-shot fetch, got %v", targetRefs)
 				}
 				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
 			},

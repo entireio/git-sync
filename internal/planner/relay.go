@@ -31,6 +31,15 @@ func SupportsReplicateRelay(target RelayTargetPolicy) (bool, string) {
 	return true, "replicate-target-capable"
 }
 
+// ReasonEmptyTargetManagedRefs labels a bootstrap selected because no desired
+// target ref exists yet; ReasonBootstrapResumeMarker labels one selected
+// because a batched-bootstrap resume marker survived on the target (the
+// bootstrap will resume from it rather than start fresh).
+const (
+	ReasonEmptyTargetManagedRefs = "empty-target-managed-refs"
+	ReasonBootstrapResumeMarker  = "bootstrap-resume-marker"
+)
+
 // CanBootstrapRelay checks whether all desired target refs are absent on the target,
 // making a bootstrap relay possible.
 func CanBootstrapRelay(
@@ -49,7 +58,7 @@ func CanBootstrapRelay(
 			return false, "bootstrap-target-ref-exists"
 		}
 	}
-	return true, "empty-target-managed-refs"
+	return true, ReasonEmptyTargetManagedRefs
 }
 
 // reasonIncrementalEligible is returned when all plans satisfy the incremental

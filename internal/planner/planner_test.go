@@ -1723,3 +1723,108 @@ func TestBootstrapTempRefTargetRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildDesiredRefsExcludesGitsyncScaffolding(t *testing.T) {
+	h := plumbing.NewHash("1111111111111111111111111111111111111111")
+	mainRef := plumbing.NewBranchReferenceName("main")
+	markerRef := BootstrapTempRef(mainRef)
+	notesRef := plumbing.ReferenceName("refs/notes/commits")
+	source := map[plumbing.ReferenceName]plumbing.Hash{
+		mainRef:   h,
+		markerRef: h,
+		notesRef:  h,
+	}
+
+	desired, _, err := BuildDesiredRefs(source, PlanConfig{AllRefs: true})
+	if err != nil {
+		t.Fatalf("BuildDesiredRefs: %v", err)
+	}
+	if _, ok := desired[markerRef]; ok {
+		t.Fatalf("expected source-side %s to be excluded from all-refs discovery", markerRef)
+	}
+	for _, want := range []plumbing.ReferenceName{mainRef, notesRef} {
+		if _, ok := desired[want]; !ok {
+			t.Fatalf("expected %s in desired set, got %#v", want, desired)
+		}
+	}
+}
+
+func TestPruneSkipsLiveBootstrapMarkers(t *testing.T) {
+	devRef := plumbing.NewBranchReferenceName("dev")
+	goneRef := plumbing.NewBranchReferenceName("gone")
+	notesRef := plumbing.ReferenceName("refs/notes/stale")
+	h1 := plumbing.NewHash("1111111111111111111111111111111111111111")
+	h2 := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	// dev's bootstrap is mid-flight (marker live, branch absent); gone's
+	// branch left the desired set mid-bootstrap (marker stale); the notes ref
+	// is ordinary prune fodder.
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		devRef: {Kind: RefKindBranch, Label: "dev", SourceRef: devRef, TargetRef: devRef, SourceHash: h2},
+	}
+	managed := map[plumbing.ReferenceName]ManagedTarget{
+		devRef: {Kind: RefKindBranch, Label: "dev"},
+	}
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		BootstrapTempRef(devRef):  h1,
+		BootstrapTempRef(goneRef): h1,
+		notesRef:                  h1,
+	}
+	cfg := PlanConfig{AllRefs: true, Prune: true}
+
+	check := func(t *testing.T, plans []BranchPlan) {
+		t.Helper()
+		actions := make(map[plumbing.ReferenceName]Action, len(plans))
+		for _, plan := range plans {
+			actions[plan.TargetRef] = plan.Action
+		}
+		if got, ok := actions[BootstrapTempRef(devRef)]; ok {
+			t.Fatalf("expected no plan for live marker %s, got action %q", BootstrapTempRef(devRef), got)
+		}
+		if actions[devRef] != ActionCreate {
+			t.Fatalf("expected create for %s, got %#v", devRef, actions)
+		}
+		for _, staleName := range []plumbing.ReferenceName{BootstrapTempRef(goneRef), notesRef} {
+			if actions[staleName] != ActionDelete {
+				t.Fatalf("expected delete for %s, got %#v", staleName, actions)
+			}
+		}
+	}
+
+	t.Run("sync", func(t *testing.T) {
+		plans, err := BuildPlans(nil, desired, targetRefs, managed, cfg)
+		if err != nil {
+			t.Fatalf("BuildPlans: %v", err)
+		}
+		check(t, plans)
+	})
+	t.Run("replicate", func(t *testing.T) {
+		plans, err := BuildReplicationPlans(desired, targetRefs, managed, cfg)
+		if err != nil {
+			t.Fatalf("BuildReplicationPlans: %v", err)
+		}
+		check(t, plans)
+	})
+
+	// A marker next to its completed branch is stale scaffolding: prune is
+	// its only cleaner and must still take it.
+	t.Run("marker with branch present stays prunable", func(t *testing.T) {
+		presentDesired := map[plumbing.ReferenceName]DesiredRef{
+			devRef: {Kind: RefKindBranch, Label: "dev", SourceRef: devRef, TargetRef: devRef, SourceHash: h1},
+		}
+		presentTarget := map[plumbing.ReferenceName]plumbing.Hash{
+			devRef:                   h1,
+			BootstrapTempRef(devRef): h1,
+		}
+		plans, err := BuildReplicationPlans(presentDesired, presentTarget, managed, cfg)
+		if err != nil {
+			t.Fatalf("BuildReplicationPlans: %v", err)
+		}
+		for _, plan := range plans {
+			if plan.TargetRef == BootstrapTempRef(devRef) && plan.Action == ActionDelete {
+				return
+			}
+		}
+		t.Fatalf("expected stale marker %s to be pruned, got %+v", BootstrapTempRef(devRef), plans)
+	})
+}
