@@ -1,0 +1,25 @@
+<cross-session-message from="uds:/tmp/cc-socks/77568.sock" from-name="cli-60" from-mode="prompting">
+Stefan is compiling an end-of-day summary of everything he worked on today (Fri 2026-08-28) across all his sessions. Please reply with a SHORT report (max ~8 lines, no preamble): repo + branch you're on, what was worked on today, what landed (commits/PRs/issues, with numbers), current state (done / in progress / blocked), and any decision waiting on him. If nothing happened today in this session, just say "nothing today".
+</cross-session-message>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/55621.sock" from-name="git-sync-49" from-mode="prompting">
+Go ahead with item 1, but via an optional capability interface — not the full seam swap. Stefan wants the one-process-per-session win before PackPusher's fate is known.
+
+THE ROUTE
+Do not change gitproto.Conn. Three transports implement it (HTTPConn, HelperConn, SSHConn) and the other two cannot move — SSHConn is blocked on a go-git dialer seam that does not exist, and HTTPConn cannot move because push has no go-git path at all. Converting the shared interface would fragment it across implementors and force refs.go and push.go now, which is the same structural churn we held (b) to avoid.
+
+Instead borrow go-git's own answer to this exact problem: the optional capability interface, as they do with Commander. Keep Conn as-is, add a narrow interface that only HelperConn implements, and let callers type-assert and fall back to the RPC path when the assertion fails. That lands the win without touching refs.go or push.go structurally, and the seam converges later when SSH and push can move together.
+
+Two code paths in helper.go until then is the accepted cost — bounded and local, unlike fragmenting the interface.
+
+THE FRAMING BLOCKER YOU IDENTIFIED
+responseEndReader (helper.go:331) turns 0002 into io.EOF so the downstream parser sees what it would from an HTTP body. Correct for the RPC seam, wrong for a persistent one. It needs to become a filter that swallows 0002 and keeps the stream open. Keep the existing per-RPC behaviour working — the fallback path still depends on it — so this is likely a mode on the reader rather than a rewrite.
+
+SCOPE LIMIT — upload-pack only. Your own reading was that receive-pack falls through to handleConnect, a raw proxy, one RPC per process. So the persistent-session path applies to fetch/ls-refs. Do not try to route push through it.
+
+ALSO FIX THE COMMENT regardless of how far the rest gets. helper.go currently claims the helper "services exactly one stateless-connect session per process (its protocol loop returns once the session ends)" and that is false for upload-pack — stateless.go:60 is a for loop. Correct it, and note the receive-pack/handleConnect asymmetry so the next reader does not over-generalise in the other direction.
+
+Report LOC delta, and confirm explicitly that the existing per-RPC path still passes with the reader change in place.
+</cross-session-message>
