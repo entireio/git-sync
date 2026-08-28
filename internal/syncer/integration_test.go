@@ -36,8 +36,8 @@ import (
 
 const (
 	testBranch                   = "master"
-	reasonEmptyTargetManagedRefs = "empty-target-managed-refs"
-	reasonBootstrapResumeMarker  = "bootstrap-resume-marker"
+	reasonEmptyTargetManagedRefs = planner.ReasonEmptyTargetManagedRefs
+	reasonBootstrapResumeMarker  = planner.ReasonBootstrapResumeMarker
 	relayModeIncremental         = "incremental"
 	relayModeBootstrap           = "bootstrap"
 	relayModeBootstrapBatch      = "bootstrap-batch"
@@ -2442,6 +2442,17 @@ func TestReplicateBootstrapRoute(t *testing.T) {
 			want:       false,
 		},
 		{
+			// An orphan marker (its branch deleted upstream mid-bootstrap) is
+			// stale, not resume state: replicate creates the desired branches
+			// and prunes the orphan in one pass, exactly as it did before the
+			// resume route existed.
+			name: "orphan marker for undesired branch stays on replicate",
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{
+				planner.BootstrapTempRef(plumbing.NewBranchReferenceName("gone")): h1,
+			},
+			want: false,
+		},
+		{
 			name:       "empty target routes via emptiness heuristic",
 			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
 			want:       true,
@@ -2844,6 +2855,60 @@ func TestRun_IntegrationReplicateNonBatchableSourceKeepsMarkerAsHave(t *testing.
 	if _, err := targetRepo.Reference(tempRef, true); err == nil {
 		t.Fatalf("expected stale marker %s pruned on the second run", tempRef)
 	}
+}
+
+func TestRun_IntegrationReplicateOrphanMarkerPrunedInOneRun(t *testing.T) {
+	// A marker whose branch was deleted upstream mid-bootstrap is stale, not
+	// resume state. It must not trigger the resume route: replicate creates
+	// the desired branches and prunes the orphan in the SAME run, exactly as
+	// it did before the resume route existed.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	sourceHead, err := sourceRepo.Reference(plumbing.NewBranchReferenceName(testBranch), true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, nil); err != nil {
+		t.Fatalf("copy source objects: %v", err)
+	}
+	orphanMarker := planner.BootstrapTempRef(plumbing.NewBranchReferenceName("gone"))
+	if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(orphanMarker, sourceHead.Hash())); err != nil {
+		t.Fatalf("set orphan marker: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackThinCap = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		Mode:         modeReplicate,
+		AllRefs:      true,
+		IncludeTags:  true,
+		Prune:        true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("replicate with orphan marker failed: %v", err)
+	}
+	if result.RelayMode != modeReplicate {
+		t.Fatalf("expected replicate relay for orphan marker, got %+v", result)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected orphan marker pruned in the same run, got %+v", result)
+	}
+	if _, err := targetRepo.Reference(orphanMarker, true); err == nil {
+		t.Fatalf("expected orphan marker %s pruned", orphanMarker)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
 func TestRun_IntegrationReplicateResumeMarkerOneShotDeletesMarker(t *testing.T) {

@@ -163,25 +163,12 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	// resume-marker route lands here instead (batchable source, but the repo
 	// is small enough that no batch limit engages), the marker anchors the
 	// negotiation so only the remainder transfers instead of the whole repo
-	// again.
+	// again. No git.NoErrAlreadyUpToDate handling: gitproto emits that
+	// sentinel only for an empty want set, and Execute's callers guarantee a
+	// non-empty desired set, so any error here is a real fetch failure.
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, gpDesired, p.TargetRefs)
 	if err != nil {
-		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return result, fmt.Errorf("fetch source pack: %w", err)
-		}
-		// Nothing to transfer. With haves in play the target can already hold
-		// every object (a bootstrap interrupted between its final pack and
-		// the cutover), so the ref creates must still land — returning early
-		// here would report a bootstrap that created nothing.
-		cmds := convert.PlansToPushCommands(hoistSourceHeadPlan(plans, p.SourceHeadTarget), false)
-		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
-			return result, fmt.Errorf("create refs after up-to-date fetch: %w", err)
-		}
-		if err := deleteLeftoverTempRefs(ctx, p, plans); err != nil {
-			return result, err
-		}
-		result.Pushed = len(plans)
-		return result, nil
+		return result, fmt.Errorf("fetch source pack: %w", err)
 	}
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 	packReader = gitproto.CloseOnce(packReader)
@@ -210,38 +197,38 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		return executeBatched(ctx, p, plans, result)
 	}
 
-	if err := deleteLeftoverTempRefs(ctx, p, plans); err != nil {
-		return result, err
+	// Leftover temp refs from an interrupted BATCHED bootstrap are cleaned in
+	// a follow-up command push (PushPack refuses deletes alongside a pack).
+	// Best-effort by design: every ref this bootstrap set out to create has
+	// landed, so a cleanup hiccup must not fail the run — the marker is stale
+	// from this moment on and the next prune is its designated cleaner.
+	if delCmds := leftoverTempRefDeletes(plans, p.TargetRefs); len(delCmds) > 0 {
+		if err := p.TargetPusher.PushCommands(ctx, delCmds); err != nil {
+			p.log("bootstrap one-shot temp ref cleanup failed; leaving markers for prune",
+				"marker_count", len(delCmds), "error", err.Error())
+			p.notice(fmt.Sprintf("temp ref cleanup failed (%d ref(s)) — a later prune will remove them", len(delCmds)))
+		}
 	}
 	result.Pushed = len(plans)
 	return result, nil
 }
 
-// deleteLeftoverTempRefs removes this run's own batched-bootstrap temp refs
-// after a completed one-shot bootstrap. The one-shot path can be resuming an
-// interrupted BATCHED bootstrap (the resume marker routed it here, but no
-// batch limit engaged); batched execution owns marker cleanup on its own
-// path, so mirror it here rather than leave the finished repo advertising an
-// in-progress bootstrap until some later prune. Markers for branches outside
-// this run's plan set are prune's job, not ours.
-func deleteLeftoverTempRefs(ctx context.Context, p Params, plans []planner.BranchPlan) error {
+// leftoverTempRefDeletes returns delete commands for this run's own
+// batched-bootstrap temp refs that survive on the target — one per
+// branch-kind plan whose marker is present. Markers for branches outside the
+// plan set are prune's job, not ours.
+func leftoverTempRefDeletes(plans []planner.BranchPlan, targetRefs map[plumbing.ReferenceName]plumbing.Hash) []gitproto.PushCommand {
 	var cmds []gitproto.PushCommand
 	for _, plan := range plans {
 		if plan.Kind != planner.RefKindBranch {
 			continue
 		}
 		tempRef := planner.BootstrapTempRef(plan.TargetRef)
-		if hash := p.TargetRefs[tempRef]; !hash.IsZero() {
+		if hash := targetRefs[tempRef]; !hash.IsZero() {
 			cmds = append(cmds, gitproto.PushCommand{Name: tempRef, Old: hash, Delete: true})
 		}
 	}
-	if len(cmds) == 0 {
-		return nil
-	}
-	if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
-		return fmt.Errorf("delete bootstrap temp refs after one-shot bootstrap: %w", err)
-	}
-	return nil
+	return cmds
 }
 
 // hoistSourceHeadPlan moves the plan whose source ref matches the

@@ -152,7 +152,7 @@ func BuildPlans(
 		// addPruneCandidates mutates the map, so copy first — the caller's
 		// managed map must not be modified (matches BuildReplicationPlans).
 		managed = copyManagedTargets(managed)
-		addPruneCandidates(managed, targetRefs, cfg)
+		addPruneCandidates(managed, desired, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -168,7 +168,7 @@ func BuildPlans(
 		targetHash, existsOnTarget := targetRefs[targetRef]
 
 		if !existsInDesired {
-			if cfg.Prune && existsOnTarget && !isLiveBootstrapMarker(targetRef, desired, targetRefs) {
+			if cfg.Prune && existsOnTarget {
 				plans = append(plans, BranchPlan{
 					Branch:     info.Label,
 					TargetRef:  targetRef,
@@ -222,7 +222,7 @@ func BuildReplicationPlans(
 		// Copy before the only mutation so the caller's managed map is left
 		// untouched (matches BuildPlans).
 		managed = copyManagedTargets(managed)
-		addPruneCandidates(managed, targetRefs, cfg)
+		addPruneCandidates(managed, desired, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -238,7 +238,7 @@ func BuildReplicationPlans(
 		targetHash, existsOnTarget := targetRefs[targetRef]
 
 		if !existsInDesired {
-			if cfg.Prune && existsOnTarget && !isLiveBootstrapMarker(targetRef, desired, targetRefs) {
+			if cfg.Prune && existsOnTarget {
 				plans = append(plans, BranchPlan{
 					Branch:     info.Label,
 					TargetRef:  targetRef,
@@ -400,9 +400,24 @@ func isLiveBootstrapMarker(
 
 // addPruneCandidates registers unmanaged target refs as deletion candidates
 // within the user's current scope. cfg is assumed normalized.
-func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, targetRefs map[plumbing.ReferenceName]plumbing.Hash, cfg PlanConfig) {
+//
+// Live bootstrap markers are exempted here, at candidacy, rather than in each
+// builder's delete emission — one statement of the exception covers every
+// plan builder. The exception lives outside PruneTarget on purpose:
+// PruneTarget also answers TargetScope's "is this ref our responsibility"
+// question, and a live marker IS git-sync's responsibility — it just must
+// not be deleted yet.
+func addPruneCandidates(
+	managed map[plumbing.ReferenceName]ManagedTarget,
+	desired map[plumbing.ReferenceName]DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	cfg PlanConfig,
+) {
 	for targetRef := range targetRefs {
 		if _, ok := managed[targetRef]; ok {
+			continue
+		}
+		if isLiveBootstrapMarker(targetRef, desired, targetRefs) {
 			continue
 		}
 		if target, prunable := PruneTarget(targetRef, cfg); prunable {
