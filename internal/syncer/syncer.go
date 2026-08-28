@@ -1084,8 +1084,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		return s.resolveEmptyDesiredSet()
 	}
 
-	allAbsent := s.replicateCanBootstrap(desiredRefs)
-	if allAbsent {
+	takeBootstrap, bootstrapReason := s.replicateBootstrapRoute(desiredRefs)
+	if takeBootstrap {
 		if s.cfg.DryRun {
 			plans, err := planner.BuildBootstrapPlans(desiredRefs, s.target.refMap)
 			if err != nil {
@@ -1095,7 +1095,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				Plans:              plans,
 				DryRun:             true,
 				OperationMode:      modeReplicate,
-				RelayReason:        "empty-target-managed-refs",
+				RelayReason:        bootstrapReason,
 				BootstrapSuggested: true,
 				Stats:              s.stats.snapshot(),
 				Measurement:        s.measurementDone(),
@@ -1103,13 +1103,14 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				SourceHEAD:         s.sourceService.HeadTarget,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, "empty-target-managed-refs")
+		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, bootstrapReason)
 	}
 
 	plans, err := planner.BuildReplicationPlans(desiredRefs, s.target.refMap, managedTargets, planConfig(s.cfg))
 	if err != nil {
 		return Result{}, fmt.Errorf("build replication plans: %w", err)
 	}
+	plans = dropLiveBootstrapMarkerDeletes(plans, desiredRefs, s.target.refMap)
 
 	result := Result{
 		Plans:         plans,
@@ -1154,11 +1155,87 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+// replicateBootstrapRoute decides whether a replicate run should take the
+// bootstrap strategy instead of building replication plans, and with which
+// relay reason.
+//
+// Besides the emptiness heuristic (replicateCanBootstrap), a leftover
+// refs/gitsync/bootstrap/* temp ref routes to bootstrap directly. The
+// namespace has exactly one writer — batched bootstrap, which deletes its
+// marker when the branch is finalized — so a surviving marker means a
+// bootstrap started and did not finish. Without this route, the marker is
+// just an undesired target ref that disqualifies the emptiness heuristic
+// under prune: the artifact of the one strategy that can resume is what
+// locked that strategy out, and the repo re-synced as a single unbatched
+// pack forever (ENT-2054).
+//
+// Marker routing deliberately ignores other stray target refs — an aborted
+// push or a branch deleted upstream mid-bootstrap must not re-wedge the
+// repo — but still requires every desired target ref to be absent, because
+// the bootstrap planner refuses targets whose desired refs exist. A marker
+// surviving next to its completed branch is stale; that state takes the
+// replicate path, which prunes it.
+func (s *syncSession) replicateBootstrapRoute(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) (bool, string) {
+	if s.replicateCanBootstrap(desiredRefs) {
+		return true, "empty-target-managed-refs"
+	}
+	if !s.desiredTargetRefsAbsent(desiredRefs) {
+		return false, ""
+	}
+	for targetRef, hash := range s.target.refMap {
+		if hash.IsZero() {
+			continue
+		}
+		if _, ok := planner.BootstrapTempRefTarget(targetRef); ok {
+			return true, "bootstrap-resume-marker"
+		}
+	}
+	return false, ""
+}
+
+// dropLiveBootstrapMarkerDeletes removes prune deletes for bootstrap temp
+// refs that still carry resume state — markers whose branch is desired but
+// absent on the target. That state is reachable only on a partially
+// bootstrapped target (some desired branch already complete, another still
+// mid-flight), which replicateBootstrapRoute cannot send to bootstrap: the
+// replicate run that handles it must never prune the resume position, which
+// doubles as a fetch have shrinking this run's own pack. The executor runs
+// deletes only after the update pack landed, so the plan-time guard bites
+// when the pack push "succeeds" but the branch create is individually
+// rejected under BestEffort — and it keeps replicate's contract independent
+// of that execution order. A marker whose branch exists or is no longer
+// desired is stale and stays prunable.
+func dropLiveBootstrapMarkerDeletes(
+	plans []planner.BranchPlan,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) []planner.BranchPlan {
+	out := plans[:0]
+	for _, plan := range plans {
+		if plan.Action == planner.ActionDelete {
+			if branch, ok := planner.BootstrapTempRefTarget(plan.TargetRef); ok {
+				if _, desired := desiredRefs[branch]; desired && targetRefs[branch].IsZero() {
+					continue
+				}
+			}
+		}
+		out = append(out, plan)
+	}
+	return out
+}
+
+func (s *syncSession) desiredTargetRefsAbsent(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
 	for targetRef := range desiredRefs {
 		if !s.target.refMap[targetRef].IsZero() {
 			return false
 		}
+	}
+	return true
+}
+
+func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+	if !s.desiredTargetRefsAbsent(desiredRefs) {
+		return false
 	}
 	if !s.cfg.Prune {
 		return true

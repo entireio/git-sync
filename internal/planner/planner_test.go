@@ -1701,3 +1701,25 @@ func seedCommit(tb testing.TB, repo *git.Repository, parents []plumbing.Hash) pl
 	}
 	return hash
 }
+
+func TestBootstrapTempRefTargetRoundTrip(t *testing.T) {
+	for _, branch := range []plumbing.ReferenceName{
+		plumbing.NewBranchReferenceName("main"),
+		plumbing.NewBranchReferenceName("mirror/main"), // nested short names must survive the round trip
+	} {
+		got, ok := BootstrapTempRefTarget(BootstrapTempRef(branch))
+		if !ok || got != branch {
+			t.Fatalf("BootstrapTempRefTarget(BootstrapTempRef(%s)) = (%s, %t), want (%s, true)", branch, got, ok, branch)
+		}
+	}
+	for _, name := range []plumbing.ReferenceName{
+		"refs/heads/main",
+		"refs/gitsync/bootstrap/heads/", // bare prefix names no branch
+		"refs/gitsync/other/main",
+		"refs/notes/commits",
+	} {
+		if got, ok := BootstrapTempRefTarget(name); ok {
+			t.Fatalf("BootstrapTempRefTarget(%s) = (%s, true), want ok=false", name, got)
+		}
+	}
+}

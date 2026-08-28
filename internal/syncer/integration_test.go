@@ -37,6 +37,7 @@ import (
 const (
 	testBranch                   = "master"
 	reasonEmptyTargetManagedRefs = "empty-target-managed-refs"
+	reasonBootstrapResumeMarker  = "bootstrap-resume-marker"
 	relayModeIncremental         = "incremental"
 	relayModeBootstrap           = "bootstrap"
 	relayModeBootstrapBatch      = "bootstrap-batch"
@@ -2384,6 +2385,136 @@ func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {
 	}
 }
 
+func TestReplicateBootstrapRoute(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	markerRef := planner.BootstrapTempRef(mainRef)
+	staleRef := plumbing.NewBranchReferenceName("stale")
+	h1 := plumbing.NewHash("1111111111111111111111111111111111111111")
+	h2 := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{
+		mainRef: {
+			SourceRef:  mainRef,
+			TargetRef:  mainRef,
+			SourceHash: h2,
+			Kind:       planner.RefKindBranch,
+		},
+	}
+
+	cases := []struct {
+		name       string
+		targetRefs map[plumbing.ReferenceName]plumbing.Hash
+		want       bool
+		wantReason string
+	}{
+		{
+			// ENT-2054: the interrupted-bootstrap artifact must select the
+			// strategy that can resume it, not disqualify it.
+			name:       "resume marker with branch absent routes to bootstrap",
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{markerRef: h1},
+			want:       true,
+			wantReason: reasonBootstrapResumeMarker,
+		},
+		{
+			// The bootstrap planner refuses targets whose desired refs exist,
+			// so a marker next to its completed branch (a leftover from a
+			// failed temp-ref delete) must stay on the replicate path, where
+			// prune removes it.
+			name:       "marker with desired branch present stays on replicate",
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{markerRef: h1, mainRef: h2},
+			want:       false,
+		},
+		{
+			// The marker is a positive signal on its own: an additional stray
+			// ref (aborted push, branch deleted upstream mid-bootstrap) must
+			// not re-wedge the repo the way it disqualifies the emptiness
+			// heuristic.
+			name:       "marker plus stray undesired branch still routes to bootstrap",
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{markerRef: h1, staleRef: h1},
+			want:       true,
+			wantReason: reasonBootstrapResumeMarker,
+		},
+		{
+			name:       "stray branch without marker stays on replicate",
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{staleRef: h1},
+			want:       false,
+		},
+		{
+			name:       "empty target routes via emptiness heuristic",
+			targetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
+			want:       true,
+			wantReason: reasonEmptyTargetManagedRefs,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &syncSession{
+				cfg:    Config{Prune: true, AllRefs: true},
+				target: &targetSession{refMap: tc.targetRefs},
+			}
+			got, reason := s.replicateBootstrapRoute(desired)
+			if got != tc.want || reason != tc.wantReason {
+				t.Fatalf("replicateBootstrapRoute = (%t, %q), want (%t, %q)", got, reason, tc.want, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestDropLiveBootstrapMarkerDeletes(t *testing.T) {
+	mainRef := plumbing.NewBranchReferenceName("main")
+	devRef := plumbing.NewBranchReferenceName("dev")
+	goneRef := plumbing.NewBranchReferenceName("gone")
+	h1 := plumbing.NewHash("1111111111111111111111111111111111111111")
+	h2 := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{
+		mainRef: {TargetRef: mainRef, SourceHash: h2, Kind: planner.RefKindBranch},
+		devRef:  {TargetRef: devRef, SourceHash: h2, Kind: planner.RefKindBranch},
+	}
+	// main is complete on the target, dev's bootstrap is mid-flight, gone was
+	// deleted upstream while its bootstrap ran.
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		mainRef:                           h1,
+		planner.BootstrapTempRef(mainRef): h1,
+		planner.BootstrapTempRef(devRef):  h1,
+		planner.BootstrapTempRef(goneRef): h1,
+	}
+
+	del := func(name plumbing.ReferenceName) planner.BranchPlan {
+		return planner.BranchPlan{TargetRef: name, TargetHash: h1, Kind: planner.RefKindOther, Action: planner.ActionDelete}
+	}
+	plans := []planner.BranchPlan{
+		{TargetRef: mainRef, SourceHash: h2, TargetHash: h1, Kind: planner.RefKindBranch, Action: planner.ActionUpdate},
+		del(planner.BootstrapTempRef(mainRef)),
+		del(planner.BootstrapTempRef(devRef)),
+		del(planner.BootstrapTempRef(goneRef)),
+		del("refs/notes/stale"),
+	}
+
+	got := dropLiveBootstrapMarkerDeletes(plans, desired, targetRefs)
+
+	kept := make(map[plumbing.ReferenceName]bool, len(got))
+	for _, plan := range got {
+		kept[plan.TargetRef] = true
+	}
+	// Only dev's marker carries live resume state (desired branch, absent on
+	// target); every other delete — and the branch update — survives.
+	if kept[planner.BootstrapTempRef(devRef)] {
+		t.Fatalf("expected live marker delete for %s to be dropped, kept plans: %+v", devRef, got)
+	}
+	for _, name := range []plumbing.ReferenceName{
+		mainRef,
+		planner.BootstrapTempRef(mainRef),
+		planner.BootstrapTempRef(goneRef),
+		"refs/notes/stale",
+	} {
+		if !kept[name] {
+			t.Fatalf("expected plan for %s to be kept, got: %+v", name, got)
+		}
+	}
+}
+
 func TestRun_IntegrationReplicateOverwritesDivergentBranch(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	targetRepo, _ := newSourceRepo(t)
@@ -2537,6 +2668,131 @@ func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
 		t.Fatalf("expected one pushed ref, got %+v", result)
 	}
 
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+}
+
+func TestRun_IntegrationReplicateResumesInterruptedBatchedBootstrap(t *testing.T) {
+	// ENT-2054: an interrupted batched bootstrap leaves its resume marker
+	// (refs/gitsync/bootstrap/heads/<branch>) on the target. Under the
+	// mirror-worker's replicate --all-refs --prune shape, that marker used to
+	// disqualify the bootstrap route on every subsequent run — the artifact
+	// of the interrupted bootstrap locked out the only strategy able to
+	// resume it, and the repo re-synced as one unbatched pack forever. The
+	// marker must instead route the run back to bootstrap, which resumes from
+	// the exact checkpoint it records.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	cfg := Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000,
+	}
+
+	targetRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(targetRef)
+	failedAfterProgress := false
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, hasPack bool) *packp.ReportStatus {
+		if !hasPack || len(req.Commands) == 0 || req.Commands[0].Name != tempRef {
+			return nil
+		}
+		if failedAfterProgress {
+			return nil
+		}
+		if _, err := targetRepo.Reference(tempRef, true); err != nil {
+			return nil
+		}
+		if _, err := targetRepo.Reference(targetRef, true); err == nil {
+			return nil
+		}
+		failedAfterProgress = true
+		report := &packp.ReportStatus{}
+		report.UnpackStatus = "ok"
+		for _, cmd := range req.Commands {
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        "ng simulated checkpoint pack failure",
+			})
+		}
+		return report
+	}
+
+	if _, err := Run(context.Background(), cfg); err == nil {
+		t.Fatal("expected first replicate attempt to fail mid-bootstrap")
+	}
+	marker, err := targetRepo.Reference(tempRef, true)
+	if err != nil {
+		t.Fatalf("resolve resume marker after interrupted bootstrap: %v", err)
+	}
+	if marker.Hash().IsZero() {
+		t.Fatal("expected non-zero resume marker after interrupted bootstrap")
+	}
+	if _, err := targetRepo.Reference(targetRef, true); err == nil {
+		t.Fatalf("expected target ref %s to remain absent after interrupted bootstrap", targetRef)
+	}
+
+	// A dry-run against the interrupted state must report the marker routing —
+	// this is the one-shot confirmation a stranded repo is on the resume path.
+	dryCfg := cfg
+	dryCfg.DryRun = true
+	dryResult, err := Run(context.Background(), dryCfg)
+	if err != nil {
+		t.Fatalf("dry-run against interrupted bootstrap failed: %v", err)
+	}
+	if !dryResult.BootstrapSuggested || dryResult.RelayReason != reasonBootstrapResumeMarker {
+		t.Fatalf("expected dry-run to suggest bootstrap with reason %q, got %+v", reasonBootstrapResumeMarker, dryResult)
+	}
+
+	// Capture the first pack-carrying temp-ref command of the retry: a resume
+	// continues from the marker (Old == marker hash) instead of restarting
+	// from scratch (Old == zero).
+	var resumedFrom plumbing.Hash
+	captured := false
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, hasPack bool) *packp.ReportStatus {
+		if !hasPack || captured {
+			return nil
+		}
+		for _, cmd := range req.Commands {
+			if cmd.Name == tempRef {
+				resumedFrom = cmd.Old
+				captured = true
+				break
+			}
+		}
+		return nil
+	}
+
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("replicate retry after interrupted bootstrap failed: %v", err)
+	}
+	if !result.Relay || result.RelayMode != relayModeBootstrapBatch {
+		t.Fatalf("expected batched bootstrap relay on retry, got %+v", result)
+	}
+	if result.RelayReason != reasonBootstrapResumeMarker {
+		t.Fatalf("expected relay reason %q, got %+v", reasonBootstrapResumeMarker, result)
+	}
+	if !captured || resumedFrom != marker.Hash() {
+		t.Fatalf("expected retry to resume from marker %s, got captured=%t hash=%s", marker.Hash(), captured, resumedFrom)
+	}
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Fatalf("expected resume marker %s to be deleted after completed bootstrap", tempRef)
+	}
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 

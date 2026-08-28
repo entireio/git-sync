@@ -222,9 +222,26 @@ func CopyRefHashMap(input map[plumbing.ReferenceName]plumbing.Hash) map[plumbing
 	return out
 }
 
+// bootstrapTempRefPrefix is the namespace holding batched-bootstrap temp refs.
+// git-sync is its only writer: the bootstrap strategy creates a marker per
+// branch and deletes it when the branch is finalized (or when the marker is
+// stale), so a surviving ref here always means a bootstrap that did not finish.
+const bootstrapTempRefPrefix = "refs/gitsync/bootstrap/heads/"
+
 // BootstrapTempRef returns the temporary ref name used during batched bootstrap.
 func BootstrapTempRef(targetRef plumbing.ReferenceName) plumbing.ReferenceName {
-	return plumbing.ReferenceName("refs/gitsync/bootstrap/heads/" + targetRef.Short())
+	return plumbing.ReferenceName(bootstrapTempRefPrefix + targetRef.Short())
+}
+
+// BootstrapTempRefTarget maps a batched-bootstrap temp ref back to the branch
+// it checkpoints — the inverse of BootstrapTempRef. ok is false for names
+// outside the temp-ref namespace.
+func BootstrapTempRefTarget(name plumbing.ReferenceName) (target plumbing.ReferenceName, ok bool) {
+	rest, found := strings.CutPrefix(name.String(), bootstrapTempRefPrefix)
+	if !found || rest == "" {
+		return "", false
+	}
+	return plumbing.NewBranchReferenceName(rest), true
 }
 
 // FormatPlanLine formats a single plan entry for human-readable output.
