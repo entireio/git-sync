@@ -1,0 +1,101 @@
+can you summarize what you fixed so far?
+
+---
+
+in simpler and more concise terms please
+
+---
+
+run another round of adversarial code review, focus on race conditions
+
+---
+
+<task-notification>
+<task-id>a71419bbfd9ae708f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-git-sync-bug-git-sync/397423ed-b1d5-4717-8442-95f85b4d4f49/tasks/a71419bbfd9ae708f.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 117 xhigh — focus specifically on ra…" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reusing **xhigh** effort (the level you typed last time); type a level to change it, e.g. `/code-review high`.
+
+Reviewed `soph/batched-cutover-drops-resume-marker` (PR 117) — 6 files, +1337/-10 — against `main`. Build, vet, and the full `gitproto`/`strategy`/`syncer` suites pass, including the new tests under `-race`; no live data race exists on `Pusher.lastRejections`, `syncSession.rejections`, or the new test fixtures (every push, `OnRejection` callback, `refRefused` read, and marker decision runs on the single goroutine driving `Execute`; `progressReporter.notify` is mutex-guarded and `terminate()` joins the ticker before the test reads its buffer). The real defects are in ordering/TOCTOU and in the new "silence = refusal" rule, not in memory safety.
+
+```json
+[
+  {
+    "file": "internal/gitproto/push.go",
+    "line": 510,
+    "summary": "The new \"a command the target never mentioned is a rejection\" loop fires onRejection with a client-invented status, which contradicts the sibling rule in bootstrap.go that silence must never stop a run — and it has zero test coverage.",
+    "failure_scenario": "Target advertises report-status but its report omits a status line for one command (a no-op Old==New update, a normalizing/non-conformant server or proxy). sendReceivePack synthesizes onRejection(cmd.Name, \"target reported no status for this ref\"). If that command is the bootstrap temp ref, executeBatched:730 aborts the whole multi-GB import with \"target refused refs/gitsync/bootstrap/heads/X: target reported no status for this ref\" — even though nothing was refused, and two lines above the code states \"treating that silence as a refusal would fail every batched bootstrap\". In any --all-refs (BestEffort) sync it also lands in s.rejections, so applyRejections downgrades a ref that actually landed to ActionWarn with Reason \"target rejected ref update: target reported no status for this ref\" (a client inference attributed to the target) and Pushed/Warned are misreported. `grep -rn \"target reported no status\" internal/` matches only push.go:517 — no test exercises the branch."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 901,
+    "summary": "resolvePendingMarkers deletes the resume marker whenever the branch name exists on the target at ANY hash, discarding the resume position precisely in the case where this run's import did not land.",
+    "failure_scenario": "BestEffort batched bootstrap of a large repo. The target refuses `refs/heads/main` with \"already exists\" because a concurrent sync created it at an older commit C; our marker refs/gitsync/bootstrap/heads/main holds our fully-pushed tip T. `refsNow[main]` = C, non-zero, so `IsZero()` is false and the marker is deleted. Commits C..T become unreferenced on the target and the next run re-transfers them — the exact full-re-transfer cost the PR exists to prevent. The test TestExecuteBatchedRefusedButPresentBranchDeletesMarker deliberately seeds an unrelated hash (6dcf09a3…, not h.trunkTip), so this is asserted rather than accidental. The check should be `!refsNow[marker.branch].Equal(&lt;hash we tried to create&gt;)` → keep."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 921,
+    "summary": "The deferred marker-cleanup push is the only push in the new code that does not consult refRefused, so a refused or unacked marker delete is completely silent — the opposite of the identical situation 100 lines above.",
+    "failure_scenario": "Under BestEffort, PushCommands returns nil when the target ng's a per-ref delete (deletes blocked in refs/gitsync/*, or Old no longer matches). resolvePendingMarkers logs and notices nothing, so the run reports success while the marker survives on a route the PR itself says has no prune to reap it. The confirmed path at bootstrap.go:815-825 does check and emits \"remove it by hand or let a --prune run reap it\"; this path does not. Additionally, all deletes ride one PushCommands call, so if the marker count exceeds MaxRefUpdates and chunk 1 fails, chunks 2..n are never attempted and the single aggregate notice claims \"could not delete %d\" for all of them."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 626,
+    "summary": "targetRefsNow uses the receive-pack advertisement as the authority on \"is the branch there\", but receive.hideRefs makes that advertisement an unreliable authority — the exact hazard Config.TargetAssertedEmpty documents in this same file.",
+    "failure_scenario": "Target sets receive.hideRefs covering the created branch (Config's own doc, verified against git 2.53: \"receive.hideRefs omits matching refs from receive-pack's advertisement, so a populated target can advertise nothing but the capabilities^{} sentinel and read as empty\"). The branch is created successfully, the listing reports it absent, and the marker is kept forever on the Bootstrap() route that forbids --prune. If hideRefs hides everything, decodeV1AdvRefs returns transport.ErrEmptyRemoteRepository, so the operator gets the misleading notice \"could not confirm refs/heads/main on the target (list target refs: remote repository is empty)\" on a target that plainly holds the branch."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 233,
+    "summary": "The fix is applied only to the batched path; the one-shot resume path still strands its marker permanently on the Bootstrap() route, for exactly the reason executeBatched cites as why it could not defer to prune.",
+    "failure_scenario": "`gitsync bootstrap` (Bootstrap(), which rejects --prune at syncer.go:1338) resumes from a marker but the repo is small enough that TargetMaxPack never engages, so Execute takes the one-shot branch. Its comment says the marker is deliberately not deleted and \"Prune is the cleaner instead\" — but on this route no prune run can ever exist, which is the exact argument bootstrap.go:786-789 makes for adding the conditional delete to the batched path. Result: a refs/gitsync/bootstrap/heads/&lt;branch&gt; marker that no code path ever removes. Params.TargetRefsNow is now available here and unused; the one-shot path could settle it the same way."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 863,
+    "summary": "Moving marker cleanup from immediately-after-cutover to after every branch and the tail phase opens a long concurrent-run window between the ref listing and the delete.",
+    "failure_scenario": "Branch A's create is unconfirmed at minute 5; the tail phase then fetches and pushes tags for another 20 minutes. During that window a second git-sync run discovers the marker, routes via ReasonBootstrapResumeMarker, and starts resuming from it. Our resolvePendingMarkers then lists (branch now present, created by that run), and deletes the marker at Old=marker.resumeHash — pulling the resume anchor out from under the concurrent run, whose next CAS push against that hash fails. Conversely, if the concurrent run advanced the marker first, our CAS delete silently no-ops (see the refRefused gap above) and we report a cleanup that never happened. The whole listing is also read once for all markers, so any marker whose branch is deleted between the listing and the batched delete push is reaped anyway."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 791,
+    "summary": "createConfirmed is documented as answering for \"the push that just returned\", but there is a reachable cutover path where no push happened in this iteration at all, so it reads the previous branch's LastRejections.",
+    "failure_scenario": "adjustedBootstrapTargetRefs (line 328) zeroes the branch when both the branch AND its temp ref already sit at SourceHash, so a create plan is built for an already-complete branch. In executeBatched, BootstrapResumeIndex returns len(Checkpoints) so the checkpoint loop pushes nothing, and the guard at line 767 is false because p.TargetRefs[branch] is non-zero — so the resume cutover push is skipped too. createConfirmed(branch) then indexes a map left over from the previous batch iteration's temp-ref delete (or, for the first batch, a nil map from a Pusher that has never pushed). The outcome happens to be benign in today's reachable states, but the invariant Params.RefRefused and syncSession.refRefused both state (\"read after a push returns\") is violated, and nothing in the code enforces it."
+  },
+  {
+    "file": "internal/gitproto/push.go",
+    "line": 70,
+    "summary": "LastRejections hands out the Pusher's live internal map and cannot distinguish \"clean push\" from \"no push yet\" or \"no report decoded\" — the ambiguity the caller then has to patch with a separate hand-threaded flag.",
+    "failure_scenario": "A caller that mutates the returned map (or ranges it while a multi-request logical push — PushObjects/PushPack split by chunkRefUpdates call sendReceivePack several times per call — is still adding entries) corrupts or mis-reads Pusher state; the doc only forbids retaining it, not mutating it. Because an empty map means three different things, the syncer has to pass gitproto.TargetFeatures.ReportStatus across two package boundaries as Params.TargetReportsRefStatus, whose own doc admits \"leaving it false there costs a ref listing\". A `func (p *Pusher) RefLanded(name) (bool, string)` on the Pusher — which already holds p.Adv and can answer capability.ReportStatus itself — would make the contract enforceable and delete the flag."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 839,
+    "summary": "The tail phase re-derives its fetch haves from `batches` instead of the completedRefs map the new code carefully maintains, re-adding exactly the refs the PR just decided not to claim.",
+    "failure_scenario": "`tailTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash` runs unconditionally over every batch, so it claims as a have (a) a subsumed branch whose create was just refused and deliberately withheld from completedRefs at line 421-427, and (b) a branch whose create is sitting in `pending` and deliberately absent from completedRefs at line 791-806 — while omitting the temp refs at `current` that are the things actually holding those objects on the target. Today the objects happen to be present anyway (pinned by the temp ref or the trunk), so no pack breaks; the cost is that the one map the PR maintains as ground truth is bypassed by the very next block, so any future change to what counts as \"delivered\" silently fails to reach the tail fetch. Use completedRefs."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 929,
+    "summary": "The package-level targetRefsNow wrapper adds nothing over the field it calls, and its name collides with both Params.TargetRefsNow and syncSession.targetRefsNow.",
+    "failure_scenario": "`refs, err := p.TargetRefsNow(ctx); if err != nil { return nil, err }; return refs, nil` is exactly `return p.TargetRefsNow(ctx)`, so the function reduces to a nil check that could be inlined into resolvePendingMarkers. Three same-named entities (bootstrap.targetRefsNow, Params.TargetRefsNow, syncSession.targetRefsNow) across two packages makes a grep for the ref-listing call site ambiguous and invites editing the wrong one."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 623,
+    "summary": "targetRefsNow guards s.target.conn but not s.target itself, and it silently drops the skipped-ref-name count that newSession tracks and warns about for the same listing.",
+    "failure_scenario": "`if s.target.conn == nil` nil-derefs when s.target is nil (the needTarget=false sessions built by Probe/Fetch); the method is only reachable via bootstrap today, so it is latent rather than live. Separately, `refs, _, err := gitproto.AdvRefsToSlice(adv)` discards the skipped names that newSession:902-910 both warns about and stores as s.target.skippedRefCount — so the map the marker decision is made on can disagree with the session's own view of the target, and a name dropped as invalid reads as \"branch absent\" with no second warning to the operator (safe direction, but the divergence is invisible). The three-line listing block is also a verbatim duplicate of newSession:900-911 and could be one shared helper."
+  },
+  {
+    "file": "internal/syncer/integration_test.go",
+    "line": 3219,
+    "summary": "The PR documents the doubled-ng-prefix hazard and fixes its own new fixture, but leaves the pre-existing sibling fixture emitting the malformed status it warns about.",
+    "failure_scenario": "refCreateDenier.hook's new comment says \"go-git encodes 'ng &lt;ref&gt; &lt;Status&gt;', so a status carrying its own 'ng ' prefix reaches the operator doubled\", and the new test asserts `!strings.Contains(plan.Reason, \"ng deny\")`. Meanwhile integration_test.go:1259 and :3219 still set `Status: \"ng simulated checkpoint pack failure\"`, so CommandStatus.encode writes `ng &lt;ref&gt; ng simulated checkpoint pack failure` and those tests assert against a wire shape no real receive-pack produces. Any assertion built on that Reason string is calibrated to the wrong text."
+  }
+]
+```</result>
+<usage><subagent_tokens>234359</subagent_tokens><tool_uses>77</tool_uses><duration_ms>1103118</duration_ms></usage>
+</task-notification>
