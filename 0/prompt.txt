@@ -160,3 +160,7 @@ I don't get why we want to limit the batch size anyway
 ---
 
 I get why we split it in batches, I don't get why we limit batch size to something less than the 10GB allowed
+
+---
+
+/loop can you address the bugbot comments, re-trigger it after every push commenting "bugbot run" and continue until it's green
