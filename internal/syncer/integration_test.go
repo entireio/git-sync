@@ -2613,6 +2613,62 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// refCreateDenier is a receive-pack hook that refuses to create one ref while
+// applying every other command in the same request for real.
+//
+// syncertest.DenyRefsReport is deliberately not used for this: a non-nil report
+// short-circuits the test server before it applies anything, which for a
+// bootstrap cutover would leave the temp ref at the previous checkpoint and
+// make the delete that follows carry a stale Old — a shape a real receive-pack
+// would reject, hiding the behaviour under test behind a second failure.
+// Applying the rest keeps the sequence faithful: the marker genuinely reaches
+// the final checkpoint, and is then genuinely destroyed or kept.
+type refCreateDenier struct {
+	repo   *git.Repository
+	ref    plumbing.ReferenceName
+	reason string
+	// off lets a later run through, so a test can assert what the retry does
+	// once the target stops refusing the create.
+	off bool
+	// denials counts requests answered with an ng for ref, so a test can
+	// confirm the create was actually attempted rather than never sent.
+	denials int
+}
+
+func (d *refCreateDenier) hook(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+	carriesRef := false
+	for _, cmd := range req.Commands {
+		if cmd.Name == d.ref {
+			carriesRef = true
+		}
+	}
+	if d.off || !carriesRef {
+		return nil // ordinary checkpoint and delete pushes apply normally
+	}
+	d.denials++
+	report := &packp.ReportStatus{UnpackStatus: "ok"}
+	for _, cmd := range req.Commands {
+		status := "ok"
+		switch {
+		case cmd.Name == d.ref:
+			status = "ng " + d.reason
+		case cmd.New.IsZero():
+			if err := d.repo.Storer.RemoveReference(cmd.Name); err != nil {
+				status = "ng " + err.Error()
+			}
+		default:
+			if err := d.repo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
+				status = "ng " + err.Error()
+			}
+		}
+		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+			ReferenceName: cmd.Name,
+			Status:        status,
+		})
+	}
+	return report
+}
+
 func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testing.T) {
 	// A batched bootstrap's temp ref (refs/gitsync/bootstrap/heads/<branch>)
 	// is the only record of how far the import got. The cutover push carries
@@ -2646,48 +2702,10 @@ func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testi
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
-	// Refuse only the branch create, and apply every other command in the same
-	// request for real. syncertest.DenyRefsReport is deliberately not used
-	// here: a non-nil report short-circuits the test server before it applies
-	// anything, which would leave the temp ref at the previous checkpoint and
-	// make the delete that follows carry a stale Old — a shape a real
-	// receive-pack would reject, hiding the bug behind a second failure.
-	// Applying the advance keeps the sequence faithful: the marker genuinely
-	// reaches the final checkpoint, and is then genuinely destroyed.
-	rejected := false
-	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
-		carriesCreate := false
-		for _, cmd := range req.Commands {
-			if cmd.Name == branchRef {
-				carriesCreate = true
-			}
-		}
-		if !carriesCreate {
-			return nil // ordinary checkpoint and delete pushes apply normally
-		}
-		rejected = true
-		report := &packp.ReportStatus{UnpackStatus: "ok"}
-		for _, cmd := range req.Commands {
-			status := "ok"
-			switch {
-			case cmd.Name == branchRef:
-				status = "ng deny creating a protected branch"
-			case cmd.New.IsZero():
-				if err := targetRepo.Storer.RemoveReference(cmd.Name); err != nil {
-					status = "ng " + err.Error()
-				}
-			default:
-				if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
-					status = "ng " + err.Error()
-				}
-			}
-			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
-				ReferenceName: cmd.Name,
-				Status:        status,
-			})
-		}
-		return report
-	}
+	// Refuse only the branch create; every other command in that request is
+	// applied for real (see refCreateDenier for why that matters here).
+	denier := &refCreateDenier{repo: targetRepo, ref: branchRef, reason: "deny creating a protected branch"}
+	targetServer.receivePackHook = denier.hook
 
 	result, err := Run(context.Background(), Config{
 		Source:             Endpoint{URL: sourceServer.RepoURL()},
@@ -2706,7 +2724,7 @@ func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testi
 
 	// Test setup, not the property under test: without these the assertion
 	// below would pass for the wrong reasons.
-	if !rejected {
+	if denier.denials == 0 {
 		t.Fatal("test setup: the cutover push never carried the branch create")
 	}
 	if result.BatchCount < 2 {
@@ -2721,6 +2739,94 @@ func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testi
 			"the run reported success (pushed=%d warned=%d, %d checkpoint packs) while leaving the target "+
 			"with neither the branch nor the marker, so the next run re-transfers the whole history",
 			tempRef, err, result.Pushed, result.Warned, result.BatchCount)
+	}
+}
+
+func TestRun_IntegrationBatchedCutoverResumesAfterRejectedCreate(t *testing.T) {
+	// The other half of the property: a marker kept through a rejected create
+	// has to be worth keeping. Once the target accepts the branch, the retry
+	// must finish the import from the marker — no checkpoint re-pushed, no
+	// history re-fetched — and only then delete it.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(branchRef)
+	sourceHead, err := sourceRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Refuse the create on the first run, then let it through on the second.
+	denier := &refCreateDenier{repo: targetRepo, ref: branchRef, reason: "deny creating a protected branch"}
+	targetServer.receivePackHook = denier.hook
+
+	cfg := Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		BestEffort:         true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000,
+	}
+
+	first, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if first.BatchCount < 2 || denier.denials == 0 {
+		t.Fatalf("test setup: expected a batched bootstrap with a refused create, got batch_count=%d denials=%d",
+			first.BatchCount, denier.denials)
+	}
+	marker, err := targetRepo.Reference(tempRef, true)
+	if err != nil {
+		t.Fatalf("resume marker %s missing after the rejected create: %v", tempRef, err)
+	}
+	// At the final checkpoint, not the penultimate one: the whole import is
+	// what the retry must be able to skip, including the pack the create rode.
+	if marker.Hash() != sourceHead.Hash() {
+		t.Fatalf("resume marker at %s, want the final checkpoint %s — the retry would re-push the last batch",
+			planner.ShortHash(marker.Hash()), planner.ShortHash(sourceHead.Hash()))
+	}
+	// Measured on the target, not the source: what a lost marker costs is the
+	// re-push of everything already delivered. (The source side is not
+	// measurable here — this test server advertises the fetch filter but
+	// ignores it, so even a commit-graph fetch comes back whole.)
+	firstBytesIn := targetServer.BytesIn(serviceReceivePack, metricPack)
+	targetServer.ResetMetrics()
+
+	denier.off = true
+
+	second, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("resuming run: %v", err)
+	}
+	if second.RelayReason != planner.ReasonBootstrapResumeMarker {
+		t.Errorf("resuming run routed with reason %q, want %q", second.RelayReason, planner.ReasonBootstrapResumeMarker)
+	}
+	if second.BatchCount != 0 {
+		t.Errorf("resuming run pushed %d checkpoint pack(s), want 0: the marker already held the tip, "+
+			"so only the branch create was outstanding", second.BatchCount)
+	}
+	if secondBytesIn := targetServer.BytesIn(serviceReceivePack, metricPack); secondBytesIn*20 >= firstBytesIn {
+		t.Errorf("resuming run sent the target %d bytes against the first run's %d — the import was re-done, not resumed",
+			secondBytesIn, firstBytesIn)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Errorf("resume marker %s outlived the branch it was scaffolding for", tempRef)
 	}
 }
 

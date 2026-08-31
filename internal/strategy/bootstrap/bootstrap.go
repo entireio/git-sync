@@ -89,12 +89,27 @@ type Params struct {
 	// subdivision, switching to batched mode). Implementations should
 	// treat each call as one log line.
 	OnNotice func(string)
+	// Rejected reports whether the target refused an update to a ref in a
+	// push this run already made. May be nil; only ever true when the caller
+	// pushes best-effort, where a per-ref "ng" invokes the pusher's
+	// OnRejection callback and the push still returns nil — so a nil error
+	// proves the request was accepted, not that every command in it landed.
+	// The batched cutover consults it before deleting its resume marker.
+	Rejected func(plumbing.ReferenceName) bool
 }
 
 func (p Params) notice(msg string) {
 	if p.OnNotice != nil {
 		p.OnNotice(msg)
 	}
+}
+
+// rejected reports whether the target refused an update to name earlier in
+// this run. False when the caller supplied no predicate: a caller that never
+// pushes best-effort has nothing to report, because there a per-ref "ng"
+// fails the push outright rather than being swallowed.
+func (p Params) rejected(name plumbing.ReferenceName) bool {
+	return p.Rejected != nil && p.Rejected(name)
 }
 
 // Result holds the outcome of the bootstrap strategy. Pushed is the count
@@ -664,6 +679,37 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
 			}
+		}
+
+		// The temp ref is this import's only record of how far it got, so it
+		// may only be deleted once the branch it was scaffolding for exists.
+		// The create rode the final checkpoint's push (or, on an at-tip
+		// resume, the command push just above), and under BestEffort a nil
+		// error from either covers the request rather than each command in
+		// it: the pusher hands a per-ref "ng" to OnRejection and returns nil.
+		// A target that refuses the create (protected branch, pre-receive
+		// policy) would otherwise end the run with neither the branch nor the
+		// marker, reported as a success — and with nothing on the target
+		// pointing at the objects pushed so far, the next run has no have to
+		// negotiate against and re-transfers the entire history, on precisely
+		// the large repositories batching exists for.
+		//
+		// Unlike the one-shot path, this cannot defer to prune as its
+		// cleaner: Bootstrap() rejects --prune outright, so on that route no
+		// cleaner would ever exist and the marker would be permanent. Hence
+		// the conditional delete rather than no delete.
+		if p.rejected(batch.Plan.TargetRef) {
+			// The marker genuinely holds `current`, so the objects behind it
+			// stay usable as haves for the branches planned after this one.
+			completedRefs[batch.TempRef] = current
+			p.log("bootstrap batch keeping resume marker after rejected branch create",
+				"branch", batch.Plan.TargetRef.String(),
+				"temp_ref", batch.TempRef.String(),
+				"resume_hash", planner.ShortHash(current),
+				"batch_count", result.BatchCount)
+			p.notice(fmt.Sprintf("target rejected %s — keeping %s at %s so the next run resumes instead of re-importing",
+				batch.Plan.TargetRef, batch.TempRef, planner.ShortHash(current)))
+			continue
 		}
 
 		cmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: current, Delete: true}}

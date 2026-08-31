@@ -597,6 +597,19 @@ func (s *syncSession) leaseFailureError() error {
 	return fmt.Errorf("lease failure on %d ref(s) (%s) — target moved during sync; rerun, or use --force-blind to overwrite: %w", len(refs), strings.Join(refs, ", "), gitproto.ErrTargetRefMoved)
 }
 
+// refRejected reports whether the target refused an update to name in a push
+// made during this session. Only ever true under BestEffort — that is the one
+// mode where s.rejections is populated, because elsewhere a per-ref "ng" fails
+// the push instead of being recorded. Read after a push returns, from the same
+// goroutine the OnRejection callback ran on.
+//
+// A strategy that infers "the ref landed" from a nil push error needs this to
+// be correct instead; the batched bootstrap cutover is the one caller.
+func (s *syncSession) refRejected(name plumbing.ReferenceName) bool {
+	_, ok := s.rejections[name]
+	return ok
+}
+
 // applyRejections downgrades plans whose ref was rejected by the target to
 // ActionWarn and returns the count.
 func (s *syncSession) applyRejections(plans []BranchPlan) int {
@@ -1399,6 +1412,7 @@ func bootstrapWithInputs(
 		Strategy: s.cfg.BootstrapStrategy,
 		OnPhase:  s.stats.setPhase,
 		OnNotice: s.notice,
+		Rejected: s.refRejected,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)
