@@ -172,3 +172,29 @@ done
 ---
 
 /loop can you address the bugbot comments, re-trigger it after every push commenting "bugbot run" and continue until it's green
+
+---
+
+1. A 408/504 deadline silently disables the whole feature for the rest of the run. internal/strategy/bootstrap/bootstrap.go:792-797
+
+subdivide includes deadlines (isBatchableTargetPushError = body-limit or 408/504). When a target drains the body and then times out — exactly the GitHub-408 behaviour documented at :1898 — abortedEarly is false and sentBytes > 0, so nextSelfImposedBudget ratchets the budget to those bytes and sets budgetFromObservation = true. That flag is never cleared except by a later parseable 413, and it gates atAnnounced, so escalation is dead for the remainder of the run.
+
+That contradicts the PR's own principle: a deadline is treated as availability, not size for classification, but as measured size evidence for provenance. I confirmed it with a probe (3-commit chain, one-shot 413 announcing 1 MiB, then a drain-then-504 on the divisible span):
+
+- as-is: 3 pushes, fails pack upload aborted early: projected to exceed target body limit
+- with !budgetFromObservation mutated out of :674: converges, emitting cannot split further (1 commit) — pushing at the target's announced limit 1.00 MB instead of 4.01 KB
+
+The narrow fix is to keep the ratchet (smaller packs genuinely do finish inside the window) but not the provenance claim:
+
+budgetFromObservation = parsedLimit <= 0 && !isTargetPushDeadlineError(pushErr)
+
+It heals on the next delivery, so it's not permanent — but it costs a full source re-fetch, on precisely the flaky multi-GiB targets this path serves.
+
+2. The pre-flight subdivide has the same shape commit 3 just fixed. bootstrap.go:615-641
+
+checkPackSizeAndSubdivide's callback calls subdivideCheckpoints, which splits every remaining gap — so an indivisible span at idx still grows the list when a later gap can split, and the loop continues to re-plan the identical checkpoint. It terminates (gaps are bounded at 1) and it's cheap (12-byte header read, then Close()), so it's not the multi-GiB waste of the post-failure path. But it's the same asymmetry, and it uses p.TargetMaxPack rather than the escalated ceiling. Worth at least a comment noting the difference is deliberate.
+
+3. Two doc nits.
+- errors.go:94 says the sentinel is returned by "Sync, Replicate and Bootstrap" — the root gitsync package has no Bootstrap method (only Probe/Plan/Sync/Replicate). It means unstable.Client.Bootstrap; worth saying so, since that comment is the mirror worker's contract.
+- client.go:46 and :62 still read "Plan computes ref actions without pushing" / "Sync executes a sync between two remotes" with no mention that the result is now populated on error. That's a public API behaviour change whose entire purpose is to be read by callers — it should be documented. (Note validation and config errors still return a zero result, which is right, but makes the distinction worth stating.)
+- bootstrap_test.go:2202-2206: drainAbort's doc comment is duplicated verbatim — a rebase artifact. <- review
