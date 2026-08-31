@@ -1,0 +1,34 @@
+do you have a pr?
+
+---
+
+The fix's core idea is right — the review found no bug in the conditional-delete guard itself, but the fixture that proves it is broken, and the guard has three gaps under the same BestEffort semantics it's guarding.
+
+## Blocking
+
+**1. The new tests don't test what they claim** (`integration_test.go:2638`, `:2827`)
+
+`refCreateDenier.hook` returns a non-nil report, and `smartHTTPRepoServer.handle` (`:4872`) writes the report and returns *before* `transport.ReceivePack`. So the pack on the cutover push is never unpacked. Verified empirically: after run 1, `refs/gitsync/bootstrap/heads/master` resolves to `cbfbb940…` but `targetRepo.CommitObject(cbfbb940…)` → *object not found*; ~30 of ~241 objects missing.
+
+That inverts the helper's own doc comment ("the marker genuinely reaches the final checkpoint" — only the *ref* does), and it hollows out the resume test: `assertHeadsMatch` compares hashes only (`syncertest/repo.go:196`), and run 2's "334 bytes" is trivially small because it's a bare ref-create with no pack — the assertion can't distinguish "resumed correctly" from "target is short a whole batch". Note the hook ignores `hasPack` (`_ bool`), which is exactly the parameter that would catch this.
+
+Fix: run `transport.ReceivePack` (or unpack into the storer) before overriding the report, and assert the target resolves the branch tip to a real commit object.
+
+**2. `"ng " + d.reason` double-prefixes the wire status** (`:2654`). go-git encodes `ng <ref> <Status>`, so the operator-visible reason becomes `target rejected ref update: ng deny creating a protected branch`. The sibling `DenyRefsReport` calls at `:3113/:3825/:3987` pass the bare reason.
+
+## Should fix
+
+**3. The temp-ref advance is assumed to have landed** (`bootstrap.go:704`). A policy that ng's the *whole request* (read-only repo, blanket block) rejects both `refs/heads/<branch>` and the temp ref. `PushPack` still returns nil, `current = checkpoint` still happens, and line 704 records a hash the target doesn't have as a fetch have for every subsequent branch. The logged `resume_hash` is likewise a hash the target never accepted. Nothing in the checkpoint loop consults `p.rejected(batch.TempRef)`.
+
+**4. `refRejected` is blind without report-status** (`syncer.go:608`). `push.go:448` only decodes a report when the target advertises `report-status`; otherwise `s.rejections` stays empty, `p.rejected(branch)` is false, and the marker is deleted on an unconfirmed create — the exact hazard this PR fixes. `gitproto.TargetFeatures.ReportStatus` already knows this; nothing gates on it.
+
+**5. A benign "already exists" rejection now leaks the marker forever** (`bootstrap.go:701`). gitproto classifies that as a concurrent move (`push.go:341`) — the branch *is* on the target. The marker is kept, but the next run sees the branch present, never takes the resume route, and `isLiveBootstrapMarker` stops exempting it. `Bootstrap()` rejects `--prune` (`syncer.go:1311`), so nothing ever cleans it. Consider not keeping the marker when the status matches `isConcurrentMove`.
+
+**6. The subsumed-branch path still has the old bug** (`bootstrap.go:356`) — pushes a lone create, records `completedRefs[...]` and `BatchCount++` on nil error. Same invariant violation, 350 lines above the new guard.
+
+## Worth considering
+
+- **`Rejected` is a session-wide predicate, not a result of the push just made** (`syncer.go:1415`). `s.rejections` is never cleared, so any earlier push touching the same ref name is a false positive. Unreachable today; the shape invites it. Cleaner: have `PushPack`/`PushCommands` return that request's rejected refs.
+- **No assertion that the rejection surfaced** (`:2737`) — the test's prose names "reported success" as the hazard but never checks `result.Warned > 0` or `ActionWarn`.
+- **`Params.Rejected` has no bootstrap-package unit test** — both integration tests are single-branch, so line 704's multi-branch have-preservation (its stated purpose) never executes with a following branch. `bootstrap_test.go` already drives `executeBatched` with fake pushers.
+- **Nits**: the hook duplicates `syncertest.DenyRefsReport`'s report loop (`:2645`); it ignores `cmd.Old`, so the stale-`Old` CAS its own comment rests on is unenforced (`:2655`); `batch_count` in the new log line is run-wide, not per-branch, unlike the neighbouring `batch`/`batch_total` fields (`bootstrap.go:709`).
