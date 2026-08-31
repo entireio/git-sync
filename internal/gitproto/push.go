@@ -249,18 +249,18 @@ func logRefUpdateBatch(conn Conn, verbose bool, batchNum, totalBatches, refs int
 
 // PushPack streams a pack to the target.
 func (p *Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
-	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.MaxRefUpdates, p.Verbose, p.beginPush())
+	return pushPack(ctx, p.Conn, p.Adv, commands, pack, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // PushCommands sends ref-only updates. Creates/updates carry an empty pack;
-// delete-only pushes carry no pack. See the package-level PushCommands.
+// delete-only pushes carry no pack. See the package-level pushCommands.
 func (p *Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
-	return PushCommands(ctx, p.Conn, p.Adv, commands, p.MaxRefUpdates, p.Verbose, p.beginPush())
+	return pushCommands(ctx, p.Conn, p.Adv, commands, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // PushObjects encodes and pushes locally materialized objects.
 func (p *Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
-	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.beginPush())
+	return pushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // buildUpdateRequest builds the receive-pack update request.
@@ -580,7 +580,7 @@ func sendReceivePack(
 	return nil
 }
 
-// PushObjects pushes locally-materialized objects to the target.
+// pushObjects pushes locally-materialized objects to the target.
 //
 // A push within the per-request ref-update limit (see effectiveMaxRefUpdates)
 // is a single atomic receive-pack request. A larger push is split: the
@@ -588,7 +588,7 @@ func sendReceivePack(
 // with the first batch of object-bearing commands, then the remaining refs (and
 // any deletes) move as ref-only updates because the objects are already
 // committed.
-func PushObjects(
+func pushObjects(
 	ctx context.Context,
 	conn Conn,
 	adv *packp.AdvRefs,
@@ -620,13 +620,13 @@ func PushObjects(
 			return err
 		}
 		if len(rest) > 0 {
-			if err := PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses); err != nil {
+			if err := pushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses); err != nil {
 				return err
 			}
 		}
 	}
 	if len(deletes) > 0 {
-		return PushCommands(ctx, conn, adv, deletes, maxRefUpdates, verbose, statuses)
+		return pushCommands(ctx, conn, adv, deletes, maxRefUpdates, verbose, statuses)
 	}
 	return nil
 }
@@ -698,7 +698,7 @@ func pushObjectsBatch(
 // fixed []*packfile.ObjectToPack, ignoring its arguments. It is the
 // passthrough used by PushObjects to feed pre-selected objects back
 // into packfile.Encoder via WithObjectSelector. Used exactly once per
-// PushObjects call and not exposed outside this package.
+// pushObjects call and not exposed outside this package.
 type precomputedSelector struct {
 	objects []*packfile.ObjectToPack
 }
@@ -728,7 +728,7 @@ func (cw *countingWriter) Count() int64 { return cw.n.Load() }
 
 // startSelectionProgress emits in-place "selecting deltas, elapsed X"
 // updates every 500ms during the synchronous delta-selection phase of
-// PushObjects. The returned stop function takes the number of selected
+// pushObjects. The returned stop function takes the number of selected
 // objects and the selection error (nil on success); on success it
 // finalizes the line with a permanent "selected N objects in Y"
 // summary, on error it just stops the ticker without claiming success.
@@ -833,8 +833,8 @@ func HumanBytes(n int64) string {
 	return fmt.Sprintf("%.2f %s", value, suffix)
 }
 
-// PushPack pushes a pack stream (relay) to the target.
-func PushPack(
+// pushPack pushes a pack stream (relay) to the target.
+func pushPack(
 	ctx context.Context,
 	conn Conn,
 	adv *packp.AdvRefs,
@@ -873,12 +873,12 @@ func PushPack(
 	}
 
 	if len(rest) > 0 {
-		return PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses)
+		return pushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses)
 	}
 	return nil
 }
 
-// PushCommands sends ref update commands that move no new objects to the
+// pushCommands sends ref update commands that move no new objects to the
 // target — the referenced objects already exist there.
 //
 // A create/update command still carries a valid empty pack (12-byte header,
@@ -888,7 +888,7 @@ func PushPack(
 // commands; an explicit empty pack satisfies them and stays valid for servers
 // that tolerate the pack-less form. Delete-only pushes carry no pack, as git
 // requires.
-func PushCommands(
+func pushCommands(
 	ctx context.Context,
 	conn Conn,
 	adv *packp.AdvRefs,

@@ -152,7 +152,7 @@ func TestPushPackClosesPackOnSuccess(t *testing.T) {
 	conn := connForServer(t, srv)
 	adv := &packp.AdvRefs{}
 
-	err := PushPack(context.Background(), conn, adv, []PushCommand{{
+	err := pushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, pack, 0, false, nil)
@@ -179,7 +179,7 @@ func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 	conn := connForServer(t, srv)
 	adv := &packp.AdvRefs{}
 
-	err := PushPack(context.Background(), conn, adv, []PushCommand{{
+	err := pushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, pack, 0, false, nil)
@@ -209,7 +209,7 @@ func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- PushPack(ctx, conn, adv, []PushCommand{{
+		done <- pushPack(ctx, conn, adv, []PushCommand{{
 			Name: "refs/heads/main",
 			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		}}, pack, 0, false, nil)
@@ -265,7 +265,7 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- PushPack(context.Background(), conn, adv, []PushCommand{{
+		done <- pushPack(context.Background(), conn, adv, []PushCommand{{
 			Name: "refs/heads/main",
 			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		}}, pack, 0, false, nil)
@@ -322,7 +322,7 @@ func TestPushObjectsStreamsBody(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	adv.Capabilities.Set(capability.OFSDelta)
 
-	err := PushObjects(context.Background(), conn, adv, []PushCommand{{
+	err := pushObjects(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, memory.NewStorage(), nil, 0, false, nil)
@@ -418,7 +418,7 @@ func TestPushCommandsSendsEmptyPackForCreate(t *testing.T) {
 	conn := connForServer(t, srv)
 	adv := &packp.AdvRefs{}
 
-	err := PushCommands(context.Background(), conn, adv, []PushCommand{{
+	err := pushCommands(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/docs-rules",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, 0, false, nil)
@@ -436,7 +436,7 @@ func TestPushCommandsSendsNoPackForDeleteOnly(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	adv.Capabilities.Set(capability.DeleteRefs)
 
-	err := PushCommands(context.Background(), conn, adv, []PushCommand{{
+	err := pushCommands(context.Background(), conn, adv, []PushCommand{{
 		Name:   "refs/gitsync/bootstrap/heads/docs-rules",
 		Old:    plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		Delete: true,
@@ -495,7 +495,7 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 	require.NoError(t, err)
 	conn := &HTTPConn{EndpointURL: ep, HTTP: &http.Client{}}
 
-	err = PushPack(context.Background(), conn, adv, []PushCommand{
+	err = pushPack(context.Background(), conn, adv, []PushCommand{
 		{Name: "refs/heads/old", Delete: true},
 	}, pack, 0, false, nil)
 	if err == nil {
@@ -835,7 +835,7 @@ func TestPushCommandsBatchesOverCap(t *testing.T) {
 	adv := &packp.AdvRefs{}
 
 	// limit=3, 7 refs → batches of 3, 3, 1.
-	require.NoError(t, PushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, false, nil))
+	require.NoError(t, pushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, false, nil))
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -862,7 +862,7 @@ func TestPushPackBatchesOverCap(t *testing.T) {
 	pack := io.NopCloser(bytes.NewReader(marker))
 
 	// limit=3, 7 refs → first batch of 3 carries the pack, then 3 + 1 ref-only.
-	require.NoError(t, PushPack(context.Background(), conn, adv, makeCreateCommands(7), pack, 3, false, nil))
+	require.NoError(t, pushPack(context.Background(), conn, adv, makeCreateCommands(7), pack, 3, false, nil))
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -891,7 +891,7 @@ func TestPushCommandsVerboseLogsBatches(t *testing.T) {
 	var buf bytes.Buffer
 	conn := connForServer(t, srv)
 	conn.ProgressOut = &buf
-	require.NoError(t, PushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, true, nil))
+	require.NoError(t, pushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, true, nil))
 
 	out := buf.String()
 	require.Contains(t, out, "pushed ref-update batch 1/3 (3 refs)")
@@ -902,7 +902,7 @@ func TestPushCommandsVerboseLogsBatches(t *testing.T) {
 	var single bytes.Buffer
 	conn2 := connForServer(t, srv)
 	conn2.ProgressOut = &single
-	require.NoError(t, PushCommands(context.Background(), conn2, adv, makeCreateCommands(2), 3, true, nil))
+	require.NoError(t, pushCommands(context.Background(), conn2, adv, makeCreateCommands(2), 3, true, nil))
 	require.NotContains(t, single.String(), "pushed ref-update batch")
 }
 
@@ -917,7 +917,7 @@ func TestPushPackUsesDefaultLimitWhenZero(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	pack := io.NopCloser(bytes.NewReader([]byte("PACK-PAYLOAD")))
 
-	require.NoError(t, PushPack(context.Background(), conn, adv, makeCreateCommands(3), pack, 0, false, nil))
+	require.NoError(t, pushPack(context.Background(), conn, adv, makeCreateCommands(3), pack, 0, false, nil))
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()

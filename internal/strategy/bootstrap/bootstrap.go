@@ -423,16 +423,19 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("create subsumed branch ref for %s: %w", batch.Plan.TargetRef, err)
 			}
-			// A subsumed branch has no temp ref to preserve — trunk already
-			// delivered its objects — so a refused create costs no resume
-			// position, only accounting: neither the have nor the batch count
-			// may claim a create the target refused. No ref listing for this
-			// one; there is nothing to clean up either way.
-			if reason, refused := p.refRefused(batch.Plan.TargetRef); refused {
-				p.log("bootstrap batch subsumed branch create refused",
+			// Same rule as the cutover below — only a create the target
+			// confirmed counts as delivered — but settled here rather than
+			// against a ref listing. A subsumed branch has no temp ref to
+			// preserve, since trunk already delivered its objects, so nothing
+			// hinges on the answer except the reported batch count and a have
+			// that trunk's own tip already covers. Neither is worth a round
+			// trip, and under-reporting work this run cannot confirm is the
+			// same direction as everything else here.
+			if confirmed, doubt := p.createConfirmed(batch.Plan.TargetRef); !confirmed {
+				p.log("bootstrap batch subsumed branch create unconfirmed; not counted",
 					"branch", batch.Plan.TargetRef.String(),
 					"source_hash", planner.ShortHash(batch.Plan.SourceHash),
-					"reason", reason)
+					"reason", doubt)
 				continue
 			}
 			completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash

@@ -2015,6 +2015,30 @@ func TestExecuteBatchedRefusalMentioningExistenceKeepsMarkerWhenAbsent(t *testin
 	}
 }
 
+// Silence is not confirmation on the subsumed path either. Nothing is at stake
+// but the count, so no listing is fetched for it — the create simply is not
+// reported as delivered. Trunk's own checkpoint pack still counts, which is
+// what separates the two numbers below.
+func TestExecuteBatchedSubsumedUnconfirmedCreateNotCounted(t *testing.T) {
+	confirmed := newSubsumedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	baseline, err := Execute(context.Background(), confirmed.params, "empty target")
+	if err != nil {
+		t.Fatalf("Execute (confirmed): %v", err)
+	}
+
+	silent := newSubsumedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	silent.silent = true
+	result, err := Execute(context.Background(), silent.params, "empty target")
+	if err != nil {
+		t.Fatalf("Execute (silent target): %v", err)
+	}
+	if result.BatchCount != baseline.BatchCount-1 {
+		t.Errorf("BatchCount=%d against a silent target, want %d — one less than the %d a confirmed run reports, "+
+			"since the subsumed create is the only difference",
+			result.BatchCount, baseline.BatchCount-1, baseline.BatchCount)
+	}
+}
+
 // A branch present at someone else's commit is not this import's branch. The
 // span between their tip and ours is reachable from the marker and nothing
 // else, so deleting it would strand exactly the objects this run delivered.
