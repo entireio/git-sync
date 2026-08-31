@@ -813,7 +813,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 						// as a measured size limit, or one 408 would disable
 						// escalation for the rest of the run, on precisely the
 						// flaky multi-GiB targets this path serves.
-						budgetFromObservation = parsedLimit <= 0 && !isTargetPushDeadlineError(pushErr)
+						budgetFromObservation = nextBudgetProvenance(budgetFromObservation, parsedLimit, pushErr)
 						selfImposedBudget = next
 					}
 					// Pick the byte count we use for sizing the next
@@ -1579,6 +1579,31 @@ func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64) bool {
 // rejection arrived comfortably under the limit (a server with
 // stricter limits announcing the failure early), 2× is enough since
 // sentBytes is closer to the real pack size.
+// nextBudgetProvenance decides whether the newly ratcheted budget should be
+// treated as a MEASURED server cutoff — bytes the target actually accepted
+// before cutting us off — rather than a figure git-sync chose. Escalation to
+// the target's announced limit is refused past a measured cutoff, so getting
+// this wrong in either direction is costly:
+//
+//   - claiming it wrongly disables escalation for the rest of the run;
+//   - erasing it wrongly lets escalation jump past a cutoff the server has
+//     already demonstrated, and an abort at that ceiling is classified
+//     permanent — a flaky target becomes a false permanent failure.
+//
+// A deadline decides neither. A target that drained the body and then timed
+// out told us about time, not size — the same reason classification refuses to
+// treat it as a size verdict — so the prior answer stands unchanged.
+//
+// A parsed limit means the target stated its own bound, which supersedes any
+// measurement; anything else that ratcheted the budget did so from observed
+// bytes, which is a measurement.
+func nextBudgetProvenance(current bool, parsedLimit int64, err error) bool {
+	if isTargetPushDeadlineError(err) {
+		return current
+	}
+	return parsedLimit <= 0
+}
+
 // nextSelfImposedBudget refines the in-flight self-imposed upload
 // ceiling after a server-rejected push (i.e. not one the client
 // aborted itself). It prefers the explicit body limit when the server

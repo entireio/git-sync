@@ -2826,3 +2826,43 @@ func TestExecuteBatchedDeadlineDoesNotDisableEscalation(t *testing.T) {
 		t.Fatalf("expected an indivisible span to still escalate after a deadline; notices=%v", notices)
 	}
 }
+
+func TestNextBudgetProvenance(t *testing.T) {
+	t.Parallel()
+	deadline := errors.New("http 408 request timeout")
+	gateway := errors.New("http 504 gateway timeout")
+	unparseable := errors.New("request body too large for target")
+	parseable := errors.New("http 413: body exceeded size limit 1048576")
+
+	cases := []struct {
+		name        string
+		current     bool
+		parsedLimit int64
+		err         error
+		want        bool
+	}{
+		// A deadline says nothing about size, so it decides nothing — the
+		// prior answer stands, in BOTH directions. Claiming it would disable
+		// escalation for the rest of the run; erasing it would let escalation
+		// jump past a cutoff the server already demonstrated, and an abort at
+		// that ceiling is classified permanent.
+		{"deadline preserves a measured cutoff", true, 0, deadline, true},
+		{"deadline preserves the absence of one", false, 0, deadline, false},
+		{"gateway timeout preserves a measured cutoff", true, 0, gateway, true},
+
+		// The target stated its own bound: that supersedes any measurement.
+		{"parsed limit clears a measured cutoff", true, 1048576, parseable, false},
+
+		// Ratcheted from observed bytes with no stated bound: a measurement.
+		{"unparseable size cut records a measured cutoff", false, 0, unparseable, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := nextBudgetProvenance(tc.current, tc.parsedLimit, tc.err); got != tc.want {
+				t.Fatalf("nextBudgetProvenance(%t, %d, %v) = %t, want %t",
+					tc.current, tc.parsedLimit, tc.err, got, tc.want)
+			}
+		})
+	}
+}
