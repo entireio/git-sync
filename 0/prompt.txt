@@ -1,0 +1,1 @@
+can you look at this PR https://github.com/entireio/git-sync/pull/117 gather context on https://github.com/entireio/git-sync/pull/116 and related linear issues and add commits to this PR to fix it.
