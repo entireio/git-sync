@@ -1815,6 +1815,9 @@ type batchedRefusalHarness struct {
 	refsNow    map[plumbing.ReferenceName]plumbing.Hash
 	refsNowErr error
 	refsNowN   int
+	// silent makes the target report nothing per ref, as one that never
+	// negotiated report-status does.
+	silent bool
 }
 
 func newBatchedRefusalHarness(t *testing.T, refused map[plumbing.ReferenceName]string) *batchedRefusalHarness {
@@ -1876,13 +1879,17 @@ func newBatchedHarness(t *testing.T, refused map[plumbing.ReferenceName]string, 
 			h.trunkRef: {SourceRef: h.trunkRef, TargetRef: h.trunkRef, SourceHash: trunkTip, Kind: planner.RefKindBranch, Label: "main"},
 			h.forkRef:  {SourceRef: h.forkRef, TargetRef: h.forkRef, SourceHash: forkTip, Kind: planner.RefKindBranch, Label: "release"},
 		},
-		TargetRefs:             map[plumbing.ReferenceName]plumbing.Hash{},
-		SourceHeadTarget:       h.trunkRef,
-		TargetMaxPack:          1024 * 1024,
-		TargetReportsRefStatus: true,
-		RefRefused: func(name plumbing.ReferenceName) (string, bool) {
-			reason, ok := refused[name]
-			return reason, ok
+		TargetRefs:       map[plumbing.ReferenceName]plumbing.Hash{},
+		SourceHeadTarget: h.trunkRef,
+		TargetMaxPack:    1024 * 1024,
+		RefOutcome: func(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+			if reason, ok := refused[name]; ok {
+				return gitproto.RefOutcomeRefused, reason
+			}
+			if h.silent {
+				return gitproto.RefOutcomeUnknown, ""
+			}
+			return gitproto.RefOutcomeApplied, ""
 		},
 		TargetRefsNow: func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
 			h.refsNowN++
@@ -1976,8 +1983,9 @@ func TestExecuteBatchedRefusedButPresentBranchDeletesMarker(t *testing.T) {
 	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
 		trunkRef: "already exists",
 	})
-	// Whoever created it, it is there.
-	h.refsNow[trunkRef] = plumbing.NewHash("6dcf09a3e2a1b3d1d1c88f1ad5e63e3f3d1a2b3c")
+	// There, at the hash this run pushed — so the import did land and the
+	// scaffolding is genuinely spent.
+	h.refsNow[trunkRef] = h.trunkTip
 
 	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -2004,6 +2012,25 @@ func TestExecuteBatchedRefusalMentioningExistenceKeepsMarkerWhenAbsent(t *testin
 	if h.deletedTrunkMarker() {
 		t.Errorf("deleted resume marker %s for a branch the target does not have: %v",
 			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// A branch present at someone else's commit is not this import's branch. The
+// span between their tip and ours is reachable from the marker and nothing
+// else, so deleting it would strand exactly the objects this run delivered.
+func TestExecuteBatchedBranchAtOtherHashKeepsMarker(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		trunkRef: "already exists",
+	})
+	h.refsNow[trunkRef] = plumbing.NewHash("6dcf09a3e2a1b3d1d1c88f1ad5e63e3f3d1a2b3c")
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted resume marker %s though %s sits at another commit: %v",
+			h.trunkTempRef, trunkRef, h.pushCommandsBatches)
 	}
 }
 
@@ -2036,7 +2063,7 @@ func TestExecuteBatchedRefusedTempRefStopsTheRun(t *testing.T) {
 func TestExecuteBatchedUnreportingTargetSettledByListing(t *testing.T) {
 	trunkRef := plumbing.NewBranchReferenceName("main")
 	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
-	h.params.TargetReportsRefStatus = false
+	h.silent = true
 	h.refsNow[trunkRef] = h.trunkTip
 
 	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
@@ -2057,7 +2084,7 @@ func TestExecuteBatchedUnreportingTargetSettledByListing(t *testing.T) {
 // asked for.
 func TestExecuteBatchedUnansweredListingKeepsMarker(t *testing.T) {
 	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
-	h.params.TargetReportsRefStatus = false
+	h.silent = true
 	h.refsNowErr = errors.New("target listing unavailable")
 
 	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {

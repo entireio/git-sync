@@ -597,30 +597,36 @@ func (s *syncSession) leaseFailureError() error {
 	return fmt.Errorf("lease failure on %d ref(s) (%s) — target moved during sync; rerun, or use --force-blind to overwrite: %w", len(refs), strings.Join(refs, ", "), gitproto.ErrTargetRefMoved)
 }
 
-// refRefused returns the target's "ng" reason for name in the push that just
-// returned, and whether there was one. Answers bootstrap.Params.RefRefused,
-// whose doc has the why; read after a push returns, from the same goroutine
-// the pusher's callback ran on.
+// refOutcome reports what the target did with name in the push that just
+// returned: applied it, refused it, or said nothing about it. Answers
+// bootstrap.Params.RefOutcome, whose doc has the why; read after a push
+// returns, from the same goroutine the pusher's callback ran on.
 //
 // Scoped to that one push rather than to s.rejections, which accumulates over
 // the session: a strategy asking "did the ref I just pushed land" must not be
 // answered with a rejection from an earlier request for the same name.
 //
-// Sanitized here, as the OnRejection callback does for s.rejections: the reason
-// is free-form text the target wrote, and from here it reaches the terminal in
-// a notice and an error message, where an escape sequence could redraw the line
-// a warning was printed on.
-func (s *syncSession) refRefused(name plumbing.ReferenceName) (string, bool) {
-	reason, refused := s.target.pusher.LastRejections()[name]
-	return sanitize.Text(reason), refused
+// The reason is sanitized here, as the OnRejection callback does for
+// s.rejections: it is free-form text the target wrote, and from here it reaches
+// the terminal in a notice and an error message, where an escape sequence could
+// redraw the line a warning was printed on.
+func (s *syncSession) refOutcome(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+	outcome, reason := s.target.pusher.LastOutcome(name)
+	return outcome, sanitize.Text(reason)
 }
 
 // targetRefsNow re-reads the target's refs mid-run. Answers
 // bootstrap.Params.TargetRefsNow, which asks it only to settle whether a branch
 // whose create no push could confirm is actually there — one advertisement
 // round trip against a transfer measured in gigabytes.
+//
+// It is the receive-pack advertisement, so receive.hideRefs can omit a ref that
+// is really there (the same caveat Config.TargetAssertedEmpty documents). That
+// direction is safe for the one question asked here: a hidden branch reads as
+// absent, which keeps a resume marker that was not needed rather than dropping
+// one that was.
 func (s *syncSession) targetRefsNow(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-	if s.target.conn == nil {
+	if s.target == nil || s.target.conn == nil {
 		return nil, errors.New("no target connection")
 	}
 	adv, err := gitproto.AdvertisedRefsV1(ctx, s.target.conn, transport.ReceivePackService)
@@ -1439,13 +1445,11 @@ func bootstrapWithInputs(
 		Strategy:   s.cfg.BootstrapStrategy,
 		OnPhase:    s.stats.setPhase,
 		OnNotice:   s.notice,
-		RefRefused: s.refRefused,
-		// Whether a per-ref outcome is knowable at all, which no push error
-		// discloses: without report-status the pusher decodes no report, so
-		// every ref looks unrejected. Where it is not knowable, the strategy
-		// asks the target directly rather than guessing.
-		TargetReportsRefStatus: s.target.features.ReportStatus,
-		TargetRefsNow:          s.targetRefsNow,
+		RefOutcome: s.refOutcome,
+		// Where a push leaves a create in doubt — refused, or a target that
+		// reports nothing — the strategy asks the target which refs it has
+		// rather than guessing from the wording of a rejection.
+		TargetRefsNow: s.targetRefsNow,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)

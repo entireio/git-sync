@@ -1057,8 +1057,8 @@ func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
 	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
 		t.Fatalf("best-effort push returned an error: %v", err)
 	}
-	if got := pusher.LastRejections()[main]; got != reason {
-		t.Fatalf("LastRejections()[%s] = %q, want the target's reason", main, got)
+	if outcome, got := pusher.LastOutcome(main); outcome != RefOutcomeRefused || got != reason {
+		t.Fatalf("LastOutcome(%s) = (%v, %q), want (refused, the target's reason)", main, outcome, got)
 	}
 
 	// Same ref, same Pusher, this time accepted. A session-wide view would
@@ -1069,8 +1069,8 @@ func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
 	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
 		t.Fatalf("second push returned an error: %v", err)
 	}
-	if _, refused := pusher.LastRejections()[main]; refused {
-		t.Errorf("LastRejections still reports %s as refused after a clean push", main)
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeApplied {
+		t.Errorf("LastOutcome(%s) = %v after a clean push, want applied", main, outcome)
 	}
 	if len(session) != 1 {
 		t.Errorf("OnRejection called %d times, want 1 — the session view must be unaffected", len(session))
@@ -1094,7 +1094,50 @@ func TestPusherWithoutOnRejectionKeepsRejectionsFatal(t *testing.T) {
 	if err == nil {
 		t.Fatal("a per-ref ng must stay fatal when the caller installed no OnRejection")
 	}
-	if len(pusher.LastRejections()) != 0 {
-		t.Errorf("LastRejections populated outside best-effort mode: %v", pusher.LastRejections())
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeUnknown {
+		t.Errorf("LastOutcome(%s) = %v after a failed strict push, want unknown", main, outcome)
+	}
+}
+
+func TestPusherOutcomeUnknownWhenReportOmitsRef(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	other := plumbing.ReferenceName("refs/heads/other")
+	// A report that mentions only one of the two commands. A conforming
+	// receive-pack does not do this; the point is that the ref it skipped must
+	// not read as accepted, and must not fail the push either.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Logf("drain request body: %v", err)
+		}
+		_ = r.Body.Close()
+		report := &packp.ReportStatus{
+			UnpackStatus:    "ok",
+			CommandStatuses: []*packp.CommandStatus{{ReferenceName: main, Status: "ok"}},
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		w.WriteHeader(http.StatusOK)
+		if err := report.Encode(w); err != nil {
+			t.Logf("encode report: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+	pusher.OnRejection = func(plumbing.ReferenceName, string) {}
+
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	if err := pusher.PushCommands(t.Context(), []PushCommand{
+		{Name: main, Old: plumbing.ZeroHash, New: hash},
+		{Name: other, Old: plumbing.ZeroHash, New: hash},
+	}); err != nil {
+		t.Fatalf("an omitted status must not fail the push: %v", err)
+	}
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeApplied {
+		t.Errorf("LastOutcome(%s) = %v, want applied", main, outcome)
+	}
+	if outcome, reason := pusher.LastOutcome(other); outcome != RefOutcomeUnknown {
+		t.Errorf("LastOutcome(%s) = (%v, %q), want unknown: the target never mentioned it", other, outcome, reason)
 	}
 }

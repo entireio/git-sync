@@ -51,42 +51,110 @@ type Pusher struct {
 	// overrides it — e.g. from the --target-max-ref-updates flag.
 	MaxRefUpdates int
 
-	// lastRejections holds the per-ref ng statuses collected by the most
+	// lastOutcomes holds what the target said about each ref in the most
 	// recent Push* call on this Pusher, reset when that call starts. A caller
 	// that infers "the ref landed" from a nil error needs THAT request's
 	// answer, not a session-wide accumulation: the same ref name can be
-	// pushed more than once in a run. Populated only when OnRejection is set,
-	// which is the only mode where a per-ref ng is survivable.
-	lastRejections map[plumbing.ReferenceName]string
+	// pushed more than once in a run.
+	lastOutcomes map[plumbing.ReferenceName]refAnswer
 }
 
-// LastRejections returns the refs the target refused during the most recent
-// Push* call on this Pusher, keyed by ng status. Empty when that push was
-// clean, when the caller is not in best-effort mode, or when the target does
-// not advertise report-status — the last two are indistinguishable here, so a
-// caller deciding whether a ref landed must consult the target's
-// capabilities too (see TargetFeatures.ReportStatus). The map is replaced by
-// the next push; callers must not retain it.
-func (p *Pusher) LastRejections() map[plumbing.ReferenceName]string {
-	return p.lastRejections
+// refAnswer is one ref's entry in a decoded report-status.
+type refAnswer struct {
+	refused bool
+	reason  string
 }
 
-// beginPush clears the previous push's rejections and returns the per-ref
-// rejection callback for this one. Nil when the caller installed no
-// OnRejection, because a nil callback is also what makes a per-ref ng fatal —
-// recording rejections must not quietly turn every push best-effort.
-func (p *Pusher) beginPush() func(plumbing.ReferenceName, string) {
-	p.lastRejections = nil
-	if p.OnRejection == nil {
-		return nil
+// RefOutcome is what a target did with one ref command in a push.
+type RefOutcome int
+
+const (
+	// RefOutcomeUnknown means the target said nothing about this ref: it did
+	// not negotiate report-status, its report omitted this command, or no push
+	// has carried the ref. Distinct from acceptance — silence is not something
+	// the target authored — and distinct from refusal.
+	RefOutcomeUnknown RefOutcome = iota
+	// RefOutcomeApplied means the target reported "ok" for this ref.
+	RefOutcomeApplied
+	// RefOutcomeRefused means the target reported "ng" for this ref. Under
+	// BestEffort that is survivable and the push still returns nil, which is
+	// why asking is necessary at all.
+	RefOutcomeRefused
+)
+
+// LastOutcome reports what the target did with name in the most recent Push*
+// call on this Pusher, and the target's "ng" reason when it refused. Answers
+// by value rather than handing out the Pusher's map, so a caller cannot mutate
+// or race with push state it does not own.
+func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
+	answer, seen := p.lastOutcomes[name]
+	switch {
+	case seen && answer.refused:
+		return RefOutcomeRefused, answer.reason
+	case seen:
+		return RefOutcomeApplied, ""
+	default:
+		return RefOutcomeUnknown, ""
 	}
-	return func(name plumbing.ReferenceName, status string) {
-		if p.lastRejections == nil {
-			p.lastRejections = make(map[plumbing.ReferenceName]string, 1)
+}
+
+// pushStatusSink observes the target's per-ref answers for one request. A nil
+// Rejected is what makes a per-ref "ng" fatal, so it stays the switch between
+// best-effort and strict — recording outcomes must not quietly turn every push
+// best-effort.
+type pushStatusSink struct {
+	Rejected func(plumbing.ReferenceName, string)
+	Applied  func(plumbing.ReferenceName)
+}
+
+// fatalRejections reports whether a per-ref "ng" must fail the push.
+func (s *pushStatusSink) fatalRejections() bool {
+	return s == nil || s.Rejected == nil
+}
+
+// record files every per-ref status in a decoded report.
+func (s *pushStatusSink) record(report *packp.ReportStatus) {
+	if s == nil {
+		return
+	}
+	for _, cs := range report.CommandStatuses {
+		if cs.Status == "" || cs.Status == "ok" {
+			if s.Applied != nil {
+				s.Applied(cs.ReferenceName)
+			}
+			continue
 		}
-		p.lastRejections[name] = status
-		p.OnRejection(name, status)
+		if s.Rejected != nil {
+			s.Rejected(cs.ReferenceName, cs.Status)
+		}
 	}
+}
+
+// beginPush clears the previous push's outcomes and returns the sink for this
+// one. Applied is always recorded, so a strict caller — whose nil error really
+// does prove every command landed — can be told so without a second round
+// trip; Rejected is installed only when the caller opted into best-effort.
+func (p *Pusher) beginPush() *pushStatusSink {
+	p.lastOutcomes = nil
+	sink := &pushStatusSink{
+		Applied: func(name plumbing.ReferenceName) {
+			p.answer(name, refAnswer{})
+		},
+	}
+	if p.OnRejection != nil {
+		sink.Rejected = func(name plumbing.ReferenceName, status string) {
+			p.answer(name, refAnswer{refused: true, reason: status})
+			p.OnRejection(name, status)
+		}
+	}
+	return sink
+}
+
+func (p *Pusher) answer(name plumbing.ReferenceName, answer refAnswer) {
+	if p.lastOutcomes == nil {
+		p.lastOutcomes = make(map[plumbing.ReferenceName]refAnswer, 1)
+	}
+	p.lastOutcomes[name] = answer
 }
 
 // NewPusher builds a target-side push executor.
@@ -445,7 +513,7 @@ func sendReceivePack(
 	req *packp.UpdateRequests,
 	packData io.Reader,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	var header bytes.Buffer
 	if err := req.Encode(&header); err != nil {
@@ -487,36 +555,27 @@ func sendReceivePack(
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}
-		if onRejection == nil {
+		if statuses.fatalRejections() {
 			if err := report.Error(); err != nil {
 				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
 			}
+			// Nothing was refused and refusals are fatal, so this nil really
+			// does mean the target applied every command it reported.
+			statuses.record(report)
 			return nil
 		}
 		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
 			// Server-authored, and formatted directly rather than wrapped, so
-			// it needs filtering here — the sibling branch below gets it from
+			// it needs filtering here — the sibling branch above gets it from
 			// sanitizedError.
 			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
 		}
-		acked := make(map[plumbing.ReferenceName]struct{}, len(report.CommandStatuses))
-		for _, cs := range report.CommandStatuses {
-			acked[cs.ReferenceName] = struct{}{}
-			if cs.Status == "" || cs.Status == "ok" {
-				continue
-			}
-			onRejection(cs.ReferenceName, cs.Status)
-		}
-		// A conforming receive-pack reports one status per command. Report a
-		// command it never mentioned as a rejection rather than letting it pass
-		// as "not rejected": a caller deciding whether a ref landed reads the
-		// absence of a rejection as success, and an unauthored silence is not
-		// something the target said.
-		for _, cmd := range req.Commands {
-			if _, ok := acked[cmd.Name]; !ok {
-				onRejection(cmd.Name, "target reported no status for this ref")
-			}
-		}
+		// A conforming receive-pack reports one status per command, so a
+		// command this report never mentions stays RefOutcomeUnknown. That is
+		// deliberately not a refusal: nothing was refused, so nothing should
+		// fail, but the silence is also not the target confirming the ref, and
+		// a caller that has to know can go and look.
+		statuses.record(report)
 	}
 	return nil
 }
@@ -538,11 +597,11 @@ func PushObjects(
 	hashes []plumbing.Hash,
 	maxRefUpdates int,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	limit := effectiveMaxRefUpdates(maxRefUpdates)
 	if len(commands) <= limit {
-		return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, onRejection)
+		return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, statuses)
 	}
 
 	updates := make([]PushCommand, 0, len(commands))
@@ -557,17 +616,17 @@ func PushObjects(
 
 	if len(updates) > 0 {
 		first, rest := splitFirstBatch(updates, limit)
-		if err := pushObjectsBatch(ctx, conn, adv, first, store, hashes, verbose, onRejection); err != nil {
+		if err := pushObjectsBatch(ctx, conn, adv, first, store, hashes, verbose, statuses); err != nil {
 			return err
 		}
 		if len(rest) > 0 {
-			if err := PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, onRejection); err != nil {
+			if err := PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses); err != nil {
 				return err
 			}
 		}
 	}
 	if len(deletes) > 0 {
-		return PushCommands(ctx, conn, adv, deletes, maxRefUpdates, verbose, onRejection)
+		return PushCommands(ctx, conn, adv, deletes, maxRefUpdates, verbose, statuses)
 	}
 	return nil
 }
@@ -591,14 +650,14 @@ func pushObjectsBatch(
 	store storer.Storer,
 	hashes []plumbing.Hash,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
 	if !hasUpdates {
-		return sendReceivePack(ctx, conn, req, nil, verbose, onRejection)
+		return sendReceivePack(ctx, conn, req, nil, verbose, statuses)
 	}
 
 	progressDest := progressSink(verbose, "target: ", conn.ProgressWriter())
@@ -626,7 +685,7 @@ func pushObjectsBatch(
 		done <- pw.Close()
 	}()
 
-	err = sendReceivePack(ctx, conn, req, pr, verbose, onRejection)
+	err = sendReceivePack(ctx, conn, req, pr, verbose, statuses)
 	_ = pr.Close()
 	encodeErr := <-done
 	if err != nil {
@@ -783,7 +842,7 @@ func PushPack(
 	pack io.ReadCloser,
 	maxRefUpdates int,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	for _, cmd := range commands {
 		if cmd.Delete {
@@ -804,7 +863,7 @@ func PushPack(
 		return err
 	}
 
-	err = sendReceivePack(ctx, conn, req, pack, verbose, onRejection)
+	err = sendReceivePack(ctx, conn, req, pack, verbose, statuses)
 	closeErr := pack.Close()
 	if err != nil {
 		return err
@@ -814,7 +873,7 @@ func PushPack(
 	}
 
 	if len(rest) > 0 {
-		return PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, onRejection)
+		return PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses)
 	}
 	return nil
 }
@@ -836,14 +895,14 @@ func PushCommands(
 	commands []PushCommand,
 	maxRefUpdates int,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	batches := chunkRefUpdates(commands, effectiveMaxRefUpdates(maxRefUpdates))
 	for i, batch := range batches {
 		// Ref-only batches carry no useful target progress; suppress the empty
 		// sideband (verbose=false) and report completion ourselves so a large
 		// push doesn't spew a bare "target:" line per batch.
-		if err := pushCommandsBatch(ctx, conn, adv, batch, false, onRejection); err != nil {
+		if err := pushCommandsBatch(ctx, conn, adv, batch, false, statuses); err != nil {
 			return err
 		}
 		logRefUpdateBatch(conn, verbose, i+1, len(batches), len(batch))
@@ -859,7 +918,7 @@ func pushCommandsBatch(
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
@@ -869,7 +928,7 @@ func pushCommandsBatch(
 	if hasUpdates {
 		packData = bytes.NewReader(emptyPack(adv))
 	}
-	return sendReceivePack(ctx, conn, req, packData, verbose, onRejection)
+	return sendReceivePack(ctx, conn, req, packData, verbose, statuses)
 }
 
 // emptyPackHeader is the fixed 12-byte prefix of any packfile with zero

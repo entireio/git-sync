@@ -1175,7 +1175,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 		report.UnpackStatus = "ok"
 		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 			ReferenceName: cmd.Name,
-			Status:        "ng simulated temp-ref delete failure",
+			Status:        "simulated temp-ref delete failure",
 		})
 		return report
 	}
@@ -1256,7 +1256,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 				ReferenceName: cmd.Name,
-				Status:        "ng simulated checkpoint pack failure",
+				Status:        "simulated checkpoint pack failure",
 			})
 		}
 		return report
@@ -1575,7 +1575,7 @@ func TestRun_IntegrationIncrementalPushFailureRecoversOnRetry(t *testing.T) {
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 				ReferenceName: cmd.Name,
-				Status:        "ng simulated incremental push failure",
+				Status:        "simulated incremental push failure",
 			})
 		}
 		return report
@@ -3216,7 +3216,7 @@ func TestRun_IntegrationReplicateResumesInterruptedBatchedBootstrap(t *testing.T
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 				ReferenceName: cmd.Name,
-				Status:        "ng simulated checkpoint pack failure",
+				Status:        "simulated checkpoint pack failure",
 			})
 		}
 		return report
