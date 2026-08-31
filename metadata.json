@@ -3,7 +3,7 @@
   "checkpoint_id": "01M1C4M6DRCWHBCR4MNJ0X95YT",
   "strategy": "manual-commit",
   "branch": "nodo/ent-2060-rebase",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "errors.go",
     "internal/strategy/bootstrap/bootstrap.go",
@@ -16,13 +16,27 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 992,
+    "cache_creation_tokens": 1890361,
+    "cache_read_tokens": 219724168,
+    "output_tokens": 443680,
+    "api_call_count": 494,
+    "subagent_tokens": {
+      "input_tokens": 344,
+      "cache_creation_tokens": 801986,
+      "cache_read_tokens": 20717370,
+      "output_tokens": 62475,
+      "api_call_count": 172
+    }
   }
 }
