@@ -2,7 +2,6 @@
   "cli_version": "0.10.3-nightly.202608260614.6561a64b8",
   "checkpoint_id": "01M1C4BS40PK95XMCB8MF5YH3Q",
   "strategy": "manual-commit",
-  "branch": "nodo/ent-2060-rebase",
   "checkpoints_count": 2,
   "files_touched": [
     "client.go",
