@@ -1,0 +1,21 @@
+can you review https://github.com/entireio/git-sync/pull/116
+
+---
+
+yes, keep it short and more condensed
+
+---
+
+can you review again, we got updates
+
+---
+
+can you please always ask me for confirmation when posting comments on github prs or issues?
+
+---
+
+can you explain me your probe that is also broken in main, isn't that a bug?
+
+---
+
+ok, can you do a new PR with this issue as a failing test?

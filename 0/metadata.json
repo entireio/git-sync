@@ -1,0 +1,47 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "01M1BFVG4TMHD8PHWE7BDMT5EB",
+  "session_id": "281d22fc-428d-4304-9c83-da8a05b7db86",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T08:44:28.571529Z",
+  "branch": "soph/batched-cutover-drops-resume-marker",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "internal/syncer/integration_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "658879e5c58f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 378382,
+    "cache_read_tokens": 13059238,
+    "output_tokens": 75780,
+    "api_call_count": 80
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T08:44:28.44656Z",
+    "agent_lines": 111,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 111,
+    "total_lines_changed": 111,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
