@@ -2,11 +2,12 @@
   "cli_version": "0.10.3-nightly.202608260614.6561a64b8",
   "checkpoint_id": "01M1BRQMBHBRW3FJHY47661Q3F",
   "strategy": "manual-commit",
-  "branch": "nodo/ent-2060-bottom-out-server-verdict",
-  "checkpoints_count": 1,
+  "branch": "nodo/ent-2060-rebase",
+  "checkpoints_count": 3,
   "files_touched": [
     "internal/strategy/bootstrap/bootstrap.go",
-    "internal/strategy/bootstrap/bootstrap_test.go"
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/syncer/syncer.go"
   ],
   "sessions": [
     {
@@ -15,6 +16,13 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {

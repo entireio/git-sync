@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.10.3-nightly.202608260614.6561a64b8",
+  "checkpoint_id": "01M1BRQMBHBRW3FJHY47661Q3F",
+  "session_id": "5e7662ca-7313-402f-a31b-1b2cdbf0fefa",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-31T14:39:06.940388Z",
+  "branch": "nodo/ent-2060-rebase",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "3fac00279998",
+  "checkpoint_transcript_start": 227,
+  "transcript_lines_at_start": 227,
+  "compact_transcript_start": 38,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01RDthFKKFwxpnqGcoPivUtf",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "3fac00279998",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 23,
+        "end": 24,
+        "entry_ids": [
+          "85ab5ca7-b418-4dac-b3b4-4edaaf0c64a5"
+        ],
+        "tool_use_id": "toolu_01RDthFKKFwxpnqGcoPivUtf"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01RDthFKKFwxpnqGcoPivUtf"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-31T14:39:06.92133Z",
+    "agent_lines": 803,
+    "agent_removed": 449,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 803,
+    "total_lines_changed": 1252,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
