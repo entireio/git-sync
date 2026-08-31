@@ -2613,6 +2613,117 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testing.T) {
+	// A batched bootstrap's temp ref (refs/gitsync/bootstrap/heads/<branch>)
+	// is the only record of how far the import got. The cutover push carries
+	// two commands in one request — advance the temp ref to the final
+	// checkpoint, and create the real branch there — and the temp ref is
+	// deleted immediately afterwards on the strength of that push returning
+	// no error.
+	//
+	// Under BestEffort a nil push error does not mean the create landed:
+	// gitproto hands a per-ref "ng" to OnRejection and returns nil. So a
+	// target that refuses the branch create (protected branch, pre-receive
+	// policy) leaves the branch absent AND has its resume marker deleted, and
+	// the run reports success. Every object pushed so far is then unreferenced
+	// on the target: nothing points at it, so the next run has no fetch have
+	// to negotiate against and re-transfers the whole history — on precisely
+	// the large repositories batching exists for.
+	//
+	// The marker must survive a create this run cannot confirm.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(branchRef)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Refuse only the branch create, and apply every other command in the same
+	// request for real. syncertest.DenyRefsReport is deliberately not used
+	// here: a non-nil report short-circuits the test server before it applies
+	// anything, which would leave the temp ref at the previous checkpoint and
+	// make the delete that follows carry a stale Old — a shape a real
+	// receive-pack would reject, hiding the bug behind a second failure.
+	// Applying the advance keeps the sequence faithful: the marker genuinely
+	// reaches the final checkpoint, and is then genuinely destroyed.
+	rejected := false
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		carriesCreate := false
+		for _, cmd := range req.Commands {
+			if cmd.Name == branchRef {
+				carriesCreate = true
+			}
+		}
+		if !carriesCreate {
+			return nil // ordinary checkpoint and delete pushes apply normally
+		}
+		rejected = true
+		report := &packp.ReportStatus{UnpackStatus: "ok"}
+		for _, cmd := range req.Commands {
+			status := "ok"
+			switch {
+			case cmd.Name == branchRef:
+				status = "ng deny creating a protected branch"
+			case cmd.New.IsZero():
+				if err := targetRepo.Storer.RemoveReference(cmd.Name); err != nil {
+					status = "ng " + err.Error()
+				}
+			default:
+				if err := targetRepo.Storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
+					status = "ng " + err.Error()
+				}
+			}
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name,
+				Status:        status,
+			})
+		}
+		return report
+	}
+
+	result, err := Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		BestEffort:         true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000, // force > 1 batch, so a checkpoint exists to lose
+	})
+	if err != nil {
+		t.Fatalf("expected the best-effort run to succeed despite the rejected create: %v", err)
+	}
+
+	// Test setup, not the property under test: without these the assertion
+	// below would pass for the wrong reasons.
+	if !rejected {
+		t.Fatal("test setup: the cutover push never carried the branch create")
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("test setup: expected a batched bootstrap with checkpoints to lose, got batch_count=%d", result.BatchCount)
+	}
+	if _, err := targetRepo.Reference(branchRef, true); err == nil {
+		t.Fatalf("test setup: expected %s to stay absent after the rejected create", branchRef)
+	}
+
+	if _, err := targetRepo.Reference(tempRef, true); err != nil {
+		t.Fatalf("resume marker %s was deleted after a branch create the run could not confirm: %v\n"+
+			"the run reported success (pushed=%d warned=%d, %d checkpoint packs) while leaving the target "+
+			"with neither the branch nor the marker, so the next run re-transfers the whole history",
+			tempRef, err, result.Pushed, result.Warned, result.BatchCount)
+	}
+}
+
 func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
