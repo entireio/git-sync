@@ -597,17 +597,17 @@ func (s *syncSession) leaseFailureError() error {
 	return fmt.Errorf("lease failure on %d ref(s) (%s) — target moved during sync; rerun, or use --force-blind to overwrite: %w", len(refs), strings.Join(refs, ", "), gitproto.ErrTargetRefMoved)
 }
 
-// refRejected reports whether the target refused an update to name in a push
-// made during this session. Only ever true under BestEffort — that is the one
-// mode where s.rejections is populated, because elsewhere a per-ref "ng" fails
-// the push instead of being recorded. Read after a push returns, from the same
-// goroutine the OnRejection callback ran on.
+// refRefused returns the target's "ng" reason for name in the push that just
+// returned, and whether there was one. Answers bootstrap.Params.RefRefused,
+// whose doc has the why; read after a push returns, from the same goroutine
+// the pusher's callback ran on.
 //
-// A strategy that infers "the ref landed" from a nil push error needs this to
-// be correct instead; the batched bootstrap cutover is the one caller.
-func (s *syncSession) refRejected(name plumbing.ReferenceName) bool {
-	_, ok := s.rejections[name]
-	return ok
+// Scoped to that one push rather than to s.rejections, which accumulates over
+// the session: a strategy asking "did the ref I just pushed land" must not be
+// answered with a rejection from an earlier request for the same name.
+func (s *syncSession) refRefused(name plumbing.ReferenceName) (string, bool) {
+	reason, refused := s.target.pusher.LastRejections()[name]
+	return reason, refused
 }
 
 // applyRejections downgrades plans whose ref was rejected by the target to
@@ -1409,10 +1409,14 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
-		Strategy: s.cfg.BootstrapStrategy,
-		OnPhase:  s.stats.setPhase,
-		OnNotice: s.notice,
-		Rejected: s.refRejected,
+		Strategy:   s.cfg.BootstrapStrategy,
+		OnPhase:    s.stats.setPhase,
+		OnNotice:   s.notice,
+		RefRefused: s.refRefused,
+		// Whether a per-ref outcome is knowable at all, which no push error
+		// discloses: without report-status the pusher decodes no report, so
+		// every ref looks unrejected.
+		TargetReportsRefStatus: s.target.features.ReportStatus,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)

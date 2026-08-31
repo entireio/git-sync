@@ -89,13 +89,27 @@ type Params struct {
 	// subdivision, switching to batched mode). Implementations should
 	// treat each call as one log line.
 	OnNotice func(string)
-	// Rejected reports whether the target refused an update to a ref in a
-	// push this run already made. May be nil; only ever true when the caller
-	// pushes best-effort, where a per-ref "ng" invokes the pusher's
-	// OnRejection callback and the push still returns nil — so a nil error
-	// proves the request was accepted, not that every command in it landed.
-	// The batched cutover consults it before deleting its resume marker.
-	Rejected func(plumbing.ReferenceName) bool
+	// RefRefused returns the target's "ng" reason for a ref in the push that
+	// just returned, and whether there was one. Consulted immediately after a
+	// push, since the answer describes that one request.
+	//
+	// It exists because a nil error is not proof. When the caller pushes
+	// best-effort the pusher hands a per-ref "ng" to its OnRejection callback
+	// and returns nil, so a target that refuses one command out of a
+	// multi-command request reports the whole push as a success.
+	//
+	// Nil for a caller that never pushes best-effort: there a per-ref "ng"
+	// fails the push outright, so a nil error already means every command
+	// landed.
+	RefRefused func(plumbing.ReferenceName) (string, bool)
+	// TargetReportsRefStatus is true when the target advertised report-status,
+	// so RefRefused's silence about a ref means the target applied it. When
+	// false no report was decoded at all, silence means nothing, and no ref
+	// update this run made is confirmable. Read only when RefRefused is set;
+	// leaving it false there gets the conservative answer — scaffolding kept
+	// rather than dropped on an unconfirmed create — which is the safe
+	// direction to forget in.
+	TargetReportsRefStatus bool
 }
 
 func (p Params) notice(msg string) {
@@ -104,12 +118,41 @@ func (p Params) notice(msg string) {
 	}
 }
 
-// rejected reports whether the target refused an update to name earlier in
-// this run. False when the caller supplied no predicate: a caller that never
-// pushes best-effort has nothing to report, because there a per-ref "ng"
-// fails the push outright rather than being swallowed.
-func (p Params) rejected(name plumbing.ReferenceName) bool {
-	return p.Rejected != nil && p.Rejected(name)
+// refRefused reports whether the target refused an update to name in the push
+// that just returned, and its reason. A refusal is a positive fact: it is
+// never inferred from a target that cannot report per-ref status.
+func (p Params) refRefused(name plumbing.ReferenceName) (string, bool) {
+	if p.RefRefused == nil {
+		return "", false
+	}
+	return p.RefRefused(name)
+}
+
+// branchPresent reports whether a branch this run just tried to create is on
+// the target — the question deleting its resume marker turns on — and the
+// reason to log when it is not. Three cases, in the order tested:
+//
+//   - Refused as a concurrent move ("already exists"): present. The branch is
+//     on the target at a hash this run did not push, so its scaffolding is
+//     genuinely stale, and keeping the marker would strand it forever on a
+//     route that cannot prune.
+//   - Refused for any other reason: absent. Under BestEffort this is the path
+//     that still returns a nil push error.
+//   - Not refused, but the target does not report per-ref status: unknown, so
+//     absent. Silence from a target that says nothing is not confirmation,
+//     and reading it as success is what loses the resume position.
+func (p Params) branchPresent(name plumbing.ReferenceName) (bool, string) {
+	reason, refused := p.refRefused(name)
+	switch {
+	case refused && gitproto.IsConcurrentMove(reason):
+		return true, ""
+	case refused:
+		return false, reason
+	case p.RefRefused != nil && !p.TargetReportsRefStatus:
+		return false, "target does not report per-ref push status"
+	default:
+		return true, ""
+	}
 }
 
 // Result holds the outcome of the bootstrap strategy. Pushed is the count
@@ -361,6 +404,17 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			}}
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("create subsumed branch ref for %s: %w", batch.Plan.TargetRef, err)
+			}
+			// A subsumed branch has no temp ref to preserve — trunk already
+			// delivered its objects — but the same nil-error-is-not-proof rule
+			// applies: neither the have nor the batch count may be recorded
+			// for a create the target refused.
+			if present, why := p.branchPresent(batch.Plan.TargetRef); !present {
+				p.log("bootstrap batch subsumed branch create not confirmed",
+					"branch", batch.Plan.TargetRef.String(),
+					"source_hash", planner.ShortHash(batch.Plan.SourceHash),
+					"reason", why)
+				continue
 			}
 			completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 			result.BatchCount++
@@ -640,6 +694,24 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
 			}
 			_ = packReader.Close()
+			// The temp ref is the state machine: `current` advances only if
+			// the target really moved it. A policy that refuses the whole
+			// request (read-only repository, a blanket pre-receive block) ng's
+			// this command too, and best-effort turns that into a nil error —
+			// after which every subsequent checkpoint would negotiate against
+			// a have the target does not have, and the cutover would delete a
+			// ref at a hash the target never accepted. There is no partial
+			// progress to keep here, so stop rather than warn: the branch
+			// cannot be delivered by this run at all.
+			//
+			// Only a refusal stops the run. A target that cannot report
+			// per-ref status says nothing about this ref either, and treating
+			// that silence as a refusal would fail every batched bootstrap
+			// against it.
+			if reason, refused := p.refRefused(batch.TempRef); refused {
+				return result, fmt.Errorf("push bootstrap batch for %s: target refused %s: %s",
+					batch.Plan.TargetRef, batch.TempRef, reason)
+			}
 			p.log("bootstrap batch checkpoint complete",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
@@ -684,31 +756,31 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		// The temp ref is this import's only record of how far it got, so it
 		// may only be deleted once the branch it was scaffolding for exists.
 		// The create rode the final checkpoint's push (or, on an at-tip
-		// resume, the command push just above), and under BestEffort a nil
-		// error from either covers the request rather than each command in
-		// it: the pusher hands a per-ref "ng" to OnRejection and returns nil.
-		// A target that refuses the create (protected branch, pre-receive
-		// policy) would otherwise end the run with neither the branch nor the
-		// marker, reported as a success — and with nothing on the target
-		// pointing at the objects pushed so far, the next run has no have to
-		// negotiate against and re-transfers the entire history, on precisely
-		// the large repositories batching exists for.
+		// resume, the command push just above), and neither push proves it
+		// landed — see Params.RefRefused. A target that refuses the create
+		// (protected branch, pre-receive policy) would otherwise end the run
+		// with neither the branch nor the marker, reported as a success — and
+		// with nothing on the target pointing at the objects pushed so far,
+		// the next run has no have to negotiate against and re-transfers the
+		// entire history, on precisely the large repositories batching exists
+		// for.
 		//
 		// Unlike the one-shot path, this cannot defer to prune as its
 		// cleaner: Bootstrap() rejects --prune outright, so on that route no
 		// cleaner would ever exist and the marker would be permanent. Hence
 		// the conditional delete rather than no delete.
-		if p.rejected(batch.Plan.TargetRef) {
+		if present, why := p.branchPresent(batch.Plan.TargetRef); !present {
 			// The marker genuinely holds `current`, so the objects behind it
 			// stay usable as haves for the branches planned after this one.
 			completedRefs[batch.TempRef] = current
-			p.log("bootstrap batch keeping resume marker after rejected branch create",
+			p.log("bootstrap batch keeping resume marker after unconfirmed branch create",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"resume_hash", planner.ShortHash(current),
-				"batch_count", result.BatchCount)
-			p.notice(fmt.Sprintf("target rejected %s — keeping %s at %s so the next run resumes instead of re-importing",
-				batch.Plan.TargetRef, batch.TempRef, planner.ShortHash(current)))
+				"pushed_checkpoints", len(pushedCheckpoints),
+				"reason", why)
+			p.notice(fmt.Sprintf("%s did not land on the target (%s) — keeping %s at %s so the next run resumes instead of re-importing",
+				batch.Plan.TargetRef, why, batch.TempRef, planner.ShortHash(current)))
 			continue
 		}
 

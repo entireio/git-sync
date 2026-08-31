@@ -608,8 +608,8 @@ func TestIsConcurrentMove(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := isConcurrentMove(c.reason); got != c.want {
-				t.Fatalf("isConcurrentMove(%q) = %v, want %v", c.reason, got, c.want)
+			if got := IsConcurrentMove(c.reason); got != c.want {
+				t.Fatalf("IsConcurrentMove(%q) = %v, want %v", c.reason, got, c.want)
 			}
 		})
 	}
@@ -1003,5 +1003,99 @@ func TestPushPackSanitizesUnpackStatusOnBestEffortPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed") {
 		t.Errorf("the real status must survive filtering: %q", err.Error())
+	}
+}
+
+// refReportServer answers every receive-pack POST with a report whose named
+// refs are "ng" and everything else "ok". The per-ref status is what a caller
+// asking "did the ref I just pushed land" reads.
+func refReportServer(t *testing.T, ngRefs func() map[plumbing.ReferenceName]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Logf("read request body: %v", err)
+		}
+		_ = r.Body.Close()
+		req := &packp.UpdateRequests{}
+		if err := req.Decode(bytes.NewReader(body)); err != nil {
+			t.Logf("decode update requests: %v", err)
+		}
+		report := &packp.ReportStatus{UnpackStatus: "ok"}
+		ng := ngRefs()
+		for _, cmd := range req.Commands {
+			status := "ok"
+			if reason, refused := ng[cmd.Name]; refused {
+				status = reason
+			}
+			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+				ReferenceName: cmd.Name, Status: status,
+			})
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		w.WriteHeader(http.StatusOK)
+		if err := report.Encode(w); err != nil {
+			t.Logf("encode report: %v", err)
+		}
+	}))
+}
+
+func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	ng := map[plumbing.ReferenceName]string{main: "deny creating a protected branch"}
+	srv := refReportServer(t, func() map[plumbing.ReferenceName]string { return ng })
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+	var session []plumbing.ReferenceName
+	// Non-nil OnRejection selects the best-effort branch, where a per-ref ng
+	// reaches the callback and the push returns nil.
+	pusher.OnRejection = func(name plumbing.ReferenceName, _ string) {
+		session = append(session, name)
+	}
+
+	cmds := []PushCommand{{Name: main, Old: plumbing.ZeroHash, New: plumbing.NewHash("1111111111111111111111111111111111111111")}}
+	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
+		t.Fatalf("best-effort push returned an error: %v", err)
+	}
+	if got := pusher.LastRejections()[main]; got != ng[main] {
+		t.Fatalf("LastRejections()[%s] = %q, want the target's reason", main, got)
+	}
+
+	// Same ref, same Pusher, this time accepted. A session-wide view would
+	// still call it rejected — the trap this exists to avoid.
+	ng = map[plumbing.ReferenceName]string{}
+	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
+		t.Fatalf("second push returned an error: %v", err)
+	}
+	if _, refused := pusher.LastRejections()[main]; refused {
+		t.Errorf("LastRejections still reports %s as refused after a clean push", main)
+	}
+	if len(session) != 1 {
+		t.Errorf("OnRejection called %d times, want 1 — the session view must be unaffected", len(session))
+	}
+}
+
+func TestPusherWithoutOnRejectionKeepsRejectionsFatal(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	srv := refReportServer(t, func() map[plumbing.ReferenceName]string {
+		return map[plumbing.ReferenceName]string{main: "deny creating a protected branch"}
+	})
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+
+	err := pusher.PushCommands(t.Context(), []PushCommand{{
+		Name: main, Old: plumbing.ZeroHash, New: plumbing.NewHash("1111111111111111111111111111111111111111"),
+	}})
+	if err == nil {
+		t.Fatal("a per-ref ng must stay fatal when the caller installed no OnRejection")
+	}
+	if len(pusher.LastRejections()) != 0 {
+		t.Errorf("LastRejections populated outside best-effort mode: %v", pusher.LastRejections())
 	}
 }

@@ -50,6 +50,43 @@ type Pusher struct {
 	// uses the env-or-default limit (see MaxRefUpdatesEnv); a positive value
 	// overrides it — e.g. from the --target-max-ref-updates flag.
 	MaxRefUpdates int
+
+	// lastRejections holds the per-ref ng statuses collected by the most
+	// recent Push* call on this Pusher, reset when that call starts. A caller
+	// that infers "the ref landed" from a nil error needs THAT request's
+	// answer, not a session-wide accumulation: the same ref name can be
+	// pushed more than once in a run. Populated only when OnRejection is set,
+	// which is the only mode where a per-ref ng is survivable.
+	lastRejections map[plumbing.ReferenceName]string
+}
+
+// LastRejections returns the refs the target refused during the most recent
+// Push* call on this Pusher, keyed by ng status. Empty when that push was
+// clean, when the caller is not in best-effort mode, or when the target does
+// not advertise report-status — the last two are indistinguishable here, so a
+// caller deciding whether a ref landed must consult the target's
+// capabilities too (see TargetFeatures.ReportStatus). The map is replaced by
+// the next push; callers must not retain it.
+func (p *Pusher) LastRejections() map[plumbing.ReferenceName]string {
+	return p.lastRejections
+}
+
+// beginPush clears the previous push's rejections and returns the per-ref
+// rejection callback for this one. Nil when the caller installed no
+// OnRejection, because a nil callback is also what makes a per-ref ng fatal —
+// recording rejections must not quietly turn every push best-effort.
+func (p *Pusher) beginPush() func(plumbing.ReferenceName, string) {
+	p.lastRejections = nil
+	if p.OnRejection == nil {
+		return nil
+	}
+	return func(name plumbing.ReferenceName, status string) {
+		if p.lastRejections == nil {
+			p.lastRejections = make(map[plumbing.ReferenceName]string, 1)
+		}
+		p.lastRejections[name] = status
+		p.OnRejection(name, status)
+	}
 }
 
 // NewPusher builds a target-side push executor.
@@ -144,18 +181,18 @@ func logRefUpdateBatch(conn Conn, verbose bool, batchNum, totalBatches, refs int
 
 // PushPack streams a pack to the target.
 func (p *Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
-	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.MaxRefUpdates, p.Verbose, p.OnRejection)
+	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // PushCommands sends ref-only updates. Creates/updates carry an empty pack;
 // delete-only pushes carry no pack. See the package-level PushCommands.
 func (p *Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
-	return PushCommands(ctx, p.Conn, p.Adv, commands, p.MaxRefUpdates, p.Verbose, p.OnRejection)
+	return PushCommands(ctx, p.Conn, p.Adv, commands, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // PushObjects encodes and pushes locally materialized objects.
 func (p *Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
-	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.OnRejection)
+	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // buildUpdateRequest builds the receive-pack update request.
@@ -331,9 +368,13 @@ var concurrentMoveMarkers = []string{
 	"stale info",
 }
 
-// isConcurrentMove reports whether a receive-pack ng reason is an unambiguous
-// concurrent target-ref move (see concurrentMoveMarkers).
-func isConcurrentMove(reason string) bool {
+// IsConcurrentMove reports whether a receive-pack ng reason is an unambiguous
+// concurrent target-ref move (see concurrentMoveMarkers) — the target's copy
+// of the ref is at a hash we did not put there, which for a create means the
+// ref exists. Exported so a caller that only sees the ng status (BestEffort,
+// where the rejection reaches OnRejection instead of an error) can tell that
+// case apart from a refusal that left the ref absent.
+func IsConcurrentMove(reason string) bool {
 	lowered := strings.ToLower(reason)
 	for _, marker := range concurrentMoveMarkers {
 		if strings.Contains(lowered, marker) {
@@ -388,7 +429,7 @@ func asRefRejectedError(err error) error {
 		// filtering cannot change whether a rejection counts as a concurrent
 		// move.
 		Reason: sanitize.Text(cs.Status),
-		moved:  isConcurrentMove(cs.Status),
+		moved:  IsConcurrentMove(cs.Status),
 		err:    err,
 	}
 }
