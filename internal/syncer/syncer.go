@@ -605,9 +605,36 @@ func (s *syncSession) leaseFailureError() error {
 // Scoped to that one push rather than to s.rejections, which accumulates over
 // the session: a strategy asking "did the ref I just pushed land" must not be
 // answered with a rejection from an earlier request for the same name.
+//
+// Sanitized here, as the OnRejection callback does for s.rejections: the reason
+// is free-form text the target wrote, and from here it reaches the terminal in
+// a notice and an error message, where an escape sequence could redraw the line
+// a warning was printed on.
 func (s *syncSession) refRefused(name plumbing.ReferenceName) (string, bool) {
 	reason, refused := s.target.pusher.LastRejections()[name]
-	return reason, refused
+	return sanitize.Text(reason), refused
+}
+
+// targetRefsNow re-reads the target's refs mid-run. Answers
+// bootstrap.Params.TargetRefsNow, which asks it only to settle whether a branch
+// whose create no push could confirm is actually there — one advertisement
+// round trip against a transfer measured in gigabytes.
+func (s *syncSession) targetRefsNow(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+	if s.target.conn == nil {
+		return nil, errors.New("no target connection")
+	}
+	adv, err := gitproto.AdvertisedRefsV1(ctx, s.target.conn, transport.ReceivePackService)
+	if err != nil {
+		return nil, fmt.Errorf("list target refs: %w", err)
+	}
+	// Skipped names are dropped without a second warning: newSession already
+	// reported them for this target, and a name git would reject cannot be one
+	// of the branches this run created.
+	refs, _, err := gitproto.AdvRefsToSlice(adv)
+	if err != nil {
+		return nil, fmt.Errorf("decode target refs: %w", err)
+	}
+	return gitproto.RefHashMap(refs), nil
 }
 
 // applyRejections downgrades plans whose ref was rejected by the target to
@@ -1415,8 +1442,10 @@ func bootstrapWithInputs(
 		RefRefused: s.refRefused,
 		// Whether a per-ref outcome is knowable at all, which no push error
 		// discloses: without report-status the pusher decodes no report, so
-		// every ref looks unrejected.
+		// every ref looks unrejected. Where it is not knowable, the strategy
+		// asks the target directly rather than guessing.
 		TargetReportsRefStatus: s.target.features.ReportStatus,
+		TargetRefsNow:          s.targetRefsNow,
 	}, relayReason)
 	if err != nil {
 		return Result{}, fmt.Errorf("bootstrap execute: %w", err)

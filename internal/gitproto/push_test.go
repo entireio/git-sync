@@ -22,6 +22,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
 	"github.com/stretchr/testify/require"
+
+	"entire.io/entire/git-sync/internal/syncertest"
 )
 
 func TestPrefixedLineWriter(t *testing.T) {
@@ -608,8 +610,8 @@ func TestIsConcurrentMove(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := IsConcurrentMove(c.reason); got != c.want {
-				t.Fatalf("IsConcurrentMove(%q) = %v, want %v", c.reason, got, c.want)
+			if got := isConcurrentMove(c.reason); got != c.want {
+				t.Fatalf("isConcurrentMove(%q) = %v, want %v", c.reason, got, c.want)
 			}
 		})
 	}
@@ -1006,10 +1008,10 @@ func TestPushPackSanitizesUnpackStatusOnBestEffortPath(t *testing.T) {
 	}
 }
 
-// refReportServer answers every receive-pack POST with a report whose named
-// refs are "ng" and everything else "ok". The per-ref status is what a caller
-// asking "did the ref I just pushed land" reads.
-func refReportServer(t *testing.T, ngRefs func() map[plumbing.ReferenceName]string) *httptest.Server {
+// refReportServer answers every receive-pack POST by denying the named ref
+// while reporting every other command "ok". deny is read under mu because the
+// handler runs on the server's goroutine while the test drives the pushes.
+func refReportServer(t *testing.T, mu *sync.Mutex, deny *plumbing.ReferenceName, reason string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -1021,17 +1023,10 @@ func refReportServer(t *testing.T, ngRefs func() map[plumbing.ReferenceName]stri
 		if err := req.Decode(bytes.NewReader(body)); err != nil {
 			t.Logf("decode update requests: %v", err)
 		}
-		report := &packp.ReportStatus{UnpackStatus: "ok"}
-		ng := ngRefs()
-		for _, cmd := range req.Commands {
-			status := "ok"
-			if reason, refused := ng[cmd.Name]; refused {
-				status = reason
-			}
-			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
-				ReferenceName: cmd.Name, Status: status,
-			})
-		}
+		mu.Lock()
+		denied := *deny
+		mu.Unlock()
+		report := syncertest.DenyRefsReport(req, reason, denied)
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 		w.WriteHeader(http.StatusOK)
 		if err := report.Encode(w); err != nil {
@@ -1042,8 +1037,10 @@ func refReportServer(t *testing.T, ngRefs func() map[plumbing.ReferenceName]stri
 
 func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
 	main := plumbing.ReferenceName("refs/heads/main")
-	ng := map[plumbing.ReferenceName]string{main: "deny creating a protected branch"}
-	srv := refReportServer(t, func() map[plumbing.ReferenceName]string { return ng })
+	const reason = "deny creating a protected branch"
+	var mu sync.Mutex
+	deny := main
+	srv := refReportServer(t, &mu, &deny, reason)
 	defer srv.Close()
 
 	adv := &packp.AdvRefs{}
@@ -1060,13 +1057,15 @@ func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
 	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
 		t.Fatalf("best-effort push returned an error: %v", err)
 	}
-	if got := pusher.LastRejections()[main]; got != ng[main] {
+	if got := pusher.LastRejections()[main]; got != reason {
 		t.Fatalf("LastRejections()[%s] = %q, want the target's reason", main, got)
 	}
 
 	// Same ref, same Pusher, this time accepted. A session-wide view would
 	// still call it rejected — the trap this exists to avoid.
-	ng = map[plumbing.ReferenceName]string{}
+	mu.Lock()
+	deny = plumbing.ReferenceName("refs/heads/other")
+	mu.Unlock()
 	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
 		t.Fatalf("second push returned an error: %v", err)
 	}
@@ -1080,9 +1079,9 @@ func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
 
 func TestPusherWithoutOnRejectionKeepsRejectionsFatal(t *testing.T) {
 	main := plumbing.ReferenceName("refs/heads/main")
-	srv := refReportServer(t, func() map[plumbing.ReferenceName]string {
-		return map[plumbing.ReferenceName]string{main: "deny creating a protected branch"}
-	})
+	var mu sync.Mutex
+	deny := main
+	srv := refReportServer(t, &mu, &deny, "deny creating a protected branch")
 	defer srv.Close()
 
 	adv := &packp.AdvRefs{}

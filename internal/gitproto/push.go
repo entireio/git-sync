@@ -368,13 +368,9 @@ var concurrentMoveMarkers = []string{
 	"stale info",
 }
 
-// IsConcurrentMove reports whether a receive-pack ng reason is an unambiguous
-// concurrent target-ref move (see concurrentMoveMarkers) — the target's copy
-// of the ref is at a hash we did not put there, which for a create means the
-// ref exists. Exported so a caller that only sees the ng status (BestEffort,
-// where the rejection reaches OnRejection instead of an error) can tell that
-// case apart from a refusal that left the ref absent.
-func IsConcurrentMove(reason string) bool {
+// isConcurrentMove reports whether a receive-pack ng reason is an unambiguous
+// concurrent target-ref move (see concurrentMoveMarkers).
+func isConcurrentMove(reason string) bool {
 	lowered := strings.ToLower(reason)
 	for _, marker := range concurrentMoveMarkers {
 		if strings.Contains(lowered, marker) {
@@ -429,7 +425,7 @@ func asRefRejectedError(err error) error {
 		// filtering cannot change whether a rejection counts as a concurrent
 		// move.
 		Reason: sanitize.Text(cs.Status),
-		moved:  IsConcurrentMove(cs.Status),
+		moved:  isConcurrentMove(cs.Status),
 		err:    err,
 	}
 }
@@ -503,11 +499,23 @@ func sendReceivePack(
 			// sanitizedError.
 			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
 		}
+		acked := make(map[plumbing.ReferenceName]struct{}, len(report.CommandStatuses))
 		for _, cs := range report.CommandStatuses {
+			acked[cs.ReferenceName] = struct{}{}
 			if cs.Status == "" || cs.Status == "ok" {
 				continue
 			}
 			onRejection(cs.ReferenceName, cs.Status)
+		}
+		// A conforming receive-pack reports one status per command. Report a
+		// command it never mentioned as a rejection rather than letting it pass
+		// as "not rejected": a caller deciding whether a ref landed reads the
+		// absence of a rejection as success, and an unauthored silence is not
+		// something the target said.
+		for _, cmd := range req.Commands {
+			if _, ok := acked[cmd.Name]; !ok {
+				onRejection(cmd.Name, "target reported no status for this ref")
+			}
 		}
 	}
 	return nil

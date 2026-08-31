@@ -1809,15 +1809,44 @@ type batchedRefusalHarness struct {
 	trunkTip            plumbing.Hash
 	fetchHaves          []map[plumbing.ReferenceName]plumbing.Hash
 	pushCommandsBatches [][]gitproto.PushCommand
+	// refsNow is what the target answers when the run asks which refs it
+	// actually has, and refsNowErr makes that question unanswerable. Together
+	// they stand in for the only authority on whether a branch landed.
+	refsNow    map[plumbing.ReferenceName]plumbing.Hash
+	refsNowErr error
+	refsNowN   int
 }
 
 func newBatchedRefusalHarness(t *testing.T, refused map[plumbing.ReferenceName]string) *batchedRefusalHarness {
 	t.Helper()
+	return newBatchedHarness(t, refused, false)
+}
+
+// newSubsumedRefusalHarness is the same two branches with the second one's tip
+// inside the trunk's ancestry, so it is planned as subsumed: one ref create, no
+// pack, no temp ref.
+func newSubsumedRefusalHarness(t *testing.T, refused map[plumbing.ReferenceName]string) *batchedRefusalHarness {
+	t.Helper()
+	return newBatchedHarness(t, refused, true)
+}
+
+func newBatchedHarness(t *testing.T, refused map[plumbing.ReferenceName]string, subsumeSecond bool) *batchedRefusalHarness {
+	t.Helper()
 	parents, trunkTip, forkTip := forkedCommitGraph(t, 4)
+	if subsumeSecond {
+		// A tip on the trunk's own chain: reachable from it, so trunk's
+		// batches deliver every object and the planner subsumes it.
+		for hash, ps := range parents {
+			if hash == trunkTip {
+				forkTip = ps[0]
+			}
+		}
+	}
 	h := &batchedRefusalHarness{
 		trunkRef: plumbing.NewBranchReferenceName("main"),
 		forkRef:  plumbing.NewBranchReferenceName("release"),
 		trunkTip: trunkTip,
+		refsNow:  map[plumbing.ReferenceName]plumbing.Hash{},
 	}
 	h.trunkTempRef = planner.BootstrapTempRef(h.trunkRef)
 	h.params = Params{
@@ -1855,6 +1884,13 @@ func newBatchedRefusalHarness(t *testing.T, refused map[plumbing.ReferenceName]s
 			reason, ok := refused[name]
 			return reason, ok
 		},
+		TargetRefsNow: func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+			h.refsNowN++
+			if h.refsNowErr != nil {
+				return nil, h.refsNowErr
+			}
+			return h.refsNow, nil
+		},
 	}
 	return h
 }
@@ -1888,6 +1924,11 @@ func TestExecuteBatchedRefusedCreateKeepsMarkerAsHave(t *testing.T) {
 		t.Errorf("deleted resume marker %s after a create the target refused: %v",
 			h.trunkTempRef, h.pushCommandsBatches)
 	}
+	// Kept because the target says the branch is absent, not because the ng
+	// text was read: the listing has to have been consulted.
+	if h.refsNowN == 0 {
+		t.Error("marker decided without asking the target which refs it has")
+	}
 	if len(h.fetchHaves) < 2 {
 		t.Fatalf("expected a fetch for the second branch, got %d fetch(es)", len(h.fetchHaves))
 	}
@@ -1907,19 +1948,61 @@ func TestExecuteBatchedRefusedCreateKeepsMarkerAsHave(t *testing.T) {
 	}
 }
 
-// "already exists" says the branch is on the target, at a hash this run did
-// not push. The marker is then stale, and keeping it would strand it on the
-// bootstrap route, which refuses --prune and so has no cleaner.
-func TestExecuteBatchedConcurrentMoveDeletesMarker(t *testing.T) {
-	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
-		plumbing.NewBranchReferenceName("main"): "already exists",
-	})
+// The common path pays nothing: a confirmed create deletes its marker straight
+// away, without asking the target for a ref listing.
+func TestExecuteBatchedConfirmedCreateDeletesMarkerWithoutListing(t *testing.T) {
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
 
 	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !h.deletedTrunkMarker() {
-		t.Errorf("kept resume marker %s for a branch the target says already exists: %v",
+		t.Errorf("did not delete resume marker %s after a confirmed create: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+	if h.refsNowN != 0 {
+		t.Errorf("asked the target for %d ref listing(s) on a run with nothing in doubt", h.refsNowN)
+	}
+}
+
+// A refusal does not always mean the branch is absent — "already exists" says
+// the opposite, and a pre-receive message can contain that phrase while the
+// branch really is missing. So the decision is made on what the target has,
+// not on what it wrote: branch present means the marker is stale scaffolding
+// and must go, or it strands forever on the bootstrap route, which refuses
+// --prune and so has no cleaner.
+func TestExecuteBatchedRefusedButPresentBranchDeletesMarker(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		trunkRef: "already exists",
+	})
+	// Whoever created it, it is there.
+	h.refsNow[trunkRef] = plumbing.NewHash("6dcf09a3e2a1b3d1d1c88f1ad5e63e3f3d1a2b3c")
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !h.deletedTrunkMarker() {
+		t.Errorf("kept resume marker %s for a branch the target has: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// The mirror image, and the reason the text is not consulted: a refusal whose
+// wording happens to contain "already exists" while the branch is genuinely
+// absent must keep the marker. Classifying the prose would delete it and cost
+// a full re-transfer.
+func TestExecuteBatchedRefusalMentioningExistenceKeepsMarkerWhenAbsent(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		trunkRef: "refusing to create refs/heads/main: a tag with that name already exists",
+	})
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted resume marker %s for a branch the target does not have: %v",
 			h.trunkTempRef, h.pushCommandsBatches)
 	}
 }
@@ -1947,17 +2030,41 @@ func TestExecuteBatchedRefusedTempRefStopsTheRun(t *testing.T) {
 }
 
 // Silence from a target that never advertised report-status is not
-// confirmation. The marker survives; it must not become a hard failure, or
-// batched bootstrap would stop working against such a target entirely.
-func TestExecuteBatchedUnconfirmableCreateKeepsMarker(t *testing.T) {
+// confirmation — but it is not a failure either. The listing settles it: the
+// create landed, so the marker is stale and goes. Without this the marker
+// would be permanent on the one route that forbids --prune.
+func TestExecuteBatchedUnreportingTargetSettledByListing(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
 	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
 	h.params.TargetReportsRefStatus = false
+	h.refsNow[trunkRef] = h.trunkTip
 
 	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	if h.refsNowN == 0 {
+		t.Error("never asked the target which refs it has, so nothing was confirmed")
+	}
+	if !h.deletedTrunkMarker() {
+		t.Errorf("kept resume marker %s though the target has the branch: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// When the target cannot be asked either, nothing is settled and everything is
+// kept — one run's leftover scaffolding against a full re-transfer — and the
+// run still succeeds, because the branches that landed are what the operator
+// asked for.
+func TestExecuteBatchedUnansweredListingKeepsMarker(t *testing.T) {
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	h.params.TargetReportsRefStatus = false
+	h.refsNowErr = errors.New("target listing unavailable")
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute must not fail because a listing failed: %v", err)
+	}
 	if h.deletedTrunkMarker() {
-		t.Errorf("deleted resume marker %s on a create the target cannot confirm: %v",
+		t.Errorf("deleted resume marker %s without confirming anything: %v",
 			h.trunkTempRef, h.pushCommandsBatches)
 	}
 }
@@ -1966,46 +2073,12 @@ func TestExecuteBatchedUnconfirmableCreateKeepsMarker(t *testing.T) {
 // with the same nil-error-is-not-proof problem: a refused create must not be
 // counted as a delivered batch or offered as a have.
 func TestExecuteBatchedSubsumedRefusedCreateNotCounted(t *testing.T) {
-	mainRef := plumbing.NewBranchReferenceName("main")
-	featureRef := plumbing.NewBranchReferenceName("feature")
-	hashes := makeLinearCommitChain(t, 3)
-	mainHash, featureHash := hashes[2], hashes[0]
+	forkRef := plumbing.NewBranchReferenceName("release")
+	h := newSubsumedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		forkRef: "deny creating a protected branch",
+	})
 
-	var fetchHaves []map[plumbing.ReferenceName]plumbing.Hash
-	result, err := Execute(context.Background(), Params{
-		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
-				store := memory.NewStorage()
-				writeLinearCommitChain(t, store, 3)
-				return parentsFromCommitChainStore(t, store), nil
-			},
-			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
-				fetchHaves = append(fetchHaves, planner.CopyRefHashMap(haves))
-				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
-			},
-		},
-		TargetPusher: fakeBootstrapPusher{
-			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
-				_ = pack.Close()
-				return nil
-			},
-			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
-		},
-		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
-			mainRef:    {SourceRef: mainRef, TargetRef: mainRef, SourceHash: mainHash, Kind: planner.RefKindBranch, Label: "main"},
-			featureRef: {SourceRef: featureRef, TargetRef: featureRef, SourceHash: featureHash, Kind: planner.RefKindBranch, Label: "feature"},
-		},
-		TargetRefs:             map[plumbing.ReferenceName]plumbing.Hash{},
-		SourceHeadTarget:       mainRef,
-		TargetMaxPack:          1024 * 1024,
-		TargetReportsRefStatus: true,
-		RefRefused: func(name plumbing.ReferenceName) (string, bool) {
-			if name == featureRef {
-				return "deny creating a protected branch", true
-			}
-			return "", false
-		},
-	}, "empty target")
+	result, err := Execute(context.Background(), h.params, "empty target")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -2014,9 +2087,9 @@ func TestExecuteBatchedSubsumedRefusedCreateNotCounted(t *testing.T) {
 	if result.BatchCount != 1 {
 		t.Errorf("BatchCount=%d, want 1 (trunk only; the subsumed create was refused)", result.BatchCount)
 	}
-	for _, haves := range fetchHaves {
-		if _, ok := haves[featureRef]; ok {
-			t.Errorf("offered refused branch %s as a fetch have: %v", featureRef, haves)
+	for _, haves := range h.fetchHaves {
+		if _, ok := haves[forkRef]; ok {
+			t.Errorf("offered refused branch %s as a fetch have: %v", forkRef, haves)
 		}
 	}
 }
