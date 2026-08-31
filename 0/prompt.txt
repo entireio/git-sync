@@ -1,0 +1,28 @@
+what's the status, this haas been going on for a while
+
+---
+
+link to the pr?
+
+---
+
+what's the problem we are solving in one sentence?
+
+---
+
+what's the solution?
+
+---
+
+>  on the target at the hash this run pushed 
+can this cause a race where someone push something in the meantime?
+
+---
+
+Review: ```The subsumed path treats "unknown" as success. At the cutover an unconfirmed create is settled against the target; on the subsumed path (bootstrap.go:431-439) only an explicit refusal is handled, so RefOutcomeUnknown falls through to completedRefs[branch] = SourceHash and result.BatchCount++. Against a target that doesn't report per-ref status, a subsumed create that silently didn't land is recorded as finalized.
+
+Impact is small: no resume state rides on it, the objects are already on the target via trunk so the have stays truthful, and the next run recreates the branch. But it's inconsistent with the path directly below it, and the justifying comment — "there is nothing to clean up either way" — answers the scaffolding question, not the accounting one. TestExecuteBatchedSubsumedRefusedCreateNotCounted covers the refused case only. Either settle it from the same listing that's already being fetched whenever anything else is pending, or state that the accounting is best-effort here.
+
+Nit
+
+PushPack, PushCommands, and PushObjects are exported but now take *pushStatusSink, an unexported type — an external caller can only pass nil. There are none (grep is empty), so this is cosmetic, but it suggests they should just be unexported now.```
