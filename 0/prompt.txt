@@ -1,0 +1,123 @@
+can you summarize this change in simple terms?
+
+---
+
+couldn't we create the branch and then delete the bookmark as a fix?
+
+---
+
+so what's the fix in this trail?
+
+---
+
+can you run another adversarial review on this
+
+---
+
+<task-notification>
+<task-id>adad35b0b652d7d5f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-git-sync-bug-git-sync/397423ed-b1d5-4717-8442-95f85b4d4f49/tasks/adad35b0b652d7d5f.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 117 xhigh" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Effort level: reusing `xhigh` from your last run — type a level (e.g. `/code-review high`) to change it.
+
+Reviewed `soph/batched-cutover-drops-resume-marker` (3 commits, 6 files) against `main`. Build, `go vet`, `golangci-lint` (0 issues) and the full `./internal/...` suite pass, including with `-race`.
+
+```json
+[
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 609,
+    "summary": "refRefused returns the raw, unsanitized server-authored ng reason, which then reaches the terminal via p.notice and the run's error string — bypassing the repo's documented rule that receive-pack rejection reasons must go through sanitize.Text.",
+    "failure_scenario": "gitproto.beginPush stores the RAW status in lastRejections (push.go:87) and only then calls OnRejection, which is the one place that sanitizes (syncer.go:906 s.rejections[name] = sanitize.Text(status)). A hostile/compromised target answers the cutover create with ng \"\\x1b[1A\\x1b[2Kbranch created ok\". branchPresent hands that string back as `why`, and bootstrap.go:782 prints it verbatim through p.notice → progressReporter.notify → fmt.Fprintln(p.out) (no sanitization anywhere in that path). The escape sequence redraws the operator's line so the \"did not land ... keeping marker\" warning reads as a success — precisely the attack internal/sanitize's package doc calls out (\"An ESC in a rejection reason can clear the line and redraw it, so a rejected push can be made to read like a successful one\"). Same for bootstrap.go:712, which formats `reason` straight into the returned error, which the CLI prints and marshals into --json."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 147,
+    "summary": "branchPresent uses gitproto.IsConcurrentMove — a free-form substring heuristic built to classify UPDATE compare-and-swap misses — as proof that a refused CREATE left the branch on the target, so any refusal whose text happens to contain \"already exists\" or \"stale info\" deletes the resume marker.",
+    "failure_scenario": "Target refuses the cutover create with a pre-receive message like \"refusing to create refs/heads/main: a tag with that name already exists\" or \"blocked: branch already exists in the protected namespace\". IsConcurrentMove matches \"already exists\", branchPresent returns (true, \"\"), the code falls through to the unconditional delete at bootstrap.go:788 and destroys refs/gitsync/bootstrap/heads/main while the branch is still absent. Every object pushed by this run becomes unreferenced, the next run has no fetch have, and the whole history is re-transferred — the exact data loss this PR exists to prevent, reintroduced through the heuristic. push.go's own doc warns the marker set is \"server-specific by design\" and that stock git phrases CAS misses differently, so the set was never a reliable \"the ref exists\" oracle."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 464,
+    "summary": "The PR applies \"a nil push error is not proof\" to the temp-ref update and the branch create but not to the stale-temp-ref delete a few lines above, which sets current = ZeroHash on a delete the target may have refused — wedging the branch permanently.",
+    "failure_scenario": "BestEffort run, target ng's ref deletes (pre-receive policy / read-only ref namespace) and the marker holds a hash not in the re-planned chain (user changed --target-max-pack-bytes). PushCommands(delCmds) returns nil with the ng swallowed, so `current = plumbing.ZeroHash; startIdx = 0` runs while the marker is still at the stale hash. The first checkpoint push then sends the temp ref with Old = zero (ActionForTargetHash(zero) = ActionCreate), the target CAS-fails it, and the NEW temp-ref guard at bootstrap.go:712 aborts with \"push bootstrap batch for refs/heads/main: target refused refs/gitsync/bootstrap/heads/main: stale info\". The marker is never cleared, so every subsequent run reproduces the same failure — an operator must delete the ref by hand — and the error blames the checkpoint push rather than the un-deleted stale marker."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 151,
+    "summary": "For any target that does not advertise report-status, branchPresent now always returns absent, so the resume marker is never deleted — and on the `git-sync bootstrap` route --prune is rejected outright, leaving the marker permanently, on runs that fully succeeded.",
+    "failure_scenario": "Target advertises no report-status (or an advertisement whose capability list is empty, which TargetFeaturesFromAdvRefs maps to ReportStatus=false; nothing in CanBootstrapRelay blocks that target from the batched route). Every branch's create actually lands — TestRun_IntegrationBatchedCutoverKeepsMarkerWhenTargetCannotReport asserts the branch is present — yet each branch keeps its refs/gitsync/bootstrap/heads/&lt;branch&gt;. syncer.Bootstrap rejects --prune (syncer.go:1311), so on that route no cleaner ever runs and a 500-branch repo is left with 500 permanent scaffolding refs plus 500 spurious notices. Previously these were all deleted. The old code was unsafe, but the replacement has no cleanup path at all on the one route that forbids prune."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 782,
+    "summary": "The operator notice states \"&lt;branch&gt; did not land on the target\" for the unconfirmable case, where the branch usually DID land, and promises a resume that provably will not happen.",
+    "failure_scenario": "Observed directly in the new test run: TestRun_IntegrationBatchedCutoverKeepsMarkerWhenTargetCannotReport prints \"refs/heads/master did not land on the target (target does not report per-ref push status) — keeping refs/gitsync/bootstrap/heads/master at cbfbb940 so the next run resumes instead of re-importing\" while the same test asserts the branch IS on the target. Both clauses are false: the branch landed, and the next run cannot resume via the marker because replicateBootstrapRoute requires desiredTargetRefsAbsent (syncer.go:1220), which is false once the branch exists. An operator reading this concludes their sync failed and starts debugging a target that worked. The message needs to distinguish \"refused\" (branch absent) from \"unconfirmable\" (state unknown)."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 154,
+    "summary": "The default branch treats \"the ref is absent from LastRejections\" as positive confirmation, which only holds if the decoded report carries a status for every command sent — and nothing verifies that.",
+    "failure_scenario": "Target advertises report-status (so TargetReportsRefStatus is true) but returns \"unpack ok\" plus statuses for only the temp-ref command, omitting the branch create — sendReceivePack's best-effort loop iterates report.CommandStatuses, so no OnRejection fires and lastRejections stays empty. branchPresent hits `default: return true` and deletes the marker for a create the target never acknowledged. The PR's whole thesis is that a nil error is not proof; it then substitutes a weaker proof (absence from a per-ref map) without checking the report actually covered the ref. Same shape as the guard being keyed on `p.RefRefused != nil` rather than on knowability: a caller that leaves RefRefused nil against a non-reporting target silently gets the old unsafe delete."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 789,
+    "summary": "The marker delete itself is never confirmed — a refused delete under BestEffort returns nil and the run logs \"bootstrap batch branch finalized\" while the marker is still on the target.",
+    "failure_scenario": "BestEffort, target ng's the delete of refs/gitsync/bootstrap/heads/main (deletes blocked in that namespace, or a concurrent run moved it so Old no longer matches). PushCommands returns nil, execution continues to completedRefs assignment and the \"branch finalized\" log, and the run reports success. The marker survives on the target with no diagnostic and no notice — the only cleaner is --prune, which the `git-sync bootstrap` route forbids. The same conditional-confirmation treatment the create now gets is missing on the delete two lines later."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 228,
+    "summary": "The one-shot bootstrap path still justifies never deleting the marker by deferring to --prune as its cleaner, while the batched path's new comment establishes that Bootstrap() rejects --prune — so the same permanent-marker problem is left unfixed one function up.",
+    "failure_scenario": "The batched comment at bootstrap.go:766 correctly reasons \"this cannot defer to prune as its cleaner: Bootstrap() rejects --prune outright, so on that route no cleaner would ever exist and the marker would be permanent.\" The one-shot path's comment (line 228: \"Prune is the cleaner instead ... the cost of being right is one extra run\") relies on exactly the mechanism just shown to be unavailable. A `git-sync bootstrap` run that resumes through the one-shot path (batchable source, repo small enough that no batch limit engages — the case that comment describes) therefore leaves refs/gitsync/bootstrap/heads/&lt;branch&gt; on the target forever. The fix is applied at one call site rather than to the shared invariant."
+  },
+  {
+    "file": "internal/syncer/integration_test.go",
+    "line": 2943,
+    "summary": "assertCommitHistoryPresent's doc claims it fails if \"the tree and blobs it names\" are missing, but the body only resolves commit.TreeHash and never touches the blobs — so the assertion that exists to prove the import really landed can pass on a target holding no file content.",
+    "failure_scenario": "The helper walks commits, calls repo.CommitObject and repo.TreeObject, and queues only commit.ParentHashes. It never enumerates tree entries, so a target that received every commit and tree but lost the blobs (a thin-pack push whose bases were never resolved, a batch whose objects the fixture's bytes.Index(body, \"PACK\") heuristic mis-sliced) passes. Both new integration tests lean on this helper as the check that hash equality alone is not enough (\"assertHeadsMatch compares hashes only, so the objects behind the branch are checked separately\") — the check is weaker than its own comment and than the tests advertise."
+  },
+  {
+    "file": "internal/syncer/integration_test.go",
+    "line": 4987,
+    "summary": "The new receivePackNoReportStatus flag is honored only on the packful path; the earlier `if !hasPack` branch of handleReceivePack always writes a report-status body, so a delete-only push against a \"cannot report\" target silently gets a reporting target.",
+    "failure_scenario": "handleReceivePack's !hasPack branch (line 4987, taken for delete-only pushes, which gitproto sends without a pack) builds a report and calls writeReceivePackReport unconditionally — receivePackNoReportStatus is checked only after that branch, at line 5049. The current test never deletes, so it passes; but the asymmetry means any future test that exercises a marker delete or prune against a no-report-status target will run against a fixture that does report, and will assert the wrong behavior with no failure to reveal it. The flag's own doc says it \"drops report-status ... so the client cannot learn any per-ref outcome\", which is not true for half the requests."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 420,
+    "summary": "The subsumed path's \"already exists\" sub-case counts a refused create as a delivered batch and records it as a fetch have, directly contradicting the comment two lines above it.",
+    "failure_scenario": "The new comment says \"neither the have nor the batch count may be recorded for a create the target refused\", but branchPresent returns true for a refusal matching IsConcurrentMove, so a subsumed branch refused with \"already exists\" falls through to `completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash; result.BatchCount++` and is logged \"subsumed branch finalized\". completedRefs then claims the target holds batch.Plan.SourceHash under that name when the concurrent writer may have created the branch at an older tip. BatchCount is reported to the operator and in --json as work the target accepted, which it did not."
+  },
+  {
+    "file": "internal/syncer/integration_test.go",
+    "line": 5083,
+    "summary": "applyReceivePackBody duplicates two blocks that already exist elsewhere in the same file: the bytes.Index(body, \"PACK\") + packfile.UpdateObjectStorage unpack (added verbatim at line 5035) and the \"apply each ref command to the storer\" loop (already at line 5008 and again inside refCreateDenier.hook).",
+    "failure_scenario": "Three copies of the apply loop and two of the unpack heuristic now have to be kept in step; the copies already differ (only refCreateDenier.hook enforces the compare-and-swap on cmd.Old, so applyReceivePackBody will happily apply a stale-Old update that a real receive-pack rejects — the very failure mode refCreateDenier's own comment says the partial application exists to avoid). Extracting one `unpackBody(body)` and one `applyCommands(req, cas bool)` helper would give all three paths the same fidelity."
+  },
+  {
+    "file": "internal/gitproto/push_test.go",
+    "line": 1012,
+    "summary": "refReportServer re-implements syncertest.DenyRefsReport's report-building loop, and its per-ref map-returning closure is more machinery than either caller needs.",
+    "failure_scenario": "syncertest.DenyRefsReport(req, status, deny...) already produces exactly this report (ng the named refs, ok everything else, UnpackStatus \"ok\"), and internal/syncertest imports nothing from gitproto so there is no cycle. Both new tests deny a single ref with a single status, so the `func() map[plumbing.ReferenceName]string` indirection exists only so TestPusherLastRejectionsCoversOnlyTheLastPush can flip the answer between the two pushes — a captured `deny bool` (or a status string) would do that. The duplicate is the third copy of this report shape in the repo."
+  },
+  {
+    "file": "internal/syncer/integration_test.go",
+    "line": 2636,
+    "summary": "refCreateDenier's off/denials fields and refReportServer's captured `ng` map are written by the test goroutine and read by the httptest handler goroutine with no synchronization, unlike pushRecorder in the same package which guards the identical shape with a mutex.",
+    "failure_scenario": "`denier.off = true` (line 2865) is written between the two Run calls while the httptest server and its keep-alive connections are still live, and `d.off` / `d.denials++` are touched from handler goroutines; refReportServer's `ng = map[...]{}` reassignment is the same pattern. CI runs `go test -race ./...` (mise.toml task test:ci) and the races did not fire locally — the HTTP round-trip happens to create the ordering edges — but that is an accident of connection reuse and request timing, not a guarantee, so this is a latent flake in a race-enabled CI. internal/gitproto/push_test.go's pushRecorder shows the house pattern: a sync.Mutex around the shared field."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap_test.go",
+    "line": 1968,
+    "summary": "TestExecuteBatchedSubsumedRefusedCreateNotCounted hand-rolls the full 30-line Params literal that newBatchedRefusalHarness — added in the same commit, four tests above — exists to build.",
+    "failure_scenario": "The two now duplicate fakeBootstrapSource, fakeBootstrapPusher, DesiredRefs, TargetRefs, SourceHeadTarget, TargetMaxPack, TargetReportsRefStatus and the RefRefused closure, and they have already drifted: the harness records pushCommands batches and fetch haves on the struct, the copy uses a local fetchHaves slice and drops push recording entirely. A harness option for \"subsumed second branch\" (its graph differs only in whether the second tip is inside trunk's ancestry) would let both tests share one setup and keep the new assertions comparable."
+  }
+]
+```</result>
+<usage><subagent_tokens>196396</subagent_tokens><tool_uses>64</tool_uses><duration_ms>882682</duration_ms></usage>
+</task-notification>
