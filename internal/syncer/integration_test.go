@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -2725,13 +2726,58 @@ func currentRefHash(s storer.Storer, name plumbing.ReferenceName) plumbing.Hash 
 }
 
 // unpackPushedObjects decodes the packfile in a receive-pack body, if any, into
-// storer. The "PACK" scan is the same heuristic the request router uses.
+// storer.
 func unpackPushedObjects(s storer.Storer, body []byte) error {
-	offset := bytes.Index(body, []byte("PACK"))
+	offset := receivePackPackOffset(body)
 	if offset < 0 {
 		return nil
 	}
 	return packfile.UpdateObjectStorage(s, bytes.NewReader(body[offset:]))
+}
+
+func TestReceivePackPackOffset(t *testing.T) {
+	pktLine := func(payload string) string {
+		return fmt.Sprintf("%04x%s", len(payload)+4, payload)
+	}
+	// A ref whose name contains the literal the old scan looked for.
+	cmd := pktLine("0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/heads/PACKAGING\x00report-status")
+	refsOnly := cmd + "0000"
+	withPack := refsOnly + "PACK\x00\x00\x00\x02"
+
+	if got := receivePackPackOffset([]byte(refsOnly)); got != -1 {
+		t.Errorf("offset in a ref-only body = %d, want -1 (the ref name is not a packfile)", got)
+	}
+	if got, want := receivePackPackOffset([]byte(withPack)), len(refsOnly); got != want {
+		t.Errorf("offset = %d, want %d (just past the flush)", got, want)
+	}
+	if got := receivePackPackOffset([]byte("garbage")); got != -1 {
+		t.Errorf("offset in an undecodable body = %d, want -1", got)
+	}
+}
+
+// receivePackPackOffset returns the index in a receive-pack request body where
+// the packfile begins, or -1 when the request carries none. It walks the
+// pkt-line framing to the flush that ends the command list, rather than
+// searching the body for "PACK": a ref named refs/heads/PACKAGING would put
+// that literal in the command list and yield an offset inside it.
+func receivePackPackOffset(body []byte) int {
+	for i := 0; i+4 <= len(body); {
+		length, err := strconv.ParseUint(string(body[i:i+4]), 16, 32)
+		if err != nil {
+			return -1
+		}
+		if length == 0 { // flush-pkt: the command list ends here
+			if i+4 >= len(body) {
+				return -1
+			}
+			return i + 4
+		}
+		if length < 4 || i+int(length) > len(body) {
+			return -1
+		}
+		i += int(length)
+	}
+	return -1
 }
 
 func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testing.T) {
@@ -5130,7 +5176,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	hasPack := bytes.Contains(body, []byte("PACK"))
+	hasPack := receivePackPackOffset(body) >= 0
 
 	// For no-PACK requests, handle manually since transport.ReceivePack
 	// expects a packfile when there are create/update commands.

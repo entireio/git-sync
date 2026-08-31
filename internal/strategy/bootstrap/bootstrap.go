@@ -795,7 +795,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		// may only be deleted once the branch it was scaffolding for exists.
 		// The create rode the final checkpoint's push (or, on an at-tip
 		// resume, the command push just above), and a nil error from either
-		// does not prove it landed — see Params.RefRefused. A target that
+		// does not prove it landed — see Params.RefOutcome. A target that
 		// refuses the create (protected branch, pre-receive policy) would
 		// otherwise end the run with neither the branch nor the marker,
 		// reported as a success — and with nothing on the target pointing at
@@ -972,6 +972,15 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 }
 
 // keepMarker logs and surfaces a resume marker this run is leaving in place.
+//
+// On the replicate and sync routes the next --prune run reaps it once its
+// branch lands, so a marker kept unnecessarily costs one run. On the bootstrap
+// route it does not: Bootstrap() rejects --prune, so nothing here will ever
+// remove a marker this function keeps, and against a target that neither
+// reports per-ref status nor answers a ref listing it is permanent. Accepted
+// deliberately, in that order of harm: a marker is inert scaffolding — the
+// resume route requires the branch to be absent, so a stale one cannot
+// misroute anything — while a marker deleted in error costs a full re-import.
 func keepMarker(p Params, marker pendingMarker, why string) {
 	p.log("bootstrap keeping resume marker",
 		"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
