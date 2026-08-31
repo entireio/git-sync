@@ -2361,7 +2361,7 @@ func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
-func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {
+func TestPruneDeletesNothingInScopeRejectsPruneDeletes(t *testing.T) {
 	s := &syncSession{
 		cfg: Config{
 			Prune: true,
@@ -2380,7 +2380,9 @@ func TestReplicateCanBootstrapRejectsPruneDeletes(t *testing.T) {
 			Kind:       planner.RefKindBranch,
 		},
 	}
-	if s.replicateCanBootstrap(desired) {
+	// The route composes this with desiredTargetRefsAbsent; here the in-scope
+	// stale branch alone must disqualify the emptiness heuristic.
+	if s.pruneDeletesNothingInScope(desired) {
 		t.Fatal("expected bootstrap shortcut to be disabled when prune would delete managed refs")
 	}
 }

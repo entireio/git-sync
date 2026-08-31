@@ -1158,7 +1158,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 // bootstrap strategy instead of building replication plans, and with which
 // relay reason.
 //
-// Besides the emptiness heuristic (replicateCanBootstrap), a leftover
+// Besides the emptiness heuristic (desiredTargetRefsAbsent plus
+// pruneDeletesNothingInScope), a leftover
 // refs/gitsync/bootstrap/* temp ref routes to bootstrap directly. The
 // namespace has exactly one writer — batched bootstrap, which deletes its
 // marker when the branch is finalized — so a surviving marker means a
@@ -1254,13 +1255,6 @@ func (s *syncSession) desiredTargetRefsAbsent(desiredRefs map[plumbing.Reference
 		}
 	}
 	return true
-}
-
-// replicateCanBootstrap is the emptiness heuristic in full: no desired target
-// ref exists, and prune (if set) would delete nothing in scope. The route
-// checks the two halves separately, having already established the first.
-func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
-	return s.desiredTargetRefsAbsent(desiredRefs) && s.pruneDeletesNothingInScope(desiredRefs)
 }
 
 // pruneDeletesNothingInScope reports whether a prune would leave every
