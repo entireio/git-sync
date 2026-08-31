@@ -1084,8 +1084,8 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 		return s.resolveEmptyDesiredSet()
 	}
 
-	allAbsent := s.replicateCanBootstrap(desiredRefs)
-	if allAbsent {
+	takeBootstrap, bootstrapReason := s.replicateBootstrapRoute(desiredRefs, s.sourceService.SupportsBootstrapBatch())
+	if takeBootstrap {
 		if s.cfg.DryRun {
 			plans, err := planner.BuildBootstrapPlans(desiredRefs, s.target.refMap)
 			if err != nil {
@@ -1095,7 +1095,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				Plans:              plans,
 				DryRun:             true,
 				OperationMode:      modeReplicate,
-				RelayReason:        "empty-target-managed-refs",
+				RelayReason:        bootstrapReason,
 				BootstrapSuggested: true,
 				Stats:              s.stats.snapshot(),
 				Measurement:        s.measurementDone(),
@@ -1103,7 +1103,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				SourceHEAD:         s.sourceService.HeadTarget,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, "empty-target-managed-refs")
+		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, bootstrapReason)
 	}
 
 	plans, err := planner.BuildReplicationPlans(desiredRefs, s.target.refMap, managedTargets, planConfig(s.cfg))
@@ -1154,12 +1154,114 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
-func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+// replicateBootstrapRoute decides whether a replicate run should take the
+// bootstrap strategy instead of building replication plans, and with which
+// relay reason.
+//
+// Besides the emptiness heuristic (desiredTargetRefsAbsent plus
+// pruneDeletesNothingInScope), a leftover
+// refs/gitsync/bootstrap/* temp ref routes to bootstrap directly. The
+// namespace has exactly one writer — batched bootstrap, which deletes its
+// marker when the branch is finalized — so a surviving marker means a
+// bootstrap started and did not finish. Without this route, the marker is
+// just an undesired target ref that disqualifies the emptiness heuristic
+// under prune: the artifact of the one strategy that can resume is what
+// locked that strategy out, and the repo re-synced as a single unbatched
+// pack forever (ENT-2054).
+//
+// Marker routing deliberately ignores other stray target refs — an aborted
+// push or a branch deleted upstream mid-bootstrap must not re-wedge the
+// repo — but still requires every desired target ref to be absent, because
+// the bootstrap planner refuses targets whose desired refs exist. A marker
+// surviving next to its completed branch is stale; that state takes the
+// replicate path, which prunes it.
+//
+// Bootstrap does not prune, so every run this route claims is a run that
+// deletes nothing. That is one deferred pass in the normal case — the
+// bootstrap completes and the next run prunes — but a bootstrap that keeps
+// failing keeps the marker alive, re-fires this route, and starves prune for
+// as long as it fails, where pre-route runs at least pruned while getting the
+// transfer wrong. Accepted: a target stuck mid-bootstrap has a half-imported
+// repository to finish, which outranks reaping its stale refs, and the refs
+// in question are unreachable-but-harmless until it lands.
+//
+// The marker check runs before the emptiness heuristic so a resume is
+// labeled bootstrap-resume-marker even in configs where both would route to
+// bootstrap (without prune the heuristic has no walk to disqualify it).
+//
+// batchableSource gates the marker route on the source supporting batched
+// bootstrap (protocol v2 + fetch filter). Markers are only ever written by
+// batched bootstrap, so a non-batchable source seeing one is a corner (the
+// capability regressed since the marker was written). Standing down sends
+// the run wherever the remaining heuristics point: under prune, to replicate
+// — which keeps the marker as a fetch have (the planner's live-marker prune
+// guard preserves it); without prune, the emptiness heuristic still selects
+// the one-shot bootstrap, which likewise fetches with the marker as a have.
+// Either way the transfer stays marker-anchored instead of committing to a
+// batched plan the source cannot serve.
+func (s *syncSession) replicateBootstrapRoute(
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	batchableSource bool,
+) (bool, string) {
+	if !s.desiredTargetRefsAbsent(desiredRefs) {
+		return false, ""
+	}
+	if batchableSource && s.hasBootstrapResumeMarker(desiredRefs) {
+		return true, planner.ReasonBootstrapResumeMarker
+	}
+	if s.pruneDeletesNothingInScope(desiredRefs) {
+		return true, planner.ReasonEmptyTargetManagedRefs
+	}
+	return false, ""
+}
+
+// hasBootstrapResumeMarker reports whether the target carries a batched-
+// bootstrap temp ref for a branch in the desired set — resume state for work
+// this run would actually do. An orphan marker (its branch deleted upstream
+// mid-bootstrap) is stale, not resume state: routing on it would relabel an
+// ordinary replicate as a resume and push the marker's prune out by a run,
+// where replicate creates the desired branches and prunes the orphan in the
+// same pass. The route's caller has already established that every desired
+// target ref is absent, so a matching marker is live by definition.
+//
+// Exclusions are honored so a caller that carved the namespace out of its
+// scope keeps the routing it asked for (the emptiness heuristic then skips
+// the marker for the same reason, and the bootstrap it selects still resumes
+// — the marker stays in the target ref map).
+func (s *syncSession) hasBootstrapResumeMarker(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+	for targetRef, hash := range s.target.refMap {
+		if hash.IsZero() {
+			continue
+		}
+		branch, ok := planner.BootstrapTempRefTarget(targetRef)
+		if !ok {
+			continue
+		}
+		if _, desired := desiredRefs[branch]; !desired {
+			continue
+		}
+		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (s *syncSession) desiredTargetRefsAbsent(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
 	for targetRef := range desiredRefs {
 		if !s.target.refMap[targetRef].IsZero() {
 			return false
 		}
 	}
+	return true
+}
+
+// pruneDeletesNothingInScope reports whether a prune would leave every
+// undesired target ref alone — either because prune is off, or because no
+// such ref falls inside the request's scope. A single in-scope deletion means
+// the target is not the blank slate bootstrap plans for.
+func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
 	if !s.cfg.Prune {
 		return true
 	}

@@ -136,6 +136,15 @@ func validateEmptySourcePolicy(cfg Config) error {
 // kept rather than replaced with an assertion so the two entry points cannot
 // drift apart if that gate is ever loosened — but do not read it as evidence
 // that both are live today. Only the pre-planning path reaches convergence.
+//
+// One non-empty advertisement does land here since discovery began excluding
+// refs/gitsync/*: a source holding ONLY that scaffolding (a former sync
+// target, interrupted before any branch was created, now chained as a source)
+// yields an empty desired set and gets ErrNoRefsSelected — or the plain error
+// under the default policy. That error is deliberate: such a source has
+// nothing mirrorable, and the pre-exclusion alternative was to replicate the
+// foreign scaffolding as content. It clears on its own once the source repo's
+// own bootstrap resumes and creates real branches.
 func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
 	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
 		return Result{}, errors.New("no source refs matched")

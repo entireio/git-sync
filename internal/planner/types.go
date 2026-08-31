@@ -222,9 +222,41 @@ func CopyRefHashMap(input map[plumbing.ReferenceName]plumbing.Hash) map[plumbing
 	return out
 }
 
+// gitsyncRefPrefix is git-sync's own scaffolding namespace on a TARGET.
+// Source-side discovery never mirrors it (see BuildDesiredRefs): a source
+// carrying refs/gitsync/* has leftover scaffolding from being someone else's
+// target, and replicating it would collide with — and under overwrite
+// semantics, clobber — this target's own resume state. The namespace is NOT
+// excluded from target-side prune scope, though: prune is the only cleaner a
+// stale marker has (isLiveBootstrapMarker carves out the live ones).
+const gitsyncRefPrefix = "refs/gitsync/"
+
+// bootstrapTempRefPrefix is the namespace holding batched-bootstrap temp refs.
+// git-sync is its only writer: the bootstrap strategy creates a marker per
+// branch and deletes it when the branch is finalized (or when the marker is
+// stale), so a surviving ref here always means a bootstrap that did not finish.
+const bootstrapTempRefPrefix = gitsyncRefPrefix + "bootstrap/heads/"
+
+// isGitSyncScaffoldingRef reports whether name lies anywhere in git-sync's
+// own scaffolding namespace.
+func isGitSyncScaffoldingRef(name plumbing.ReferenceName) bool {
+	return strings.HasPrefix(name.String(), gitsyncRefPrefix)
+}
+
 // BootstrapTempRef returns the temporary ref name used during batched bootstrap.
 func BootstrapTempRef(targetRef plumbing.ReferenceName) plumbing.ReferenceName {
-	return plumbing.ReferenceName("refs/gitsync/bootstrap/heads/" + targetRef.Short())
+	return plumbing.ReferenceName(bootstrapTempRefPrefix + targetRef.Short())
+}
+
+// BootstrapTempRefTarget maps a batched-bootstrap temp ref back to the branch
+// it checkpoints — the inverse of BootstrapTempRef. ok is false for names
+// outside the temp-ref namespace.
+func BootstrapTempRefTarget(name plumbing.ReferenceName) (target plumbing.ReferenceName, ok bool) {
+	rest, found := strings.CutPrefix(name.String(), bootstrapTempRefPrefix)
+	if !found || rest == "" {
+		return "", false
+	}
+	return plumbing.NewBranchReferenceName(rest), true
 }
 
 // FormatPlanLine formats a single plan entry for human-readable output.

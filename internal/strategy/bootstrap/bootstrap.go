@@ -158,11 +158,26 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	// One-shot bootstrap
 	p.log("bootstrap fetching refs from source", "ref_count", len(plans))
 	gpDesired := convert.DesiredRefs(p.DesiredRefs)
-	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, gpDesired, nil)
+	// Target refs ride along as fetch haves. On the designed path — a truly
+	// empty target — the map is empty and this changes nothing; when the
+	// resume-marker route lands here instead (batchable source, but the repo
+	// is small enough that no batch limit engages), the marker anchors the
+	// negotiation so only the remainder transfers instead of the whole repo
+	// again. No git.NoErrAlreadyUpToDate handling: gitproto emits that
+	// sentinel only for an empty want set, and Execute's callers guarantee a
+	// non-empty desired set, so any error here is a real fetch failure.
+	//
+	// A marker that led us here is NOT deleted on completion, deliberately.
+	// A nil push error does not mean the branch create landed: with
+	// BestEffort the pusher swallows a per-ref "ng" and returns nil
+	// (gitproto.PushPack via OnRejection), so deleting the marker here would
+	// throw away the resume position for a branch that never got created —
+	// the precise hazard the planner-side prune carve-out exists to prevent.
+	// Prune is the cleaner instead: isLiveBootstrapMarker classifies the
+	// marker as stale exactly when the branch really is present, so the cost
+	// of being right is one extra run.
+	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, gpDesired, p.TargetRefs)
 	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return result, nil
-		}
 		return result, fmt.Errorf("fetch source pack: %w", err)
 	}
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)

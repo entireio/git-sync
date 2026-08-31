@@ -102,6 +102,16 @@ func BuildDesiredRefs(
 			switch {
 			case kind == RefKindTag && wantTags:
 			case kind == RefKindOther && cfg.AllRefs:
+				// refs/gitsync/* on a source is leftover scaffolding from that
+				// repo being someone else's sync target — never content to
+				// mirror. Worse, a source-side bootstrap marker shares its name
+				// with this target's own resume marker, so replicating it would
+				// block the resume route and overwrite the checkpoint it
+				// records. Explicit Mappings bypass this like every other
+				// discovery exclusion.
+				if isGitSyncScaffoldingRef(refName) {
+					continue
+				}
 			default:
 				continue
 			}
@@ -142,7 +152,7 @@ func BuildPlans(
 		// addPruneCandidates mutates the map, so copy first — the caller's
 		// managed map must not be modified (matches BuildReplicationPlans).
 		managed = copyManagedTargets(managed)
-		addPruneCandidates(managed, targetRefs, cfg)
+		addPruneCandidates(managed, desired, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -212,7 +222,7 @@ func BuildReplicationPlans(
 		// Copy before the only mutation so the caller's managed map is left
 		// untouched (matches BuildPlans).
 		managed = copyManagedTargets(managed)
-		addPruneCandidates(managed, targetRefs, cfg)
+		addPruneCandidates(managed, desired, targetRefs, cfg)
 	}
 
 	targetNames := make([]plumbing.ReferenceName, 0, len(managed))
@@ -364,11 +374,50 @@ func PruneTarget(targetRef plumbing.ReferenceName, cfg PlanConfig) (ManagedTarge
 	return ManagedTarget{}, false
 }
 
+// isLiveBootstrapMarker reports whether targetRef is a batched-bootstrap
+// resume marker that still carries live state: its branch is in the desired
+// set but absent on the target — an interrupted bootstrap that has not been
+// resumed yet. Prune must never delete one, from ANY mode: the marker is the
+// only record of how far the bootstrap got, and it doubles as a fetch have
+// that keeps the interim replicate/sync packs incremental (ENT-2054). A
+// marker whose branch exists on the target, or whose branch left the desired
+// set, is stale scaffolding and stays prunable — prune is the only cleaner a
+// stale marker has.
+func isLiveBootstrapMarker(
+	targetRef plumbing.ReferenceName,
+	desired map[plumbing.ReferenceName]DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+) bool {
+	branch, ok := BootstrapTempRefTarget(targetRef)
+	if !ok {
+		return false
+	}
+	if _, isDesired := desired[branch]; !isDesired {
+		return false
+	}
+	return targetRefs[branch].IsZero()
+}
+
 // addPruneCandidates registers unmanaged target refs as deletion candidates
 // within the user's current scope. cfg is assumed normalized.
-func addPruneCandidates(managed map[plumbing.ReferenceName]ManagedTarget, targetRefs map[plumbing.ReferenceName]plumbing.Hash, cfg PlanConfig) {
+//
+// Live bootstrap markers are exempted here, at candidacy, rather than in each
+// builder's delete emission — one statement of the exception covers every
+// plan builder. The exception lives outside PruneTarget on purpose:
+// PruneTarget also answers TargetScope's "is this ref our responsibility"
+// question, and a live marker IS git-sync's responsibility — it just must
+// not be deleted yet.
+func addPruneCandidates(
+	managed map[plumbing.ReferenceName]ManagedTarget,
+	desired map[plumbing.ReferenceName]DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	cfg PlanConfig,
+) {
 	for targetRef := range targetRefs {
 		if _, ok := managed[targetRef]; ok {
+			continue
+		}
+		if isLiveBootstrapMarker(targetRef, desired, targetRefs) {
 			continue
 		}
 		if target, prunable := PruneTarget(targetRef, cfg); prunable {
