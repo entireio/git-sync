@@ -2535,3 +2535,181 @@ func TestExecuteBatchedReportsBatchingWhenCheckpointPlanningFails(t *testing.T) 
 			result.Batching, result.RelayMode)
 	}
 }
+
+// twoCommitFixture builds a chain of n commits plus the desired-ref map for a
+// single branch over it, sharing one store so the tip and the parent map cannot
+// disagree.
+func twoCommitFixture(t *testing.T, n int) (map[plumbing.Hash][]plumbing.Hash, map[plumbing.ReferenceName]planner.DesiredRef) {
+	t.Helper()
+	mainRef := plumbing.NewBranchReferenceName("main")
+	store := memory.NewStorage()
+	hashes := writeLinearCommitChain(t, store, n)
+	return parentsFromCommitChainStore(t, store), map[plumbing.ReferenceName]planner.DesiredRef{
+		mainRef: {
+			SourceRef: mainRef, TargetRef: mainRef,
+			SourceHash: hashes[len(hashes)-1], Kind: planner.RefKindBranch, Label: "main",
+		},
+	}
+}
+
+func TestExecuteBatchedDivisibleCheckpointKeepsTheSmallBudget(t *testing.T) {
+	// The central gate: only a checkpoint that CANNOT be split is pushed at the
+	// target's ceiling. A divisible span must still abort at the small budget —
+	// that is what bounds the waste of a doomed push and keeps the temp ref
+	// advancing, and it is the entire justification for TargetMaxPack existing.
+	// Without this, escalating unconditionally would look identical in every
+	// other test.
+	parents, desired := twoCommitFixture(t, 4)
+	// Big enough to trip the small budget's 95% cut, small enough to fit the
+	// announced limit — so escalating a divisible span would visibly let it
+	// through, and the abort below is the only reason it does not.
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 300_000)...)
+	var aborts, ceilings int
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				if _, err := io.Copy(io.Discard, pack); err != nil {
+					aborts++
+					return err
+				}
+				return nil
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: desired,
+		TargetRefs:  map[plumbing.ReferenceName]plumbing.Hash{},
+		// Large enough that planning yields ONE multi-commit (divisible)
+		// checkpoint, while the pack still exceeds its 95% cut.
+		TargetMaxPack: 262_144,
+		// Comfortably above the pack, so escalating would let it through.
+		AnnouncedTargetLimit: 1 << 20,
+		OnNotice: func(msg string) {
+			if strings.Contains(msg, "announced limit") {
+				ceilings++
+			}
+		},
+	}, "empty target")
+	_ = err
+
+	if aborts == 0 {
+		t.Fatal("expected the divisible span to abort at the small budget; it never did")
+	}
+	if ceilings > 0 && aborts == 0 {
+		t.Fatal("escalated before exhausting subdivision")
+	}
+}
+
+func TestExecuteBatchedEscalatesWhenBudgetEqualsAnnouncedLimit(t *testing.T) {
+	// The >= boundary. An in-batching rejection ratchets the budget down to the
+	// announced limit, leaving the two EQUAL. Escalating still matters there:
+	// it sheds the 95% margin and the projection. With a strict > this pack —
+	// sized inside that last 5% — aborts on every delivery forever.
+	const announced = 4200
+	parents, desired := twoCommitFixture(t, 2)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...) // 4108 = 97.8% of announced
+	if len(body) <= announced*95/100 || len(body) > announced {
+		t.Fatalf("fixture must sit in the top 5%% of the announced limit, got %d", len(body))
+	}
+	pushes := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				if pushes == 1 {
+					// Announces the limit AND ratchets the budget to exactly it.
+					return fmt.Errorf("http 413: body exceeded size limit %d", announced)
+				}
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs:   desired,
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetMaxPack: 1 << 30, // enters batching; the 413 ratchets it to announced
+	}, "empty target")
+
+	if err != nil {
+		t.Fatalf("a pack inside the top 5%% of the announced limit must converge, got %v", err)
+	}
+}
+
+func TestExecuteBatchedObservedCutoffBlocksAnnouncedEscalation(t *testing.T) {
+	// A budget inferred from bytes we actually got to send is evidence of where
+	// the server cuts, not a figure we chose, so an indivisible checkpoint must
+	// NOT be escalated past it.
+	//
+	// Reaching this needs >= 2 commits: a divisible span to take the
+	// observation, then an indivisible one to consult it. On a one-commit chain
+	// the guard is unreachable — any failure that would set it ends the run on
+	// that same checkpoint, so there is no later iteration to read the flag.
+	parents, desired := twoCommitFixture(t, 2)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				switch pushes {
+				case 1:
+					// One-shot: a parseable 413 announces 1 MiB and derives the
+					// batching budget from it.
+					return errors.New("http 413: body exceeded size limit 1048576")
+				case 2:
+					// A divisible span: bytes flow, then an UNPARSEABLE
+					// body-limit cut. That is the only route that arms the
+					// guard — it ratchets the budget to the bytes observed.
+					if _, copyErr := io.Copy(io.Discard, pack); copyErr != nil {
+						return copyErr
+					}
+					return errors.New("request body too large for target")
+				default:
+					_, copyErr := io.Copy(io.Discard, pack)
+					return copyErr
+				}
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: desired,
+		TargetRefs:  map[plumbing.ReferenceName]plumbing.Hash{},
+		// Both the budget and the announced limit are derived from the 413,
+		// exactly as production does it.
+	}, "empty target")
+
+	if err == nil {
+		t.Fatal("guard violated: an indivisible push escalated past a measured server cutoff")
+	}
+	if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+		t.Fatalf("an abort against a measured cutoff is not the target's size verdict: %v", err)
+	}
+	if pushes != 3 {
+		t.Fatalf("expected one-shot 413, observed cutoff, one capped attempt (3 pushes), got %d", pushes)
+	}
+}

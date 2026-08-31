@@ -116,10 +116,10 @@ type Params struct {
 	// stated, parsed from a rejection (0 when it never said). It is NOT the
 	// batching budget — TargetMaxPack is deliberately smaller, so a doomed or
 	// interrupted push wastes less and the temp ref advances more often. This
-	// is the authority of last resort: when checkpoint subdivision bottoms out
-	// (one commit per gap) and our own smaller budget is what stopped the
-	// upload, the push is retried against this limit so the SERVER decides
-	// whether the indivisible pack is too big. See executeBatched.
+	// is the authority of last resort: a checkpoint that subdivision cannot
+	// split (one commit per gap) is pushed at THIS limit rather than the
+	// smaller budget, so the SERVER decides whether the indivisible pack is
+	// too big. See executeBatched.
 	AnnouncedTargetLimit int64
 }
 
@@ -570,6 +570,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		// Manual index loop: subdivide may insert checkpoints at the current
 		// index, so we must not auto-increment after a retry.
 		idx := startIdx
+		noticedAnnounced := false
 		for idx < len(batch.Checkpoints) {
 			checkpoint := batch.Checkpoints[idx]
 			if p.OnPhase != nil {
@@ -654,12 +655,6 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 
 			cmds := convert.PlansToPushCommands(stagePlans, false)
 			observer := newPackStreamObserver(packReader)
-			// relaxedBudget, when set, raises the ceiling for THIS attempt only.
-			// It must not be written back into selfImposedBudget: that variable
-			// spans every checkpoint and every branch, so a raised ceiling would
-			// leak forward and later packs would upload in full instead of
-			// aborting at the small budget the pre-flight estimate still plans
-			// against.
 			// The abort budget for a span we cannot split is the target's
 			// number, not ours. TargetMaxPack exists so a doomed push wastes
 			// little and the temp ref advances often — both of which need a
@@ -686,9 +681,16 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					"batch", idx+1,
 					"self_imposed_budget", selfImposedBudget,
 					"announced_target_limit", p.AnnouncedTargetLimit)
-				p.notice(fmt.Sprintf(
-					"cannot split further (1 commit) — pushing at the target's announced limit %s instead of %s",
-					gitproto.HumanBytes(p.AnnouncedTargetLimit), gitproto.HumanBytes(selfImposedBudget)))
+				// Once per branch: the ceiling is chosen per push now, so an
+				// uneven-gap stretch would otherwise repeat this for every
+				// one-commit checkpoint, including packs nowhere near either
+				// number. The structured log above still records every push.
+				if !noticedAnnounced {
+					noticedAnnounced = true
+					p.notice(fmt.Sprintf(
+						"cannot split further (1 commit) — pushing at the target's announced limit %s instead of %s",
+						gitproto.HumanBytes(p.AnnouncedTargetLimit), gitproto.HumanBytes(selfImposedBudget)))
+				}
 			}
 			switch {
 			case atAnnounced:

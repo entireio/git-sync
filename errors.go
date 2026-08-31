@@ -104,7 +104,7 @@ var ErrSourceEmptyTargetPopulated = syncer.ErrSourceEmptyTargetPopulated
 // which a retry can discover.
 //
 // Deliberately NOT returned when git-sync's own smaller batching budget
-// stopped the upload: those runs are retried against the target's announced
-// limit first, so this sentinel always carries a verdict from the target
-// rather than from a threshold git-sync chose.
+// stopped the upload: a checkpoint that cannot be split is pushed at the
+// target's announced limit instead, so this sentinel always carries a verdict
+// from the target rather than from a threshold git-sync chose.
 var ErrCheckpointExceedsTargetLimit = bootstrap.ErrCheckpointExceedsTargetLimit
