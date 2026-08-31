@@ -1,0 +1,23 @@
+can you summarize the problem this pr is solving with one sentence
+
+---
+
+```
+Re-reviewed c9423f7..653e9c5. Fix confirmed independently — I re-ran my original probe against the new tree:
+
+result: relayMode="bootstrap" reason="bootstrap-resume-marker" err=<nil>
+after run: branch present=false marker present=true   (still at the original hash)
+Dropping the cleanup rather than filtering it was the right call, and your test-server gotcha is worth the note you gave it — a non-nil report short-circuits before any command is applied, so the hasPack == false → nil passthrough is exactly what makes the assertion non-vacuous. Full suite green locally. Findings 2 and 3 are addressed; the PR body now reads accurately against the code.
+
+One thing on the deferred batched cutover. My probe still fails there on this head (as expected — it fails on origin/main too, so it's not yours). Two things worth carrying into ENT-2060, because I don't think the symmetry holds:
+
+It's the higher-consequence half. Batched is the large-repo path — ENT-1948, the >10 GiB case this PR exists for — so a lost position there costs a full re-transfer of exactly the repos that can least afford one. Reachable through the CLI: --all-refs implies BestEffort for bootstrap (cmd/git-sync/bootstrap.go:68) and sync (syncplan.go:121), and client.go:133 passes Policy.BestEffort through for any mode. bootstrap --all-refs --target-max-pack-bytes=N against a target that refuses the create loses the whole batched import, silently, reported as success.
+
+The fix you used here won't port. Dropping the delete at bootstrap.go:687-691 leaves a permanent marker, because Bootstrap() rejects --prune (syncer.go:1287) — no cleaner would ever exist on that path. It needs the rejection actually threaded into the strategy; the syncer already records it (s.rejections, syncer.go:708), so it's a Params field away rather than a redesign.
+
+Nit: replicateCanBootstrap now has no production caller — integration_test.go:2383 is the only one. Either have the route call it (one extra map walk over the desired set) or let the test compose desiredTargetRefsAbsent + pruneDeletesNothingInScope directly, so the composed predicate isn't production code kept alive by a test.
+
+LGTM otherwise.
+```
+
+Another review
