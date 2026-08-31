@@ -612,7 +612,18 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// immediately instead of pushing a pack the target will reject.
 			// This avoids wasting a multi-GiB transfer on a doomed push.
 			var packObjectCount int64
-			if p.TargetMaxPack > 0 && len(batch.chain) > 0 {
+			// Skipped for a span that cannot shrink, for the same reason the
+			// post-failure path skips it: subdivideCheckpoints splits every
+			// remaining gap, so a splittable later gap would grow the list and
+			// re-plan an identical checkpoint. Cheaper here than after a failed
+			// push — a 12-byte header read, then Close — but the asymmetry is
+			// the same one, so it is closed the same way.
+			//
+			// This also sidesteps a mismatch: the estimate is compared against
+			// TargetMaxPack, which is the right bound while a span can still be
+			// split, but not the ceiling an indivisible span is actually pushed
+			// at (see atAnnounced below).
+			if p.TargetMaxPack > 0 && len(batch.chain) > 0 && !isIndivisibleCheckpoint(batch, current, idx) {
 				subdivided := false
 				packReader, packObjectCount, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, calibratedBytesPerObject, func(estimated int64) bool {
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
@@ -792,8 +803,17 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					if next := nextSelfImposedBudget(selfImposedBudget, parsedLimit, sentBytes, abortedEarly); next != selfImposedBudget {
 						// A budget derived from bytes actually sent is evidence
 						// of where the server cuts, not a number we picked, so
-						// the relaxed retry must not jump past it.
-						budgetFromObservation = parsedLimit <= 0
+						// escalation must not jump past it.
+						//
+						// A DEADLINE is excluded, for the same reason
+						// classification excludes it: a target that drained the
+						// body and then timed out told us about time, not size.
+						// Keep the smaller budget — smaller packs genuinely do
+						// finish inside the window — but do not let it masquerade
+						// as a measured size limit, or one 408 would disable
+						// escalation for the rest of the run, on precisely the
+						// flaky multi-GiB targets this path serves.
+						budgetFromObservation = parsedLimit <= 0 && !isTargetPushDeadlineError(pushErr)
 						selfImposedBudget = next
 					}
 					// Pick the byte count we use for sizing the next

@@ -2201,9 +2201,6 @@ func bottomOutParams(t *testing.T, budget, announced int64, push func(int, io.Re
 
 // drainAbort drains the observer so its counter advances and the aborter can
 // fire; the abort surfaces as the read error.
-
-// drainAbort drains the observer so its counter advances and the aborter can
-// fire; the abort surfaces as the read error.
 func drainAbort(_ int, pack io.ReadCloser) error {
 	_, err := io.Copy(io.Discard, pack)
 	return err
@@ -2761,5 +2758,71 @@ func TestExecuteBatchedIndivisibleSpanIsNotRePushedWhileLaterGapsSplit(t *testin
 	}
 	if pushes != 1 {
 		t.Fatalf("an indivisible span must not be re-pushed while later gaps split; got %d pushes", pushes)
+	}
+}
+
+func TestExecuteBatchedDeadlineDoesNotDisableEscalation(t *testing.T) {
+	// A target that drains the body and then times out (GitHub's 408 shape)
+	// told us about TIME, not size. Ratcheting the budget to those bytes is
+	// right — smaller packs do finish inside the window — but recording it as a
+	// measured size limit is not: budgetFromObservation gates escalation and is
+	// cleared only by a later parseable 413, so a single deadline would disable
+	// the feature for the rest of the run, on exactly the flaky multi-GiB
+	// targets this path serves.
+	//
+	// Classification already treats a deadline as availability rather than
+	// size; provenance has to agree.
+	const announced = 1 << 20
+	parents, desired := twoCommitFixture(t, 3)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+	var notices []string
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				switch pushes {
+				case 1:
+					// One-shot: announces the real limit and derives the budget.
+					return fmt.Errorf("http 413: body exceeded size limit %d", announced)
+				case 2:
+					// Drain, then time out: bytes flowed, so the budget ratchets
+					// to them — but this is not size evidence.
+					if _, copyErr := io.Copy(io.Discard, pack); copyErr != nil {
+						return copyErr
+					}
+					return errors.New("http 408 request timeout")
+				default:
+					_, copyErr := io.Copy(io.Discard, pack)
+					return copyErr
+				}
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: desired,
+		TargetRefs:  map[plumbing.ReferenceName]plumbing.Hash{},
+		OnNotice:    func(msg string) { notices = append(notices, msg) },
+	}, "empty target")
+
+	if err != nil {
+		t.Fatalf("a deadline must not disable escalation for the rest of the run, got %v", err)
+	}
+	var escalated bool
+	for _, n := range notices {
+		if strings.Contains(n, "announced limit") {
+			escalated = true
+		}
+	}
+	if !escalated {
+		t.Fatalf("expected an indivisible span to still escalate after a deadline; notices=%v", notices)
 	}
 }
