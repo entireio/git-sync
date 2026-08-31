@@ -1,0 +1,109 @@
+review https://github.com/entireio/git-sync/pull/118
+
+---
+
+<task-notification>
+<task-id>a8d4cdaa73086a788</task-id>
+<tool-use-id>toolu_01RDthFKKFwxpnqGcoPivUtf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-ENT-2054/5e7662ca-7313-402f-a31b-1b2cdbf0fefa/tasks/a8d4cdaa73086a788.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review https://github.com/entireio/git-sync…" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reusing **xhigh** effort (the level you typed last time); type a level to change it, e.g. `/code-review high`.
+
+Reviewed `entireio/git-sync` PR #118 (`d4649ff1`, branch `nodo/ent-2060-bottom-out-server-verdict`) at `/Users/nodo/work/tasks/ENT-2054/git-sync`. Paths below are repo-relative to that root. Findings 1 and 3 were reproduced with a throwaway probe test (since removed); `go build`, `go test ./internal/strategy/bootstrap/... ./internal/syncer/...` and `golangci-lint` are all clean, so nothing here is caught by the existing suite.
+
+```json
+[
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 686,
+    "summary": "The `!subdivide` disjunct classifies ANY unrelated push error on an indivisible checkpoint as the permanent ErrCheckpointExceedsTargetLimit, because `subdivide` is true for real size rejections and false for everything else — the gate is inverted relative to its own comment.",
+    "failure_scenario": "Confirmed by probe: a 1-commit chain whose PushPack returns `errors.New(\"http 401 unauthorized\")` yields `push bootstrap batch for refs/heads/main: bootstrap checkpoint exceeds target pack limit and cannot be subdivided further: http 401 unauthorized` after 1 push. Same for a connection reset, HTTP 500, a pre-receive hook decline, or a context deadline. Any single-commit repo, and every checkpoint after subdivision has bottomed out on a large repo, permafails on a transient error — the mirror worker is told to stop redelivering a repo that only needed a retry. This is the opposite of the PR's stated safety direction."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 676,
+    "summary": "`selfImposedBudget = p.AnnouncedTargetLimit` mutates a variable declared at function scope (line 366) and never restores it, so the raised ceiling leaks to every later checkpoint and every later branch in the run.",
+    "failure_scenario": "Target announces 10 GiB; TargetMaxPack is 512 MiB. Checkpoint 7 bottoms out, is retried at 10 GiB, and succeeds. For checkpoints 8..N and for every subsequent branch the abort ceiling is now 10 GiB while the pre-flight estimate still plans against p.TargetMaxPack (512 MiB) — a pack the estimate calls 400 MiB but which is really 4 GiB now uploads in full instead of aborting at ~486 MiB. That is exactly the 'bounds the waste of a doomed push' invariant the PR claims to keep ('Doesn't raise the batching budget'). It also silently disables the fix for branch 2+: `relaxedRetried` is reset per branch but the budget is not, so `p.AnnouncedTargetLimit &gt; selfImposedBudget` is then false — no retry, and no permanent classification either."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 679,
+    "summary": "The comment claims the sentinel covers the case where the target 'rejected the pack outright', but a genuine 413 body-limit rejection can never reach it: `subdivide` is true and the relaxed-retry block requires `abortedEarly`, so `relaxedRetried` stays false and the gate at 686 is skipped.",
+    "failure_scenario": "Confirmed by probe: a 1-commit chain whose PushPack returns `http 413: body exceeded size limit 1000` returns the plain retryable `push bootstrap batch for refs/heads/main: http 413: ...` — no sentinel — after 1 push. A repo whose first checkpoint push gets a hard 413 with no prior self-imposed abort therefore stays in the redelivery loop forever, which is the failure mode the PR exists to end. The sentinel only ever fires after a self-imposed abort has already happened."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1268,
+    "summary": "`isIndivisibleCheckpoint` derives `prev` from `batch.Checkpoints[idx-1]` instead of the loop's `current`, so it measures the wrong gap on the stale-temp-ref re-plan path where startIdx is reset to 0 while `current` holds a non-zero ResumeHash.",
+    "failure_scenario": "executeBatched lines 397-413 replace `batch.Checkpoints` with `evenCheckpoints(remaining, ...)` and set `startIdx = 0` while `current = batch.ResumeHash`. At idx 0, isIndivisibleCheckpoint uses `prev = plumbing.ZeroHash`, so subdivideCheckpoints sees `curIdx = -1` and a gap of `cpIdx+1` counted from the chain root rather than from ResumeHash — it reports 'divisible' for a checkpoint that subdivideToFactor just proved indivisible. Result: after the relaxed retry has already fired and failed, the run returns a plain retryable error instead of the sentinel — on exactly the resume route this PR series (ENT-2054) exists for. Pass `current` in instead."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 779,
+    "summary": "`result.Batching = true` and `result.RelayMode = \"bootstrap-batch\"` are assigned only at executeBatched's success return, so every failure path returns Batching=false / RelayMode=\"bootstrap\" — falsifying the syncer change's premise that Execute 'populates these before it can fail'.",
+    "failure_scenario": "A failed batched bootstrap now reaches the caller as `batching=false relay-mode=bootstrap`, i.e. indistinguishable from a failed one-shot bootstrap — the exact route distinction the syncer change was added to expose. Worse, `Result.Lines()` (internal/syncer/syncer.go:221) gates the temp-ref line on `if r.Batching &amp;&amp; len(r.TempRefs) &gt; 0`, so the TempRefs the new error-path Result carefully carries out are still never rendered. Fix at the source: set Batching/RelayMode on `result` before the batch loop, next to `result.Relay`."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 571,
+    "summary": "The batch loop parses `parsedLimit := targetBodyLimit(pushErr)` on every rejection but never feeds it into `p.AnnouncedTargetLimit`; the field is populated only on Execute's one-shot auto-switch path (line 232), so whole configurations can never reach the relaxed retry.",
+    "failure_scenario": "With `--target-max-pack-bytes` set (or once the GitHub large-repo preflight at line 1408 starts working — the auth fix the PR defers to ENT-2060), Execute returns to executeBatched at line 168 without ever attempting a one-shot push, so AnnouncedTargetLimit is 0 for the whole run. Every in-loop 413 that announces 10 GiB is parsed into `parsedLimit`, used for `limit` and `nextSelfImposedBudget`, and then discarded — the relaxed retry can never fire and the fix is inert for those repos. One line (`if parsedLimit &gt; p.AnnouncedTargetLimit { p.AnnouncedTargetLimit = parsedLimit }`) makes the mechanism self-sufficient and removes the landing-order coupling the PR description has to warn about."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 665,
+    "summary": "The retry condition compares the announced limit against `selfImposedBudget` without distinguishing 'the budget we chose' from 'a server cutoff we measured', so it discards empirical evidence that the target cuts below its announced figure.",
+    "failure_scenario": "A reverse proxy cuts the connection at 4 MiB without announcing a limit; `nextSelfImposedBudget` (line 1224) ratchets selfImposedBudget down to sentBytes = 4 MiB. The next push aborts early at 4 MiB, subdivision bottoms out, and `p.AnnouncedTargetLimit` (10 GiB, parsed from the original one-shot 413) &gt; 4 MiB, so the retry jumps the ceiling from a measured 4 MiB straight to 10 GiB. We then upload up to ~9.5 GiB against a server that demonstrably cuts at 4 MiB before the abort even engages. Track whether the current budget came from a ratchet-down observation and skip the retry when it did."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 1409,
+    "summary": "The carried-out strategy facts are discarded one layer up by every public entry point, so the diagnosability change has no observable effect on any caller.",
+    "failure_scenario": "`client.go:73` (`return SyncResult{}, fmt.Errorf(\"sync: %w\", err)`), `client.go:57` (Plan), and `unstable/client.go:150/167/186/200` (Plan/Sync/Replicate/Bootstrap) all replace the Result with a zero value on error; `cmd/git-sync/syncplan.go:81` returns before `printOutput`. The actual consumer, mirror-pipeline `cmd/worker/syncer.go`, holds a `gitsync.SyncResult` and only calls `reportSyncSuccess` on the success path. So the fleet-wide log query the PR wants ('a failed sync could only report its strategy when it succeeded') still returns nothing after this change — the fix is at the wrong depth: it has to reach the client wrappers, or the syncer has to log the route itself."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 99,
+    "summary": "`ErrCheckpointExceedsTargetLimit` lives in an internal package and is not re-exported from the root `gitsync` package, so the caller the doc comment addresses cannot match on it.",
+    "failure_scenario": "errors.go establishes the repo's convention: every caller-facing sentinel (ErrTargetRefMoved, ErrNoRefsSelected, ErrSourceEmptyUnverified, ErrTargetEmptyUnverified, ErrSourceEmptyTargetPopulated) is aliased into package `gitsync` with a doc block saying 'Test for it with errors.Is'. mirror-pipeline `cmd/worker/syncer_errors.go:225-263` matches exactly those `gitsync.Err*` values. `entire.io/entire/git-sync/internal/strategy/bootstrap` is unimportable from mirror-pipeline, so 'callers can treat that as permanent' is unreachable — the worker would have to string-match the message, which errors.go:20 explicitly warns against. Add the alias plus doc block in errors.go."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1259,
+    "summary": "isIndivisibleCheckpoint's doc contradicts its implementation and it rebuilds a full chain-index map to answer a question that is one subtraction; the `len(batch.chain) == 0` disjunct at line 686 is also dead.",
+    "failure_scenario": "The comment says it 'reports whether the checkpoint at idx covers a single commit', but subdivideCheckpoints splits every remaining gap, so it returns true only when the entire remaining tail is one-commit-per-gap — a 1-commit checkpoint at idx followed by a 20-commit gap answers false. That makes the sentinel's firing condition depend on unrelated later checkpoints, amplifying finding 1's unpredictability. The intended answer is `chainPosition(chain, batch.Checkpoints[idx]) - chainPosition(chain, current) == 1`, which is correct by construction and avoids allocating a `map[plumbing.Hash]int` over the whole chain (≈1M inserts for a linux-sized repo) on every push failure. Separately, `len(batch.chain) == 0` at 686 can never change the outcome — isIndivisibleCheckpoint already returns false for an empty chain."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap_test.go",
+    "line": 1762,
+    "summary": "All three new tests share one shape — a single branch, a 1-commit chain, and a budget far below minBytesBeforeAbort — so none of them can catch the budget leak, the multi-branch regression, or the projection-based abort that production actually hits.",
+    "failure_scenario": "Budgets are 64, 256 and 1&lt;&lt;20 bytes while `minBytesBeforeAbort` is 8 MiB (line 1136), so only the absolute `bytesSent &gt;= threshold` branch of shouldAbortPush ever fires — never the projection path that produced the production log line the PR quotes. The fake pack is `\"PACK\" + 4096×'x'`, whose version field is 0x78787878, so packfile.Scanner rejects it and the observer's totalObjects/objectsSent stay 0 (checkPackSizeAndSubdivide reads the count anyway, getting 2,021,161,080). And with one checkpoint on one branch there is no second iteration to observe the leaked selfImposedBudget. A two-checkpoint or two-branch case asserting the budget is restored after a relaxed retry is the test that would have caught finding 2."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 1409,
+    "summary": "The error-path Result is asymmetric with the success path: it drops Plans, Pushed, Warned and Measurement even though bResult.Plans is populated before anything in Execute can fail.",
+    "failure_scenario": "Execute sets `result.Plans = plans` at line 164, before any failure is possible — the same argument the new comment makes for Relay/RelayMode — yet the error branch omits it, so `fromSyncResult` (results.go:186) yields `Refs: []` and `Measurement: {}` for a failed bootstrap while the success branch at 1421 carries both. A caller that did read the Result gets a partial picture whose gaps have no principled boundary."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 677,
+    "summary": "The relaxed retry `continue`s back through packReaderForCheckpoint, re-fetching the entire indivisible pack from the source rather than reusing the stream it just uploaded.",
+    "failure_scenario": "For the case this branch exists to serve — one commit whose pack is several GiB — the retry doubles source egress and wall time before the target gets a verdict. Unavoidable without buffering, but worth stating in the comment alongside the 'bounds the waste' rationale, since the retry is the one place in the batch loop that knowingly re-pays a multi-GiB fetch."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap_test.go",
+    "line": 1765,
+    "summary": "bottomOutParams writes the same 1-commit chain twice into two throwaway stores and relies on the hashes matching across calls; its packBytes parameter is also 4096 at all three call sites.",
+    "failure_scenario": "`hashes := makeLinearCommitChain(t, 1)` builds one store, then `fetchCommitParents` builds a second `memory.NewStorage()` and calls `writeLinearCommitChain(t, store, 1)` again, so DesiredRefs.SourceHash and the returned parent map only agree because writeLinearCommitChain happens to be deterministic. If that helper ever picks up a real timestamp the three tests fail with an unrelated 'checkpoint not in chain' symptom. Build the store once, derive both from it, and drop the single-valued packBytes parameter."
+  }
+]
+```</result>
+<usage><subagent_tokens>152940</subagent_tokens><tool_uses>47</tool_uses><duration_ms>590528</duration_ms></usage>
+</task-notification>
+
+---
+
+can you send the review to the implementer?

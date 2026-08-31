@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.3-nightly.202608260614.6561a64b8",
+  "checkpoint_id": "01M1BT9PH0C8J6VWRVS3HFM313",
+  "strategy": "manual-commit",
+  "branch": "nodo/ent-2060-bottom-out-server-verdict",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "client.go",
+    "errors.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/bootstrap_test.go",
+    "internal/syncer/syncer.go",
+    "unstable/client.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 89773,
+    "cache_read_tokens": 915884,
+    "output_tokens": 18724,
+    "api_call_count": 13
+  }
+}
