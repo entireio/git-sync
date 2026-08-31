@@ -89,12 +89,85 @@ type Params struct {
 	// subdivision, switching to batched mode). Implementations should
 	// treat each call as one log line.
 	OnNotice func(string)
+	// RefOutcome reports what the target did with a ref in the push that just
+	// returned: applied it, refused it (with the reason), or said nothing about
+	// it at all. Consulted immediately after a push, since the answer describes
+	// that one request.
+	//
+	// It exists because a nil error is not proof. When the caller pushes
+	// best-effort the pusher hands a per-ref "ng" to its OnRejection callback
+	// and returns nil, so a target that refuses one command out of a
+	// multi-command request reports the whole push as a success. Silence is a
+	// third answer, not a synonym for success: a target that never negotiated
+	// report-status, or whose report skipped this command, has confirmed
+	// nothing.
+	//
+	// Nil for a caller that cannot answer, which reads as silence throughout.
+	RefOutcome func(plumbing.ReferenceName) (gitproto.RefOutcome, string)
+	// TargetRefsNow re-reads the target's refs. Consulted only when a push
+	// left the fate of a branch create in doubt — the target refused it, or
+	// cannot report per-ref status at all — to settle whether the branch is
+	// there before its resume marker is deleted. That question has one honest
+	// answer, and it is the target's rather than an inference from the ng text
+	// it happened to write. Nil or failing means unsettled, which keeps the
+	// marker.
+	TargetRefsNow func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
 }
 
 func (p Params) notice(msg string) {
 	if p.OnNotice != nil {
 		p.OnNotice(msg)
 	}
+}
+
+// refOutcome reports what the target did with name in the push that just
+// returned. Silence when the caller supplied no accessor.
+func (p Params) refOutcome(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+	if p.RefOutcome == nil {
+		return gitproto.RefOutcomeUnknown, ""
+	}
+	return p.RefOutcome(name)
+}
+
+// refRefused reports whether the target refused an update to name, and its
+// reason. A refusal is a positive fact — never inferred from silence — because
+// it is the one answer this strategy stops a run on.
+func (p Params) refRefused(name plumbing.ReferenceName) (string, bool) {
+	outcome, reason := p.refOutcome(name)
+	return reason, outcome == gitproto.RefOutcomeRefused
+}
+
+// createConfirmed reports whether the push that just returned proves the branch
+// create landed, and what leaves it in doubt when it does not. Doubt is not
+// failure: it is settled against the target's own ref listing, because whether
+// a branch is there is a fact the target can state and an ng reason's wording
+// is not.
+func (p Params) createConfirmed(name plumbing.ReferenceName) (bool, string) {
+	switch outcome, reason := p.refOutcome(name); outcome {
+	case gitproto.RefOutcomeApplied:
+		return true, ""
+	case gitproto.RefOutcomeRefused:
+		return false, reason
+	case gitproto.RefOutcomeUnknown:
+		return false, "target reported no status for this ref"
+	default:
+		return false, "target reported no status for this ref"
+	}
+}
+
+// pendingMarker is a resume marker whose branch create this run could not
+// confirm from the push, held back until the target's own ref listing settles
+// whether the branch is there.
+type pendingMarker struct {
+	branch     plumbing.ReferenceName
+	tempRef    plumbing.ReferenceName
+	resumeHash plumbing.Hash
+	// createHash is the hash this run tried to create the branch at. The
+	// marker is only scaffolding once the branch is there at THAT hash;
+	// a branch someone else created at an older commit leaves the span
+	// between the two reachable from nothing but the marker.
+	createHash plumbing.Hash
+	doubt      string
 }
 
 // Result holds the outcome of the bootstrap strategy. Pushed is the count
@@ -318,6 +391,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	// multi-branch bootstrap re-sends all shared objects (e.g., linux's
 	// master and nocache-cleanup share ~99% of history).
 	completedRefs := planner.CopyRefHashMap(p.TargetRefs)
+	// Markers whose branch create this run could not confirm, settled against
+	// the target's own ref listing once every branch has had its cutover.
+	var pending []pendingMarker
 
 	// calibratedBytesPerObject tracks the per-object byte estimate
 	// updated from observed rejected pushes. Starts at the static
@@ -347,6 +423,21 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("create subsumed branch ref for %s: %w", batch.Plan.TargetRef, err)
 			}
+			// Same rule as the cutover below — only a create the target
+			// confirmed counts as delivered — but settled here rather than
+			// against a ref listing. A subsumed branch has no temp ref to
+			// preserve, since trunk already delivered its objects, so nothing
+			// hinges on the answer except the reported batch count and a have
+			// that trunk's own tip already covers. Neither is worth a round
+			// trip, and under-reporting work this run cannot confirm is the
+			// same direction as everything else here.
+			if confirmed, doubt := p.createConfirmed(batch.Plan.TargetRef); !confirmed {
+				p.log("bootstrap batch subsumed branch create unconfirmed; not counted",
+					"branch", batch.Plan.TargetRef.String(),
+					"source_hash", planner.ShortHash(batch.Plan.SourceHash),
+					"reason", doubt)
+				continue
+			}
 			completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 			result.BatchCount++
 			p.log("bootstrap batch subsumed branch finalized",
@@ -363,6 +454,13 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			"resume_hash", planner.ShortHash(batch.ResumeHash))
 
 		current := batch.ResumeHash
+		// Whether this branch's create rode a push in this iteration at all.
+		// It does not when the branch and its marker already sit at the source
+		// hash — adjustedBootstrapTargetRefs zeroes such a branch so it gets a
+		// create plan, but the checkpoint loop and the at-tip cutover both have
+		// nothing to do. Asking what the target said about a ref no push
+		// carried would read the previous branch's answer.
+		createPushed := false
 		startIdx, err := planner.BootstrapResumeIndex(batch.Checkpoints, batch.ResumeHash)
 		if err != nil && !batch.ResumeHash.IsZero() && len(batch.chain) > 0 {
 			// Temp ref doesn't match any planned checkpoint (e.g., the user
@@ -393,6 +491,16 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			delCmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: batch.ResumeHash, Delete: true}}
 			if delErr := p.TargetPusher.PushCommands(ctx, delCmds); delErr != nil {
 				return result, fmt.Errorf("delete stale temp ref %s: %w (original: %w)", batch.TempRef, delErr, err)
+			}
+			// Restarting from zero is only sound if the marker really went
+			// away. A refused delete (deletes blocked in the namespace, or the
+			// ref moved so Old no longer matches) returns nil under
+			// BestEffort, and continuing would push the first checkpoint with
+			// Old=zero against a ref that still exists — a CAS failure every
+			// run reproduces, with the marker never cleared.
+			if reason, refused := p.refRefused(batch.TempRef); refused {
+				return result, fmt.Errorf("clear stale bootstrap temp ref %s: target refused: %s (stale because: %w)",
+					batch.TempRef, reason, err)
 			}
 			current = plumbing.ZeroHash
 			startIdx = 0
@@ -439,6 +547,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				Reason: fmt.Sprintf("%s -> %s via %s", planner.ShortHash(current), planner.ShortHash(checkpoint), batch.TempRef),
 			}}
 			if idx == len(batch.Checkpoints)-1 {
+				createPushed = true
 				stagePlans = append(stagePlans, planner.BranchPlan{
 					Branch: batch.Plan.Branch, SourceRef: batch.Plan.SourceRef,
 					TargetRef: batch.Plan.TargetRef, SourceHash: checkpoint,
@@ -625,6 +734,24 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
 			}
 			_ = packReader.Close()
+			// The temp ref is the state machine: `current` advances only if
+			// the target really moved it. A policy that refuses the whole
+			// request (read-only repository, a blanket pre-receive block) ng's
+			// this command too, and best-effort turns that into a nil error —
+			// after which every subsequent checkpoint would negotiate against
+			// a have the target does not have, and the cutover would delete a
+			// ref at a hash the target never accepted. There is no partial
+			// progress to keep here, so stop rather than warn: the branch
+			// cannot be delivered by this run at all.
+			//
+			// Only a refusal stops the run. A target that cannot report
+			// per-ref status says nothing about this ref either, and treating
+			// that silence as a refusal would fail every batched bootstrap
+			// against it.
+			if reason, refused := p.refRefused(batch.TempRef); refused {
+				return result, fmt.Errorf("push bootstrap batch for %s: target refused %s: %s",
+					batch.Plan.TargetRef, batch.TempRef, reason)
+			}
 			p.log("bootstrap batch checkpoint complete",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
@@ -664,16 +791,77 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
 			}
+			createPushed = true
+		}
+
+		// The temp ref is this import's only record of how far it got, so it
+		// may only be deleted once the branch it was scaffolding for exists.
+		// The create rode the final checkpoint's push (or, on an at-tip
+		// resume, the command push just above), and a nil error from either
+		// does not prove it landed — see Params.RefOutcome. A target that
+		// refuses the create (protected branch, pre-receive policy) would
+		// otherwise end the run with neither the branch nor the marker,
+		// reported as a success — and with nothing on the target pointing at
+		// the objects pushed so far, the next run has no have to negotiate
+		// against and re-transfers the entire history, on precisely the large
+		// repositories batching exists for.
+		//
+		// Unlike the one-shot path, this cannot defer to prune as its
+		// cleaner: Bootstrap() rejects --prune outright, so on that route no
+		// cleaner would ever exist and the marker would be permanent. Hence
+		// the conditional delete rather than no delete.
+		// A branch nothing was pushed for is one the target already holds at
+		// the source hash — that is the only way to reach here without a
+		// create — so its marker is stale and needs no confirming.
+		confirmed, doubt := true, ""
+		if createPushed {
+			confirmed, doubt = p.createConfirmed(batch.Plan.TargetRef)
+		}
+		if !confirmed {
+			// Held back rather than decided here: whether the branch is on the
+			// target is a fact the target can state, and one listing after the
+			// last branch settles every doubtful case at once. The marker
+			// genuinely holds `current` meanwhile, so the objects behind it
+			// stay usable as haves for the branches planned after this one.
+			pending = append(pending, pendingMarker{
+				branch: batch.Plan.TargetRef, tempRef: batch.TempRef,
+				resumeHash: current, createHash: batch.Plan.SourceHash, doubt: doubt,
+			})
+			completedRefs[batch.TempRef] = current
+			p.log("bootstrap batch branch create unconfirmed; deferring marker cleanup",
+				"branch", batch.Plan.TargetRef.String(),
+				"temp_ref", batch.TempRef.String(),
+				"resume_hash", planner.ShortHash(current),
+				"pushed_checkpoints", len(pushedCheckpoints),
+				"reason", doubt)
+			continue
 		}
 
 		cmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: current, Delete: true}}
 		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
 		}
+		if reason, refused := p.refRefused(batch.TempRef); refused {
+			// Not fatal — the branch is there, which is what the operator
+			// asked for — but the scaffolding outlived it, and on the
+			// bootstrap route prune is not available to reap it.
+			p.log("bootstrap temp ref delete refused; marker left on target",
+				"branch", batch.Plan.TargetRef.String(),
+				"temp_ref", batch.TempRef.String(),
+				"reason", reason)
+			p.notice(fmt.Sprintf("target refused to delete %s (%s) — remove it by hand or let a --prune run reap it",
+				batch.TempRef, reason))
+		}
 		completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 		completedRefs[batch.TempRef] = batch.Plan.SourceHash
 		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
 	}
+
+	// Settled here rather than after the tail phase: the last create has
+	// happened, so the listing is already authoritative, and every extra
+	// minute between reading the target's refs and acting on them is a minute
+	// in which another run can pick the marker up and start resuming from it.
+	resolvePendingMarkers(ctx, p, pending)
 
 	// Tail phase: tags and other-kind refs (issue #1)
 	if len(tailPlans) > 0 {
@@ -681,10 +869,12 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		if p.OnPhase != nil {
 			p.OnPhase(tailPhaseLabel(tailPlans))
 		}
-		tailTargetRefs := planner.CopyRefHashMap(p.TargetRefs)
-		for _, batch := range batches {
-			tailTargetRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
-		}
+		// completedRefs, not a fresh pass over `batches`: it is the map this
+		// run maintains as what the target demonstrably holds — branch tips
+		// whose creates were confirmed, and the temp refs still anchoring the
+		// ones that were not. Re-deriving from the plans here would claim the
+		// creates the cutover deliberately withheld.
+		tailTargetRefs := planner.CopyRefHashMap(completedRefs)
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, tailDesired, tailTargetRefs)
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -711,6 +901,96 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	result.Batching = true
 	result.RelayMode = "bootstrap-batch"
 	return result, nil
+}
+
+// resolvePendingMarkers settles the markers whose branch create no push could
+// confirm, by asking the target which branches it actually has. A marker whose
+// branch is present at the hash this run pushed is stale scaffolding and is
+// deleted; anything else is kept, with the reason stated. When the target
+// cannot be asked, everything is kept: one run's worth of leftover scaffolding
+// is recoverable, a discarded resume position is a full re-transfer.
+//
+// Deliberately not fatal. The branches that did land are on the target, the
+// operator asked for those, and a listing failure at the very end of a
+// multi-gigabyte import must not turn a delivered import into a failed run.
+func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarker) {
+	if len(pending) == 0 {
+		return
+	}
+	if p.TargetRefsNow == nil {
+		for _, marker := range pending {
+			keepMarker(p, marker, "no way to list the target's refs")
+		}
+		return
+	}
+	refsNow, err := p.TargetRefsNow(ctx)
+	if err != nil {
+		for _, marker := range pending {
+			keepMarker(p, marker, fmt.Sprintf("could not list the target's refs: %v", err))
+		}
+		return
+	}
+
+	cmds := make([]gitproto.PushCommand, 0, len(pending))
+	deleted := make([]pendingMarker, 0, len(pending))
+	for _, marker := range pending {
+		switch onTarget := refsNow[marker.branch]; {
+		case onTarget.IsZero():
+			keepMarker(p, marker, fmt.Sprintf("%s is not on the target", marker.branch))
+		case onTarget != marker.createHash:
+			// Someone else's branch, at their commit. Everything between it
+			// and this import's tip is reachable from the marker and nothing
+			// else, so the marker is still the only thing holding it.
+			keepMarker(p, marker, fmt.Sprintf("%s is on the target at %s, not the %s this run pushed",
+				marker.branch, planner.ShortHash(onTarget), planner.ShortHash(marker.createHash)))
+		default:
+			p.log("bootstrap deleting resume marker; branch present at pushed hash",
+				"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
+				"target_hash", planner.ShortHash(onTarget), "doubt", marker.doubt)
+			cmds = append(cmds, gitproto.PushCommand{Name: marker.tempRef, Old: marker.resumeHash, Delete: true})
+			deleted = append(deleted, marker)
+		}
+	}
+	if len(cmds) == 0 {
+		return
+	}
+	if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+		p.log("bootstrap resume marker cleanup failed; markers left on target",
+			"marker_count", len(cmds), "error", err.Error())
+		p.notice(fmt.Sprintf("could not delete %d stale resume marker(s) — remove them by hand or let a --prune run reap them", len(cmds)))
+		return
+	}
+	// Per marker, because best-effort swallows a per-ref "ng" here exactly as
+	// it does at the cutover: a delete the target refused, or one whose Old no
+	// longer matches because a concurrent run moved the marker, returns nil.
+	for _, marker := range deleted {
+		if reason, refused := p.refRefused(marker.tempRef); refused {
+			p.log("bootstrap temp ref delete refused; marker left on target",
+				"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
+				"reason", reason)
+			p.notice(fmt.Sprintf("target refused to delete %s (%s) — remove it by hand or let a --prune run reap it",
+				marker.tempRef, reason))
+		}
+	}
+}
+
+// keepMarker logs and surfaces a resume marker this run is leaving in place.
+//
+// On the replicate and sync routes the next --prune run reaps it once its
+// branch lands, so a marker kept unnecessarily costs one run. On the bootstrap
+// route it does not: Bootstrap() rejects --prune, so nothing here will ever
+// remove a marker this function keeps, and against a target that neither
+// reports per-ref status nor answers a ref listing it is permanent. Accepted
+// deliberately, in that order of harm: a marker is inert scaffolding — the
+// resume route requires the branch to be absent, so a stale one cannot
+// misroute anything — while a marker deleted in error costs a full re-import.
+func keepMarker(p Params, marker pendingMarker, why string) {
+	p.log("bootstrap keeping resume marker",
+		"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
+		"resume_hash", planner.ShortHash(marker.resumeHash),
+		"doubt", marker.doubt, "reason", why)
+	p.notice(fmt.Sprintf("%s (%s) — keeping %s at %s so the next run resumes instead of re-importing",
+		why, marker.doubt, marker.tempRef, planner.ShortHash(marker.resumeHash)))
 }
 
 // tailPhaseLabel returns a phase label matching what's in plans.

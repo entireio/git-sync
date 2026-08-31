@@ -1755,3 +1755,392 @@ func writeLinearCommitChain(tb testing.TB, store storer.Storer, count int) []plu
 	}
 	return hashes
 }
+
+// forkedCommitGraph builds a commit graph with two divergent tips sharing a
+// root: a linear trunk, plus one commit hanging off the trunk's second commit.
+// A second branch whose tip is IN the trunk's ancestry is planned as subsumed
+// and never fetches, so a test about later branches' fetch haves needs a fork.
+func forkedCommitGraph(tb testing.TB, trunkLen int) (parents map[plumbing.Hash][]plumbing.Hash, trunkTip, forkTip plumbing.Hash) {
+	tb.Helper()
+	store := memory.NewStorage()
+	trunk := writeLinearCommitChain(tb, store, trunkLen)
+	obj := store.NewEncodedObject()
+	commit := &object.Commit{
+		Author:       object.Signature{Name: "test", Email: "test@example.com", When: time.Unix(9000, 0).UTC()},
+		Committer:    object.Signature{Name: "test", Email: "test@example.com", When: time.Unix(9000, 0).UTC()},
+		Message:      "fork",
+		TreeHash:     plumbing.ZeroHash,
+		ParentHashes: []plumbing.Hash{trunk[1]},
+	}
+	if err := commit.Encode(obj); err != nil {
+		tb.Fatalf("encode fork commit: %v", err)
+	}
+	forkTip, err := store.SetEncodedObject(obj)
+	if err != nil {
+		tb.Fatalf("store fork commit: %v", err)
+	}
+	return parentsFromCommitChainStore(tb, store), trunk[trunkLen-1], forkTip
+}
+
+// reachableParents narrows a commit-parents map to the commits reachable from
+// tip.
+func reachableParents(parents map[plumbing.Hash][]plumbing.Hash, tip plumbing.Hash) map[plumbing.Hash][]plumbing.Hash {
+	out := map[plumbing.Hash][]plumbing.Hash{}
+	queue := []plumbing.Hash{tip}
+	for len(queue) > 0 {
+		hash := queue[0]
+		queue = queue[1:]
+		if _, seen := out[hash]; seen {
+			continue
+		}
+		out[hash] = parents[hash]
+		queue = append(queue, parents[hash]...)
+	}
+	return out
+}
+
+// batchedRefusalHarness drives a two-branch batched bootstrap whose target
+// answers with the given per-ref "ng" statuses, and records what the run
+// fetched and pushed.
+type batchedRefusalHarness struct {
+	params              Params
+	trunkRef, forkRef   plumbing.ReferenceName
+	trunkTempRef        plumbing.ReferenceName
+	trunkTip            plumbing.Hash
+	fetchHaves          []map[plumbing.ReferenceName]plumbing.Hash
+	pushCommandsBatches [][]gitproto.PushCommand
+	// refsNow is what the target answers when the run asks which refs it
+	// actually has, and refsNowErr makes that question unanswerable. Together
+	// they stand in for the only authority on whether a branch landed.
+	refsNow    map[plumbing.ReferenceName]plumbing.Hash
+	refsNowErr error
+	refsNowN   int
+	// silent makes the target report nothing per ref, as one that never
+	// negotiated report-status does.
+	silent bool
+}
+
+func newBatchedRefusalHarness(t *testing.T, refused map[plumbing.ReferenceName]string) *batchedRefusalHarness {
+	t.Helper()
+	return newBatchedHarness(t, refused, false)
+}
+
+// newSubsumedRefusalHarness is the same two branches with the second one's tip
+// inside the trunk's ancestry, so it is planned as subsumed: one ref create, no
+// pack, no temp ref.
+func newSubsumedRefusalHarness(t *testing.T, refused map[plumbing.ReferenceName]string) *batchedRefusalHarness {
+	t.Helper()
+	return newBatchedHarness(t, refused, true)
+}
+
+func newBatchedHarness(t *testing.T, refused map[plumbing.ReferenceName]string, subsumeSecond bool) *batchedRefusalHarness {
+	t.Helper()
+	parents, trunkTip, forkTip := forkedCommitGraph(t, 4)
+	if subsumeSecond {
+		// A tip on the trunk's own chain: reachable from it, so trunk's
+		// batches deliver every object and the planner subsumes it.
+		for hash, ps := range parents {
+			if hash == trunkTip {
+				forkTip = ps[0]
+			}
+		}
+	}
+	h := &batchedRefusalHarness{
+		trunkRef: plumbing.NewBranchReferenceName("main"),
+		forkRef:  plumbing.NewBranchReferenceName("release"),
+		trunkTip: trunkTip,
+		refsNow:  map[plumbing.ReferenceName]plumbing.Hash{},
+	}
+	h.trunkTempRef = planner.BootstrapTempRef(h.trunkRef)
+	h.params = Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				// Only the requested ref's ancestry, as a real commit-graph
+				// fetch answers: handing back the whole graph would put the
+				// fork tip in trunk's stop set and plan it as subsumed.
+				return reachableParents(parents, ref.SourceHash), nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				h.fetchHaves = append(h.fetchHaves, planner.CopyRefHashMap(haves))
+				return io.NopCloser(bytes.NewReader([]byte("PACK"))), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				_ = pack.Close()
+				return nil
+			},
+			pushCommands: func(_ context.Context, cmds []gitproto.PushCommand) error {
+				h.pushCommandsBatches = append(h.pushCommandsBatches, append([]gitproto.PushCommand(nil), cmds...))
+				return nil
+			},
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			h.trunkRef: {SourceRef: h.trunkRef, TargetRef: h.trunkRef, SourceHash: trunkTip, Kind: planner.RefKindBranch, Label: "main"},
+			h.forkRef:  {SourceRef: h.forkRef, TargetRef: h.forkRef, SourceHash: forkTip, Kind: planner.RefKindBranch, Label: "release"},
+		},
+		TargetRefs:       map[plumbing.ReferenceName]plumbing.Hash{},
+		SourceHeadTarget: h.trunkRef,
+		TargetMaxPack:    1024 * 1024,
+		RefOutcome: func(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+			if reason, ok := refused[name]; ok {
+				return gitproto.RefOutcomeRefused, reason
+			}
+			if h.silent {
+				return gitproto.RefOutcomeUnknown, ""
+			}
+			return gitproto.RefOutcomeApplied, ""
+		},
+		TargetRefsNow: func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+			h.refsNowN++
+			if h.refsNowErr != nil {
+				return nil, h.refsNowErr
+			}
+			return h.refsNow, nil
+		},
+	}
+	return h
+}
+
+// deletedTrunkMarker reports whether the run pushed a delete for the trunk
+// branch's resume marker.
+func (h *batchedRefusalHarness) deletedTrunkMarker() bool {
+	for _, cmds := range h.pushCommandsBatches {
+		for _, cmd := range cmds {
+			if cmd.Name == h.trunkTempRef && cmd.Delete {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// A refused branch create must leave the marker in place AND leave its hash
+// usable as a fetch have for the branches planned after it — the reason the
+// cutover records the temp ref instead of the branch it could not create.
+func TestExecuteBatchedRefusedCreateKeepsMarkerAsHave(t *testing.T) {
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		plumbing.NewBranchReferenceName("main"): "deny creating a protected branch",
+	})
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted resume marker %s after a create the target refused: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+	// Kept because the target says the branch is absent, not because the ng
+	// text was read: the listing has to have been consulted.
+	if h.refsNowN == 0 {
+		t.Error("marker decided without asking the target which refs it has")
+	}
+	if len(h.fetchHaves) < 2 {
+		t.Fatalf("expected a fetch for the second branch, got %d fetch(es)", len(h.fetchHaves))
+	}
+	// The second branch's fetch must offer the kept marker's hash, or the
+	// objects trunk already delivered are re-sent.
+	var offeredTrunkTip bool
+	for _, haves := range h.fetchHaves[1:] {
+		for _, hash := range haves {
+			if hash == h.trunkTip {
+				offeredTrunkTip = true
+			}
+		}
+	}
+	if !offeredTrunkTip {
+		t.Errorf("later fetch did not offer the kept marker at %s as a have: %v",
+			planner.ShortHash(h.trunkTip), h.fetchHaves)
+	}
+}
+
+// The common path pays nothing: a confirmed create deletes its marker straight
+// away, without asking the target for a ref listing.
+func TestExecuteBatchedConfirmedCreateDeletesMarkerWithoutListing(t *testing.T) {
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !h.deletedTrunkMarker() {
+		t.Errorf("did not delete resume marker %s after a confirmed create: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+	if h.refsNowN != 0 {
+		t.Errorf("asked the target for %d ref listing(s) on a run with nothing in doubt", h.refsNowN)
+	}
+}
+
+// A refusal does not always mean the branch is absent — "already exists" says
+// the opposite, and a pre-receive message can contain that phrase while the
+// branch really is missing. So the decision is made on what the target has,
+// not on what it wrote: branch present means the marker is stale scaffolding
+// and must go, or it strands forever on the bootstrap route, which refuses
+// --prune and so has no cleaner.
+func TestExecuteBatchedRefusedButPresentBranchDeletesMarker(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		trunkRef: "already exists",
+	})
+	// There, at the hash this run pushed — so the import did land and the
+	// scaffolding is genuinely spent.
+	h.refsNow[trunkRef] = h.trunkTip
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !h.deletedTrunkMarker() {
+		t.Errorf("kept resume marker %s for a branch the target has: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// The mirror image, and the reason the text is not consulted: a refusal whose
+// wording happens to contain "already exists" while the branch is genuinely
+// absent must keep the marker. Classifying the prose would delete it and cost
+// a full re-transfer.
+func TestExecuteBatchedRefusalMentioningExistenceKeepsMarkerWhenAbsent(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		trunkRef: "refusing to create refs/heads/main: a tag with that name already exists",
+	})
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted resume marker %s for a branch the target does not have: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// Silence is not confirmation on the subsumed path either. Nothing is at stake
+// but the count, so no listing is fetched for it — the create simply is not
+// reported as delivered. Trunk's own checkpoint pack still counts, which is
+// what separates the two numbers below.
+func TestExecuteBatchedSubsumedUnconfirmedCreateNotCounted(t *testing.T) {
+	confirmed := newSubsumedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	baseline, err := Execute(context.Background(), confirmed.params, "empty target")
+	if err != nil {
+		t.Fatalf("Execute (confirmed): %v", err)
+	}
+
+	silent := newSubsumedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	silent.silent = true
+	result, err := Execute(context.Background(), silent.params, "empty target")
+	if err != nil {
+		t.Fatalf("Execute (silent target): %v", err)
+	}
+	if result.BatchCount != baseline.BatchCount-1 {
+		t.Errorf("BatchCount=%d against a silent target, want %d — one less than the %d a confirmed run reports, "+
+			"since the subsumed create is the only difference",
+			result.BatchCount, baseline.BatchCount-1, baseline.BatchCount)
+	}
+}
+
+// A branch present at someone else's commit is not this import's branch. The
+// span between their tip and ours is reachable from the marker and nothing
+// else, so deleting it would strand exactly the objects this run delivered.
+func TestExecuteBatchedBranchAtOtherHashKeepsMarker(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		trunkRef: "already exists",
+	})
+	h.refsNow[trunkRef] = plumbing.NewHash("6dcf09a3e2a1b3d1d1c88f1ad5e63e3f3d1a2b3c")
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted resume marker %s though %s sits at another commit: %v",
+			h.trunkTempRef, trunkRef, h.pushCommandsBatches)
+	}
+}
+
+// A target that refuses the temp ref itself has applied nothing: the run must
+// stop rather than advance its checkpoint state against a hash the target
+// never accepted.
+func TestExecuteBatchedRefusedTempRefStopsTheRun(t *testing.T) {
+	trunkTempRef := planner.BootstrapTempRef(plumbing.NewBranchReferenceName("main"))
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		plumbing.NewBranchReferenceName("main"): "deny updating a hidden ref",
+		trunkTempRef:                            "deny updating a hidden ref",
+	})
+
+	_, err := Execute(context.Background(), h.params, "empty target")
+	if err == nil {
+		t.Fatal("Execute succeeded against a target that refused the temp ref")
+	}
+	if !strings.Contains(err.Error(), trunkTempRef.String()) {
+		t.Errorf("error does not name the refused temp ref: %v", err)
+	}
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted a marker the target never accepted: %v", h.pushCommandsBatches)
+	}
+}
+
+// Silence from a target that never advertised report-status is not
+// confirmation — but it is not a failure either. The listing settles it: the
+// create landed, so the marker is stale and goes. Without this the marker
+// would be permanent on the one route that forbids --prune.
+func TestExecuteBatchedUnreportingTargetSettledByListing(t *testing.T) {
+	trunkRef := plumbing.NewBranchReferenceName("main")
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	h.silent = true
+	h.refsNow[trunkRef] = h.trunkTip
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.refsNowN == 0 {
+		t.Error("never asked the target which refs it has, so nothing was confirmed")
+	}
+	if !h.deletedTrunkMarker() {
+		t.Errorf("kept resume marker %s though the target has the branch: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// When the target cannot be asked either, nothing is settled and everything is
+// kept — one run's leftover scaffolding against a full re-transfer — and the
+// run still succeeds, because the branches that landed are what the operator
+// asked for.
+func TestExecuteBatchedUnansweredListingKeepsMarker(t *testing.T) {
+	h := newBatchedRefusalHarness(t, map[plumbing.ReferenceName]string{})
+	h.silent = true
+	h.refsNowErr = errors.New("target listing unavailable")
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute must not fail because a listing failed: %v", err)
+	}
+	if h.deletedTrunkMarker() {
+		t.Errorf("deleted resume marker %s without confirming anything: %v",
+			h.trunkTempRef, h.pushCommandsBatches)
+	}
+}
+
+// A subsumed branch has no temp ref to lose, but its create is a lone ref push
+// with the same nil-error-is-not-proof problem: a refused create must not be
+// counted as a delivered batch or offered as a have.
+func TestExecuteBatchedSubsumedRefusedCreateNotCounted(t *testing.T) {
+	forkRef := plumbing.NewBranchReferenceName("release")
+	h := newSubsumedRefusalHarness(t, map[plumbing.ReferenceName]string{
+		forkRef: "deny creating a protected branch",
+	})
+
+	result, err := Execute(context.Background(), h.params, "empty target")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// Trunk's checkpoint only. Counting the refused subsumed create would
+	// report work the target never accepted.
+	if result.BatchCount != 1 {
+		t.Errorf("BatchCount=%d, want 1 (trunk only; the subsumed create was refused)", result.BatchCount)
+	}
+	for _, haves := range h.fetchHaves {
+		if _, ok := haves[forkRef]; ok {
+			t.Errorf("offered refused branch %s as a fetch have: %v", forkRef, haves)
+		}
+	}
+}

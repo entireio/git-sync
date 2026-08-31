@@ -22,6 +22,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
 	"github.com/stretchr/testify/require"
+
+	"entire.io/entire/git-sync/internal/syncertest"
 )
 
 func TestPrefixedLineWriter(t *testing.T) {
@@ -150,7 +152,7 @@ func TestPushPackClosesPackOnSuccess(t *testing.T) {
 	conn := connForServer(t, srv)
 	adv := &packp.AdvRefs{}
 
-	err := PushPack(context.Background(), conn, adv, []PushCommand{{
+	err := pushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, pack, 0, false, nil)
@@ -177,7 +179,7 @@ func TestPushPackClosesPackOnReceivePackError(t *testing.T) {
 	conn := connForServer(t, srv)
 	adv := &packp.AdvRefs{}
 
-	err := PushPack(context.Background(), conn, adv, []PushCommand{{
+	err := pushPack(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, pack, 0, false, nil)
@@ -207,7 +209,7 @@ func TestPushPackClosesPackOnContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- PushPack(ctx, conn, adv, []PushCommand{{
+		done <- pushPack(ctx, conn, adv, []PushCommand{{
 			Name: "refs/heads/main",
 			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		}}, pack, 0, false, nil)
@@ -263,7 +265,7 @@ func TestPushPackStartsHTTPBeforePackFullyRead(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- PushPack(context.Background(), conn, adv, []PushCommand{{
+		done <- pushPack(context.Background(), conn, adv, []PushCommand{{
 			Name: "refs/heads/main",
 			New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		}}, pack, 0, false, nil)
@@ -320,7 +322,7 @@ func TestPushObjectsStreamsBody(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	adv.Capabilities.Set(capability.OFSDelta)
 
-	err := PushObjects(context.Background(), conn, adv, []PushCommand{{
+	err := pushObjects(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/main",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, memory.NewStorage(), nil, 0, false, nil)
@@ -416,7 +418,7 @@ func TestPushCommandsSendsEmptyPackForCreate(t *testing.T) {
 	conn := connForServer(t, srv)
 	adv := &packp.AdvRefs{}
 
-	err := PushCommands(context.Background(), conn, adv, []PushCommand{{
+	err := pushCommands(context.Background(), conn, adv, []PushCommand{{
 		Name: "refs/heads/docs-rules",
 		New:  plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 	}}, 0, false, nil)
@@ -434,7 +436,7 @@ func TestPushCommandsSendsNoPackForDeleteOnly(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	adv.Capabilities.Set(capability.DeleteRefs)
 
-	err := PushCommands(context.Background(), conn, adv, []PushCommand{{
+	err := pushCommands(context.Background(), conn, adv, []PushCommand{{
 		Name:   "refs/gitsync/bootstrap/heads/docs-rules",
 		Old:    plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		Delete: true,
@@ -493,7 +495,7 @@ func TestPushPackRejectsDeletes(t *testing.T) {
 	require.NoError(t, err)
 	conn := &HTTPConn{EndpointURL: ep, HTTP: &http.Client{}}
 
-	err = PushPack(context.Background(), conn, adv, []PushCommand{
+	err = pushPack(context.Background(), conn, adv, []PushCommand{
 		{Name: "refs/heads/old", Delete: true},
 	}, pack, 0, false, nil)
 	if err == nil {
@@ -833,7 +835,7 @@ func TestPushCommandsBatchesOverCap(t *testing.T) {
 	adv := &packp.AdvRefs{}
 
 	// limit=3, 7 refs → batches of 3, 3, 1.
-	require.NoError(t, PushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, false, nil))
+	require.NoError(t, pushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, false, nil))
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -860,7 +862,7 @@ func TestPushPackBatchesOverCap(t *testing.T) {
 	pack := io.NopCloser(bytes.NewReader(marker))
 
 	// limit=3, 7 refs → first batch of 3 carries the pack, then 3 + 1 ref-only.
-	require.NoError(t, PushPack(context.Background(), conn, adv, makeCreateCommands(7), pack, 3, false, nil))
+	require.NoError(t, pushPack(context.Background(), conn, adv, makeCreateCommands(7), pack, 3, false, nil))
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -889,7 +891,7 @@ func TestPushCommandsVerboseLogsBatches(t *testing.T) {
 	var buf bytes.Buffer
 	conn := connForServer(t, srv)
 	conn.ProgressOut = &buf
-	require.NoError(t, PushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, true, nil))
+	require.NoError(t, pushCommands(context.Background(), conn, adv, makeCreateCommands(7), 3, true, nil))
 
 	out := buf.String()
 	require.Contains(t, out, "pushed ref-update batch 1/3 (3 refs)")
@@ -900,7 +902,7 @@ func TestPushCommandsVerboseLogsBatches(t *testing.T) {
 	var single bytes.Buffer
 	conn2 := connForServer(t, srv)
 	conn2.ProgressOut = &single
-	require.NoError(t, PushCommands(context.Background(), conn2, adv, makeCreateCommands(2), 3, true, nil))
+	require.NoError(t, pushCommands(context.Background(), conn2, adv, makeCreateCommands(2), 3, true, nil))
 	require.NotContains(t, single.String(), "pushed ref-update batch")
 }
 
@@ -915,7 +917,7 @@ func TestPushPackUsesDefaultLimitWhenZero(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	pack := io.NopCloser(bytes.NewReader([]byte("PACK-PAYLOAD")))
 
-	require.NoError(t, PushPack(context.Background(), conn, adv, makeCreateCommands(3), pack, 0, false, nil))
+	require.NoError(t, pushPack(context.Background(), conn, adv, makeCreateCommands(3), pack, 0, false, nil))
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -1003,5 +1005,139 @@ func TestPushPackSanitizesUnpackStatusOnBestEffortPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed") {
 		t.Errorf("the real status must survive filtering: %q", err.Error())
+	}
+}
+
+// refReportServer answers every receive-pack POST by denying the named ref
+// while reporting every other command "ok". deny is read under mu because the
+// handler runs on the server's goroutine while the test drives the pushes.
+func refReportServer(t *testing.T, mu *sync.Mutex, deny *plumbing.ReferenceName, reason string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Logf("read request body: %v", err)
+		}
+		_ = r.Body.Close()
+		req := &packp.UpdateRequests{}
+		if err := req.Decode(bytes.NewReader(body)); err != nil {
+			t.Logf("decode update requests: %v", err)
+		}
+		mu.Lock()
+		denied := *deny
+		mu.Unlock()
+		report := syncertest.DenyRefsReport(req, reason, denied)
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		w.WriteHeader(http.StatusOK)
+		if err := report.Encode(w); err != nil {
+			t.Logf("encode report: %v", err)
+		}
+	}))
+}
+
+func TestPusherLastRejectionsCoversOnlyTheLastPush(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	const reason = "deny creating a protected branch"
+	var mu sync.Mutex
+	deny := main
+	srv := refReportServer(t, &mu, &deny, reason)
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+	var session []plumbing.ReferenceName
+	// Non-nil OnRejection selects the best-effort branch, where a per-ref ng
+	// reaches the callback and the push returns nil.
+	pusher.OnRejection = func(name plumbing.ReferenceName, _ string) {
+		session = append(session, name)
+	}
+
+	cmds := []PushCommand{{Name: main, Old: plumbing.ZeroHash, New: plumbing.NewHash("1111111111111111111111111111111111111111")}}
+	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
+		t.Fatalf("best-effort push returned an error: %v", err)
+	}
+	if outcome, got := pusher.LastOutcome(main); outcome != RefOutcomeRefused || got != reason {
+		t.Fatalf("LastOutcome(%s) = (%v, %q), want (refused, the target's reason)", main, outcome, got)
+	}
+
+	// Same ref, same Pusher, this time accepted. A session-wide view would
+	// still call it rejected — the trap this exists to avoid.
+	mu.Lock()
+	deny = plumbing.ReferenceName("refs/heads/other")
+	mu.Unlock()
+	if err := pusher.PushCommands(t.Context(), cmds); err != nil {
+		t.Fatalf("second push returned an error: %v", err)
+	}
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeApplied {
+		t.Errorf("LastOutcome(%s) = %v after a clean push, want applied", main, outcome)
+	}
+	if len(session) != 1 {
+		t.Errorf("OnRejection called %d times, want 1 — the session view must be unaffected", len(session))
+	}
+}
+
+func TestPusherWithoutOnRejectionKeepsRejectionsFatal(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	var mu sync.Mutex
+	deny := main
+	srv := refReportServer(t, &mu, &deny, "deny creating a protected branch")
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+
+	err := pusher.PushCommands(t.Context(), []PushCommand{{
+		Name: main, Old: plumbing.ZeroHash, New: plumbing.NewHash("1111111111111111111111111111111111111111"),
+	}})
+	if err == nil {
+		t.Fatal("a per-ref ng must stay fatal when the caller installed no OnRejection")
+	}
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeUnknown {
+		t.Errorf("LastOutcome(%s) = %v after a failed strict push, want unknown", main, outcome)
+	}
+}
+
+func TestPusherOutcomeUnknownWhenReportOmitsRef(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	other := plumbing.ReferenceName("refs/heads/other")
+	// A report that mentions only one of the two commands. A conforming
+	// receive-pack does not do this; the point is that the ref it skipped must
+	// not read as accepted, and must not fail the push either.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Logf("drain request body: %v", err)
+		}
+		_ = r.Body.Close()
+		report := &packp.ReportStatus{
+			UnpackStatus:    "ok",
+			CommandStatuses: []*packp.CommandStatus{{ReferenceName: main, Status: "ok"}},
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
+		w.WriteHeader(http.StatusOK)
+		if err := report.Encode(w); err != nil {
+			t.Logf("encode report: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+	pusher.OnRejection = func(plumbing.ReferenceName, string) {}
+
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	if err := pusher.PushCommands(t.Context(), []PushCommand{
+		{Name: main, Old: plumbing.ZeroHash, New: hash},
+		{Name: other, Old: plumbing.ZeroHash, New: hash},
+	}); err != nil {
+		t.Fatalf("an omitted status must not fail the push: %v", err)
+	}
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeApplied {
+		t.Errorf("LastOutcome(%s) = %v, want applied", main, outcome)
+	}
+	if outcome, reason := pusher.LastOutcome(other); outcome != RefOutcomeUnknown {
+		t.Errorf("LastOutcome(%s) = (%v, %q), want unknown: the target never mentioned it", other, outcome, reason)
 	}
 }

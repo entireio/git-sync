@@ -50,6 +50,111 @@ type Pusher struct {
 	// uses the env-or-default limit (see MaxRefUpdatesEnv); a positive value
 	// overrides it — e.g. from the --target-max-ref-updates flag.
 	MaxRefUpdates int
+
+	// lastOutcomes holds what the target said about each ref in the most
+	// recent Push* call on this Pusher, reset when that call starts. A caller
+	// that infers "the ref landed" from a nil error needs THAT request's
+	// answer, not a session-wide accumulation: the same ref name can be
+	// pushed more than once in a run.
+	lastOutcomes map[plumbing.ReferenceName]refAnswer
+}
+
+// refAnswer is one ref's entry in a decoded report-status.
+type refAnswer struct {
+	refused bool
+	reason  string
+}
+
+// RefOutcome is what a target did with one ref command in a push.
+type RefOutcome int
+
+const (
+	// RefOutcomeUnknown means the target said nothing about this ref: it did
+	// not negotiate report-status, its report omitted this command, or no push
+	// has carried the ref. Distinct from acceptance — silence is not something
+	// the target authored — and distinct from refusal.
+	RefOutcomeUnknown RefOutcome = iota
+	// RefOutcomeApplied means the target reported "ok" for this ref.
+	RefOutcomeApplied
+	// RefOutcomeRefused means the target reported "ng" for this ref. Under
+	// BestEffort that is survivable and the push still returns nil, which is
+	// why asking is necessary at all.
+	RefOutcomeRefused
+)
+
+// LastOutcome reports what the target did with name in the most recent Push*
+// call on this Pusher, and the target's "ng" reason when it refused. Answers
+// by value rather than handing out the Pusher's map, so a caller cannot mutate
+// or race with push state it does not own.
+func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
+	answer, seen := p.lastOutcomes[name]
+	switch {
+	case seen && answer.refused:
+		return RefOutcomeRefused, answer.reason
+	case seen:
+		return RefOutcomeApplied, ""
+	default:
+		return RefOutcomeUnknown, ""
+	}
+}
+
+// pushStatusSink observes the target's per-ref answers for one request. A nil
+// Rejected is what makes a per-ref "ng" fatal, so it stays the switch between
+// best-effort and strict — recording outcomes must not quietly turn every push
+// best-effort.
+type pushStatusSink struct {
+	Rejected func(plumbing.ReferenceName, string)
+	Applied  func(plumbing.ReferenceName)
+}
+
+// fatalRejections reports whether a per-ref "ng" must fail the push.
+func (s *pushStatusSink) fatalRejections() bool {
+	return s == nil || s.Rejected == nil
+}
+
+// record files every per-ref status in a decoded report.
+func (s *pushStatusSink) record(report *packp.ReportStatus) {
+	if s == nil {
+		return
+	}
+	for _, cs := range report.CommandStatuses {
+		if cs.Status == "" || cs.Status == "ok" {
+			if s.Applied != nil {
+				s.Applied(cs.ReferenceName)
+			}
+			continue
+		}
+		if s.Rejected != nil {
+			s.Rejected(cs.ReferenceName, cs.Status)
+		}
+	}
+}
+
+// beginPush clears the previous push's outcomes and returns the sink for this
+// one. Applied is always recorded, so a strict caller — whose nil error really
+// does prove every command landed — can be told so without a second round
+// trip; Rejected is installed only when the caller opted into best-effort.
+func (p *Pusher) beginPush() *pushStatusSink {
+	p.lastOutcomes = nil
+	sink := &pushStatusSink{
+		Applied: func(name plumbing.ReferenceName) {
+			p.answer(name, refAnswer{})
+		},
+	}
+	if p.OnRejection != nil {
+		sink.Rejected = func(name plumbing.ReferenceName, status string) {
+			p.answer(name, refAnswer{refused: true, reason: status})
+			p.OnRejection(name, status)
+		}
+	}
+	return sink
+}
+
+func (p *Pusher) answer(name plumbing.ReferenceName, answer refAnswer) {
+	if p.lastOutcomes == nil {
+		p.lastOutcomes = make(map[plumbing.ReferenceName]refAnswer, 1)
+	}
+	p.lastOutcomes[name] = answer
 }
 
 // NewPusher builds a target-side push executor.
@@ -144,18 +249,18 @@ func logRefUpdateBatch(conn Conn, verbose bool, batchNum, totalBatches, refs int
 
 // PushPack streams a pack to the target.
 func (p *Pusher) PushPack(ctx context.Context, commands []PushCommand, pack io.ReadCloser) error {
-	return PushPack(ctx, p.Conn, p.Adv, commands, pack, p.MaxRefUpdates, p.Verbose, p.OnRejection)
+	return pushPack(ctx, p.Conn, p.Adv, commands, pack, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // PushCommands sends ref-only updates. Creates/updates carry an empty pack;
-// delete-only pushes carry no pack. See the package-level PushCommands.
+// delete-only pushes carry no pack. See the package-level pushCommands.
 func (p *Pusher) PushCommands(ctx context.Context, commands []PushCommand) error {
-	return PushCommands(ctx, p.Conn, p.Adv, commands, p.MaxRefUpdates, p.Verbose, p.OnRejection)
+	return pushCommands(ctx, p.Conn, p.Adv, commands, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // PushObjects encodes and pushes locally materialized objects.
 func (p *Pusher) PushObjects(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
-	return PushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.OnRejection)
+	return pushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
 // buildUpdateRequest builds the receive-pack update request.
@@ -408,7 +513,7 @@ func sendReceivePack(
 	req *packp.UpdateRequests,
 	packData io.Reader,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	var header bytes.Buffer
 	if err := req.Encode(&header); err != nil {
@@ -450,29 +555,32 @@ func sendReceivePack(
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}
-		if onRejection == nil {
+		if statuses.fatalRejections() {
 			if err := report.Error(); err != nil {
 				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
 			}
+			// Nothing was refused and refusals are fatal, so this nil really
+			// does mean the target applied every command it reported.
+			statuses.record(report)
 			return nil
 		}
 		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
 			// Server-authored, and formatted directly rather than wrapped, so
-			// it needs filtering here — the sibling branch below gets it from
+			// it needs filtering here — the sibling branch above gets it from
 			// sanitizedError.
 			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
 		}
-		for _, cs := range report.CommandStatuses {
-			if cs.Status == "" || cs.Status == "ok" {
-				continue
-			}
-			onRejection(cs.ReferenceName, cs.Status)
-		}
+		// A conforming receive-pack reports one status per command, so a
+		// command this report never mentions stays RefOutcomeUnknown. That is
+		// deliberately not a refusal: nothing was refused, so nothing should
+		// fail, but the silence is also not the target confirming the ref, and
+		// a caller that has to know can go and look.
+		statuses.record(report)
 	}
 	return nil
 }
 
-// PushObjects pushes locally-materialized objects to the target.
+// pushObjects pushes locally-materialized objects to the target.
 //
 // A push within the per-request ref-update limit (see effectiveMaxRefUpdates)
 // is a single atomic receive-pack request. A larger push is split: the
@@ -480,7 +588,7 @@ func sendReceivePack(
 // with the first batch of object-bearing commands, then the remaining refs (and
 // any deletes) move as ref-only updates because the objects are already
 // committed.
-func PushObjects(
+func pushObjects(
 	ctx context.Context,
 	conn Conn,
 	adv *packp.AdvRefs,
@@ -489,11 +597,11 @@ func PushObjects(
 	hashes []plumbing.Hash,
 	maxRefUpdates int,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	limit := effectiveMaxRefUpdates(maxRefUpdates)
 	if len(commands) <= limit {
-		return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, onRejection)
+		return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, statuses)
 	}
 
 	updates := make([]PushCommand, 0, len(commands))
@@ -508,17 +616,17 @@ func PushObjects(
 
 	if len(updates) > 0 {
 		first, rest := splitFirstBatch(updates, limit)
-		if err := pushObjectsBatch(ctx, conn, adv, first, store, hashes, verbose, onRejection); err != nil {
+		if err := pushObjectsBatch(ctx, conn, adv, first, store, hashes, verbose, statuses); err != nil {
 			return err
 		}
 		if len(rest) > 0 {
-			if err := PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, onRejection); err != nil {
+			if err := pushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses); err != nil {
 				return err
 			}
 		}
 	}
 	if len(deletes) > 0 {
-		return PushCommands(ctx, conn, adv, deletes, maxRefUpdates, verbose, onRejection)
+		return pushCommands(ctx, conn, adv, deletes, maxRefUpdates, verbose, statuses)
 	}
 	return nil
 }
@@ -542,14 +650,14 @@ func pushObjectsBatch(
 	store storer.Storer,
 	hashes []plumbing.Hash,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
 	}
 	if !hasUpdates {
-		return sendReceivePack(ctx, conn, req, nil, verbose, onRejection)
+		return sendReceivePack(ctx, conn, req, nil, verbose, statuses)
 	}
 
 	progressDest := progressSink(verbose, "target: ", conn.ProgressWriter())
@@ -577,7 +685,7 @@ func pushObjectsBatch(
 		done <- pw.Close()
 	}()
 
-	err = sendReceivePack(ctx, conn, req, pr, verbose, onRejection)
+	err = sendReceivePack(ctx, conn, req, pr, verbose, statuses)
 	_ = pr.Close()
 	encodeErr := <-done
 	if err != nil {
@@ -590,7 +698,7 @@ func pushObjectsBatch(
 // fixed []*packfile.ObjectToPack, ignoring its arguments. It is the
 // passthrough used by PushObjects to feed pre-selected objects back
 // into packfile.Encoder via WithObjectSelector. Used exactly once per
-// PushObjects call and not exposed outside this package.
+// pushObjects call and not exposed outside this package.
 type precomputedSelector struct {
 	objects []*packfile.ObjectToPack
 }
@@ -620,7 +728,7 @@ func (cw *countingWriter) Count() int64 { return cw.n.Load() }
 
 // startSelectionProgress emits in-place "selecting deltas, elapsed X"
 // updates every 500ms during the synchronous delta-selection phase of
-// PushObjects. The returned stop function takes the number of selected
+// pushObjects. The returned stop function takes the number of selected
 // objects and the selection error (nil on success); on success it
 // finalizes the line with a permanent "selected N objects in Y"
 // summary, on error it just stops the ticker without claiming success.
@@ -725,8 +833,8 @@ func HumanBytes(n int64) string {
 	return fmt.Sprintf("%.2f %s", value, suffix)
 }
 
-// PushPack pushes a pack stream (relay) to the target.
-func PushPack(
+// pushPack pushes a pack stream (relay) to the target.
+func pushPack(
 	ctx context.Context,
 	conn Conn,
 	adv *packp.AdvRefs,
@@ -734,7 +842,7 @@ func PushPack(
 	pack io.ReadCloser,
 	maxRefUpdates int,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	for _, cmd := range commands {
 		if cmd.Delete {
@@ -755,7 +863,7 @@ func PushPack(
 		return err
 	}
 
-	err = sendReceivePack(ctx, conn, req, pack, verbose, onRejection)
+	err = sendReceivePack(ctx, conn, req, pack, verbose, statuses)
 	closeErr := pack.Close()
 	if err != nil {
 		return err
@@ -765,12 +873,12 @@ func PushPack(
 	}
 
 	if len(rest) > 0 {
-		return PushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, onRejection)
+		return pushCommands(ctx, conn, adv, rest, maxRefUpdates, verbose, statuses)
 	}
 	return nil
 }
 
-// PushCommands sends ref update commands that move no new objects to the
+// pushCommands sends ref update commands that move no new objects to the
 // target — the referenced objects already exist there.
 //
 // A create/update command still carries a valid empty pack (12-byte header,
@@ -780,21 +888,21 @@ func PushPack(
 // commands; an explicit empty pack satisfies them and stays valid for servers
 // that tolerate the pack-less form. Delete-only pushes carry no pack, as git
 // requires.
-func PushCommands(
+func pushCommands(
 	ctx context.Context,
 	conn Conn,
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	maxRefUpdates int,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	batches := chunkRefUpdates(commands, effectiveMaxRefUpdates(maxRefUpdates))
 	for i, batch := range batches {
 		// Ref-only batches carry no useful target progress; suppress the empty
 		// sideband (verbose=false) and report completion ourselves so a large
 		// push doesn't spew a bare "target:" line per batch.
-		if err := pushCommandsBatch(ctx, conn, adv, batch, false, onRejection); err != nil {
+		if err := pushCommandsBatch(ctx, conn, adv, batch, false, statuses); err != nil {
 			return err
 		}
 		logRefUpdateBatch(conn, verbose, i+1, len(batches), len(batch))
@@ -810,7 +918,7 @@ func pushCommandsBatch(
 	adv *packp.AdvRefs,
 	commands []PushCommand,
 	verbose bool,
-	onRejection func(plumbing.ReferenceName, string),
+	statuses *pushStatusSink,
 ) error {
 	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
@@ -820,7 +928,7 @@ func pushCommandsBatch(
 	if hasUpdates {
 		packData = bytes.NewReader(emptyPack(adv))
 	}
-	return sendReceivePack(ctx, conn, req, packData, verbose, onRejection)
+	return sendReceivePack(ctx, conn, req, packData, verbose, statuses)
 }
 
 // emptyPackHeader is the fixed 12-byte prefix of any packfile with zero

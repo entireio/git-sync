@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/revlist"
+	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
 )
@@ -1174,7 +1176,7 @@ func TestBootstrap_IntegrationBatchedDeleteFailureRecoversOnRetry(t *testing.T) 
 		report.UnpackStatus = "ok"
 		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 			ReferenceName: cmd.Name,
-			Status:        "ng simulated temp-ref delete failure",
+			Status:        "simulated temp-ref delete failure",
 		})
 		return report
 	}
@@ -1255,7 +1257,7 @@ func TestBootstrap_IntegrationBatchedPackFailureResumesOnRetry(t *testing.T) {
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 				ReferenceName: cmd.Name,
-				Status:        "ng simulated checkpoint pack failure",
+				Status:        "simulated checkpoint pack failure",
 			})
 		}
 		return report
@@ -1574,7 +1576,7 @@ func TestRun_IntegrationIncrementalPushFailureRecoversOnRetry(t *testing.T) {
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 				ReferenceName: cmd.Name,
-				Status:        "ng simulated incremental push failure",
+				Status:        "simulated incremental push failure",
 			})
 		}
 		return report
@@ -2613,6 +2615,559 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// refCreateDenier is a receive-pack hook that refuses to create one ref while
+// applying every other command in the same request for real.
+//
+// syncertest.DenyRefsReport cannot stand in: it builds statuses but applies
+// nothing, and a non-nil report short-circuits the test server before it
+// applies anything either. For a bootstrap cutover that would leave the temp
+// ref at the previous checkpoint and make the delete that follows carry a
+// stale Old — a shape a real receive-pack would reject, hiding the behaviour
+// under test behind a second failure. Applying the rest keeps the sequence
+// faithful: the marker genuinely reaches the final checkpoint, and is then
+// genuinely destroyed or kept.
+//
+// Requires receivePackUnpackForHook on the server, since the objects behind
+// the commands it applies arrive in the pack this report short-circuits.
+type refCreateDenier struct {
+	repo   *git.Repository
+	ref    plumbing.ReferenceName
+	reason string
+
+	// The httptest handler runs on its own goroutine while the test drives
+	// Run, so both fields below are shared state.
+	mu sync.Mutex
+	// off lets a later run through, so a test can assert what the retry does
+	// once the target stops refusing the create.
+	off bool
+	// denials counts requests answered with an ng for ref, so a test can
+	// confirm the create was actually attempted rather than never sent.
+	denials int
+}
+
+// allow stops refusing the create.
+func (d *refCreateDenier) allow() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.off = true
+}
+
+// denialCount returns how many requests have been answered with an ng.
+func (d *refCreateDenier) denialCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.denials
+}
+
+func (d *refCreateDenier) hook(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+	carriesRef := false
+	for _, cmd := range req.Commands {
+		if cmd.Name == d.ref {
+			carriesRef = true
+		}
+	}
+	d.mu.Lock()
+	skip := d.off || !carriesRef
+	if !skip {
+		d.denials++
+	}
+	d.mu.Unlock()
+	if skip {
+		return nil // ordinary checkpoint and delete pushes apply normally
+	}
+	// Bare reasons: go-git encodes "ng <ref> <Status>", so a status carrying
+	// its own "ng " prefix reaches the operator doubled.
+	return applyCommandsExcept(d.repo.Storer, req, d.ref, d.reason)
+}
+
+// applyCommandsExcept applies every ref command in req to storer and reports
+// the outcome per command, answering "ng <reason>" for except and enforcing
+// each command's Old as a real receive-pack's compare-and-swap does — without
+// which a fixture accepts the stale-Old updates it exists to catch.
+func applyCommandsExcept(
+	storer storer.Storer,
+	req *packp.UpdateRequests,
+	except plumbing.ReferenceName,
+	reason string,
+) *packp.ReportStatus {
+	report := &packp.ReportStatus{UnpackStatus: "ok"}
+	for _, cmd := range req.Commands {
+		status := "ok"
+		switch {
+		case cmd.Name == except:
+			status = reason
+		case cmd.Old != currentRefHash(storer, cmd.Name):
+			status = fmt.Sprintf("stale info, expected %s", cmd.Old)
+		case cmd.New.IsZero():
+			if err := storer.RemoveReference(cmd.Name); err != nil {
+				status = err.Error()
+			}
+		default:
+			if err := storer.SetReference(plumbing.NewHashReference(cmd.Name, cmd.New)); err != nil {
+				status = err.Error()
+			}
+		}
+		report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
+			ReferenceName: cmd.Name,
+			Status:        status,
+		})
+	}
+	return report
+}
+
+// currentRefHash returns a storer's value for name, zero when absent — the
+// value a push command's Old must match.
+func currentRefHash(s storer.Storer, name plumbing.ReferenceName) plumbing.Hash {
+	ref, err := s.Reference(name)
+	if err != nil {
+		return plumbing.ZeroHash
+	}
+	return ref.Hash()
+}
+
+// unpackPushedObjects decodes the packfile in a receive-pack body, if any, into
+// storer.
+func unpackPushedObjects(s storer.Storer, body []byte) error {
+	offset := receivePackPackOffset(body)
+	if offset < 0 {
+		return nil
+	}
+	return packfile.UpdateObjectStorage(s, bytes.NewReader(body[offset:]))
+}
+
+func TestReceivePackPackOffset(t *testing.T) {
+	pktLine := func(payload string) string {
+		return fmt.Sprintf("%04x%s", len(payload)+4, payload)
+	}
+	// A ref whose name contains the literal the old scan looked for.
+	cmd := pktLine("0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 refs/heads/PACKAGING\x00report-status")
+	refsOnly := cmd + "0000"
+	withPack := refsOnly + "PACK\x00\x00\x00\x02"
+
+	if got := receivePackPackOffset([]byte(refsOnly)); got != -1 {
+		t.Errorf("offset in a ref-only body = %d, want -1 (the ref name is not a packfile)", got)
+	}
+	if got, want := receivePackPackOffset([]byte(withPack)), len(refsOnly); got != want {
+		t.Errorf("offset = %d, want %d (just past the flush)", got, want)
+	}
+	if got := receivePackPackOffset([]byte("garbage")); got != -1 {
+		t.Errorf("offset in an undecodable body = %d, want -1", got)
+	}
+}
+
+// receivePackPackOffset returns the index in a receive-pack request body where
+// the packfile begins, or -1 when the request carries none. It walks the
+// pkt-line framing to the flush that ends the command list, rather than
+// searching the body for "PACK": a ref named refs/heads/PACKAGING would put
+// that literal in the command list and yield an offset inside it.
+func receivePackPackOffset(body []byte) int {
+	for i := 0; i+4 <= len(body); {
+		length, err := strconv.ParseUint(string(body[i:i+4]), 16, 32)
+		if err != nil {
+			return -1
+		}
+		if length == 0 { // flush-pkt: the command list ends here
+			if i+4 >= len(body) {
+				return -1
+			}
+			return i + 4
+		}
+		if length < 4 || i+int(length) > len(body) {
+			return -1
+		}
+		i += int(length)
+	}
+	return -1
+}
+
+func TestRun_IntegrationBatchedCutoverKeepsResumeMarkerOnRejectedCreate(t *testing.T) {
+	// A batched bootstrap's temp ref (refs/gitsync/bootstrap/heads/<branch>)
+	// is the only record of how far the import got. The cutover push carries
+	// two commands in one request — advance the temp ref to the final
+	// checkpoint, and create the real branch there — and the temp ref is
+	// deleted immediately afterwards on the strength of that push returning
+	// no error.
+	//
+	// Under BestEffort a nil push error does not mean the create landed:
+	// gitproto hands a per-ref "ng" to OnRejection and returns nil. So a
+	// target that refuses the branch create (protected branch, pre-receive
+	// policy) leaves the branch absent AND has its resume marker deleted, and
+	// the run reports success. Every object pushed so far is then unreferenced
+	// on the target: nothing points at it, so the next run has no fetch have
+	// to negotiate against and re-transfers the whole history — on precisely
+	// the large repositories batching exists for.
+	//
+	// The marker must survive a create this run cannot confirm.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(branchRef)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Refuse only the branch create; every other command in that request is
+	// applied for real, objects included (see refCreateDenier).
+	denier := &refCreateDenier{repo: targetRepo, ref: branchRef, reason: "deny creating a protected branch"}
+	targetServer.receivePackHook = denier.hook
+	targetServer.receivePackUnpackForHook = true
+
+	result, err := Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		BestEffort:         true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000, // force > 1 batch, so a checkpoint exists to lose
+	})
+	if err != nil {
+		t.Fatalf("expected the best-effort run to succeed despite the rejected create: %v", err)
+	}
+
+	// Test setup, not the property under test: without these the assertion
+	// below would pass for the wrong reasons.
+	if denier.denialCount() == 0 {
+		t.Fatal("test setup: the cutover push never carried the branch create")
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("test setup: expected a batched bootstrap with checkpoints to lose, got batch_count=%d", result.BatchCount)
+	}
+	if _, err := targetRepo.Reference(branchRef, true); err == nil {
+		t.Fatalf("test setup: expected %s to stay absent after the rejected create", branchRef)
+	}
+
+	// The rejection itself has to reach the operator; it always did, and a
+	// marker kept silently would be its own bug.
+	if result.Warned != 1 || result.Pushed != 0 {
+		t.Errorf("rejected create reported as pushed=%d warned=%d, want 0/1", result.Pushed, result.Warned)
+	}
+	var warnedPlan bool
+	for _, plan := range result.Plans {
+		if plan.TargetRef != branchRef {
+			continue
+		}
+		warnedPlan = true
+		if plan.Action != ActionWarn {
+			t.Errorf("branch plan Action=%s, want warn", plan.Action)
+		}
+		// go-git encodes "ng <ref> <status>", so a status that carries its own
+		// "ng " reaches the operator doubled — the fixture must not.
+		if !strings.Contains(plan.Reason, "deny creating a protected branch") || strings.Contains(plan.Reason, "ng deny") {
+			t.Errorf("branch plan Reason=%q, want the target's bare ng reason", plan.Reason)
+		}
+	}
+	if !warnedPlan {
+		t.Errorf("no plan for %s in the result", branchRef)
+	}
+
+	marker, err := targetRepo.Reference(tempRef, true)
+	if err != nil {
+		t.Fatalf("resume marker %s was deleted after a branch create the run could not confirm: %v\n"+
+			"the run reported success (pushed=%d warned=%d, %d checkpoint packs) while leaving the target "+
+			"with neither the branch nor the marker, so the next run re-transfers the whole history",
+			tempRef, err, result.Pushed, result.Warned, result.BatchCount)
+	}
+	// A marker is only a resume position if the objects under it are on the
+	// target; a ref at a hash the target cannot resolve resumes nothing.
+	if _, err := targetRepo.CommitObject(marker.Hash()); err != nil {
+		t.Fatalf("resume marker %s points at %s, which the target cannot resolve: %v",
+			tempRef, planner.ShortHash(marker.Hash()), err)
+	}
+}
+
+func TestRun_IntegrationBatchedCutoverResumesAfterRejectedCreate(t *testing.T) {
+	// The other half of the property: a marker kept through a rejected create
+	// has to be worth keeping. Once the target accepts the branch, the retry
+	// must finish the import from the marker — no checkpoint re-pushed, no
+	// history re-fetched — and only then delete it.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(branchRef)
+	sourceHead, err := sourceRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("resolve source head: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Refuse the create on the first run, then let it through on the second.
+	denier := &refCreateDenier{repo: targetRepo, ref: branchRef, reason: "deny creating a protected branch"}
+	targetServer.receivePackHook = denier.hook
+	targetServer.receivePackUnpackForHook = true
+
+	cfg := Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		BestEffort:         true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000,
+	}
+
+	first, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if first.BatchCount < 2 || denier.denialCount() == 0 {
+		t.Fatalf("test setup: expected a batched bootstrap with a refused create, got batch_count=%d denials=%d",
+			first.BatchCount, denier.denialCount())
+	}
+	marker, err := targetRepo.Reference(tempRef, true)
+	if err != nil {
+		t.Fatalf("resume marker %s missing after the rejected create: %v", tempRef, err)
+	}
+	// At the final checkpoint, not the penultimate one: the whole import is
+	// what the retry must be able to skip, including the pack the create rode.
+	if marker.Hash() != sourceHead.Hash() {
+		t.Fatalf("resume marker at %s, want the final checkpoint %s — the retry would re-push the last batch",
+			planner.ShortHash(marker.Hash()), planner.ShortHash(sourceHead.Hash()))
+	}
+	if got, want := assertHistoryCompleteFrom(t, targetRepo, marker.Hash()), commitCount(t, sourceRepo, branchRef); got != want {
+		t.Errorf("marker reaches %d commits on the target, source has %d — the import is short a batch", got, want)
+	}
+	// Measured on the target, not the source: what a lost marker costs is the
+	// re-push of everything already delivered. (The source side is not
+	// measurable here — this test server advertises the fetch filter but
+	// ignores it, so even a commit-graph fetch comes back whole.)
+	firstBytesIn := targetServer.BytesIn(serviceReceivePack, metricPack)
+	targetServer.ResetMetrics()
+
+	denier.allow()
+
+	second, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("resuming run: %v", err)
+	}
+	if second.RelayReason != planner.ReasonBootstrapResumeMarker {
+		t.Errorf("resuming run routed with reason %q, want %q", second.RelayReason, planner.ReasonBootstrapResumeMarker)
+	}
+	if second.BatchCount != 0 {
+		t.Errorf("resuming run pushed %d checkpoint pack(s), want 0: the marker already held the tip, "+
+			"so only the branch create was outstanding", second.BatchCount)
+	}
+	if secondBytesIn := targetServer.BytesIn(serviceReceivePack, metricPack); secondBytesIn*20 >= firstBytesIn {
+		t.Errorf("resuming run sent the target %d bytes against the first run's %d — the import was re-done, not resumed",
+			secondBytesIn, firstBytesIn)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+	// assertHeadsMatch compares hashes only, so the objects behind the branch
+	// are checked separately: a target short one batch would still match.
+	assertCommitHistoryPresent(t, targetRepo, sourceRepo, branchRef)
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Errorf("resume marker %s outlived the branch it was scaffolding for", tempRef)
+	}
+}
+
+func TestRun_IntegrationBatchedCutoverSettlesMarkerAgainstUnreportingTarget(t *testing.T) {
+	// A target that does not advertise report-status tells the client nothing
+	// about any command it sent: the pusher decodes no report, so every ref
+	// looks unrejected whether it landed or not. The cutover must not read
+	// that silence as confirmation — but it must not strand the marker either,
+	// because the bootstrap route forbids --prune and nothing else would ever
+	// reap it. It asks the target which refs it has instead.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(branchRef)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackNoReportStatus = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		BestEffort:         true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap against a target without report-status: %v", err)
+	}
+	if result.BatchCount < 2 {
+		t.Fatalf("test setup: expected a batched bootstrap, got batch_count=%d", result.BatchCount)
+	}
+	if _, err := targetRepo.Reference(branchRef, true); err != nil {
+		t.Fatalf("branch %s missing after a run the target accepted: %v", branchRef, err)
+	}
+	assertCommitHistoryPresent(t, targetRepo, sourceRepo, branchRef)
+	// The create did land; the target simply could not say so. Having asked,
+	// the run knows the scaffolding is stale.
+	if _, err := targetRepo.Reference(tempRef, true); err == nil {
+		t.Errorf("resume marker %s left behind on a route that cannot prune it", tempRef)
+	}
+}
+
+func TestRun_IntegrationBatchedCutoverSanitizesRejectionInNotice(t *testing.T) {
+	// The ng reason is free-form text the target wrote, and the marker-kept
+	// notice prints it. An escape sequence in it could clear the line the
+	// warning was drawn on and redraw it as a success — the attack
+	// internal/sanitize exists for — so the reason must be filtered on the way
+	// to the terminal, not just on the way into a plan's Reason.
+	const hostile = "denied\x1b[1A\x1b[2Kbranch created ok"
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 80, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	denier := &refCreateDenier{repo: targetRepo, ref: branchRef, reason: hostile}
+	targetServer.receivePackHook = denier.hook
+	targetServer.receivePackUnpackForHook = true
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	var progressBuf bytes.Buffer
+	if _, err := Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		AllRefs:            true,
+		IncludeTags:        true,
+		Prune:              true,
+		BestEffort:         true,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 350_000,
+		Progress:           true,
+		progressOut:        &progressBuf,
+	}); err != nil {
+		t.Fatalf("best-effort run: %v", err)
+	}
+
+	printed := progressBuf.String()
+	if !strings.Contains(printed, "keeping") {
+		t.Fatalf("expected the marker-kept notice in the progress output, got %q", printed)
+	}
+	// The words survive; the cursor movement does not.
+	if !strings.Contains(printed, "branch created ok") {
+		t.Errorf("sanitizing must keep the text, only drop control characters: %q", printed)
+	}
+	if strings.Contains(printed, "\x1b[1A") || strings.Contains(printed, "\x1b[2K") {
+		t.Errorf("server-authored escape sequence reached the terminal: %q", printed)
+	}
+}
+
+// assertHistoryCompleteFrom walks every commit reachable from tip in repo,
+// failing if any commit, tree, or blob is missing, and returns the commit
+// count. A ref can point at a hash the target never received, and a pack can
+// deliver commits and trees whose blobs never resolved, so hash equality on
+// the tip establishes neither.
+func assertHistoryCompleteFrom(t *testing.T, repo *git.Repository, tip plumbing.Hash) int {
+	t.Helper()
+	seen := make(map[plumbing.Hash]bool)
+	queue := []plumbing.Hash{tip}
+	commits := 0
+	for len(queue) > 0 {
+		hash := queue[0]
+		queue = queue[1:]
+		if seen[hash] {
+			continue
+		}
+		seen[hash] = true
+		commit, err := repo.CommitObject(hash)
+		if err != nil {
+			t.Fatalf("commit %s missing (%d reachable commits checked): %v",
+				planner.ShortHash(hash), commits, err)
+		}
+		commits++
+		assertTreeComplete(t, repo, commit.TreeHash, hash)
+		queue = append(queue, commit.ParentHashes...)
+	}
+	if commits == 0 {
+		t.Fatalf("no commits reachable from %s", planner.ShortHash(tip))
+	}
+	return commits
+}
+
+// commitCount counts the commits reachable from ref in repo.
+func commitCount(t *testing.T, repo *git.Repository, ref plumbing.ReferenceName) int {
+	t.Helper()
+	tip, err := repo.Reference(ref, true)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", ref, err)
+	}
+	iter, err := repo.Log(&git.LogOptions{From: tip.Hash()})
+	if err != nil {
+		t.Fatalf("walk history from %s: %v", ref, err)
+	}
+	count := 0
+	if err := iter.ForEach(func(*object.Commit) error { count++; return nil }); err != nil {
+		t.Fatalf("count commits from %s: %v", ref, err)
+	}
+	return count
+}
+
+// assertCommitHistoryPresent asserts the target holds ref, and every commit,
+// tree and blob reachable from it, in the same quantity the source has.
+func assertCommitHistoryPresent(t *testing.T, target, source *git.Repository, ref plumbing.ReferenceName) {
+	t.Helper()
+	tipRef, err := target.Reference(ref, true)
+	if err != nil {
+		t.Fatalf("target is missing %s: %v", ref, err)
+	}
+	if got, want := assertHistoryCompleteFrom(t, target, tipRef.Hash()), commitCount(t, source, ref); got != want {
+		t.Errorf("target holds %d commits reachable from %s, source has %d", got, ref, want)
+	}
+}
+
+// assertTreeComplete resolves a tree and everything it names, recursively.
+func assertTreeComplete(t *testing.T, repo *git.Repository, treeHash, commitHash plumbing.Hash) {
+	t.Helper()
+	tree, err := repo.TreeObject(treeHash)
+	if err != nil {
+		t.Fatalf("tree %s of commit %s missing from target: %v",
+			planner.ShortHash(treeHash), planner.ShortHash(commitHash), err)
+	}
+	for _, entry := range tree.Entries {
+		if entry.Mode.IsFile() {
+			if _, err := repo.BlobObject(entry.Hash); err != nil {
+				t.Fatalf("blob %s (%s) of commit %s missing from target: %v",
+					planner.ShortHash(entry.Hash), entry.Name, planner.ShortHash(commitHash), err)
+			}
+			continue
+		}
+		assertTreeComplete(t, repo, entry.Hash, commitHash)
+	}
+}
+
 func TestRun_IntegrationReplicateBootstrapsEmptyTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
@@ -2707,7 +3262,7 @@ func TestRun_IntegrationReplicateResumesInterruptedBatchedBootstrap(t *testing.T
 		for _, cmd := range req.Commands {
 			report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{
 				ReferenceName: cmd.Name,
-				Status:        "ng simulated checkpoint pack failure",
+				Status:        "simulated checkpoint pack failure",
 			})
 		}
 		return report
@@ -4157,9 +4712,22 @@ type smartHTTPRepoServer struct {
 	receivePackThinCap   bool
 	commandHook          func(*packp.UpdateRequests) *packp.ReportStatus
 	receivePackHook      func(*packp.UpdateRequests, bool) *packp.ReportStatus
-	uploadPackRaw        func(http.ResponseWriter, *http.Request, []byte) bool
-	uploadPackV2FetchRaw func(http.ResponseWriter, v2TestCommandRequest, []byte) bool
-	receivePackRaw       func(http.ResponseWriter, *http.Request) bool
+	// receivePackUnpackForHook decodes a pushed packfile into the target
+	// storer before receivePackHook answers with its own report. A hook that
+	// returns a report short-circuits transport.ReceivePack, which is what
+	// would otherwise have unpacked the objects — so a hook that applies some
+	// of the request's ref commands itself needs this, or it leaves those refs
+	// pointing at objects the target does not have and every assertion about
+	// them passes on hashes alone. Objects for the refused command land too,
+	// which is what a real receive-pack does whenever any command in the
+	// request succeeds.
+	receivePackUnpackForHook bool
+	// receivePackNoReportStatus drops report-status from the receive-pack
+	// advertisement, so the client cannot learn any per-ref outcome.
+	receivePackNoReportStatus bool
+	uploadPackRaw             func(http.ResponseWriter, *http.Request, []byte) bool
+	uploadPackV2FetchRaw      func(http.ResponseWriter, v2TestCommandRequest, []byte) bool
+	receivePackRaw            func(http.ResponseWriter, *http.Request) bool
 
 	mu      sync.Mutex
 	metrics []exchangeMetric
@@ -4320,13 +4888,16 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if service == serviceReceivePack && (s.receivePackNoThin || s.receivePackThinCap) {
+	if service == serviceReceivePack && (s.receivePackNoThin || s.receivePackThinCap || s.receivePackNoReportStatus) {
 		rewritten, err := rewriteReceivePackAdvertisement(buf.Bytes(), func(caps *capability.List) {
 			if s.receivePackThinCap {
 				caps.Delete(capability.Capability("no-thin"))
 			}
 			if s.receivePackNoThin {
 				caps.Set(capability.Capability("no-thin"))
+			}
+			if s.receivePackNoReportStatus {
+				caps.Delete(capability.ReportStatus)
 			}
 		})
 		if err != nil {
@@ -4605,7 +5176,7 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	hasPack := bytes.Contains(body, []byte("PACK"))
+	hasPack := receivePackPackOffset(body) >= 0
 
 	// For no-PACK requests, handle manually since transport.ReceivePack
 	// expects a packfile when there are create/update commands.
@@ -4627,6 +5198,14 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 				s.writeReceivePackReport(w, report, &req.Capabilities, len(body))
 				return
 			}
+		}
+		if s.receivePackNoReportStatus {
+			// A target that advertised no report-status must not answer with
+			// one here either, or half its requests would quietly be
+			// reporting — delete-only pushes carry no pack and land in this
+			// branch.
+			s.applyReceivePackBody(w, body)
+			return
 		}
 
 		report := &packp.ReportStatus{}
@@ -4658,10 +5237,27 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if s.receivePackUnpackForHook {
+			if err := unpackPushedObjects(s.repo.Storer, body); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		if report := s.receivePackHook(req, true); report != nil {
 			s.writeReceivePackReport(w, report, &req.Capabilities, len(body))
 			return
 		}
+	}
+
+	if s.receivePackNoReportStatus {
+		// go-git's server-side ReceivePack returns as soon as it has unpacked
+		// the objects when the client does not support report-status — it has
+		// nowhere to report the outcome, so it never applies the ref commands.
+		// A real receive-pack applies them regardless of what the client can
+		// be told, which is the whole point of a target that cannot report,
+		// so supply that here.
+		s.applyReceivePackBody(w, body)
+		return
 	}
 
 	var buf bytes.Buffer
@@ -4680,6 +5276,32 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 	}
 
 	s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+}
+
+// applyReceivePackBody unpacks a receive-pack request's objects and applies
+// its ref commands, answering with an empty body — what a client that did not
+// negotiate report-status expects. Used only where go-git's server-side
+// ReceivePack declines to apply the commands itself.
+func (s *smartHTTPRepoServer) applyReceivePackBody(w http.ResponseWriter, body []byte) {
+	req := &packp.UpdateRequests{}
+	if err := req.Decode(bytes.NewReader(body)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := unpackPushedObjects(s.repo.Storer, body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Same compare-and-swap fidelity as the hook path; "" denies nothing.
+	report := applyCommandsExcept(s.repo.Storer, req, "", "")
+	for _, cs := range report.CommandStatuses {
+		if cs.Status != "ok" {
+			http.Error(w, fmt.Sprintf("%s: %s", cs.ReferenceName, cs.Status), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", serviceReceivePack))
+	s.recordMetric(serviceReceivePack, metricPack, int64(len(body)), 0, 0, 0)
 }
 
 // writeReceivePackReport encodes a report-status, optionally wrapped in

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A batched bootstrap no longer discards its resume position when the target refuses the branch create.** The cutover push carries two commands — advance the `refs/gitsync/bootstrap/heads/<branch>` temp ref to the final checkpoint, and create the real branch there — and the temp ref was deleted on the strength of that push returning no error. Under `--best-effort` (implied by `--all-refs`) a per-ref `ng` reaches a callback and the push still returns `nil`, so a target that refuses the create — a protected branch, a pre-receive policy — ended the run with neither the branch nor the marker and reported success. With nothing on the target referencing the objects already delivered, the next run had no fetch have to negotiate against and re-transferred the entire history, on precisely the large repositories batching exists for. Whether the branch landed is now settled against the target's own refs, not inferred from the push, and the marker survives anything short of the branch being present at the hash the run pushed ([#117](https://github.com/entireio/git-sync/pull/117))
+
+### Changed
+
+- **A target that refuses the batched bootstrap temp ref now fails the run, including under `--best-effort`.** Every other per-ref refusal stays a warning there, but this one is the batching state machine: the run previously advanced its checkpoint position against a ref the target had not moved, then failed later and more confusingly, or deleted a marker at a hash the target never accepted. A run against a target that blocks writes to `refs/gitsync/*` used to exit 0 with warnings and now exits non-zero — worth knowing if you alert on exit codes ([#117](https://github.com/entireio/git-sync/pull/117))
+
 ## [0.9.0] - 2026-08-28
 
 ### Security
