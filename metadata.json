@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.3-nightly.202608260614.6561a64b8",
+  "checkpoint_id": "01M1C12QKHMS0PPY5W1PB22EW0",
+  "strategy": "manual-commit",
+  "branch": "soph/batched-cutover-drops-resume-marker",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CHANGELOG.md",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/syncer/integration_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 11044,
+    "cache_read_tokens": 3317488,
+    "output_tokens": 9156,
+    "api_call_count": 8
+  }
+}

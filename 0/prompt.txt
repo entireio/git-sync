@@ -1,0 +1,16 @@
+one last review `One finding (minor)
+
+Params.RefRefused documents itself as "Nil for a caller that never pushes best-effort", but bootstrapWithInputs sets it unconditionally (syncer.go:1413). So the !TargetReportsRefStatus branch fires for every caller, and against a target that doesn't advertise report-status the marker is always kept. Under replicate/sync --prune that self-heals next run. On the bootstrap route it doesn't — Bootstrap() refuses --prune, which is the exact argument the new comment uses to justify a conditional delete over no delete. Probe:
+
+run 1: err=<nil> batches=8 → branch present=true  marker present=true
+run 2:                      → marker present=true   (permanent; no cleaner on this route)
+
+Low severity: report-status is universal in practice, and the marker is inert (routing needs the branch absent, so it can't misroute). But doc and code disagree about when that branch is reachable, and the permanence is unremarked. Either narrow RefRefused to best-effort callers, or note that this corner accepts a permanent marker on the no-prune route.
+
+Worth a changelog line
+
+A refused temp-ref update now hard-fails the run (bootstrap.go:711-713) including under --best-effort, where every other per-ref refusal is a warning. I think that's the right call — previously it advanced current against a have the target lacked and failed later and more confusingly — but a run against a target that blocks refs/gitsync/* used to exit 0-with-warnings and now exits non-zero. Anything alerting on exit codes will notice.
+
+Nit
+
+bytes.Index(body, []byte("PACK")) in the fixture locates the pack by scanning the whole request body for the literal, so a ref named e.g. refs/heads/PACKAGING would yield a wrong offset. Not reachable in these tests; a footgun for the next author. Scanning from the end of the pkt-line section would be exact.`
