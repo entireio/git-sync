@@ -1175,6 +1175,15 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 // surviving next to its completed branch is stale; that state takes the
 // replicate path, which prunes it.
 //
+// Bootstrap does not prune, so every run this route claims is a run that
+// deletes nothing. That is one deferred pass in the normal case — the
+// bootstrap completes and the next run prunes — but a bootstrap that keeps
+// failing keeps the marker alive, re-fires this route, and starves prune for
+// as long as it fails, where pre-route runs at least pruned while getting the
+// transfer wrong. Accepted: a target stuck mid-bootstrap has a half-imported
+// repository to finish, which outranks reaping its stale refs, and the refs
+// in question are unreachable-but-harmless until it lands.
+//
 // The marker check runs before the emptiness heuristic so a resume is
 // labeled bootstrap-resume-marker even in configs where both would route to
 // bootstrap (without prune the heuristic has no walk to disqualify it).
@@ -1199,7 +1208,7 @@ func (s *syncSession) replicateBootstrapRoute(
 	if batchableSource && s.hasBootstrapResumeMarker(desiredRefs) {
 		return true, planner.ReasonBootstrapResumeMarker
 	}
-	if s.replicateCanBootstrap(desiredRefs) {
+	if s.pruneDeletesNothingInScope(desiredRefs) {
 		return true, planner.ReasonEmptyTargetManagedRefs
 	}
 	return false, ""
@@ -1247,10 +1256,18 @@ func (s *syncSession) desiredTargetRefsAbsent(desiredRefs map[plumbing.Reference
 	return true
 }
 
+// replicateCanBootstrap is the emptiness heuristic in full: no desired target
+// ref exists, and prune (if set) would delete nothing in scope. The route
+// checks the two halves separately, having already established the first.
 func (s *syncSession) replicateCanBootstrap(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
-	if !s.desiredTargetRefsAbsent(desiredRefs) {
-		return false
-	}
+	return s.desiredTargetRefsAbsent(desiredRefs) && s.pruneDeletesNothingInScope(desiredRefs)
+}
+
+// pruneDeletesNothingInScope reports whether a prune would leave every
+// undesired target ref alone — either because prune is off, or because no
+// such ref falls inside the request's scope. A single in-scope deletion means
+// the target is not the blank slate bootstrap plans for.
+func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
 	if !s.cfg.Prune {
 		return true
 	}

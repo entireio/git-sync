@@ -166,6 +166,16 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	// again. No git.NoErrAlreadyUpToDate handling: gitproto emits that
 	// sentinel only for an empty want set, and Execute's callers guarantee a
 	// non-empty desired set, so any error here is a real fetch failure.
+	//
+	// A marker that led us here is NOT deleted on completion, deliberately.
+	// A nil push error does not mean the branch create landed: with
+	// BestEffort the pusher swallows a per-ref "ng" and returns nil
+	// (gitproto.PushPack via OnRejection), so deleting the marker here would
+	// throw away the resume position for a branch that never got created —
+	// the precise hazard the planner-side prune carve-out exists to prevent.
+	// Prune is the cleaner instead: isLiveBootstrapMarker classifies the
+	// marker as stale exactly when the branch really is present, so the cost
+	// of being right is one extra run.
 	packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, gpDesired, p.TargetRefs)
 	if err != nil {
 		return result, fmt.Errorf("fetch source pack: %w", err)
@@ -197,38 +207,8 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		return executeBatched(ctx, p, plans, result)
 	}
 
-	// Leftover temp refs from an interrupted BATCHED bootstrap are cleaned in
-	// a follow-up command push (PushPack refuses deletes alongside a pack).
-	// Best-effort by design: every ref this bootstrap set out to create has
-	// landed, so a cleanup hiccup must not fail the run — the marker is stale
-	// from this moment on and the next prune is its designated cleaner.
-	if delCmds := leftoverTempRefDeletes(plans, p.TargetRefs); len(delCmds) > 0 {
-		if err := p.TargetPusher.PushCommands(ctx, delCmds); err != nil {
-			p.log("bootstrap one-shot temp ref cleanup failed; leaving markers for prune",
-				"marker_count", len(delCmds), "error", err.Error())
-			p.notice(fmt.Sprintf("temp ref cleanup failed (%d ref(s)) — a later prune will remove them", len(delCmds)))
-		}
-	}
 	result.Pushed = len(plans)
 	return result, nil
-}
-
-// leftoverTempRefDeletes returns delete commands for this run's own
-// batched-bootstrap temp refs that survive on the target — one per
-// branch-kind plan whose marker is present. Markers for branches outside the
-// plan set are prune's job, not ours.
-func leftoverTempRefDeletes(plans []planner.BranchPlan, targetRefs map[plumbing.ReferenceName]plumbing.Hash) []gitproto.PushCommand {
-	var cmds []gitproto.PushCommand
-	for _, plan := range plans {
-		if plan.Kind != planner.RefKindBranch {
-			continue
-		}
-		tempRef := planner.BootstrapTempRef(plan.TargetRef)
-		if hash := targetRefs[tempRef]; !hash.IsZero() {
-			cmds = append(cmds, gitproto.PushCommand{Name: tempRef, Old: hash, Delete: true})
-		}
-	}
-	return cmds
 }
 
 // hoistSourceHeadPlan moves the plan whose source ref matches the
