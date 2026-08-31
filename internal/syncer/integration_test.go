@@ -5482,3 +5482,49 @@ func TestMain(m *testing.M) {
 	syncertest.IsolateGitConfig()
 	os.Exit(m.Run())
 }
+
+func TestBootstrap_IntegrationFailedRunStillReportsItsRoute(t *testing.T) {
+	// A failed bootstrap must still say which strategy ran. The route facts are
+	// known before the first push, and zeroing them on the error path is why a
+	// stuck repo's logs could never answer "which path did it take?" — the gap
+	// that made ENT-2054 a source read instead of a log query.
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 40, 5_000)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// Refuse every pack-bearing push so the run fails inside batched bootstrap.
+	targetServer.receivePackHook = func(req *packp.UpdateRequests, hasPack bool) *packp.ReportStatus {
+		if !hasPack {
+			return nil
+		}
+		return syncertest.DenyRefsReport(req, "nope")
+	}
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 100_000,
+	})
+	if err == nil {
+		t.Fatal("expected the batched bootstrap to fail")
+	}
+	if result.RelayMode != relayModeBootstrapBatch {
+		t.Fatalf("expected the failed run to report relayMode=%q, got %q", relayModeBootstrapBatch, result.RelayMode)
+	}
+	if !result.Batching {
+		t.Fatalf("expected the failed run to report batching, got %+v", result)
+	}
+	if result.RelayReason == "" {
+		t.Fatal("expected the failed run to carry its relay reason")
+	}
+}

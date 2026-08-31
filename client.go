@@ -54,7 +54,7 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return PlanResult{}, fmt.Errorf("plan: %w", err)
+		return fromSyncResult(result), fmt.Errorf("plan: %w", err)
 	}
 	return fromSyncResult(result), nil
 }
@@ -70,7 +70,7 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("sync: %w", err)
+		return fromSyncResult(result), fmt.Errorf("sync: %w", err)
 	}
 	return fromSyncResult(result), nil
 }

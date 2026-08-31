@@ -147,7 +147,7 @@ func (c *Client) Plan(ctx context.Context, req SyncRequest) (Result, error) {
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return Result{}, fmt.Errorf("plan: %w", err)
+		return result, fmt.Errorf("plan: %w", err)
 	}
 	return result, nil
 }
@@ -165,7 +165,7 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (Result, error) {
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return Result{}, fmt.Errorf("sync: %w", err)
+		return result, fmt.Errorf("sync: %w", err)
 	}
 	return result, nil
 }
@@ -184,7 +184,7 @@ func (c *Client) Replicate(ctx context.Context, req SyncRequest) (Result, error)
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return Result{}, fmt.Errorf("replicate: %w", err)
+		return result, fmt.Errorf("replicate: %w", err)
 	}
 	return result, nil
 }
@@ -199,7 +199,10 @@ func (c *Client) Bootstrap(ctx context.Context, req BootstrapRequest) (Result, e
 	}
 	result, err := syncer.Bootstrap(ctx, cfg)
 	if err != nil {
-		return Result{}, fmt.Errorf("bootstrap: %w", err)
+		// syncer.Bootstrap hands back the route it took alongside the error;
+		// the method actually named "bootstrap" must not be the one that
+		// throws it away.
+		return result, fmt.Errorf("bootstrap: %w", err)
 	}
 	return result, nil
 }

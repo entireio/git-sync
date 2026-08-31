@@ -112,7 +112,27 @@ type Params struct {
 	// it happened to write. Nil or failing means unsettled, which keeps the
 	// marker.
 	TargetRefsNow func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
+	// AnnouncedTargetLimit is the receive-pack body limit the target itself
+	// stated, parsed from a rejection (0 when it never said). It is NOT the
+	// batching budget — TargetMaxPack is deliberately smaller, so a doomed or
+	// interrupted push wastes less and the temp ref advances more often. This
+	// is the authority of last resort: when checkpoint subdivision bottoms out
+	// (one commit per gap) and our own smaller budget is what stopped the
+	// upload, the push is retried against this limit so the SERVER decides
+	// whether the indivisible pack is too big. See executeBatched.
+	AnnouncedTargetLimit int64
 }
+
+// ErrCheckpointExceedsTargetLimit reports a single commit whose pack the
+// target itself refused: checkpoint subdivision had already bottomed out at
+// one commit per gap, so there is nothing left to split and no retry can
+// help. Callers should treat it as permanent rather than redelivering — the
+// only remedies are a larger server limit or object-level splitting.
+//
+// Deliberately NOT returned for our own budget aborts: those are retried
+// against the announced server limit first (see executeBatched), so this
+// sentinel always carries a real server verdict.
+var ErrCheckpointExceedsTargetLimit = errors.New("bootstrap checkpoint exceeds target pack limit and cannot be subdivided further")
 
 func (p Params) notice(msg string) {
 	if p.OnNotice != nil {
@@ -277,6 +297,14 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		p.notice(fmt.Sprintf("%s — switching to batched mode (limit %s)",
 			reason, gitproto.HumanBytes(autoBatch)))
 		p.TargetMaxPack = autoBatch
+		// Remember what the target actually said, separately from the (smaller)
+		// batching budget derived from it. Without this the announced figure is
+		// consumed by autoTargetMaxPackBytes and lost, leaving the batch loop
+		// unable to tell "too big for the server" from "too big for the budget
+		// we chose".
+		if announced := targetBodyLimit(pushErr); announced > p.AnnouncedTargetLimit {
+			p.AnnouncedTargetLimit = announced
+		}
 		return executeBatched(ctx, p, plans, result)
 	}
 
@@ -350,8 +378,16 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	result Result,
 ) (Result, error) {
 	if !p.SourceService.SupportsBootstrapBatch() {
+		// Left as the one-shot route deliberately: batching was unavailable, so
+		// reporting it would misdescribe what ran.
 		return result, errors.New("bootstrap batching requires protocol v2 source fetch filter support")
 	}
+	// Batching describes the route, not the outcome, so it is recorded here —
+	// before checkpoint planning, whose commit-graph fetch is the likeliest
+	// thing to fail for exactly the large repos that batch. Recording it after
+	// planning would report those failures as one-shot bootstraps.
+	result.Batching = true
+	result.RelayMode = "bootstrap-batch"
 
 	// Tags and other-kind refs are create-only and ride a single tail phase
 	// after the checkpointed branch batches; they reuse branch-tip haves.
@@ -412,6 +448,12 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	// before the connection was cut). Re-used across attempts so every
 	// failed push refines the budget.
 	selfImposedBudget := p.TargetMaxPack
+	// budgetFromObservation records that selfImposedBudget came from bytes we
+	// actually got to send — a measured server cutoff — rather than a figure we
+	// chose. Declared beside the budget, not inside the per-branch loop: the
+	// provenance has to travel with the value, or branch 2 escalates past a
+	// cutoff branch 1 demonstrated.
+	budgetFromObservation := false
 
 	for _, batch := range batches {
 		if batch.subsumed {
@@ -612,8 +654,55 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 
 			cmds := convert.PlansToPushCommands(stagePlans, false)
 			observer := newPackStreamObserver(packReader)
-			if selfImposedBudget > 0 {
-				budget := selfImposedBudget
+			// relaxedBudget, when set, raises the ceiling for THIS attempt only.
+			// It must not be written back into selfImposedBudget: that variable
+			// spans every checkpoint and every branch, so a raised ceiling would
+			// leak forward and later packs would upload in full instead of
+			// aborting at the small budget the pre-flight estimate still plans
+			// against.
+			// The abort budget for a span we cannot split is the target's
+			// number, not ours. TargetMaxPack exists so a doomed push wastes
+			// little and the temp ref advances often — both of which need a
+			// smaller pack to be *possible*. On a one-commit gap neither is, so
+			// cutting at our budget only defers the inevitable and costs a
+			// second full source fetch to learn what the target thinks.
+			//
+			// Note this spends no extra bytes: a ceiling is an abort threshold,
+			// not an upload size. A pack that fits under the small budget sends
+			// exactly the same bytes under a larger ceiling.
+			//
+			// >= not >: when an in-batching rejection ratchets the budget down
+			// to the announced limit the two are equal, and escalating still
+			// sheds the 5% margin and the projection — without which a pack
+			// sized in that last 5% aborts on every delivery forever.
+			budget := selfImposedBudget
+			atAnnounced := !budgetFromObservation && p.AnnouncedTargetLimit > 0 &&
+				p.AnnouncedTargetLimit >= budget &&
+				isIndivisibleCheckpoint(batch, current, idx)
+			if atAnnounced {
+				budget = p.AnnouncedTargetLimit
+				p.log("bootstrap batch pushing indivisible checkpoint at announced target limit",
+					"branch", batch.Plan.TargetRef.String(),
+					"batch", idx+1,
+					"self_imposed_budget", selfImposedBudget,
+					"announced_target_limit", p.AnnouncedTargetLimit)
+				p.notice(fmt.Sprintf(
+					"cannot split further (1 commit) — pushing at the target's announced limit %s instead of %s",
+					gitproto.HumanBytes(p.AnnouncedTargetLimit), gitproto.HumanBytes(selfImposedBudget)))
+			}
+			switch {
+			case atAnnounced:
+				// No margin and no projection: at the target's own limit an
+				// early cut would manufacture a verdict it never gave, and a
+				// front-loaded pack's bytes-per-object average overshoots badly
+				// — exactly the giant-blob shape this path serves. Cut only once
+				// we have genuinely exceeded what it said it accepts, where a
+				// rejection is certain rather than predicted.
+				ceiling := budget
+				observer.SetAborter(func(bytesSent, _, _ int64) bool {
+					return bytesSent > ceiling
+				})
+			case budget > 0:
 				observer.SetAborter(func(bytesSent, objectsSent, totalObjects int64) bool {
 					return shouldAbortPush(bytesSent, objectsSent, totalObjects, budget)
 				})
@@ -646,11 +735,23 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					"error", pushErr.Error())
 				if subdivide && len(batch.chain) > 0 {
 					parsedLimit := targetBodyLimit(pushErr)
+					// Keep the announced figure even when the run never made a
+					// one-shot attempt (an explicit --target-max-pack-bytes, or
+					// the GitHub large-repo preflight, enters batching directly).
+					// Without this the relaxed retry below could only ever fire
+					// on runs that happened to start with a one-shot rejection.
+					if parsedLimit > p.AnnouncedTargetLimit {
+						p.AnnouncedTargetLimit = parsedLimit
+					}
 					limit := p.TargetMaxPack
 					if parsedLimit > 0 {
 						limit = parsedLimit
-					} else if abortedEarly && selfImposedBudget > 0 {
-						limit = selfImposedBudget
+					} else if abortedEarly && budget > 0 {
+						// budget, not selfImposedBudget: on a relaxed retry the
+						// ceiling in force is the announced one, and reporting
+						// the smaller figure would under-state it on exactly the
+						// path this exists to make legible.
+						limit = budget
 					}
 					// Calibrate before subdividing. The new value carries
 					// over to the next iteration's pre-flight check, so a
@@ -686,7 +787,13 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 							"objects_sent", objectsSent)
 						calibratedBytesPerObject = updated
 					}
-					selfImposedBudget = nextSelfImposedBudget(selfImposedBudget, parsedLimit, sentBytes, abortedEarly)
+					if next := nextSelfImposedBudget(selfImposedBudget, parsedLimit, sentBytes, abortedEarly); next != selfImposedBudget {
+						// A budget derived from bytes actually sent is evidence
+						// of where the server cuts, not a number we picked, so
+						// the relaxed retry must not jump past it.
+						budgetFromObservation = parsedLimit <= 0
+						selfImposedBudget = next
+					}
 					// Pick the byte count we use for sizing the next
 					// subdivision. When the server cut us off, sentBytes
 					// is roughly the cap and using it directly is right.
@@ -729,6 +836,26 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 							reason, limitText, oldRemaining, newCount))
 						batch.Checkpoints = append(batch.Checkpoints[:idx], expanded...)
 						continue // retry at same idx with new (smaller) checkpoint
+					}
+
+					// Subdivision has bottomed out: this checkpoint is one
+					// commit, so no further split exists.
+					//
+					// Terminal only on evidence about SIZE from the target: a
+					// body-limit rejection it actually sent, or an attempt made
+					// at the limit it announced that still overshot. Both mean
+					// the identical indivisible pack would be re-sent forever.
+					//
+					// A deadline (408/504) is availability, not size — with zero
+					// bytes sent there is no size evidence at all — so it stays
+					// retryable and heals on the next delivery. So does an abort
+					// against our own smaller budget: a larger budget or a
+					// server config change could still mirror this repo.
+					if isTargetBodyLimitError(pushErr) || (atAnnounced && abortedEarly) {
+						if isIndivisibleCheckpoint(batch, current, idx) {
+							return result, fmt.Errorf("push bootstrap batch for %s: %w: %w",
+								batch.Plan.TargetRef, ErrCheckpointExceedsTargetLimit, pushErr)
+						}
 					}
 				}
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
@@ -898,8 +1025,6 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	}
 
 	result.Pushed = len(plans)
-	result.Batching = true
-	result.RelayMode = "bootstrap-batch"
 	return result, nil
 }
 
@@ -1466,6 +1591,36 @@ func observedSubdivisionFactor(sentBytes, limit int64) int {
 		factor = 2
 	}
 	return factor
+}
+
+// isIndivisibleCheckpoint reports whether the span from current to the
+// checkpoint at idx is a single commit — the point at which subdivision has
+// nothing left to split.
+//
+// It measures against `current`, the commit the pack is actually being built
+// from, not against Checkpoints[idx-1]: on the stale-temp-ref resume path the
+// checkpoint list is re-planned from ResumeHash with startIdx 0, so idx-1 does
+// not exist and the gap would be counted from the chain root — reporting
+// "divisible" for a span subdivideToFactor just proved otherwise, on exactly
+// the resume route this all exists to serve.
+//
+// A hash missing from the chain answers false, which merely keeps the error
+// retryable — the safe direction.
+func isIndivisibleCheckpoint(batch plannedBatch, current plumbing.Hash, idx int) bool {
+	if len(batch.chain) == 0 || idx >= len(batch.Checkpoints) {
+		return false
+	}
+	cpIdx := chainPosition(batch.chain, batch.Checkpoints[idx])
+	if cpIdx < 0 {
+		return false
+	}
+	prevIdx := -1 // nothing pushed yet: the span starts before the chain root
+	if !current.IsZero() {
+		if prevIdx = chainPosition(batch.chain, current); prevIdx < 0 {
+			return false
+		}
+	}
+	return cpIdx-prevIdx == 1
 }
 
 // subdivideToFactor halves the remaining checkpoint ranges at least

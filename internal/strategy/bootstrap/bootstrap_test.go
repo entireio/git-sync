@@ -380,18 +380,6 @@ func TestEvenCheckpoints(t *testing.T) {
 }
 
 func TestCheckPackSizeAndSubdivide(t *testing.T) {
-	// Build a minimal PACK header: "PACK" + version 2 + object count
-	makePackHeader := func(objectCount uint32) []byte {
-		var h [12]byte
-		copy(h[:4], "PACK")
-		h[4], h[5], h[6], h[7] = 0, 0, 0, 2 // version 2
-		h[8] = byte(objectCount >> 24)
-		h[9] = byte(objectCount >> 16)
-		h[10] = byte(objectCount >> 8)
-		h[11] = byte(objectCount)
-		return h[:]
-	}
-
 	t.Run("small pack proceeds without subdivide", func(t *testing.T) {
 		header := makePackHeader(100) // 100 * 750 = 75000 bytes estimated
 		body := make([]byte, 0, len(header)+len("packdata"))
@@ -2142,5 +2130,408 @@ func TestExecuteBatchedSubsumedRefusedCreateNotCounted(t *testing.T) {
 		if _, ok := haves[forkRef]; ok {
 			t.Errorf("offered refused branch %s as a fetch have: %v", forkRef, haves)
 		}
+	}
+}
+
+// makePackHeader builds a minimal valid PACK header: "PACK" + version 2 +
+// object count. Fixtures must use it rather than arbitrary bytes — a bogus
+// version field is read as the object count by checkPackSizeAndSubdivide and
+// leaves the observer's TotalObjects at 0, which silently closes the
+// projection paths a test may believe it is exercising.
+func makePackHeader(objectCount uint32) []byte {
+	var h [12]byte
+	copy(h[:4], "PACK")
+	h[4], h[5], h[6], h[7] = 0, 0, 0, 2 // version 2
+	h[8] = byte(objectCount >> 24)
+	h[9] = byte(objectCount >> 16)
+	h[10] = byte(objectCount >> 8)
+	h[11] = byte(objectCount)
+	return h[:]
+}
+
+// bottomOutParams builds a batched bootstrap over a one-commit chain, so the
+// checkpoint is indivisible from the first push and the bottom-out path is
+// exercised directly.
+//
+// The commit chain is written ONCE and both DesiredRefs.SourceHash and the
+// parent map derive from it: building two stores and relying on the helper
+// being deterministic makes an unrelated change surface here as a confusing
+// "checkpoint not in chain".
+func bottomOutParams(t *testing.T, budget, announced int64, push func(int, io.ReadCloser) error) Params {
+	t.Helper()
+	mainRef := plumbing.NewBranchReferenceName("main")
+	store := memory.NewStorage()
+	hashes := writeLinearCommitChain(t, store, 1)
+	parents := parentsFromCommitChainStore(t, store)
+	tip := hashes[len(hashes)-1]
+	// A real header: the observer parses TotalObjects from it, which is what
+	// opens the projection used to size the next subdivision. With a bogus
+	// version the count reads as 0 and that path is silently skipped.
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+
+	return Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			// Fresh reader per attempt: a retry re-fetches.
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				return push(pushes, pack)
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef: mainRef, TargetRef: mainRef,
+				SourceHash: tip, Kind: planner.RefKindBranch, Label: "main",
+			},
+		},
+		TargetRefs:           map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetMaxPack:        budget,
+		AnnouncedTargetLimit: announced,
+	}
+}
+
+// drainAbort drains the observer so its counter advances and the aborter can
+// fire; the abort surfaces as the read error.
+
+// drainAbort drains the observer so its counter advances and the aborter can
+// fire; the abort surfaces as the read error.
+func drainAbort(_ int, pack io.ReadCloser) error {
+	_, err := io.Copy(io.Discard, pack)
+	return err
+}
+
+func TestExecuteBatchedSelfImposedAbortIsNotPermanent(t *testing.T) {
+	// Our own budget stopped the upload and the target never stated a limit,
+	// so we have no evidence it would refuse the pack. That must stay
+	// retryable — permafailing here would strand a repo a larger budget or a
+	// config change could still mirror.
+	pushes := 0
+	_, err := Execute(context.Background(), bottomOutParams(t, 64, 0, func(n int, p io.ReadCloser) error {
+		pushes = n
+		return drainAbort(n, p)
+	}), "empty target")
+	if err == nil {
+		t.Fatal("expected the push to fail")
+	}
+	if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+		t.Fatalf("self-imposed abort must not be classified permanent: %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("expected no relaxed retry without an announced limit, got %d pushes", pushes)
+	}
+}
+
+func TestExecuteBatchedPushesIndivisibleCheckpointAtAnnouncedLimit(t *testing.T) {
+	// The point of the change: a one-commit checkpoint cannot be split, so the
+	// only meaningful ceiling is the target's own. It is pushed at that ceiling
+	// directly and converges — in ONE push, with no doomed attempt against our
+	// smaller budget and no second source fetch.
+	pushes := 0
+	result, err := Execute(context.Background(), bottomOutParams(t, 64, 1<<20, func(n int, p io.ReadCloser) error {
+		pushes = n
+		return drainAbort(n, p)
+	}), "empty target")
+	if err != nil {
+		t.Fatalf("expected the run to converge at the announced ceiling, got %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("expected a single push at the announced ceiling, got %d", pushes)
+	}
+	if !result.Batching {
+		t.Fatalf("expected a batched result, got %+v", result)
+	}
+}
+
+func TestExecuteBatchedPermanentOnceTargetsOwnLimitIsExceeded(t *testing.T) {
+	// Pushed at the announced limit and still over it: the verdict is the
+	// target's, and the checkpoint cannot be split. Terminal — and reached in
+	// one push rather than after a doomed smaller attempt.
+	pushes := 0
+	_, err := Execute(context.Background(), bottomOutParams(t, 64, 256, func(n int, p io.ReadCloser) error {
+		pushes = n
+		return drainAbort(n, p)
+	}), "empty target")
+	if err == nil {
+		t.Fatal("expected the push to fail")
+	}
+	if !errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+		t.Fatalf("expected ErrCheckpointExceedsTargetLimit, got %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("expected a single push at the announced ceiling, got %d", pushes)
+	}
+}
+
+func TestExecuteBatchedUnrelatedErrorStaysRetryable(t *testing.T) {
+	// An indivisible checkpoint that fails for a reason that has nothing to do
+	// with size must NOT be permanent: the worker would stop redelivering a
+	// repo that needed one retry. This is the direction the whole change turns
+	// on, so it is asserted for each shape of ordinary failure.
+	for _, msg := range []string{
+		"http 401 unauthorized",
+		"http 500 internal server error",
+		"connection reset by peer",
+		"pre-receive hook declined",
+	} {
+		t.Run(msg, func(t *testing.T) {
+			_, err := Execute(context.Background(), bottomOutParams(t, 64, 1<<20, func(int, io.ReadCloser) error {
+				return errors.New(msg)
+			}), "empty target")
+			if err == nil {
+				t.Fatal("expected the push to fail")
+			}
+			if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+				t.Fatalf("unrelated failure must stay retryable, got permanent: %v", err)
+			}
+		})
+	}
+}
+
+func TestExecuteBatchedHardRejectionIsPermanentWithoutSelfImposedAbort(t *testing.T) {
+	// The target rejected the indivisible pack outright, with no prior
+	// self-imposed abort. That is already the target's verdict, so it must be
+	// permanent immediately rather than redelivering forever — the failure
+	// mode this change exists to end.
+	pushes := 0
+	_, err := Execute(context.Background(), bottomOutParams(t, 1<<30, 0, func(n int, _ io.ReadCloser) error {
+		pushes = n
+		return errors.New("http 413: body exceeded size limit 1000")
+	}), "empty target")
+	if err == nil {
+		t.Fatal("expected the push to fail")
+	}
+	if !errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+		t.Fatalf("a hard body-limit rejection on an indivisible checkpoint must be permanent, got %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("expected no retry for a server rejection, got %d pushes", pushes)
+	}
+}
+
+func TestExecuteBatchedDeadlineOnIndivisibleCheckpointStaysRetryable(t *testing.T) {
+	// A gateway timeout is availability, not size — with no bytes sent there is
+	// no size evidence at all. Classifying it permanent would stop redelivery
+	// for a repo that one calm retry would mirror, and a target rolling restart
+	// would permafail every large bootstrap in flight.
+	for _, msg := range []string{"http 504 gateway timeout", "http 408 request timeout"} {
+		t.Run(msg, func(t *testing.T) {
+			_, err := Execute(context.Background(), bottomOutParams(t, 64, 1<<20, func(int, io.ReadCloser) error {
+				return errors.New(msg)
+			}), "empty target")
+			if err == nil {
+				t.Fatal("expected the push to fail")
+			}
+			if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+				t.Fatalf("a deadline is not a size verdict; must stay retryable: %v", err)
+			}
+		})
+	}
+}
+
+func TestExecuteBatchedNoSafetyMarginAtAnnouncedLimit(t *testing.T) {
+	// A pack inside the top 5% of the announced limit is one the target would
+	// accept. A push at that ceiling must therefore carry no safety margin and
+	// no projection: cutting early would invent a rejection the target never
+	// issued and then report it as permanent.
+	const announced = 4200
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...) // 4108 bytes: 97.8% of announced
+	if len(body) <= announced*95/100 || len(body) > announced {
+		t.Fatalf("fixture must sit between 95%% and 100%% of the announced limit, got %d", len(body))
+	}
+
+	mainRef := plumbing.NewBranchReferenceName("main")
+	store := memory.NewStorage()
+	hashes := writeLinearCommitChain(t, store, 1)
+	parents := parentsFromCommitChainStore(t, store)
+	pushes := 0
+
+	result, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef: mainRef, TargetRef: mainRef,
+				SourceHash: hashes[len(hashes)-1], Kind: planner.RefKindBranch, Label: "main",
+			},
+		},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetMaxPack: 64, // forces the first attempt to abort on our own budget
+		// The target says it accepts more than this pack needs.
+		AnnouncedTargetLimit: announced,
+	}, "empty target")
+
+	if err != nil {
+		t.Fatalf("a pack under the announced limit must converge, got %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("expected a single push at the announced ceiling, got %d", pushes)
+	}
+	if !result.Batching {
+		t.Fatalf("expected a batched result, got %+v", result)
+	}
+}
+
+func TestExecuteOneShotRejectionCapturesAnnouncedLimitForRelaxedRetry(t *testing.T) {
+	// Production never sets AnnouncedTargetLimit — it is only ever learned by
+	// parsing a rejection, so this capture and the in-loop one below are the
+	// feature's ONLY real sources. Without coverage either could be deleted and
+	// the whole mechanism would go inert with a green suite.
+	const announced = 8400
+	mainRef := plumbing.NewBranchReferenceName("main")
+	store := memory.NewStorage()
+	hashes := writeLinearCommitChain(t, store, 1)
+	parents := parentsFromCommitChainStore(t, store)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				if pushes == 1 {
+					// The one-shot attempt: rejected, announcing the real limit.
+					return fmt.Errorf("http 413: body exceeded size limit %d", announced)
+				}
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef: mainRef, TargetRef: mainRef,
+				SourceHash: hashes[len(hashes)-1], Kind: planner.RefKindBranch, Label: "main",
+			},
+		},
+		TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
+		// No TargetMaxPack and no AnnouncedTargetLimit: both must be derived
+		// from the rejection, exactly as production does it.
+	}, "empty target")
+
+	if err != nil {
+		t.Fatalf("expected the run to converge via the captured limit, got %v", err)
+	}
+	// One-shot rejection, then a single batched push at the captured limit.
+	if pushes != 2 {
+		t.Fatalf("expected one-shot rejection then one push at the captured limit, got %d", pushes)
+	}
+}
+
+func TestExecuteBatchedInLoopRejectionCapturesAnnouncedLimit(t *testing.T) {
+	// The second capture site: a run that enters batching directly (an explicit
+	// --target-max-pack-bytes, or the GitHub large-repo preflight) never makes a
+	// one-shot attempt, so the only place it can learn the target's limit is a
+	// rejection inside the batch loop.
+	const announced = 8400
+	mainRef := plumbing.NewBranchReferenceName("main")
+	store := memory.NewStorage()
+	hashes := writeLinearCommitChain(t, store, 3)
+	parents := parentsFromCommitChainStore(t, store)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				if pushes == 1 {
+					// A divisible span is rejected, announcing the real limit:
+					// this subdivides AND must record the limit for later.
+					return fmt.Errorf("http 413: body exceeded size limit %d", announced)
+				}
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef: mainRef, TargetRef: mainRef,
+				SourceHash: hashes[len(hashes)-1], Kind: planner.RefKindBranch, Label: "main",
+			},
+		},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetMaxPack: 2000, // enters batching directly; no one-shot attempt
+		// AnnouncedTargetLimit deliberately unset.
+	}, "empty target")
+
+	if err != nil {
+		t.Fatalf("expected the in-loop captured limit to carry the run, got %v", err)
+	}
+	if pushes < 2 {
+		t.Fatalf("expected pushes after the rejection, got %d", pushes)
+	}
+}
+
+func TestExecuteBatchedReportsBatchingWhenCheckpointPlanningFails(t *testing.T) {
+	// Checkpoint planning fetches the commit graph — the likeliest failure for
+	// exactly the large repos that batch. The route facts must already be set,
+	// or such a failure reports itself as a one-shot bootstrap and the whole
+	// point of carrying them on the error path is lost.
+	mainRef := plumbing.NewBranchReferenceName("main")
+	hashes := makeLinearCommitChain(t, 1)
+
+	result, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return nil, errors.New("commit graph fetch exploded")
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{},
+		DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{
+			mainRef: {
+				SourceRef: mainRef, TargetRef: mainRef,
+				SourceHash: hashes[len(hashes)-1], Kind: planner.RefKindBranch, Label: "main",
+			},
+		},
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetMaxPack: 1000,
+	}, "empty target")
+
+	if err == nil {
+		t.Fatal("expected checkpoint planning to fail")
+	}
+	if !result.Batching || result.RelayMode != "bootstrap-batch" {
+		t.Fatalf("a failed batched bootstrap must not report as one-shot: batching=%t relayMode=%q",
+			result.Batching, result.RelayMode)
 	}
 }
