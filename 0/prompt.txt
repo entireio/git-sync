@@ -198,3 +198,7 @@ checkPackSizeAndSubdivide's callback calls subdivideCheckpoints, which splits ev
 - errors.go:94 says the sentinel is returned by "Sync, Replicate and Bootstrap" — the root gitsync package has no Bootstrap method (only Probe/Plan/Sync/Replicate). It means unstable.Client.Bootstrap; worth saying so, since that comment is the mirror worker's contract.
 - client.go:46 and :62 still read "Plan computes ref actions without pushing" / "Sync executes a sync between two remotes" with no mention that the result is now populated on error. That's a public API behaviour change whose entire purpose is to be read by callers — it should be documented. (Note validation and config errors still return a zero result, which is right, but makes the distinction worth stating.)
 - bootstrap_test.go:2202-2206: drainAbort's doc comment is duplicated verbatim — a rebase artifact. <- review
+
+---
+
+/loop can you check CI and re-trigger bug-bot until green?
