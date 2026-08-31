@@ -2713,3 +2713,53 @@ func TestExecuteBatchedObservedCutoffBlocksAnnouncedEscalation(t *testing.T) {
 		t.Fatalf("expected one-shot 413, observed cutoff, one capped attempt (3 pushes), got %d", pushes)
 	}
 }
+
+func TestExecuteBatchedIndivisibleSpanIsNotRePushedWhileLaterGapsSplit(t *testing.T) {
+	// subdivideToFactor splits EVERY remaining gap, so a splittable gap later
+	// in the branch grows the checkpoint list even when the current span is
+	// already one commit. Retrying on that basis re-fetches and re-pushes an
+	// identical pack — a one-commit gap has no midpoint to gain — once per
+	// later split. On the repos this path serves that is the same multi-GiB
+	// upload several times in a single run.
+	//
+	// Layout: 5 commits planned into 4 batches gives gaps of 1,1,1,2, so the
+	// first checkpoint is indivisible while the last gap can still split.
+	parents, desired := twoCommitFixture(t, 5)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			// A deadline: batchable (so the subdivide path is entered) but not a
+			// size verdict, so classification is not terminal and the old code
+			// fell through to the growth branch.
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, _ io.ReadCloser) error {
+				pushes++
+				return errors.New("http 504 gateway timeout")
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs: desired,
+		TargetRefs:  map[plumbing.ReferenceName]plumbing.Hash{},
+		// ~5 commits x 64 KiB / 80 KiB => 4 planned batches.
+		TargetMaxPack: 81_920,
+	}, "empty target")
+
+	if err == nil {
+		t.Fatal("expected the push to fail")
+	}
+	if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+		t.Fatalf("a deadline is not a size verdict: %v", err)
+	}
+	if pushes != 1 {
+		t.Fatalf("an indivisible span must not be re-pushed while later gaps split; got %d pushes", pushes)
+	}
+}

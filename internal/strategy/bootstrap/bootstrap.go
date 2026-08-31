@@ -812,7 +812,20 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 						}
 					}
 					factor := observedSubdivisionFactor(sizingBytes, limit)
-					expanded := subdivideToFactor(batch.chain, current, batch.Checkpoints[idx:], factor)
+					indivisible := isIndivisibleCheckpoint(batch, current, idx)
+					// Subdividing only helps when THIS span can shrink.
+					// subdivideToFactor splits every remaining gap, so a
+					// splittable gap later in the branch grows the list — and
+					// the retry then re-fetches and re-pushes an identical pack,
+					// because a one-commit gap at idx has no midpoint to gain.
+					// Repeated once per later split, that is the same doomed
+					// upload several times in one run. When the current span is
+					// already one commit there is nothing to retry for: fall
+					// through and classify.
+					expanded := batch.Checkpoints[idx:]
+					if !indivisible {
+						expanded = subdivideToFactor(batch.chain, current, batch.Checkpoints[idx:], factor)
+					}
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						oldRemaining := len(batch.Checkpoints[idx:])
 						newCount := len(expanded)
@@ -853,11 +866,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					// retryable and heals on the next delivery. So does an abort
 					// against our own smaller budget: a larger budget or a
 					// server config change could still mirror this repo.
-					if isTargetBodyLimitError(pushErr) || (atAnnounced && abortedEarly) {
-						if isIndivisibleCheckpoint(batch, current, idx) {
-							return result, fmt.Errorf("push bootstrap batch for %s: %w: %w",
-								batch.Plan.TargetRef, ErrCheckpointExceedsTargetLimit, pushErr)
-						}
+					if indivisible && (isTargetBodyLimitError(pushErr) || (atAnnounced && abortedEarly)) {
+						return result, fmt.Errorf("push bootstrap batch for %s: %w: %w",
+							batch.Plan.TargetRef, ErrCheckpointExceedsTargetLimit, pushErr)
 					}
 				}
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
