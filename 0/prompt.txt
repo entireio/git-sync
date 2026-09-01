@@ -224,3 +224,26 @@ checkPackSizeAndSubdivide's callback calls subdivideCheckpoints, which splits ev
 ---
 
 hey i have another review
+
+---
+
+1. The pre-flight skip is unpinned. internal/strategy/bootstrap/bootstrap.go:626
+
+Removing && !isIndivisibleCheckpoint(batch, current, idx) from the guard passes the entire suite. It's not a no-op — I probed it with a fetch counter on a 5-commit chain (gaps 1,1,1,2), TargetMaxPack: 81_920, makePackHeader(200) so the 200 × 750 estimate trips the pre-flight:
+
+- with the guard: 9 fetches, 5 pushes
+- without: 11 fetches, 5 pushes
+
+So the behaviour is real and observable in two lines of fixture, it just has nothing holding it. Given this PR has mutation-verified every other claim it makes — and 3e55d75b exists solely because three mutants survived — this one stands out. The fixture above is enough; assert the fetch count.
+
+2. packObjectCount is now always 0 on the escalated push. bootstrap.go:614, :648, :729
+
+Skipping checkPackSizeAndSubdivide also skips the only thing that parses the pack header for a count, so for an indivisible span both log lines report object_count=0 and estimated_bytes=0 — on precisely the push this whole feature exists to make. total_objects_in_pack still works (the observer parses its own header), so the loss is confined to those two fields.
+
+calibrationDenom := packObjectCount also goes to 0, which kills calibrateBytesPerObject — but that's inert in practice: with the new guard an indivisible span never takes the growth continue, so a failed push there always returns from executeBatched and there is no later iteration to consume the calibration. Log-only, but worth either fixing (read the header without the subdivide callback) or noting in the comment so the next reader doesn't chase the zeros.
+
+3. Three small doc things.
+
+- errors.go:96 — the edit didn't reflow: that line is 107 chars in a block that otherwise wraps at ~79.
+- bootstrap.go:1581/1582 — no blank line, so nextBudgetProvenance's doc comment now begins with the 14 orphaned lines of observedSubdivisionFactor's prose. The fusion is pre-existing on main (observedSubdivisionFactor's doc has always sat above nextSelfImposedBudget, with the function itself defined ~70 lines lower), but the new function inherits it, so a brand-new symbol is documented by a paragraph about pack subdivision multipliers. One blank line fixes the new half; moving the block down to :1639 fixes the original.
+- client.go:47 / :71 — "Counts describe what was attempted, not what landed" reads as a warning against over-reading, but on the only path that populates a result on error, bootstrapWithInputs never carries bResult.Pushed, so Counts.Applied is 0. It understates rather than overstates. Worth one word, since that comment is the mirror worker's contract. The rest of the field names check out — Execution.OperationMode, TransferMode (from RelayMode), Reason (from RelayReason), Batch, Refs all exist and map as described.
