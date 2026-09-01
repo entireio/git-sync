@@ -1,0 +1,249 @@
+can you summarize the problem this pr is solving with one sentence
+
+---
+
+```
+Re-reviewed c9423f7..653e9c5. Fix confirmed independently — I re-ran my original probe against the new tree:
+
+result: relayMode="bootstrap" reason="bootstrap-resume-marker" err=<nil>
+after run: branch present=false marker present=true   (still at the original hash)
+Dropping the cleanup rather than filtering it was the right call, and your test-server gotcha is worth the note you gave it — a non-nil report short-circuits before any command is applied, so the hasPack == false → nil passthrough is exactly what makes the assertion non-vacuous. Full suite green locally. Findings 2 and 3 are addressed; the PR body now reads accurately against the code.
+
+One thing on the deferred batched cutover. My probe still fails there on this head (as expected — it fails on origin/main too, so it's not yours). Two things worth carrying into ENT-2060, because I don't think the symmetry holds:
+
+It's the higher-consequence half. Batched is the large-repo path — ENT-1948, the >10 GiB case this PR exists for — so a lost position there costs a full re-transfer of exactly the repos that can least afford one. Reachable through the CLI: --all-refs implies BestEffort for bootstrap (cmd/git-sync/bootstrap.go:68) and sync (syncplan.go:121), and client.go:133 passes Policy.BestEffort through for any mode. bootstrap --all-refs --target-max-pack-bytes=N against a target that refuses the create loses the whole batched import, silently, reported as success.
+
+The fix you used here won't port. Dropping the delete at bootstrap.go:687-691 leaves a permanent marker, because Bootstrap() rejects --prune (syncer.go:1287) — no cleaner would ever exist on that path. It needs the rejection actually threaded into the strategy; the syncer already records it (s.rejections, syncer.go:708), so it's a Params field away rather than a redesign.
+
+Nit: replicateCanBootstrap now has no production caller — integration_test.go:2383 is the only one. Either have the route call it (one extra map walk over the desired set) or let the test compose desiredTargetRefsAbsent + pruneDeletesNothingInScope directly, so the composed predicate isn't production code kept alive by a test.
+
+LGTM otherwise.
+```
+
+Another review
+
+---
+
+work/tasks/ENT-2054 ❯ entire-core admin mirrors resume 01KXK4WZWXD1PEP16K9V6CMFHA --base-url https://eu.auth.entire.io
+error: execute: resume mirror: HTTP 401: invalid token
+
+hint: this core (eu.auth.entire.io) is in a different region than your login (us.auth.entire.io); it only
+accepts tokens minted by its own region. Most admin reads (e.g. `mirrors
+list`, `users list`) are global — run them against your home core without
+--base-url/--context; for a region-local operation, log in to eu.auth.entire.io first
+
+---
+
+<task-notification>
+<task-id>ae57e1e4edba8160f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-ENT-2054/3863bbad-1d22-4fc9-9331-869fd69d8fe4/tasks/ae57e1e4edba8160f.output</output-file>
+<status>completed</status>
+<summary>Agent "Review simplification delta" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Adversarial review complete. Tree verified pristine at b06c763d; `go build ./...`, full `go test ./...`, and `golangci-lint run ./...` (0 issues) all pass at HEAD. All probes and mutants were reverted; no untracked files remain.
+
+# Verdict
+
+**No demonstrated correctness bug in the shipped logic — the up-front-ceiling rewrite is equivalent or strictly better than the retry design on every path I could construct or trace.** But the commit should not land as-is: mutation testing shows it deleted the only coverage of the feature's central gate, and it left three stale comments describing the design it removed. Details, all demonstrated or precisely justified:
+
+## 1. Confirmed sound (attack surfaces that held)
+
+- **Decide-up-front vs retry**: `atAnnounced` (bootstrap.go:570-572) is computed after the pre-flight `checkPackSizeAndSubdivide` in the same iteration, and every `continue` recomputes it; the terminal check at :745-746 re-derives indivisibility from the same `current`/`idx` (the expanded list is only assigned inside the growth branch that `continue`s, :704-729). The stale-resume re-plan (`startIdx=0`, `current=ResumeHash`, :407-441) is handled because `isIndivisibleCheckpoint` measures against `current`, not `Checkpoints[idx-1]` (:1329-1344). Subsumed branches never enter the loop.
+- **Loop safety with the latch gone**: every `continue` (:534, :729) is gated on `len(expanded) &gt; len(remaining)`; growth is bounded by chain length; the success path always advances `idx`/`current`; recombine only runs after success. The announced-ceiling push is not a retry, so no latch is needed — failure paths either grow the list, return terminal, or return retryable. No no-progress cycle exists.
+- **Classification**: with `atAnnounced`, `observer.Aborted()` can only be set by the strict `bytesSent &gt; ceiling` aborter (pack_observer.go:110-125 — the aborter is consulted only when the read error is nil), so `atAnnounced &amp;&amp; abortedEarly` ⟺ more than the announced limit's bytes of pack were actually read: terminal is justified regardless of what error the transport surfaces. A `MaxPackBytes` fetch-limit breach surfaces as a read error with `Aborted()==false`, and its message ("source pack exceeded max-pack-bytes limit", gitproto/readers.go:85) matches none of the terminal patterns → stays retryable. 408/504 stay retryable (tested). `errors.Is` traverses the `%w: %w` at :747-748 fine (tested). Best-effort swallowed `ng` → nil PushPack is a pre-existing hazard, unchanged here.
+- **`&gt;=` and the guard at the boundaries**: `AnnouncedTargetLimit ≥ selfImposedBudget` is an invariant whenever announced &gt; 0 — announced only ratchets up from parsed limits (:232-233, :634-636), each parse simultaneously ratchets the budget to ≤ that value (:1281-1299), and the budget only falls. So `&gt;=` matters exactly at equality, which is reachable (I proved it with a probe, below) and behaves correctly on HEAD.
+- **Amplification concern (traced, not a defect)**: when a pack &gt; announced aborts and later gaps are still splittable, calibration from `sentBytes≈announced` (:665-680) makes the next pre-flight estimate ≥ 2×announced &gt; TargetMaxPack, so subsequent rounds subdivide in pre-flight *without pushing* until bottom-out. Worst case ≈ 2 announced-sized uploads, same order as the old design.
+- **The scope move of `budgetFromObservation` (:375-380) fixes a real bug in the previously approved design**: old code reset the flag per-branch (deleted lines at old :456-465) while `selfImposedBudget` persisted across branches, so branch 2 would treat branch 1's *measured* cutoff as "a figure we chose" and relax-retry past it.
+
+## 2. Coverage holes — three mutants survive the FULL test suite
+
+Verified by mutation (apply → `go test ./...` → restore):
+
+- **M1 (critical): delete `isIndivisibleCheckpoint(batch, current, idx)` from `atAnnounced` (:572) — entire suite stays green.** Nothing pins the feature's central claim that *only* bottomed-out checkpoints escalate. This mutant pushes every checkpoint at the announced ceiling with no margin and no projection, silently destroying the waste-bounding that justifies `TargetMaxPack` — the deleted `RelaxedBudgetDoesNotLeakToLaterCheckpoints` test was the closest thing to coverage here and was removed without replacement. The suite needs a test with an announced limit set and a *divisible* checkpoint that must still abort at the small budget.
+- **M2: `&gt;=` → `&gt;` (:571) — entire suite green.** The "pack sized in that last 5% aborts on every delivery forever" boundary the new comment defends is untested. It is real and pinnable — my probe (2-commit chain, `TargetMaxPack: 1&lt;&lt;30`, first push returns `"http 413: body exceeded size limit 4200"` so budget ratchets to exactly announced, body = 4108 bytes = 97.8% of 4200) passes on HEAD and fails under the mutant.
+- **M3: remove `!budgetFromObservation` (:570) — entire suite green**, confirming the author's report. See below.
+
+By contrast the mechanism itself is well pinned: disabling `atAnnounced` fails 5 tests; dropping `(atAnnounced &amp;&amp; abortedEarly)` from :745 fails `TestExecuteBatchedPermanentOnceTargetsOwnLimitIsExceeded`; reintroducing the 95% margin at the ceiling fails `TestExecuteBatchedNoSafetyMarginAtAnnouncedLimit`.
+
+## 3. The `budgetFromObservation` mystery — solved: the guard is live, the fixture was structurally incapable of reaching it
+
+The guard is **not dead code**. It is assigned only at :685 inside the subdivide block, which requires all of: a batchable error, `!abortedEarly`, **no parsed limit**, and **0 &lt; sentBytes &lt; budget**; and it is *read* only on a **later** loop iteration. This commit hard-coded `bottomOutParams` to a one-commit chain (bootstrap_test.go:1775) — and on a one-commit chain the guard is **genuinely unreachable**: any failure that sets it on the sole checkpoint either ends terminal immediately (an unparseable 413 still satisfies `isTargetBodyLimitError`) or returns retryably (408/504), and there is no next iteration to read the flag. Equally fatal: a fixture whose pusher returns the unparseable 413 *without draining the pack* leaves `sentBytes=0`, so `nextSelfImposedBudget` no-ops and the flag is never set at all. Either way, removing the guard changes nothing — hence the green mutant.
+
+A biting fixture needs **≥ 2 commits**: a divisible span to take the observation, then an indivisible one to consult it. This one passes on HEAD and fails when the guard is removed (I verified both):
+
+```go
+func TestObservedCutoffBlocksAnnouncedEscalation(t *testing.T) {
+    mainRef := plumbing.NewBranchReferenceName("main")
+    store := memory.NewStorage()
+    hashes := writeLinearCommitChain(t, store, 2)
+    parents := parentsFromCommitChainStore(t, store)
+    body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...) // 4108 bytes
+    pushes := 0
+    _, err := Execute(context.Background(), Params{
+        SourceService: fakeBootstrapSource{
+            fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) { return parents, nil },
+            fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+                return io.NopCloser(bytes.NewReader(body)), nil
+            },
+        },
+        TargetPusher: fakeBootstrapPusher{
+            pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+                pushes++
+                switch pushes {
+                case 1: // one-shot: parseable 413 announces 1 MiB, derives the batching budget
+                    return errors.New("http 413: body exceeded size limit 1048576")
+                case 2: // divisible span: bytes flow, then an UNPARSEABLE body-limit cut —
+                    // the only route that arms budgetFromObservation (ratchets budget to sentBytes=4108)
+                    if _, copyErr := io.Copy(io.Discard, pack); copyErr != nil { return copyErr }
+                    return errors.New("request body too large for target")
+                default:
+                    _, copyErr := io.Copy(io.Discard, pack)
+                    return copyErr
+                }
+            },
+            pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+        },
+        DesiredRefs: map[plumbing.ReferenceName]planner.DesiredRef{mainRef: {
+            SourceRef: mainRef, TargetRef: mainRef,
+            SourceHash: hashes[len(hashes)-1], Kind: planner.RefKindBranch, Label: "main",
+        }},
+        TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
+        // No TargetMaxPack / AnnouncedTargetLimit: both derived from the 413, as production does.
+    }, "empty target")
+    if err == nil {
+        t.Fatal("guard violated: indivisible push escalated past a measured server cutoff to the announced limit")
+    }
+    if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+        t.Fatalf("abort against the measured cutoff must stay retryable, got permanent: %v", err)
+    }
+    if pushes != 3 {
+        t.Fatalf("expected one-shot 413, observed cutoff, one capped attempt (3 pushes), got %d", pushes)
+    }
+}
+```
+
+## 4. Doc drift introduced by this commit
+
+- **bootstrap.go:548-553**: a comment block still opens with "relaxedBudget, when set, raises the ceiling for THIS attempt only. It must not be written back into selfImposedBudget…" — `relaxedBudget` was deleted by this very commit; the paragraph describes the removed design and now sits fused onto the new comment.
+- **bootstrap.go:92-100** (`Params.AnnouncedTargetLimit` doc): "…the push is **retried** against this limit so the SERVER decides" — the retry no longer exists.
+- **bootstrap.go:109-111** (`ErrCheckpointExceedsTargetLimit` doc): "those are **retried** against the announced server limit first" — same staleness.
+
+## 5. Minor behavior change worth a conscious sign-off
+
+The log+notice at :575-582 now fires on **every** indivisible-checkpoint push once a limit is announced — including tiny packs nowhere near either number — whereas the old notice fired only after our budget had actually aborted one. After a deep subdivision episode this emits "cannot split further (1 commit) — pushing at the target's announced limit 10 GiB instead of 512 MiB" for kilobyte packs (bounded in practice by recombine regrowth, but per-push in uneven-gap states). Noise/UX only, no correctness impact.
+
+**Bottom line**: land only after (a) adding a test that pins the indivisibility gate (M1 — the deleted leak test's replacement), (b) pinning the `&gt;=` equality boundary (M2 fixture above), (c) restoring the `budgetFromObservation` guard's coverage with the ≥2-commit fixture above instead of concluding it dead, and (d) fixing the three stale comments, chiefly the dangling `relaxedBudget` block at :548-553.</result>
+<usage><subagent_tokens>167204</subagent_tokens><tool_uses>47</tool_uses><duration_ms>1041384</duration_ms></usage>
+</task-notification>
+
+---
+
+did you force push
+
+---
+
+can you update the pr description to be concise and explain the problem and the solution
+
+---
+
+remove any reference to `gh/nicschick/vc3r`
+
+---
+
+Couldn't we just configure TargetMaxPack in mirror-worker as a fix?
+
+---
+
+I don't get why we want to limit the batch size anyway
+
+---
+
+I get why we split it in batches, I don't get why we limit batch size to something less than the 10GB allowed
+
+---
+
+/loop can you address the bugbot comments, re-trigger it after every push commenting "bugbot run" and continue until it's green
+
+---
+
+done
+
+---
+
+/loop can you address the bugbot comments, re-trigger it after every push commenting "bugbot run" and continue until it's green
+
+---
+
+1. A 408/504 deadline silently disables the whole feature for the rest of the run. internal/strategy/bootstrap/bootstrap.go:792-797
+
+subdivide includes deadlines (isBatchableTargetPushError = body-limit or 408/504). When a target drains the body and then times out — exactly the GitHub-408 behaviour documented at :1898 — abortedEarly is false and sentBytes > 0, so nextSelfImposedBudget ratchets the budget to those bytes and sets budgetFromObservation = true. That flag is never cleared except by a later parseable 413, and it gates atAnnounced, so escalation is dead for the remainder of the run.
+
+That contradicts the PR's own principle: a deadline is treated as availability, not size for classification, but as measured size evidence for provenance. I confirmed it with a probe (3-commit chain, one-shot 413 announcing 1 MiB, then a drain-then-504 on the divisible span):
+
+- as-is: 3 pushes, fails pack upload aborted early: projected to exceed target body limit
+- with !budgetFromObservation mutated out of :674: converges, emitting cannot split further (1 commit) — pushing at the target's announced limit 1.00 MB instead of 4.01 KB
+
+The narrow fix is to keep the ratchet (smaller packs genuinely do finish inside the window) but not the provenance claim:
+
+budgetFromObservation = parsedLimit <= 0 && !isTargetPushDeadlineError(pushErr)
+
+It heals on the next delivery, so it's not permanent — but it costs a full source re-fetch, on precisely the flaky multi-GiB targets this path serves.
+
+2. The pre-flight subdivide has the same shape commit 3 just fixed. bootstrap.go:615-641
+
+checkPackSizeAndSubdivide's callback calls subdivideCheckpoints, which splits every remaining gap — so an indivisible span at idx still grows the list when a later gap can split, and the loop continues to re-plan the identical checkpoint. It terminates (gaps are bounded at 1) and it's cheap (12-byte header read, then Close()), so it's not the multi-GiB waste of the post-failure path. But it's the same asymmetry, and it uses p.TargetMaxPack rather than the escalated ceiling. Worth at least a comment noting the difference is deliberate.
+
+3. Two doc nits.
+- errors.go:94 says the sentinel is returned by "Sync, Replicate and Bootstrap" — the root gitsync package has no Bootstrap method (only Probe/Plan/Sync/Replicate). It means unstable.Client.Bootstrap; worth saying so, since that comment is the mirror worker's contract.
+- client.go:46 and :62 still read "Plan computes ref actions without pushing" / "Sync executes a sync between two remotes" with no mention that the result is now populated on error. That's a public API behaviour change whose entire purpose is to be read by callers — it should be documented. (Note validation and config errors still return a zero result, which is right, but makes the distinction worth stating.)
+- bootstrap_test.go:2202-2206: drainAbort's doc comment is duplicated verbatim — a rebase artifact. <- review
+
+---
+
+/loop can you check CI and re-trigger bug-bot until green?
+
+---
+
+/loop can you check CI and re-trigger bug-bot until green?
+
+---
+
+/loop can you check CI and re-trigger bug-bot until green?
+
+---
+
+<task-notification>
+<task-id>b2be30qbc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-tasks-ENT-2054/3863bbad-1d22-4fc9-9331-869fd69d8fe4/tasks/b2be30qbc.output</output-file>
+<status>completed</status>
+<summary>Background command "Check CI and Bugbot on fcd1aa25" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+hey i have another review
+
+---
+
+1. The pre-flight skip is unpinned. internal/strategy/bootstrap/bootstrap.go:626
+
+Removing && !isIndivisibleCheckpoint(batch, current, idx) from the guard passes the entire suite. It's not a no-op — I probed it with a fetch counter on a 5-commit chain (gaps 1,1,1,2), TargetMaxPack: 81_920, makePackHeader(200) so the 200 × 750 estimate trips the pre-flight:
+
+- with the guard: 9 fetches, 5 pushes
+- without: 11 fetches, 5 pushes
+
+So the behaviour is real and observable in two lines of fixture, it just has nothing holding it. Given this PR has mutation-verified every other claim it makes — and 3e55d75b exists solely because three mutants survived — this one stands out. The fixture above is enough; assert the fetch count.
+
+2. packObjectCount is now always 0 on the escalated push. bootstrap.go:614, :648, :729
+
+Skipping checkPackSizeAndSubdivide also skips the only thing that parses the pack header for a count, so for an indivisible span both log lines report object_count=0 and estimated_bytes=0 — on precisely the push this whole feature exists to make. total_objects_in_pack still works (the observer parses its own header), so the loss is confined to those two fields.
+
+calibrationDenom := packObjectCount also goes to 0, which kills calibrateBytesPerObject — but that's inert in practice: with the new guard an indivisible span never takes the growth continue, so a failed push there always returns from executeBatched and there is no later iteration to consume the calibration. Log-only, but worth either fixing (read the header without the subdivide callback) or noting in the comment so the next reader doesn't chase the zeros.
+
+3. Three small doc things.
+
+- errors.go:96 — the edit didn't reflow: that line is 107 chars in a block that otherwise wraps at ~79.
+- bootstrap.go:1581/1582 — no blank line, so nextBudgetProvenance's doc comment now begins with the 14 orphaned lines of observedSubdivisionFactor's prose. The fusion is pre-existing on main (observedSubdivisionFactor's doc has always sat above nextSelfImposedBudget, with the function itself defined ~70 lines lower), but the new function inherits it, so a brand-new symbol is documented by a paragraph about pack subdivision multipliers. One blank line fixes the new half; moving the block down to :1639 fixes the original.
+- client.go:47 / :71 — "Counts describe what was attempted, not what landed" reads as a warning against over-reading, but on the only path that populates a result on error, bootstrapWithInputs never carries bResult.Pushed, so Counts.Applied is 0. It understates rather than overstates. Worth one word, since that comment is the mirror worker's contract. The rest of the field names check out — Execution.OperationMode, TransferMode (from RelayMode), Reason (from RelayReason), Batch, Refs all exist and map as described.
