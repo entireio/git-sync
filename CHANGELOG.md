@@ -9,11 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **An indivisible one-commit bootstrap checkpoint is now tested against the target's announced pack limit before the run gives up.** The batching budget is intentionally smaller than that limit, so treating a pack that crossed the budget as permanently too large made every retry fail locally even when the target would have accepted it. Once subdivision bottoms out at one commit, git-sync now attempts that pack and only reports a permanent failure when the target itself refuses it. Deadline and cancellation errors retain their original classification instead of being converted into a size verdict ([#118](https://github.com/entireio/git-sync/pull/118))
+
 - **A batched bootstrap no longer discards its resume position when the target refuses the branch create.** The cutover push carries two commands — advance the `refs/gitsync/bootstrap/heads/<branch>` temp ref to the final checkpoint, and create the real branch there — and the temp ref was deleted on the strength of that push returning no error. Under `--best-effort` (implied by `--all-refs`) a per-ref `ng` reaches a callback and the push still returns `nil`, so a target that refuses the create — a protected branch, a pre-receive policy — ended the run with neither the branch nor the marker and reported success. With nothing on the target referencing the objects already delivered, the next run had no fetch have to negotiate against and re-transferred the entire history, on precisely the large repositories batching exists for. Whether the branch landed is now settled against the target's own refs, not inferred from the push, and the marker survives anything short of the branch being present at the hash the run pushed ([#117](https://github.com/entireio/git-sync/pull/117))
 
 ### Changed
 
+- **Embedding callers now receive the populated result alongside errors returned after planning has begun.** `Plan`, `Sync`, and `Replicate`, plus their unstable counterparts and `Bootstrap`, preserve the selected operation and transfer modes, relay fallback reason, attempted ref plan, and completed batch progress when execution fails. Callers can therefore distinguish a failed relay from a failed or partially completed bootstrap without reconstructing the route from the error text. Outcome counts remain intentionally unpopulated on this path and must not be used to infer how much landed ([#118](https://github.com/entireio/git-sync/pull/118))
+
 - **A target that refuses the batched bootstrap temp ref now fails the run, including under `--best-effort`.** Every other per-ref refusal stays a warning there, but this one is the batching state machine: the run previously advanced its checkpoint position against a ref the target had not moved, then failed later and more confusingly, or deleted a marker at a hash the target never accepted. A run against a target that blocks writes to `refs/gitsync/*` used to exit 0 with warnings and now exits non-zero — worth knowing if you alert on exit codes ([#117](https://github.com/entireio/git-sync/pull/117))
+
+### Added
+
+- **`ErrCheckpointExceedsTargetLimit` identifies a permanent, target-verified bootstrap size failure.** `Sync`, `Replicate`, and `Bootstrap` wrap this sentinel only after the target refuses a one-commit checkpoint that cannot be subdivided further, so embedders can terminate futile redelivery with `errors.Is` while continuing to retry transport failures and deadline expiry ([#118](https://github.com/entireio/git-sync/pull/118))
 
 ## [0.9.0] - 2026-08-28
 
