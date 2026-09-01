@@ -1452,7 +1452,22 @@ func bootstrapWithInputs(
 		TargetRefsNow: s.targetRefsNow,
 	}, relayReason)
 	if err != nil {
-		return Result{}, fmt.Errorf("bootstrap execute: %w", err)
+		// Carry the strategy facts out with the error. Execute populates these
+		// before it can fail (they describe the route taken, not the outcome),
+		// and returning a zero Result here is why a failed sync could report
+		// which strategy ran only when it succeeded — the exact blind spot that
+		// made ENT-2054 a source read instead of a log query.
+		// Plans is populated before the first push, so it describes the work
+		// attempted; carrying it keeps a failed run's report the same shape as
+		// a successful one rather than an empty ref list.
+		return Result{
+			Plans: bResult.Plans, OperationMode: s.cfg.Mode,
+			Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
+			Batching: bResult.Batching, BatchCount: bResult.BatchCount,
+			PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
+			Stats: s.stats.snapshot(), Measurement: s.measurementDone(),
+			Protocol: s.sourceService.Protocol, SourceHEAD: s.sourceService.HeadTarget,
+		}, fmt.Errorf("bootstrap execute: %w", err)
 	}
 	plans := bResult.Plans
 	warned := s.applyRejections(plans)

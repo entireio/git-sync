@@ -44,6 +44,16 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 }
 
 // Plan computes ref actions without pushing.
+//
+// On a run that reached the remotes, the returned PlanResult is populated even when
+// the error is non-nil: Execution carries the strategy that ran (OperationMode,
+// TransferMode, Reason, Batch) and Refs the plan it attempted, so a caller can
+// report WHICH path failed rather than only that something did. Counts are NOT
+// populated on that path — Applied is 0 even where refs were pushed before the
+// failure — so read Refs for what was attempted and ignore Counts entirely.
+//
+// A request that never got that far — Validate or config resolution failing —
+// still returns a zero PlanResult, since there is no run to describe.
 func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) {
 	if err := req.Validate(); err != nil {
 		return PlanResult{}, err
@@ -54,12 +64,22 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return PlanResult{}, fmt.Errorf("plan: %w", err)
+		return fromSyncResult(result), fmt.Errorf("plan: %w", err)
 	}
 	return fromSyncResult(result), nil
 }
 
 // Sync executes a sync between two remotes.
+//
+// On a run that reached the remotes, the returned SyncResult is populated even when
+// the error is non-nil: Execution carries the strategy that ran (OperationMode,
+// TransferMode, Reason, Batch) and Refs the plan it attempted, so a caller can
+// report WHICH path failed rather than only that something did. Counts are NOT
+// populated on that path — Applied is 0 even where refs were pushed before the
+// failure — so read Refs for what was attempted and ignore Counts entirely.
+//
+// A request that never got that far — Validate or config resolution failing —
+// still returns a zero SyncResult, since there is no run to describe.
 func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) {
 	if err := req.Validate(); err != nil {
 		return SyncResult{}, err
@@ -70,12 +90,14 @@ func (c *Client) Sync(ctx context.Context, req SyncRequest) (SyncResult, error) 
 	}
 	result, err := syncer.Run(ctx, cfg)
 	if err != nil {
-		return SyncResult{}, fmt.Errorf("sync: %w", err)
+		return fromSyncResult(result), fmt.Errorf("sync: %w", err)
 	}
 	return fromSyncResult(result), nil
 }
 
 // Replicate executes source-authoritative relay-only replication between two remotes.
+//
+// Populates the returned SyncResult on error the same way Sync does.
 func (c *Client) Replicate(ctx context.Context, req SyncRequest) (SyncResult, error) {
 	req.Policy.Mode = ModeReplicate
 	return c.Sync(ctx, req)
