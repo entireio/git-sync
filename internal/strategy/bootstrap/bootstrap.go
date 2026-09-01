@@ -612,20 +612,25 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// immediately instead of pushing a pack the target will reject.
 			// This avoids wasting a multi-GiB transfer on a doomed push.
 			var packObjectCount int64
-			// Skipped for a span that cannot shrink, for the same reason the
-			// post-failure path skips it: subdivideCheckpoints splits every
-			// remaining gap, so a splittable later gap would grow the list and
-			// re-plan an identical checkpoint. Cheaper here than after a failed
-			// push — a 12-byte header read, then Close — but the asymmetry is
-			// the same one, so it is closed the same way.
-			//
-			// This also sidesteps a mismatch: the estimate is compared against
-			// TargetMaxPack, which is the right bound while a span can still be
-			// split, but not the ceiling an indivisible span is actually pushed
-			// at (see atAnnounced below).
-			if p.TargetMaxPack > 0 && len(batch.chain) > 0 && !isIndivisibleCheckpoint(batch, current, idx) {
+			if p.TargetMaxPack > 0 && len(batch.chain) > 0 {
 				subdivided := false
 				packReader, packObjectCount, err = checkPackSizeAndSubdivide(packReader, p.TargetMaxPack, calibratedBytesPerObject, func(estimated int64) bool {
+					// A span that cannot shrink declines here rather than the
+					// call being skipped, so the header is still parsed and
+					// packObjectCount still feeds the logs and the calibration.
+					//
+					// Declining is necessary for the same reason the
+					// post-failure path stops subdividing: subdivideCheckpoints
+					// splits every remaining gap, so a splittable later gap
+					// would grow the list and re-plan an identical checkpoint —
+					// one wasted fetch per later split. It also sidesteps a
+					// mismatch, since the estimate is compared against
+					// TargetMaxPack, the right bound only while a span can
+					// still be split, not the ceiling an indivisible span is
+					// actually pushed at (see atAnnounced below).
+					if isIndivisibleCheckpoint(batch, current, idx) {
+						return false
+					}
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						oldRemaining := len(batch.Checkpoints[idx:])
@@ -1565,20 +1570,6 @@ func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64) bool {
 	return false
 }
 
-// observedSubdivisionFactor estimates how many sub-packs a rejected
-// push should be split into based on bytes actually transmitted before
-// the server cut us off.
-//
-// The safety multiplier varies with how close sentBytes came to the
-// limit. When the rejection arrived within ~10% of the limit (the
-// common reverse-proxy case where the server cuts mid-stream at its
-// body cap), the true pack size is essentially unknown — it is at
-// least sentBytes but may be many times larger. A 4× multiplier in
-// that regime converges in one or two rounds instead of dancing
-// through 1 → 2 → 4 → 8 → … one round per rejection. When the
-// rejection arrived comfortably under the limit (a server with
-// stricter limits announcing the failure early), 2× is enough since
-// sentBytes is closer to the real pack size.
 // nextBudgetProvenance decides whether the newly ratcheted budget should be
 // treated as a MEASURED server cutoff — bytes the target actually accepted
 // before cutting us off — rather than a figure git-sync chose. Escalation to
@@ -1636,6 +1627,20 @@ func nextSelfImposedBudget(current, parsedLimit, sentBytes int64, abortedEarly b
 	return current
 }
 
+// observedSubdivisionFactor estimates how many sub-packs a rejected
+// push should be split into based on bytes actually transmitted before
+// the server cut us off.
+//
+// The safety multiplier varies with how close sentBytes came to the
+// limit. When the rejection arrived within ~10% of the limit (the
+// common reverse-proxy case where the server cuts mid-stream at its
+// body cap), the true pack size is essentially unknown — it is at
+// least sentBytes but may be many times larger. A 4× multiplier in
+// that regime converges in one or two rounds instead of dancing
+// through 1 → 2 → 4 → 8 → … one round per rejection. When the
+// rejection arrived comfortably under the limit (a server with
+// stricter limits announcing the failure early), 2× is enough since
+// sentBytes is closer to the real pack size.
 func observedSubdivisionFactor(sentBytes, limit int64) int {
 	if sentBytes <= 0 || limit <= 0 {
 		return 2

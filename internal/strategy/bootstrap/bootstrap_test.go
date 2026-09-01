@@ -2866,3 +2866,50 @@ func TestNextBudgetProvenance(t *testing.T) {
 		})
 	}
 }
+
+func TestExecuteBatchedPreFlightDoesNotResplitAnIndivisibleSpan(t *testing.T) {
+	// The pre-flight estimate subdivides before pushing, and
+	// subdivideCheckpoints splits EVERY remaining gap — so a splittable gap
+	// later in the branch grows the list even when the current span is one
+	// commit, and the loop re-plans and re-fetches an identical checkpoint.
+	// Cheaper than the post-failure path (a header read, then Close) but the
+	// same asymmetry, and it costs one wasted source fetch per later split.
+	//
+	// Layout: 5 commits into 4 batches gives gaps of 1,1,1,2 — the first span
+	// indivisible while the last can still split. makePackHeader(200) makes the
+	// 200 x 750 estimate exceed the budget so the pre-flight actually fires.
+	parents, desired := twoCommitFixture(t, 5)
+	body := append(makePackHeader(200), bytes.Repeat([]byte("x"), 4096)...)
+	fetches, pushes := 0, 0
+
+	// The outcome is irrelevant here; the fetch count is the assertion.
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				fetches++
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				_, err := io.Copy(io.Discard, pack)
+				return err
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		DesiredRefs:   desired,
+		TargetRefs:    map[plumbing.ReferenceName]plumbing.Hash{},
+		TargetMaxPack: 81_920,
+	}, "empty target")
+
+	_ = err
+	// Re-planning an indivisible span costs a fetch without a push, so the
+	// fetch count is what moves; pushes stay put either way.
+	if fetches != 9 {
+		t.Fatalf("expected 9 source fetches; an indivisible span was re-planned before pushing, got %d (pushes=%d)", fetches, pushes)
+	}
+}

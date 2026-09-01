@@ -48,8 +48,9 @@ func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, erro
 // On a run that reached the remotes, the returned PlanResult is populated even when
 // the error is non-nil: Execution carries the strategy that ran (OperationMode,
 // TransferMode, Reason, Batch) and Refs the plan it attempted, so a caller can
-// report WHICH path failed rather than only that something did. Counts describe
-// what was attempted, not what landed — do not read them as applied work.
+// report WHICH path failed rather than only that something did. Counts are NOT
+// populated on that path — Applied is 0 even where refs were pushed before the
+// failure — so read Refs for what was attempted and ignore Counts entirely.
 //
 // A request that never got that far — Validate or config resolution failing —
 // still returns a zero PlanResult, since there is no run to describe.
@@ -73,8 +74,9 @@ func (c *Client) Plan(ctx context.Context, req PlanRequest) (PlanResult, error) 
 // On a run that reached the remotes, the returned SyncResult is populated even when
 // the error is non-nil: Execution carries the strategy that ran (OperationMode,
 // TransferMode, Reason, Batch) and Refs the plan it attempted, so a caller can
-// report WHICH path failed rather than only that something did. Counts describe
-// what was attempted, not what landed — do not read them as applied work.
+// report WHICH path failed rather than only that something did. Counts are NOT
+// populated on that path — Applied is 0 even where refs were pushed before the
+// failure — so read Refs for what was attempted and ignore Counts entirely.
 //
 // A request that never got that far — Validate or config resolution failing —
 // still returns a zero SyncResult, since there is no run to describe.

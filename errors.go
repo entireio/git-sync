@@ -93,7 +93,8 @@ var ErrSourceEmptyTargetPopulated = syncer.ErrSourceEmptyTargetPopulated
 
 // ErrCheckpointExceedsTargetLimit is returned (wrapped) by Sync and Replicate
 // here, and by unstable.Client.Bootstrap, when a batched bootstrap reached a
-// single commit whose pack the target itself refused. Checkpoint subdivision splits between commits, so at
+// single commit whose pack the target itself refused. Checkpoint
+// subdivision splits between commits, so at
 // one commit per gap there is nothing left to split and every retry re-sends
 // the identical pack. Test for it with
 // errors.Is(err, gitsync.ErrCheckpointExceedsTargetLimit).
