@@ -3,6 +3,7 @@ package unstable
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -26,23 +27,29 @@ type (
 type Options struct {
 	HTTPClient *http.Client
 	Auth       gitsync.AuthProvider
+	// BootstrapLogger receives structured checkpoint diagnostics. Nil disables them.
+	BootstrapLogger *slog.Logger
 }
 
 type Client struct {
-	httpClient *http.Client
-	auth       gitsync.AuthProvider
+	httpClient      *http.Client
+	auth            gitsync.AuthProvider
+	bootstrapLogger *slog.Logger
 }
 
 type AdvancedOptions struct {
-	CollectStats           bool   `json:"collectStats"`
-	MeasureMemory          bool   `json:"measureMemory"`
-	Verbose                bool   `json:"verbose"`
-	Progress               bool   `json:"progress"`
-	MaxPackBytes           int64  `json:"maxPackBytes"`
-	TargetMaxPackBytes     int64  `json:"targetMaxPackBytes"`
-	TargetMaxRefUpdates    int    `json:"targetMaxRefUpdates"`
-	MaterializedMaxObjects int    `json:"materializedMaxObjects"`
-	BootstrapStrategy      string `json:"bootstrapStrategy,omitempty"`
+	CollectStats       bool  `json:"collectStats"`
+	MeasureMemory      bool  `json:"measureMemory"`
+	Verbose            bool  `json:"verbose"`
+	Progress           bool  `json:"progress"`
+	MaxPackBytes       int64 `json:"maxPackBytes"`
+	TargetMaxPackBytes int64 `json:"targetMaxPackBytes"`
+	// BootstrapFallbackMaxPackBytes is a local ceiling for indivisible checkpoints
+	// without a known target limit. Non-positive values disable the fallback.
+	BootstrapFallbackMaxPackBytes int64  `json:"bootstrapFallbackMaxPackBytes"`
+	TargetMaxRefUpdates           int    `json:"targetMaxRefUpdates"`
+	MaterializedMaxObjects        int    `json:"materializedMaxObjects"`
+	BootstrapStrategy             string `json:"bootstrapStrategy,omitempty"`
 }
 
 // BootstrapStrategy values accepted by AdvancedOptions.BootstrapStrategy.
@@ -114,7 +121,7 @@ type FetchRequest struct {
 }
 
 func New(opts Options) *Client {
-	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth}
+	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger}
 }
 
 func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, error) {
@@ -263,34 +270,36 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		maxObjects = DefaultMaterializedMaxObjects
 	}
 	return syncer.Config{
-		Source:                 source,
-		Target:                 target,
-		HTTPClient:             c.httpClient,
-		Branches:               append([]string(nil), req.Scope.Branches...),
-		Mappings:               validationMappings(req.Scope.Mappings),
-		AllRefs:                req.Scope.AllRefs,
-		ExcludeRefPrefixes:     append([]string(nil), req.Scope.ExcludeRefPrefixes...),
-		ExcludeRefs:            append([]string(nil), req.Scope.ExcludeRefs...),
-		IncludeTags:            req.Policy.IncludeTags,
-		DryRun:                 req.DryRun,
-		ShowStats:              req.Options.CollectStats,
-		MeasureMemory:          req.Options.MeasureMemory,
-		Progress:               req.Options.Progress,
-		Mode:                   string(req.Policy.Mode),
-		ForceWithLease:         req.Policy.ForceWithLease,
-		ForceBlind:             req.Policy.ForceBlind,
-		Prune:                  req.Policy.Prune,
-		BestEffort:             req.Policy.BestEffort,
-		AllowEmptySource:       req.Policy.AllowEmptySource,
-		SourceAssertedEmpty:    req.Policy.SourceAssertedEmpty,
-		TargetAssertedEmpty:    req.Policy.TargetAssertedEmpty,
-		MaxPackBytes:           req.Options.MaxPackBytes,
-		TargetMaxPackBytes:     req.Options.TargetMaxPackBytes,
-		TargetMaxRefUpdates:    req.Options.TargetMaxRefUpdates,
-		MaterializedMaxObjects: maxObjects,
-		ProtocolMode:           string(req.Policy.Protocol),
-		Verbose:                req.Options.Verbose,
-		BootstrapStrategy:      req.Options.BootstrapStrategy,
+		Source:                        source,
+		Target:                        target,
+		HTTPClient:                    c.httpClient,
+		Branches:                      append([]string(nil), req.Scope.Branches...),
+		Mappings:                      validationMappings(req.Scope.Mappings),
+		AllRefs:                       req.Scope.AllRefs,
+		ExcludeRefPrefixes:            append([]string(nil), req.Scope.ExcludeRefPrefixes...),
+		ExcludeRefs:                   append([]string(nil), req.Scope.ExcludeRefs...),
+		IncludeTags:                   req.Policy.IncludeTags,
+		DryRun:                        req.DryRun,
+		ShowStats:                     req.Options.CollectStats,
+		MeasureMemory:                 req.Options.MeasureMemory,
+		Progress:                      req.Options.Progress,
+		Mode:                          string(req.Policy.Mode),
+		ForceWithLease:                req.Policy.ForceWithLease,
+		ForceBlind:                    req.Policy.ForceBlind,
+		Prune:                         req.Policy.Prune,
+		BestEffort:                    req.Policy.BestEffort,
+		AllowEmptySource:              req.Policy.AllowEmptySource,
+		SourceAssertedEmpty:           req.Policy.SourceAssertedEmpty,
+		TargetAssertedEmpty:           req.Policy.TargetAssertedEmpty,
+		MaxPackBytes:                  req.Options.MaxPackBytes,
+		TargetMaxPackBytes:            req.Options.TargetMaxPackBytes,
+		BootstrapFallbackMaxPackBytes: req.Options.BootstrapFallbackMaxPackBytes,
+		BootstrapLogger:               c.bootstrapLogger,
+		TargetMaxRefUpdates:           req.Options.TargetMaxRefUpdates,
+		MaterializedMaxObjects:        maxObjects,
+		ProtocolMode:                  string(req.Policy.Protocol),
+		Verbose:                       req.Options.Verbose,
+		BootstrapStrategy:             req.Options.BootstrapStrategy,
 	}, nil
 }
 
@@ -304,25 +313,27 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:              source,
-		Target:              target,
-		HTTPClient:          c.httpClient,
-		Branches:            append([]string(nil), req.Scope.Branches...),
-		Mappings:            validationMappings(req.Scope.Mappings),
-		AllRefs:             req.Scope.AllRefs,
-		ExcludeRefPrefixes:  append([]string(nil), req.Scope.ExcludeRefPrefixes...),
-		ExcludeRefs:         append([]string(nil), req.Scope.ExcludeRefs...),
-		IncludeTags:         req.IncludeTags,
-		BestEffort:          req.BestEffort,
-		ShowStats:           req.Options.CollectStats,
-		MeasureMemory:       req.Options.MeasureMemory,
-		Progress:            req.Options.Progress,
-		MaxPackBytes:        req.Options.MaxPackBytes,
-		TargetMaxPackBytes:  req.Options.TargetMaxPackBytes,
-		TargetMaxRefUpdates: req.Options.TargetMaxRefUpdates,
-		ProtocolMode:        string(req.Protocol),
-		Verbose:             req.Options.Verbose,
-		BootstrapStrategy:   req.Options.BootstrapStrategy,
+		Source:                        source,
+		Target:                        target,
+		HTTPClient:                    c.httpClient,
+		Branches:                      append([]string(nil), req.Scope.Branches...),
+		Mappings:                      validationMappings(req.Scope.Mappings),
+		AllRefs:                       req.Scope.AllRefs,
+		ExcludeRefPrefixes:            append([]string(nil), req.Scope.ExcludeRefPrefixes...),
+		ExcludeRefs:                   append([]string(nil), req.Scope.ExcludeRefs...),
+		IncludeTags:                   req.IncludeTags,
+		BestEffort:                    req.BestEffort,
+		ShowStats:                     req.Options.CollectStats,
+		MeasureMemory:                 req.Options.MeasureMemory,
+		Progress:                      req.Options.Progress,
+		MaxPackBytes:                  req.Options.MaxPackBytes,
+		TargetMaxPackBytes:            req.Options.TargetMaxPackBytes,
+		BootstrapFallbackMaxPackBytes: req.Options.BootstrapFallbackMaxPackBytes,
+		BootstrapLogger:               c.bootstrapLogger,
+		TargetMaxRefUpdates:           req.Options.TargetMaxRefUpdates,
+		ProtocolMode:                  string(req.Protocol),
+		Verbose:                       req.Options.Verbose,
+		BootstrapStrategy:             req.Options.BootstrapStrategy,
 	}, nil
 }
 

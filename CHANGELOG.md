@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The CLI flag `--bootstrap-fallback-max-pack-bytes` and `unstable.AdvancedOptions.BootstrapFallbackMaxPackBytes` enable the fallback for bootstrap, sync, replicate, and plan. `unstable.Options.BootstrapLogger` supplies structured diagnostics to bootstrap and sync paths. ([#120](https://github.com/entireio/git-sync/pull/120))
+
+- `Options.BootstrapFallbackMaxPackBytes` provides an opt-in local byte ceiling for indivisible bootstrap checkpoints when no target limit is known. These uploads bypass projection and the batching margin, while preserving source limits, deadlines, and observed server cutoffs. Exceeding the fallback remains retryable, not `ErrCheckpointExceedsTargetLimit`. Diagnostics identify the `configured_fallback` budget separately from a target-announced limit. ([#120](https://github.com/entireio/git-sync/pull/120))
+
 - `Options.BootstrapLogger` emits one structured event per bootstrap checkpoint upload without verbose protocol logging. Events include the checkpoint, split eligibility, effective budget and its source, read/object counters, size projection, and local abort reason. Abort counters are captured at the decision; they do not assert target receipt or acceptance. Upload limits and retry behavior are unchanged.
 
 - **`ErrCheckpointExceedsTargetLimit` identifies a permanent, target-verified bootstrap size failure.** `Sync` and `Replicate`, plus `unstable.Client.Bootstrap`, wrap this sentinel only after the target refuses a one-commit checkpoint that cannot be subdivided further, so embedders can terminate futile redelivery with `errors.Is` while continuing to retry transport failures and deadline expiry ([#118](https://github.com/entireio/git-sync/pull/118))
@@ -20,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **A target that refuses the batched bootstrap temp ref now fails the run, including under `--best-effort`.** Every other per-ref refusal stays a warning there, but this one is the batching state machine: the run previously advanced its checkpoint position against a ref the target had not moved, then failed later and more confusingly, or deleted a marker at a hash the target never accepted. A run against a target that blocks writes to `refs/gitsync/*` used to exit 0 with warnings and now exits non-zero — worth knowing if you alert on exit codes ([#117](https://github.com/entireio/git-sync/pull/117))
 
 ### Fixed
+
+- Preserve source-read errors when closing bootstrap observation, including `io.ErrUnexpectedEOF`; a truncated source is reported as `observer_failed`, not expected `observer_interrupted`. Intentional partial closure is unchanged. ([#120](https://github.com/entireio/git-sync/pull/120))
+
+- At source EOF, bootstrap upload guards enforce actual bytes without projection or the batching safety margin. Final bytes returned together with EOF remain subject to the byte limit, and diagnostic counters retain their observed values. ([#120](https://github.com/entireio/git-sync/pull/120))
+
+- Bootstrap upload diagnostics distinguish expected scanner interruption on a partially consumed upload (`observer_interrupted`) from malformed input or scanner failure (`observer_failed`). Closing a partial valid pack no longer reports instrumentation failure; malformed data and source truncation remain visible. ([#120](https://github.com/entireio/git-sync/pull/120))
 
 - **An indivisible one-commit bootstrap checkpoint is now tested against the target's announced pack limit before the run gives up.** The batching budget is intentionally smaller than that limit, so treating a pack that crossed the budget as permanently too large made every retry fail locally even when the target would have accepted it. Once subdivision bottoms out at one commit, git-sync now attempts that pack and only reports a permanent failure when the target itself refuses it. A deadline retains its original classification instead of being converted into a size verdict ([#118](https://github.com/entireio/git-sync/pull/118))
 

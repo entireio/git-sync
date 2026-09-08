@@ -122,6 +122,10 @@ type Params struct {
 	// smaller budget, so the SERVER decides whether the indivisible pack is
 	// too big. See executeBatched.
 	AnnouncedTargetLimit int64
+	// FallbackMaxPackBytes is a local byte ceiling for indivisible checkpoints
+	// with no announced target limit. It never overrides a measured cutoff.
+	// Non-positive disables the fallback. MaxPackBytes still bounds source reads.
+	FallbackMaxPackBytes int64
 }
 
 // ErrCheckpointExceedsTargetLimit reports a single commit whose pack the
@@ -574,6 +578,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		noticedAnnounced := false
 		for idx < len(batch.Checkpoints) {
 			checkpoint := batch.Checkpoints[idx]
+			indivisible := isIndivisibleCheckpoint(batch, current, idx)
 			if p.OnPhase != nil {
 				p.OnPhase(fmt.Sprintf("pack %d/%d", idx+1, len(batch.Checkpoints)))
 			}
@@ -629,7 +634,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					// TargetMaxPack, the right bound only while a span can
 					// still be split, not the ceiling an indivisible span is
 					// actually pushed at (see atAnnounced below).
-					if isIndivisibleCheckpoint(batch, current, idx) {
+					if indivisible {
 						return false
 					}
 					expanded := subdivideCheckpoints(batch.chain, current, batch.Checkpoints[idx:])
@@ -690,7 +695,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			budget := selfImposedBudget
 			atAnnounced := !budgetFromObservation && p.AnnouncedTargetLimit > 0 &&
 				p.AnnouncedTargetLimit >= budget &&
-				isIndivisibleCheckpoint(batch, current, idx)
+				indivisible
 			if atAnnounced {
 				budget = p.AnnouncedTargetLimit
 				p.log("bootstrap batch pushing indivisible checkpoint at announced target limit",
@@ -709,29 +714,45 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 						gitproto.HumanBytes(p.AnnouncedTargetLimit), gitproto.HumanBytes(selfImposedBudget)))
 				}
 			}
+			// A lower fallback remains a hard local bound. Even then, use an
+			// actual-byte attempt for an indivisible pack rather than an estimate.
+			atFallback := !budgetFromObservation && p.AnnouncedTargetLimit == 0 &&
+				p.FallbackMaxPackBytes > 0 && indivisible
+			if atFallback {
+				budget = p.FallbackMaxPackBytes
+			}
 			switch {
-			case atAnnounced:
-				// No margin and no projection: at the target's own limit an
+			case atAnnounced || atFallback:
+				// No margin or projection at an indivisible upload ceiling.
+				// For an announced limit, an
 				// early cut would manufacture a verdict it never gave, and a
 				// front-loaded pack's bytes-per-object average overshoots badly
 				// — exactly the giant-blob shape this path serves. Cut only once
-				// we have genuinely exceeded what it said it accepts, where a
-				// rejection is certain rather than predicted.
+				// the byte ceiling is exceeded. A configured fallback is local
+				// policy and must not be classified as a target size verdict.
 				ceiling := budget
-				observer.SetAborter(func(bytesSent, _, _ int64) bool {
+				observer.SetAborter(func(bytesSent, _, _ int64, _ bool) bool {
 					return bytesSent > ceiling
 				})
 			case budget > 0:
-				observer.SetAborter(func(bytesSent, objectsSent, totalObjects int64) bool {
-					return shouldAbortPush(bytesSent, objectsSent, totalObjects, budget)
+				observer.SetAborter(func(bytesSent, objectsSent, totalObjects int64, atEOF bool) bool {
+					return shouldAbortPush(bytesSent, objectsSent, totalObjects, budget, atEOF)
 				})
 			}
 			pushErr := p.TargetPusher.PushPack(ctx, cmds, observer)
+			// Settle diagnostics even when a custom pusher leaves its input open.
+			// Close is idempotent for pushers that already closed the observer.
+			// Match gitproto.pushPack: a close failure prevents reporting success
+			// and advancing the checkpoint. A custom pusher's nil result alone
+			// does not establish acceptance. Retain a push error when both fail.
+			if closeErr := observer.Close(); pushErr == nil {
+				pushErr = closeErr
+			}
 			sentBytes := observer.Bytes()
 			objectsSent := observer.ObjectsSent()
 			totalObjects := observer.TotalObjects()
 			abortedEarly := observer.Aborted()
-			p.logPush(ctx, batch, current, idx, observer, budget, atAnnounced, budgetFromObservation, pushErr)
+			p.logPush(ctx, batch, current, idx, observer, budget, atAnnounced, atFallback, budgetFromObservation, indivisible, pushErr)
 			if pushErr != nil {
 				_ = packReader.Close()
 				// A pack too big for the target is the unifying signal here,
@@ -807,22 +828,10 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 							"objects_sent", objectsSent)
 						calibratedBytesPerObject = updated
 					}
-					if next := nextSelfImposedBudget(selfImposedBudget, parsedLimit, sentBytes, abortedEarly); next != selfImposedBudget {
-						// A budget derived from bytes actually sent is evidence
-						// of where the server cuts, not a number we picked, so
-						// escalation must not jump past it.
-						//
-						// A DEADLINE is excluded, for the same reason
-						// classification excludes it: a target that drained the
-						// body and then timed out told us about time, not size.
-						// Keep the smaller budget — smaller packs genuinely do
-						// finish inside the window — but do not let it masquerade
-						// as a measured size limit, or one 408 would disable
-						// escalation for the rest of the run, on precisely the
-						// flaky multi-GiB targets this path serves.
-						budgetFromObservation = nextBudgetProvenance(budgetFromObservation, parsedLimit, pushErr)
-						selfImposedBudget = next
-					}
+					// Provenance does not depend on whether the budget shrinks.
+					budgetFromObservation = nextBudgetProvenance(budgetFromObservation, parsedLimit, sentBytes, abortedEarly, pushErr)
+					selfImposedBudget = nextSelfImposedBudget(selfImposedBudget, parsedLimit, sentBytes, abortedEarly)
+
 					// Pick the byte count we use for sizing the next
 					// subdivision. When the server cut us off, sentBytes
 					// is roughly the cap and using it directly is right.
@@ -839,7 +848,6 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 						}
 					}
 					factor := observedSubdivisionFactor(sizingBytes, limit)
-					indivisible := isIndivisibleCheckpoint(batch, current, idx)
 					// Subdividing only helps when THIS span can shrink.
 					// subdivideToFactor splits every remaining gap, so a
 					// splittable gap later in the branch grows the list — and
@@ -1549,10 +1557,14 @@ func effectiveObjectsSent(objectsSent, totalObjects int64, abortedEarly bool) in
 // of the first KB. The absolute "we already crossed the budget"
 // trigger fires regardless of the floor — once the server (or a
 // learned proxy cutoff) said the cap is N and we've sent ≥ N, there
-// is nothing left to learn by sending more.
-func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64) bool {
+// is nothing left to learn by sending more. At EOF, use the full budget
+// without projection or margin because the complete byte count is known.
+func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64, atEOF bool) bool {
 	if budget <= 0 {
 		return false
+	}
+	if atEOF {
+		return bytesSent > budget
 	}
 	const safety = 95 // percent of budget at which we cut
 	threshold := budget * safety / 100
@@ -1572,29 +1584,21 @@ func shouldAbortPush(bytesSent, objectsSent, totalObjects, budget int64) bool {
 	return false
 }
 
-// nextBudgetProvenance decides whether the newly ratcheted budget should be
-// treated as a MEASURED server cutoff — bytes the target actually accepted
-// before cutting us off — rather than a figure git-sync chose. Escalation to
-// the target's announced limit is refused past a measured cutoff, so getting
-// this wrong in either direction is costly:
-//
-//   - claiming it wrongly disables escalation for the rest of the run;
-//   - erasing it wrongly lets escalation jump past a cutoff the server has
-//     already demonstrated, and an abort at that ceiling is classified
-//     permanent — a flaky target becomes a false permanent failure.
-//
-// A deadline decides neither. A target that drained the body and then timed
-// out told us about time, not size — the same reason classification refuses to
-// treat it as a size verdict — so the prior answer stands unchanged.
-//
-// A parsed limit means the target stated its own bound, which supersedes any
-// measurement; anything else that ratcheted the budget did so from observed
-// bytes, which is a measurement.
-func nextBudgetProvenance(current bool, parsedLimit int64, err error) bool {
-	if isTargetPushDeadlineError(err) {
+// nextBudgetProvenance classifies server size evidence independently of budget
+// movement. Local aborts, deadlines, and non-size failures preserve prior state.
+// A stated server limit supersedes a measurement. An unannounced size rejection
+// establishes a measured cutoff only when bytes were actually read.
+func nextBudgetProvenance(current bool, parsedLimit, sentBytes int64, abortedEarly bool, err error) bool {
+	if abortedEarly || isTargetPushDeadlineError(err) || !isTargetBodyLimitError(err) {
 		return current
 	}
-	return parsedLimit <= 0
+	if parsedLimit > 0 {
+		return false
+	}
+	if sentBytes > 0 {
+		return true
+	}
+	return current
 }
 
 // nextSelfImposedBudget refines the in-flight self-imposed upload

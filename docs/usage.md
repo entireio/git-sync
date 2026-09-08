@@ -402,3 +402,9 @@ there.
 - `--stats` adds per-service request, byte, want, have, and command counters to the output.
 
 For the deeper protocol-level walkthrough (smart HTTP, pkt-line, capability negotiation, sideband stripping, relay framing), see [protocol.md](protocol.md).
+
+### Indivisible bootstrap upload fallback
+
+`bootstrap`, `sync`, `replicate`, and `plan` accept `--bootstrap-fallback-max-pack-bytes`. The default `0` disables the fallback. A positive byte count supplies a local ceiling for indivisible bootstrap checkpoints when no target limit or observed server cutoff is available. This ceiling bypasses projection and the batching margin, even when configured below the ordinary batch budget. Source limits and deadlines still apply. Exceeding this local ceiling stays retryable and does not establish a target size rejection.
+
+For example, `git-sync bootstrap --bootstrap-fallback-max-pack-bytes 1073741824 SOURCE TARGET` opts into a 1 GiB fallback. The unstable API exposes the same setting through `AdvancedOptions.BootstrapFallbackMaxPackBytes` and accepts a diagnostic logger through `Options.BootstrapLogger`.

@@ -30,6 +30,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
+	"github.com/spf13/cobra"
 )
 
 // TestMain isolates the package's tests from the developer's local
@@ -954,3 +955,20 @@ func (s *smartHTTPRepoServer) handleReceivePack(w http.ResponseWriter, r *http.R
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
+
+func TestBootstrapFallbackFlagAvailableOnAllEntryPoints(t *testing.T) {
+	t.Parallel()
+	for _, cmd := range []*cobra.Command{newBootstrapCmd(), newSyncCmd(), newReplicateCmd(), newPlanCmd()} {
+		t.Run(cmd.Name(), func(t *testing.T) {
+			t.Parallel()
+			const flag = "bootstrap-fallback-max-pack-bytes"
+			if err := cmd.ParseFlags([]string{"--" + flag + "=1073741824"}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := cmd.Flags().GetInt64(flag)
+			if err != nil || got != 1<<30 {
+				t.Fatalf("fallback flag=%d: %v", got, err)
+			}
+		})
+	}
+}

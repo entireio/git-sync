@@ -2,6 +2,7 @@ package unstable
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"testing"
 
@@ -216,4 +217,27 @@ func TestBuildFetchConfigThreadsEveryScopeField(t *testing.T) {
 		}
 		return cfg
 	})
+}
+
+func TestBootstrapFallbackAndLoggerReachBothEntryPoints(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.DiscardHandler)
+	c := New(Options{BootstrapLogger: logger})
+	source := gitsync.Endpoint{URL: "https://source.example/repo.git"}
+	target := gitsync.Endpoint{URL: "https://target.example/repo.git"}
+	options := AdvancedOptions{BootstrapFallbackMaxPackBytes: 1 << 30}
+	cfg, err := c.buildBootstrapConfig(context.Background(), BootstrapRequest{Source: source, Target: target, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BootstrapFallbackMaxPackBytes != 1<<30 || cfg.BootstrapLogger != logger {
+		t.Fatal("bootstrap dropped fallback or logger")
+	}
+	cfg, err = c.buildSyncConfig(context.Background(), SyncRequest{Source: source, Target: target, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BootstrapFallbackMaxPackBytes != 1<<30 || cfg.BootstrapLogger != logger {
+		t.Fatal("sync dropped fallback or logger")
+	}
 }
