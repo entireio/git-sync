@@ -3,7 +3,7 @@
   "checkpoint_id": "01M20CJF69XGJ4Y0K5935ERM8Q",
   "strategy": "manual-commit",
   "branch": "nodo/cor-1489-bootstrap-fallback",
-  "checkpoints_count": 13,
+  "checkpoints_count": 4,
   "files_touched": [
     "CHANGELOG.md",
     "client.go",
@@ -26,10 +26,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 83480,
+    "input_tokens": 11317,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 7600768,
-    "output_tokens": 15896,
-    "api_call_count": 62
+    "cache_read_tokens": 2061952,
+    "output_tokens": 3491,
+    "api_call_count": 17
   }
 }
