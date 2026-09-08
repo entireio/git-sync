@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Options.BootstrapLogger` emits one structured event per bootstrap checkpoint upload without verbose protocol logging. Events include the checkpoint, split eligibility, effective budget and its source, read/object counters, size projection, and local abort reason. Abort counters are captured at the decision; they do not assert target receipt or acceptance. Upload limits and retry behavior are unchanged.
+
 - **`ErrCheckpointExceedsTargetLimit` identifies a permanent, target-verified bootstrap size failure.** `Sync` and `Replicate`, plus `unstable.Client.Bootstrap`, wrap this sentinel only after the target refuses a one-commit checkpoint that cannot be subdivided further, so embedders can terminate futile redelivery with `errors.Is` while continuing to retry transport failures and deadline expiry ([#118](https://github.com/entireio/git-sync/pull/118))
 
 ### Changed

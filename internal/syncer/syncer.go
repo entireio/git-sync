@@ -70,6 +70,7 @@ type Config struct {
 	Source                 Endpoint
 	Target                 Endpoint
 	HTTPClient             *http.Client
+	BootstrapLogger        *slog.Logger
 	Branches               []string
 	Mappings               []RefMapping
 	AllRefs                bool
@@ -1442,6 +1443,7 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
+		PushLogger: s.cfg.BootstrapLogger,
 		Strategy:   s.cfg.BootstrapStrategy,
 		OnPhase:    s.stats.setPhase,
 		OnNotice:   s.notice,
