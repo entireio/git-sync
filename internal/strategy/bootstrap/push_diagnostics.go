@@ -11,7 +11,7 @@ import (
 // local abort, counters are the exact inputs that triggered the decision; for
 // other outcomes they are the observer's latest counters. Neither proves target
 // acceptance. In particular, a nil PushPack error can still hide a refused ref.
-func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbing.Hash, idx int, observer *packStreamObserver, budget int64, atAnnounced, fromObservation bool, pushErr error) {
+func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbing.Hash, idx int, observer *packStreamObserver, budget int64, atAnnounced, atFallback, fromObservation, indivisible bool, pushErr error) {
 	if p.PushLogger == nil {
 		return
 	}
@@ -25,8 +25,15 @@ func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbin
 		budgetSource = "observed_cutoff"
 	}
 	threshold := budget * 95 / 100
+	if observer.sourceEOF.Load() {
+		threshold = budget
+	}
 	if atAnnounced {
 		budgetSource = "target_announced"
+		threshold = budget
+	}
+	if atFallback {
+		budgetSource = "configured_fallback"
 		threshold = budget
 	}
 	projectionAvailable := counters.objects > 0 && counters.total > 0
@@ -37,7 +44,7 @@ func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbin
 	abortReason := "none"
 	if abort != nil {
 		abortReason = "projection"
-		if atAnnounced || counters.bytes >= threshold {
+		if atAnnounced || atFallback || counters.bytes >= threshold {
 			abortReason = "bytes_read"
 		}
 	}
@@ -47,11 +54,12 @@ func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbin
 		slog.String("previous_checkpoint_hash", current.String()),
 		slog.Int("checkpoint_index", idx+1),
 		slog.Int("checkpoint_count", len(batch.Checkpoints)),
-		slog.Bool("indivisible", isIndivisibleCheckpoint(batch, current, idx)),
+		slog.Bool("indivisible", indivisible),
 		slog.Int64("planning_budget_bytes", p.TargetMaxPack),
 		slog.Int64("effective_budget_bytes", budget),
 		slog.String("budget_source", budgetSource),
 		slog.Int64("announced_target_limit_bytes", p.AnnouncedTargetLimit),
+		slog.Int64("configured_fallback_limit_bytes", p.FallbackMaxPackBytes),
 		slog.Int64("abort_threshold_bytes", threshold),
 		slog.Int64("bytes_read", counters.bytes),
 		slog.Int64("objects_processed", counters.objects),
@@ -61,5 +69,6 @@ func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbin
 		slog.Bool("aborted_early", observer.Aborted()),
 		slog.String("abort_reason", abortReason),
 		slog.Bool("observer_failed", observer.ScannerError() != nil),
+		slog.Bool("observer_interrupted", observer.interrupted.Load()),
 		slog.Bool("push_failed", pushErr != nil))
 }

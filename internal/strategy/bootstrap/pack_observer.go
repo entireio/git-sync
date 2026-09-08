@@ -10,13 +10,14 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 )
 
-// ErrPackUploadAborted is returned from packStreamObserver.Read when
-// the configured aborter says the upload is projected to exceed the
-// target body limit. Surfaces up through the HTTP transport as a
-// generic body-read error; bootstrap's push-failed branch checks the
-// observer's Aborted() flag to distinguish "we cut it" from a
-// server-side 413 / 500 / network failure.
-var ErrPackUploadAborted = errors.New("pack upload aborted early: projected to exceed target body limit")
+// ErrPackUploadAborted reports a local upload guard stopping the stream.
+// It is not evidence of a server size rejection. Diagnostics distinguish
+// projection from an actual-byte cutoff and identify the budget source.
+var ErrPackUploadAborted = errors.New("pack upload aborted early: local upload limit exceeded")
+
+// errObservationInterrupted marks pipe closure before the source reached EOF.
+// The scanner only saw a prefix, so this is not a malformed-pack verdict.
+var errObservationInterrupted = errors.New("pack observation interrupted")
 
 // packStreamObserver wraps the pack stream handed to PushPack with two
 // instruments:
@@ -45,9 +46,11 @@ var ErrPackUploadAborted = errors.New("pack upload aborted early: projected to e
 // hashing — but the zlib walk itself is unavoidable because pack
 // objects don't record their compressed size.
 type packStreamObserver struct {
-	src io.ReadCloser
-	tee io.Reader
-	pw  *io.PipeWriter
+	src       io.ReadCloser
+	tee       io.Reader
+	pw        *io.PipeWriter
+	closeOnce sync.Once
+	closeErr  error
 
 	bytes        atomic.Int64
 	objectsSent  atomic.Int64
@@ -57,6 +60,9 @@ type packStreamObserver struct {
 	headerReady chan struct{}
 	done        chan struct{}
 	scannerErr  atomic.Pointer[error]
+	sourceEOF   atomic.Bool
+	sourceErr   atomic.Pointer[error]
+	interrupted atomic.Bool
 
 	aborter       aborterFunc
 	aborted       atomic.Bool
@@ -72,10 +78,12 @@ type packCounters struct {
 // aborterFunc is consulted on every Read to decide whether the upload
 // should be cancelled mid-stream. Receives the latest counters so it
 // can project the final pack size from the bytes-per-object ratio so
-// far. Return true to abort the upload; the observer surfaces
+// far. At source EOF, atEOF requests only the hard byte ceiling.
+// Projection and the batching margin cannot save work on a complete stream.
+// Return true to abort the upload; the observer surfaces
 // ErrPackUploadAborted from its next Read and refuses to give up
 // further bytes.
-type aborterFunc func(bytesSent, objectsSent, totalObjects int64) bool
+type aborterFunc func(bytesSent, objectsSent, totalObjects int64, atEOF bool) bool
 
 func newPackStreamObserver(src io.ReadCloser) *packStreamObserver {
 	pr, pw := io.Pipe()
@@ -119,12 +127,19 @@ func (o *packStreamObserver) Read(p []byte) (int, error) {
 		return 0, ErrPackUploadAborted
 	}
 	n, err := o.tee.Read(p)
+	if errors.Is(err, io.EOF) {
+		o.sourceEOF.Store(true)
+	} else if err != nil {
+		// Preserve the source failure instead of turning its truncated prefix
+		// into an expected interruption when the upload closes the observer.
+		o.sourceErr.CompareAndSwap(nil, &err)
+	}
 	if n > 0 {
 		o.bytes.Add(int64(n))
 	}
-	if err == nil && o.aborter != nil {
+	if (err == nil || errors.Is(err, io.EOF)) && o.aborter != nil {
 		counters := packCounters{o.bytes.Load(), o.objectsSent.Load(), o.totalObjects.Load()}
-		if o.aborter(counters.bytes, counters.objects, counters.total) {
+		if o.aborter(counters.bytes, counters.objects, counters.total, errors.Is(err, io.EOF)) {
 			o.abortCounters.Store(&counters)
 			o.aborted.Store(true)
 			return n, ErrPackUploadAborted
@@ -153,12 +168,20 @@ func (o *packStreamObserver) Aborted() bool {
 // cleanly, then closes the underlying source. Idempotent on the source
 // side (the wrapped ReadCloser may itself be a closeOnce wrapper).
 func (o *packStreamObserver) Close() error {
-	_ = o.pw.Close()
-	<-o.done
-	if err := o.src.Close(); err != nil {
-		return fmt.Errorf("close pack source: %w", err)
-	}
-	return nil
+	o.closeOnce.Do(func() {
+		if sourceErr := o.sourceErr.Load(); sourceErr != nil {
+			_ = o.pw.CloseWithError(*sourceErr)
+		} else if o.sourceEOF.Load() {
+			_ = o.pw.Close()
+		} else {
+			_ = o.pw.CloseWithError(errObservationInterrupted)
+		}
+		<-o.done
+		if err := o.src.Close(); err != nil {
+			o.closeErr = fmt.Errorf("close pack source: %w", err)
+		}
+	})
+	return o.closeErr
 }
 
 // HeaderReady returns a channel that closes once the pack header has
@@ -191,6 +214,7 @@ func (o *packStreamObserver) TotalObjects() int64 {
 }
 
 // ScannerError returns the first error the Scanner produced, if any.
+// Expected interruption from closing a partial upload is excluded.
 // A non-nil error means observation stopped early — counters above
 // will not advance further. Useful for debugging; non-fatal for the
 // upload itself, which is driven by Read on the tee.
@@ -221,7 +245,9 @@ func (o *packStreamObserver) consume(pr *io.PipeReader) {
 			// final ObjectSection has already incremented objectsSent.
 		}
 	}
-	if err := s.Error(); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+	if err := s.Error(); errors.Is(err, errObservationInterrupted) {
+		o.interrupted.Store(true)
+	} else if err != nil {
 		o.scannerErr.Store(&err)
 	}
 	// Ensure HeaderReady is closed even on a malformed pack so callers

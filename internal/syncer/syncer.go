@@ -67,32 +67,33 @@ type RefMapping = validation.RefMapping
 
 // Config holds all configuration for a sync operation.
 type Config struct {
-	Source                 Endpoint
-	Target                 Endpoint
-	HTTPClient             *http.Client
-	BootstrapLogger        *slog.Logger
-	Branches               []string
-	Mappings               []RefMapping
-	AllRefs                bool
-	ExcludeRefPrefixes     []string
-	ExcludeRefs            []string
-	IncludeTags            bool
-	DryRun                 bool
-	Verbose                bool
-	ShowStats              bool
-	MeasureMemory          bool
-	Progress               bool
-	Mode                   string
-	ForceWithLease         bool
-	ForceBlind             bool
-	Prune                  bool
-	BestEffort             bool
-	MaxPackBytes           int64
-	TargetMaxPackBytes     int64
-	TargetMaxRefUpdates    int
-	MaterializedMaxObjects int
-	ProtocolMode           string
-	BootstrapStrategy      string // "" | "first-parent" | "topo"
+	Source                        Endpoint
+	Target                        Endpoint
+	HTTPClient                    *http.Client
+	BootstrapLogger               *slog.Logger
+	BootstrapFallbackMaxPackBytes int64
+	Branches                      []string
+	Mappings                      []RefMapping
+	AllRefs                       bool
+	ExcludeRefPrefixes            []string
+	ExcludeRefs                   []string
+	IncludeTags                   bool
+	DryRun                        bool
+	Verbose                       bool
+	ShowStats                     bool
+	MeasureMemory                 bool
+	Progress                      bool
+	Mode                          string
+	ForceWithLease                bool
+	ForceBlind                    bool
+	Prune                         bool
+	BestEffort                    bool
+	MaxPackBytes                  int64
+	TargetMaxPackBytes            int64
+	TargetMaxRefUpdates           int
+	MaterializedMaxObjects        int
+	ProtocolMode                  string
+	BootstrapStrategy             string // "" | "first-parent" | "topo"
 	// SourceAssertedEmpty is the caller's authoritative statement that the
 	// source repository holds no refs at all, obtained from something that
 	// sees the repository's real state rather than its advertisement — git
@@ -1443,11 +1444,12 @@ func bootstrapWithInputs(
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,
-		PushLogger: s.cfg.BootstrapLogger,
-		Strategy:   s.cfg.BootstrapStrategy,
-		OnPhase:    s.stats.setPhase,
-		OnNotice:   s.notice,
-		RefOutcome: s.refOutcome,
+		PushLogger:           s.cfg.BootstrapLogger,
+		FallbackMaxPackBytes: s.cfg.BootstrapFallbackMaxPackBytes,
+		Strategy:             s.cfg.BootstrapStrategy,
+		OnPhase:              s.stats.setPhase,
+		OnNotice:             s.notice,
+		RefOutcome:           s.refOutcome,
 		// Where a push leaves a create in doubt — refused, or a target that
 		// reports nothing — the strategy asks the target which refs it has
 		// rather than guessing from the wording of a rejection.

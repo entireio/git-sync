@@ -28,14 +28,14 @@ func TestMain(m *testing.M) {
 
 func TestBootstrapLoggerReachesSyncConfiguration(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	cfg, err := New(Options{BootstrapLogger: logger}).buildSyncConfig(context.Background(), SyncRequest{
+	cfg, err := New(Options{BootstrapLogger: logger, BootstrapFallbackMaxPackBytes: 1 << 30}).buildSyncConfig(context.Background(), SyncRequest{
 		Source: Endpoint{URL: "https://example.com/source.git"},
 		Target: Endpoint{URL: "https://example.com/target.git"},
 	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BootstrapLogger != logger || cfg.Verbose {
+	if cfg.BootstrapLogger != logger || cfg.Verbose || cfg.BootstrapFallbackMaxPackBytes != 1<<30 {
 		t.Fatal("bootstrap diagnostics must propagate independently of verbose logging")
 	}
 }

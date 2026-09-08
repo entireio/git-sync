@@ -19,18 +19,24 @@ type Options struct {
 	// including failures, independently of verbose protocol logging. Nil disables
 	// these diagnostics. Bytes read are not proof of bytes accepted by the target.
 	BootstrapLogger *slog.Logger
+	// BootstrapFallbackMaxPackBytes bounds indivisible checkpoint uploads when
+	// the target has not announced a limit. Positive values disable projection
+	// and the batching margin for these uploads only. Non-positive disables the
+	// fallback. This is local policy, not evidence of the target's capacity.
+	BootstrapFallbackMaxPackBytes int64
 }
 
 // Client provides the public orchestration API for git-sync.
 type Client struct {
-	httpClient      *http.Client
-	auth            AuthProvider
-	bootstrapLogger *slog.Logger
+	httpClient                    *http.Client
+	auth                          AuthProvider
+	bootstrapLogger               *slog.Logger
+	bootstrapFallbackMaxPackBytes int64
 }
 
 // New constructs a new Client.
 func New(opts Options) *Client {
-	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger}
+	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger, bootstrapFallbackMaxPackBytes: opts.BootstrapFallbackMaxPackBytes}
 }
 
 // Probe inspects a source remote and optional target remote.
@@ -143,28 +149,29 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		return syncer.Config{}, err
 	}
 	return syncer.Config{
-		Source:                 syncerEndpoint(req.Source, sourceAuth),
-		Target:                 syncerEndpoint(req.Target, targetAuth),
-		BootstrapLogger:        c.bootstrapLogger,
-		HTTPClient:             c.httpClient,
-		Branches:               append([]string(nil), req.Scope.Branches...),
-		Mappings:               validationMappings(req.Scope.Mappings),
-		AllRefs:                req.Scope.AllRefs,
-		ExcludeRefPrefixes:     append([]string(nil), req.Scope.ExcludeRefPrefixes...),
-		ExcludeRefs:            append([]string(nil), req.Scope.ExcludeRefs...),
-		IncludeTags:            req.Policy.IncludeTags,
-		DryRun:                 dryRun,
-		ShowStats:              req.CollectStats,
-		Mode:                   string(req.Policy.Mode),
-		ForceWithLease:         req.Policy.ForceWithLease,
-		ForceBlind:             req.Policy.ForceBlind,
-		Prune:                  req.Policy.Prune,
-		BestEffort:             req.Policy.BestEffort,
-		AllowEmptySource:       req.Policy.AllowEmptySource,
-		SourceAssertedEmpty:    req.Policy.SourceAssertedEmpty,
-		TargetAssertedEmpty:    req.Policy.TargetAssertedEmpty,
-		ProtocolMode:           string(req.Policy.Protocol),
-		MaterializedMaxObjects: syncer.DefaultMaterializedMaxObjects,
+		Source:                        syncerEndpoint(req.Source, sourceAuth),
+		Target:                        syncerEndpoint(req.Target, targetAuth),
+		BootstrapLogger:               c.bootstrapLogger,
+		BootstrapFallbackMaxPackBytes: c.bootstrapFallbackMaxPackBytes,
+		HTTPClient:                    c.httpClient,
+		Branches:                      append([]string(nil), req.Scope.Branches...),
+		Mappings:                      validationMappings(req.Scope.Mappings),
+		AllRefs:                       req.Scope.AllRefs,
+		ExcludeRefPrefixes:            append([]string(nil), req.Scope.ExcludeRefPrefixes...),
+		ExcludeRefs:                   append([]string(nil), req.Scope.ExcludeRefs...),
+		IncludeTags:                   req.Policy.IncludeTags,
+		DryRun:                        dryRun,
+		ShowStats:                     req.CollectStats,
+		Mode:                          string(req.Policy.Mode),
+		ForceWithLease:                req.Policy.ForceWithLease,
+		ForceBlind:                    req.Policy.ForceBlind,
+		Prune:                         req.Policy.Prune,
+		BestEffort:                    req.Policy.BestEffort,
+		AllowEmptySource:              req.Policy.AllowEmptySource,
+		SourceAssertedEmpty:           req.Policy.SourceAssertedEmpty,
+		TargetAssertedEmpty:           req.Policy.TargetAssertedEmpty,
+		ProtocolMode:                  string(req.Policy.Protocol),
+		MaterializedMaxObjects:        syncer.DefaultMaterializedMaxObjects,
 	}, nil
 }
 

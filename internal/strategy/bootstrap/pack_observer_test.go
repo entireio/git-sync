@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -190,7 +191,7 @@ func TestPackStreamObserverAbortStopsRead(t *testing.T) {
 	defer func() { _ = o.Close() }()
 
 	// Trigger after the first 32 bytes pass through.
-	o.SetAborter(func(bytesSent, _, _ int64) bool {
+	o.SetAborter(func(bytesSent, _, _ int64, _ bool) bool {
 		return bytesSent >= 32
 	})
 
@@ -223,5 +224,180 @@ func TestPackStreamObserverCloseBeforeFullRead(t *testing.T) {
 	}
 	if err := o.Close(); err != nil {
 		t.Fatalf("close after partial read: %v", err)
+	}
+}
+
+// Readers may return their final bytes together with EOF. The byte guard must
+// inspect those bytes before treating the upload as complete.
+type finalBytesReader struct{ data []byte }
+
+func (r *finalBytesReader) Read(p []byte) (int, error) {
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	if len(r.data) == 0 {
+		return n, io.EOF
+	}
+	return n, nil
+}
+func TestPackStreamObserverChecksFinalBytesWithEOF(t *testing.T) {
+	t.Parallel()
+	o := newPackStreamObserver(io.NopCloser(&finalBytesReader{data: []byte("over limit")}))
+	defer o.Close()
+	o.SetAborter(func(n, _, _ int64, _ bool) bool { return n > 4 })
+	_, err := io.Copy(io.Discard, o)
+	if !errors.Is(err, ErrPackUploadAborted) || !o.Aborted() {
+		t.Fatalf("final bytes bypassed ceiling: %v", err)
+	}
+}
+
+func TestPackObservationDistinguishesInterruptedUploads(t *testing.T) {
+	t.Parallel()
+	valid, _ := buildSyntheticPack(t, 10)
+	for _, tc := range []struct {
+		name                                         string
+		data                                         []byte
+		partial, abort, wantFailure, wantInterrupted bool
+	}{
+		{name: "complete valid pack", data: valid},
+		{name: "server stops upload", data: valid, partial: true, wantInterrupted: true},
+		{name: "client aborts upload", data: valid, partial: true, abort: true, wantInterrupted: true},
+		{name: "source is truncated", data: valid[:64], wantFailure: true},
+		{name: "malformed before close", data: bytes.Repeat([]byte("x"), 128), partial: true, wantFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := newPackStreamObserver(io.NopCloser(bytes.NewReader(tc.data)))
+			if tc.abort {
+				o.SetAborter(func(n, _, _ int64, _ bool) bool { return n >= 64 })
+			}
+			if tc.partial {
+				_, err := o.Read(make([]byte, 64))
+				if tc.abort && !errors.Is(err, ErrPackUploadAborted) {
+					t.Fatalf("expected abort: %v", err)
+				}
+			} else {
+				if _, err := io.Copy(io.Discard, o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := o.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if (o.ScannerError() != nil) != tc.wantFailure || o.interrupted.Load() != tc.wantInterrupted {
+				t.Fatalf("error=%v interrupted=%v; want failure=%v interrupted=%v", o.ScannerError(), o.interrupted.Load(), tc.wantFailure, tc.wantInterrupted)
+			}
+		})
+	}
+}
+
+func TestPackStreamObserverEOFUsesActualBytesDespiteScannerLag(t *testing.T) {
+	t.Parallel()
+	const size = 8 << 20
+	for _, separateEOF := range []bool{false, true} {
+		for _, budget := range []int64{16 << 20, 4 << 20} {
+			name := fmt.Sprintf("separateEOF=%v/budget=%d", separateEOF, budget)
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				// Freeze a lagging scanner state independently of goroutine scheduling.
+				// Its projection is 800 MiB, but the final stream size is 8 MiB.
+				var reader io.Reader = &finalBytesReader{data: bytes.Repeat([]byte("x"), size)}
+				o := newPackStreamObserver(io.NopCloser(reader))
+				// Bypass only the scanner tee to freeze its scheduling state. Retain
+				// the real constructor and shutdown lifecycle.
+				o.tee = reader
+				defer o.Close()
+				if separateEOF {
+					o.tee = bytes.NewReader(nil)
+					o.bytes.Store(size)
+				}
+				o.totalObjects.Store(100)
+				o.objectsSent.Store(1)
+				o.SetAborter(func(n, objects, total int64, atEOF bool) bool {
+					return shouldAbortPush(n, objects, total, budget, atEOF)
+				})
+				_, err := o.Read(make([]byte, size))
+				if budget > size {
+					if !errors.Is(err, io.EOF) || o.Aborted() {
+						t.Fatalf("completed pack falsely projected: %v", err)
+					}
+				} else {
+					if !errors.Is(err, ErrPackUploadAborted) {
+						t.Fatalf("EOF bypassed byte guard: %v", err)
+					}
+					snapshot := o.abortCounters.Load()
+					if snapshot == nil || snapshot.objects != 1 || snapshot.total != 100 || snapshot.bytes != size {
+						t.Fatalf("diagnostic counters were changed: %+v", snapshot)
+					}
+				}
+			})
+		}
+	}
+}
+
+// sourceFailureReader can report a failure with its final bytes or on a
+// subsequent read, as network readers are permitted to do.
+type sourceFailureReader struct {
+	data     []byte
+	failure  error
+	separate bool
+}
+
+func (r *sourceFailureReader) Read(p []byte) (int, error) {
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	if len(r.data) == 0 && (!r.separate || n == 0) {
+		return n, r.failure
+	}
+	return n, nil
+}
+
+func TestPackObservationPreservesSourceReadFailure(t *testing.T) {
+	t.Parallel()
+	valid, _ := buildSyntheticPack(t, 10)
+	for _, failure := range []error{io.ErrUnexpectedEOF, io.ErrClosedPipe, fmt.Errorf("source body: %w", io.ErrUnexpectedEOF), errors.New("source connection reset")} {
+		for _, separate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%v/separate=%v", failure, separate), func(t *testing.T) {
+				t.Parallel()
+				o := newPackStreamObserver(io.NopCloser(&sourceFailureReader{data: valid[:64], failure: failure, separate: separate}))
+				_, err := io.Copy(io.Discard, o)
+				if !errors.Is(err, failure) {
+					t.Fatalf("source error lost during upload: %v", err)
+				}
+				if err := o.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if !errors.Is(o.ScannerError(), failure) || o.interrupted.Load() {
+					t.Fatalf("source failure mislabeled: scanner=%v interrupted=%v", o.ScannerError(), o.interrupted.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestPackEOFMarginBandAndHardCeiling(t *testing.T) {
+	t.Parallel()
+	const budget = 1 << 20
+	for _, size := range []int{997232, budget, budget + 1} {
+		for _, separate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("size=%d/separate=%v", size, separate), func(t *testing.T) {
+				t.Parallel()
+				o := newPackStreamObserver(io.NopCloser(&finalBytesReader{data: bytes.Repeat([]byte("x"), size)}))
+				defer o.Close()
+				if separate {
+					// Final EOF after previously delivered bytes, with no scheduling race.
+					o.bytes.Store(int64(size))
+					o.tee = bytes.NewReader(nil)
+				}
+				o.SetAborter(func(n, objects, total int64, eof bool) bool { return shouldAbortPush(n, objects, total, budget, eof) })
+				_, err := o.Read(make([]byte, size))
+				if size <= budget {
+					if !errors.Is(err, io.EOF) || o.Aborted() {
+						t.Fatalf("complete pack inside ceiling rejected: %v", err)
+					}
+				} else if !errors.Is(err, ErrPackUploadAborted) {
+					t.Fatalf("hard ceiling bypassed: %v", err)
+				}
+			})
+		}
 	}
 }

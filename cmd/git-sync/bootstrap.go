@@ -73,6 +73,7 @@ func newBootstrapCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")
 	cmd.Flags().Int64Var(&req.Options.MaxPackBytes, "max-pack-bytes", 0, "abort bootstrap if the streamed source pack exceeds this many bytes")
 	cmd.Flags().Int64Var(&req.Options.TargetMaxPackBytes, "target-max-pack-bytes", 0, "target receive-pack body size limit; batches are planned and auto-subdivided to fit")
+	cmd.Flags().Int64Var(&req.Options.BootstrapFallbackMaxPackBytes, "bootstrap-fallback-max-pack-bytes", 0, "local byte ceiling for indivisible bootstrap checkpoints with no known server limit (0 disables fallback)")
 	cmd.Flags().IntVar(&req.Options.TargetMaxRefUpdates, "target-max-ref-updates", 0, "max ref-update commands per receive-pack request; 0 uses the default (env GITSYNC_MAX_REF_UPDATES_PER_PUSH or 5000). Raise for entire-server targets (up to 25000); lower for providers that reject large ref pushes")
 	cmd.Flags().StringVar(&req.Options.BootstrapStrategy, "bootstrap-strategy", "", "checkpoint chain ordering: \"first-parent\" (default) or \"topo\". Use \"topo\" for merge-heavy repos where individual first-parent steps drag in unboundedly large side branches; requires the target to allow non-fast-forward updates on the refs/gitsync/ namespace")
 	addProtocolFlag(cmd, &protocolVal)

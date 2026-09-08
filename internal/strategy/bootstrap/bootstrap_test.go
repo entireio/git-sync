@@ -691,7 +691,7 @@ func TestShouldAbortPush(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := shouldAbortPush(c.bytesSent, c.objectsSent, c.totalObjects, c.budget)
+			got := shouldAbortPush(c.bytesSent, c.objectsSent, c.totalObjects, c.budget, false)
 			if got != c.want {
 				t.Errorf("shouldAbortPush(%d, %d, %d, %d) = %v, want %v",
 					c.bytesSent, c.objectsSent, c.totalObjects, c.budget, got, c.want)
@@ -2859,7 +2859,7 @@ func TestNextBudgetProvenance(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := nextBudgetProvenance(tc.current, tc.parsedLimit, tc.err); got != tc.want {
+			if got := nextBudgetProvenance(tc.current, tc.parsedLimit, 4096, false, tc.err); got != tc.want {
 				t.Fatalf("nextBudgetProvenance(%t, %d, %v) = %t, want %t",
 					tc.current, tc.parsedLimit, tc.err, got, tc.want)
 			}
@@ -2911,5 +2911,255 @@ func TestExecuteBatchedPreFlightDoesNotResplitAnIndivisibleSpan(t *testing.T) {
 	// fetch count is what moves; pushes stay put either way.
 	if fetches != 9 {
 		t.Fatalf("expected 9 source fetches; an indivisible span was re-planned before pushing, got %d (pushes=%d)", fetches, pushes)
+	}
+}
+
+func TestExecuteBatchedConfiguredFallback(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                             string
+		fallback, announced, sourceLimit int64
+		wantAbort, wantPermanent         bool
+	}{
+		{name: "fits beyond batching budget", fallback: 8192},
+		{name: "exact ceiling fits without margin", fallback: 4108},
+		{name: "actual overflow remains retryable", fallback: 4107, wantAbort: true},
+		{name: "disabled preserves old behavior", wantAbort: true},
+		{name: "lower fallback is enforced", fallback: 32, wantAbort: true},
+		{name: "announced rejection remains permanent", fallback: 8192, announced: 128, wantAbort: true, wantPermanent: true},
+		{name: "announced limit takes precedence", fallback: 128, announced: 8192},
+		{name: "source ceiling remains enforced", fallback: 8192, sourceLimit: 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pushes := 0
+			p := bottomOutParams(t, 64, tc.announced, func(n int, pack io.ReadCloser) error {
+				pushes = n
+				return drainAbort(n, pack)
+			})
+			p.FallbackMaxPackBytes = tc.fallback
+			p.MaxPackBytes = tc.sourceLimit
+			_, err := Execute(context.Background(), p, "bootstrap-resume-marker")
+			if tc.sourceLimit > 0 {
+				if err == nil || errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+					t.Fatalf("source ceiling lost or classified as target rejection: %v", err)
+				}
+			} else if errors.Is(err, ErrPackUploadAborted) != tc.wantAbort || (err != nil) != tc.wantAbort {
+				t.Fatalf("error=%v; want abort=%v", err, tc.wantAbort)
+			}
+			if errors.Is(err, ErrCheckpointExceedsTargetLimit) != tc.wantPermanent {
+				t.Fatalf("wrong permanent classification: %v", err)
+			}
+			if pushes != 1 {
+				t.Fatalf("expected one attempt, got %d", pushes)
+			}
+		})
+	}
+}
+
+func TestExecuteBatchedObservedCutoffBlocksConfiguredFallback(t *testing.T) {
+	t.Parallel()
+	// An unannounced server cutoff must block fallback escalation on the next, indivisible span.
+	parents, desired := twoCommitFixture(t, 2)
+	body := append(makePackHeader(1), bytes.Repeat([]byte("x"), 4096)...)
+	pushes := 0
+
+	_, err := Execute(context.Background(), Params{
+		SourceService: fakeBootstrapSource{
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				return parents, nil
+			},
+			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(body)), nil
+			},
+		},
+		TargetPusher: fakeBootstrapPusher{
+			pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+				pushes++
+				switch pushes {
+				case 1:
+					// One-shot rejection enters batching without announcing a limit.
+					return errors.New("http 413: request body too large for target")
+				case 2:
+					// A divisible span: bytes flow, then an UNPARSEABLE
+					// body-limit cut. That is the only route that arms the
+					// guard — it ratchets the budget to the bytes observed.
+					if _, copyErr := io.Copy(io.Discard, pack); copyErr != nil {
+						return copyErr
+					}
+					return errors.New("request body too large for target")
+				default:
+					_, copyErr := io.Copy(io.Discard, pack)
+					return copyErr
+				}
+			},
+			pushCommands: func(_ context.Context, _ []gitproto.PushCommand) error { return nil },
+		},
+		FallbackMaxPackBytes: 1 << 20,
+		DesiredRefs:          desired,
+		TargetRefs:           map[plumbing.ReferenceName]plumbing.Hash{},
+		// No announced limit: the configured fallback must not override the observed cutoff.
+	}, "empty target")
+
+	if err == nil {
+		t.Fatal("guard violated: an indivisible push escalated past a measured server cutoff")
+	}
+	if errors.Is(err, ErrCheckpointExceedsTargetLimit) {
+		t.Fatalf("an abort against a measured cutoff is not the target's size verdict: %v", err)
+	}
+	if pushes != 3 {
+		t.Fatalf("expected one-shot 413, observed cutoff, one capped attempt (3 pushes), got %d", pushes)
+	}
+}
+
+func TestConfiguredFallbackIgnoresProjection(t *testing.T) {
+	t.Parallel()
+	p := bottomOutParams(t, 512<<10, 0, func(_ int, pack io.ReadCloser) error {
+		observer, ok := pack.(*packStreamObserver)
+		if !ok {
+			t.Fatalf("expected upload observer, got %T", pack)
+		}
+		// A front-loaded stream would project 8 GiB, but only 8 MiB have
+		// actually been read. The installed upload guard must allow it.
+		if observer.aborter(8<<20, 1, 1024, false) {
+			t.Fatal("fallback used projection")
+		}
+		if !observer.aborter((16<<20)+1, 1, 1024, false) {
+			t.Fatal("fallback ignored actual byte overflow")
+		}
+		return drainAbort(1, pack)
+	})
+	p.FallbackMaxPackBytes = 16 << 20
+	if _, err := Execute(context.Background(), p, "bootstrap-resume-marker"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestObservedCutoffBlocksFallbackRegardlessOfBudgetMovement(t *testing.T) {
+	t.Parallel()
+	const budget int64 = 128 << 10 // one initial checkpoint over two commits
+	for _, cutoff := range []int64{budget / 2, budget, budget * 2} {
+		t.Run(fmt.Sprintf("cutoff=%d", cutoff), func(t *testing.T) {
+			t.Parallel()
+			parents, desired := twoCommitFixture(t, 2)
+			fetches, pushes := 0, 0
+			p := Params{
+				TargetMaxPack: budget, FallbackMaxPackBytes: budget * 4,
+				DesiredRefs: desired, TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
+				SourceService: fakeBootstrapSource{
+					fetchCommitParents: func(context.Context, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+						return parents, nil
+					},
+					fetchPack: func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+						fetches++
+						if fetches == 1 {
+							// Model a target cut racing a source-read error: bytes have flowed,
+							// but no local projection/byte abort has established the verdict.
+							data := append(makePackHeader(1), bytes.Repeat([]byte("x"), int(cutoff)-12)...)
+							return io.NopCloser(&sourceFailureReader{data: data, failure: io.ErrUnexpectedEOF}), nil
+						}
+						return io.NopCloser(bytes.NewReader(append(makePackHeader(1), bytes.Repeat([]byte("x"), int(budget))...))), nil
+					},
+				},
+				TargetPusher: fakeBootstrapPusher{
+					pushPack: func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+						pushes++
+						if pushes == 1 {
+							buffer := make([]byte, int(cutoff)+12)
+							for {
+								_, err := pack.Read(buffer)
+								if err != nil {
+									if !errors.Is(err, io.ErrUnexpectedEOF) {
+										t.Fatalf("fixture aborted locally: %v", err)
+									}
+									break
+								}
+							}
+							return errors.New("http 413: request body too large")
+						}
+						_, err := io.Copy(io.Discard, pack)
+						return err
+					},
+					pushCommands: func(context.Context, []gitproto.PushCommand) error { return nil },
+				},
+			}
+			_, err := Execute(context.Background(), p, "bootstrap-resume-marker")
+			if !errors.Is(err, ErrPackUploadAborted) || errors.Is(err, ErrCheckpointExceedsTargetLimit) || pushes != 2 {
+				t.Fatalf("observed cutoff did not block fallback: pushes=%d error=%v", pushes, err)
+			}
+		})
+	}
+}
+
+func TestBudgetProvenanceIgnoresNonEvidence(t *testing.T) {
+	t.Parallel()
+	for _, current := range []bool{false, true} {
+		for _, tc := range []struct {
+			name         string
+			parsed, sent int64
+			aborted      bool
+			err          error
+		}{
+			{name: "local abort", sent: 4096, aborted: true, err: ErrPackUploadAborted},
+			{name: "local abort with size text", parsed: 8192, sent: 4096, aborted: true, err: errors.New("http 413")},
+			{name: "transport failure", sent: 4096, err: errors.New("connection reset")},
+			{name: "zero byte rejection", err: errors.New("http 413")},
+			{name: "deadline with size text", parsed: 8192, sent: 4096, err: errors.New("http 504 after http 413")},
+		} {
+			t.Run(fmt.Sprintf("%s/current=%v", tc.name, current), func(t *testing.T) {
+				t.Parallel()
+				if got := nextBudgetProvenance(current, tc.parsed, tc.sent, tc.aborted, tc.err); got != current {
+					t.Fatalf("non-evidence changed provenance: %v -> %v", current, got)
+				}
+			})
+		}
+	}
+}
+
+type failingClosePack struct {
+	io.Reader
+
+	err    error
+	closes int
+}
+
+func (p *failingClosePack) Close() error { p.closes++; return p.err }
+
+func TestCustomPusherCloseFailureDoesNotAdvanceCheckpoint(t *testing.T) {
+	t.Parallel()
+	closeFailure := errors.New("source cleanup failed")
+	pushFailure := errors.New("target rejected update")
+	for _, pushErr := range []error{nil, pushFailure} {
+		t.Run(fmt.Sprintf("pushError=%v", pushErr), func(t *testing.T) {
+			t.Parallel()
+			data, _ := buildSyntheticPack(t, 10)
+			src := &failingClosePack{Reader: bytes.NewReader(data), err: closeFailure}
+			p := bottomOutParams(t, 1<<20, 0, func(_ int, pack io.ReadCloser) error {
+				if _, err := io.Copy(io.Discard, pack); err != nil {
+					return err
+				}
+				// Deliberately leave closing to Execute, like a custom implementation.
+				return pushErr
+			})
+			source, ok := p.SourceService.(fakeBootstrapSource)
+			if !ok {
+				t.Fatal("expected fixture source")
+			}
+			source.fetchPack = func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+				return src, nil
+			}
+			p.SourceService = source
+			result, err := Execute(context.Background(), p, "bootstrap-resume-marker")
+			want := closeFailure
+			if pushErr != nil {
+				want = pushErr
+			}
+			if !errors.Is(err, want) || errors.Is(err, ErrCheckpointExceedsTargetLimit) || result.BatchCount != 0 || result.Pushed != 0 {
+				t.Fatalf("close failure advanced checkpoint or lost error: result=%+v error=%v", result, err)
+			}
+			if src.closes != 1 {
+				t.Fatalf("source closed %d times", src.closes)
+			}
+		})
 	}
 }
