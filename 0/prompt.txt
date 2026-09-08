@@ -1,0 +1,7 @@
+ok can you create trails?
+
+---
+
+can you address in this PR a review comment from the previous git-sync PR as well? THe comment is:
+
+>observer_failed is true on every cut upload (push_diagnostics.go:63). Any abort truncates the pack, and the scanner then records a parse error. I probed this against the local checkout — a valid pack read to 64 bytes and closed gives ScannerError = malformed pack file: unexpected EOF even though observation worked fine. Since the field only matters on failed pushes and is true on essentially all of them, it reads as instrumentation breakage when it isn't.
