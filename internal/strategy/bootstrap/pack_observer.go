@@ -58,8 +58,15 @@ type packStreamObserver struct {
 	done        chan struct{}
 	scannerErr  atomic.Pointer[error]
 
-	aborter aborterFunc
-	aborted atomic.Bool
+	aborter       aborterFunc
+	aborted       atomic.Bool
+	abortCounters atomic.Pointer[packCounters]
+}
+
+// Freeze the inputs to the abort decision; the scanner can finish another
+// object after Read returns, so its later counters are not that decision's inputs.
+type packCounters struct {
+	bytes, objects, total int64
 }
 
 // aborterFunc is consulted on every Read to decide whether the upload
@@ -116,7 +123,9 @@ func (o *packStreamObserver) Read(p []byte) (int, error) {
 		o.bytes.Add(int64(n))
 	}
 	if err == nil && o.aborter != nil {
-		if o.aborter(o.bytes.Load(), o.objectsSent.Load(), o.totalObjects.Load()) {
+		counters := packCounters{o.bytes.Load(), o.objectsSent.Load(), o.totalObjects.Load()}
+		if o.aborter(counters.bytes, counters.objects, counters.total) {
+			o.abortCounters.Store(&counters)
 			o.aborted.Store(true)
 			return n, ErrPackUploadAborted
 		}

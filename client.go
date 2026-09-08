@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"entire.io/entire/git-sync/internal/syncer"
@@ -14,17 +15,22 @@ import (
 type Options struct {
 	HTTPClient *http.Client
 	Auth       AuthProvider
+	// BootstrapLogger receives one structured diagnostic per checkpoint upload,
+	// including failures, independently of verbose protocol logging. Nil disables
+	// these diagnostics. Bytes read are not proof of bytes accepted by the target.
+	BootstrapLogger *slog.Logger
 }
 
 // Client provides the public orchestration API for git-sync.
 type Client struct {
-	httpClient *http.Client
-	auth       AuthProvider
+	httpClient      *http.Client
+	auth            AuthProvider
+	bootstrapLogger *slog.Logger
 }
 
 // New constructs a new Client.
 func New(opts Options) *Client {
-	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth}
+	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger}
 }
 
 // Probe inspects a source remote and optional target remote.
@@ -139,6 +145,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 	return syncer.Config{
 		Source:                 syncerEndpoint(req.Source, sourceAuth),
 		Target:                 syncerEndpoint(req.Target, targetAuth),
+		BootstrapLogger:        c.bootstrapLogger,
 		HTTPClient:             c.httpClient,
 		Branches:               append([]string(nil), req.Scope.Branches...),
 		Mappings:               validationMappings(req.Scope.Mappings),

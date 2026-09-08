@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +24,20 @@ import (
 func TestMain(m *testing.M) {
 	syncertest.IsolateGitConfig()
 	os.Exit(m.Run())
+}
+
+func TestBootstrapLoggerReachesSyncConfiguration(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	cfg, err := New(Options{BootstrapLogger: logger}).buildSyncConfig(context.Background(), SyncRequest{
+		Source: Endpoint{URL: "https://example.com/source.git"},
+		Target: Endpoint{URL: "https://example.com/target.git"},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BootstrapLogger != logger || cfg.Verbose {
+		t.Fatal("bootstrap diagnostics must propagate independently of verbose logging")
+	}
 }
 
 type errAuthProvider struct{}

@@ -56,6 +56,7 @@ type Params struct {
 	TargetMaxPack    int64
 	Verbose          bool
 	Logger           *slog.Logger
+	PushLogger       *slog.Logger
 	// Strategy selects the chain ordering for batched bootstrap. Empty
 	// or "first-parent" walks the first-parent backbone (default,
 	// matches historical behaviour). "topo" includes every reachable
@@ -730,6 +731,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			objectsSent := observer.ObjectsSent()
 			totalObjects := observer.TotalObjects()
 			abortedEarly := observer.Aborted()
+			p.logPush(ctx, batch, current, idx, observer, budget, atAnnounced, budgetFromObservation, pushErr)
 			if pushErr != nil {
 				_ = packReader.Close()
 				// A pack too big for the target is the unifying signal here,
