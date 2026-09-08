@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2039202K0FMZ6RS81ET0RV7",
+  "session_id": "01a07c34-fb79-79c1-925b-79c72dde41c7",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-08T08:48:42.830906Z",
+  "branch": "nodo/cor-1489-upload-diagnostics",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "CHANGELOG.md",
+    "client.go",
+    "client_test.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/pack_observer.go",
+    "internal/strategy/bootstrap/push_diagnostics.go",
+    "internal/strategy/bootstrap/push_diagnostics_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "9cf84c072596",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 805954,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 40649216,
+    "output_tokens": 120541,
+    "api_call_count": 341
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-08T08:48:42.59077Z",
+    "agent_lines": 170,
+    "agent_removed": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 170,
+    "total_lines_changed": 176,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

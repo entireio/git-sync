@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2039202K0FMZ6RS81ET0RV7",
+  "strategy": "manual-commit",
+  "branch": "nodo/cor-1489-upload-diagnostics",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "CHANGELOG.md",
+    "client.go",
+    "client_test.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/pack_observer.go",
+    "internal/strategy/bootstrap/push_diagnostics.go",
+    "internal/strategy/bootstrap/push_diagnostics_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 805954,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 40649216,
+    "output_tokens": 120541,
+    "api_call_count": 341
+  }
+}
