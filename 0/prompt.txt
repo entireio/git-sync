@@ -1,17 +1,1 @@
-can you fix it?
-
----
-
-can you address the findings?
-
----
-
-can you please squash the commits in one, remove the checkpoint id (only for this session), force push?
-
----
-
-yes but remove the checkpoint trailer
-
----
-
 ok just squash
