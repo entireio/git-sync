@@ -104,6 +104,14 @@ func validateEmptySourcePolicy(cfg Config) error {
 	if cfg.AllowEmptyScope && cfg.Mode != modeReplicate {
 		return fmt.Errorf("AllowEmptyScope applies to replicate only, got mode %q", cfg.Mode)
 	}
+	// Prune is the effect; AllRefs is what keeps the advertisement unnarrowed,
+	// which is the evidence emptyScopePrunes rests on.
+	if cfg.AllowEmptyScope && !cfg.Prune {
+		return errors.New("AllowEmptyScope requires Prune; without it an empty in-scope set has nothing to do")
+	}
+	if cfg.AllowEmptyScope && !cfg.AllRefs {
+		return errors.New("AllowEmptyScope requires AllRefs; a narrowed listing cannot tell an empty namespace from one it never asked about")
+	}
 	if !cfg.AllowEmptySource {
 		// The assertions are inputs to this policy alone. Set without it they
 		// are inert by design — the opt-in is what makes the outcome

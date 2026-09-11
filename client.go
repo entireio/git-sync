@@ -232,6 +232,13 @@ func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPoli
 	if policy.AllowEmptyScope && len(scope.IncludeRefPrefixes) == 0 {
 		return errors.New("AllowEmptyScope requires Scope.IncludeRefPrefixes; without a scope to be empty the policy has nothing to act on")
 	}
+	// The empty-scope rule reads "the source advertised refs" off a listing
+	// AllRefs keeps unnarrowed; under a narrower scope RefPrefixes asks for
+	// refs/heads/ alone, so a refs/tags/ include prefix would see an empty
+	// advertisement for a reason that has nothing to do with the namespace.
+	if policy.AllowEmptyScope && !scope.AllRefs {
+		return errors.New("AllowEmptyScope requires Scope.AllRefs; a narrowed listing cannot tell an empty namespace from one it never asked about")
+	}
 	if policy.AllowEmptySource && len(scope.IncludeRefPrefixes) > 0 {
 		return errors.New("AllowEmptySource and Scope.IncludeRefPrefixes are mutually exclusive; a prefix-scoped listing cannot establish that a repository is empty (use AllowEmptyScope)")
 	}

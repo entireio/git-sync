@@ -235,3 +235,42 @@ func TestIncludeRefPrefixesKeepScaffoldingPrunable(t *testing.T) {
 	sort.Strings(deleted)
 	assertNames(t, "deleted", deleted, []string{stale.String()})
 }
+
+// Two syncs with different scopes can share a target — a github-kind mirror
+// and a namespace-kind one on the same placement. A marker belongs to the
+// branch it checkpoints, and isLiveBootstrapMarker can only speak for THIS
+// run's desired set, so a scoped run that judged every marker on its own
+// reckoning would delete the other writer's live resume state and force a full
+// re-import of the repository it was halfway through.
+func TestIncludeRefPrefixesSpareOtherWritersMarkers(t *testing.T) {
+	t.Parallel()
+	cfg := PlanConfig{AllRefs: true, Prune: true, IncludeRefPrefixes: []string{nativePrefix}}
+	desired, managed, err := BuildDesiredRefs(scopedSourceRefs(), cfg)
+	if err != nil {
+		t.Fatalf("BuildDesiredRefs: %v", err)
+	}
+	// refs/heads/main is outside this run's scope, so its marker is another
+	// writer's business: absent branch, live marker, and none of it visible in
+	// this run's desired set.
+	foreign := BootstrapTempRef(plumbing.NewBranchReferenceName("main"))
+	mine := BootstrapTempRef(plumbing.ReferenceName(nativePrefix + "one"))
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		nativePrefix + "one": hash("1"),
+		mine:                 hash("2"),
+		foreign:              hash("3"),
+	}
+	plans, err := BuildReplicationPlans(desired, targetRefs, managed, cfg)
+	if err != nil {
+		t.Fatalf("BuildReplicationPlans: %v", err)
+	}
+	var deleted []string
+	for _, p := range plans {
+		if p.Action == ActionDelete {
+			deleted = append(deleted, p.TargetRef.String())
+		}
+	}
+	sort.Strings(deleted)
+	// mine is stale (its branch exists on the target) and still prunable;
+	// foreign is not this run's to judge at all.
+	assertNames(t, "deleted", deleted, []string{mine.String()})
+}

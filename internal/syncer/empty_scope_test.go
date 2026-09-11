@@ -134,8 +134,21 @@ func TestValidateEmptySourcePolicyScopeRules(t *testing.T) {
 		// Only replicate consults the policy; every other mode would carry it
 		// in, return the historical error, and keep the refs it was meant to
 		// prune — the silent-no-op class this whole family exists to prevent.
+		// Both of these leave the policy inert in a way that reads as success:
+		// without prune the empty in-scope set plans nothing and the run goes
+		// green over the refs it was meant to reap, and without AllRefs the
+		// advertisement emptyScopePrunes reads is itself narrowed, so "the
+		// source showed us refs" stops meaning what the rule needs it to mean.
+		"empty scope without prune": {
+			Config{Mode: modeReplicate, AllRefs: true, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
+			"requires Prune",
+		},
+		"empty scope without all refs": {
+			Config{Mode: modeReplicate, Prune: true, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
+			"requires AllRefs",
+		},
 		"empty scope outside replicate": {
-			Config{Mode: modeSync, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
+			Config{Mode: modeSync, AllRefs: true, Prune: true, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
 			"applies to replicate only",
 		},
 		"empty source with include prefixes": {
@@ -159,7 +172,7 @@ func TestValidateEmptySourcePolicyScopeRules(t *testing.T) {
 	// The combination each rule permits still validates, so neither rule
 	// widened into the configurations the policies exist for.
 	for name, cfg := range map[string]Config{
-		"scoped prune":   {Mode: modeReplicate, AllRefs: true, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
+		"scoped prune":   {Mode: modeReplicate, AllRefs: true, Prune: true, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
 		"unscoped empty": {Mode: modeReplicate, AllRefs: true, AllowEmptySource: true},
 	} {
 		if err := validateEmptySourcePolicy(cfg); err != nil {

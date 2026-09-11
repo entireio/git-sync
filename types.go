@@ -215,13 +215,18 @@ func (p SyncPolicy) Validate() error {
 	// read as the source withholding refs rather than as the caller's own
 	// protocol choice. ProtocolAuto is fine — it negotiates v2 wherever the
 	// server supports it.
+	if p.AllowEmptySource && p.Protocol == ProtocolV1 {
+		return errors.New("AllowEmptySource requires protocol v2 on the source; v1 cannot report an unborn HEAD, so emptiness can never be corroborated")
+	}
 	// Only replicate's empty-set branch consults the policy; elsewhere the run
 	// returns the historical error and keeps the refs the caller meant to prune.
 	if p.AllowEmptyScope && p.Mode != ModeReplicate {
 		return errors.New("AllowEmptyScope applies to replicate only; set Mode to ModeReplicate or use Replicate")
 	}
-	if p.AllowEmptySource && p.Protocol == ProtocolV1 {
-		return errors.New("AllowEmptySource requires protocol v2 on the source; v1 cannot report an unborn HEAD, so emptiness can never be corroborated")
+	// Without prune there is no effect to deliver: the run turns the historical
+	// error into a green zero-plan pass and leaves the refs it was set to reap.
+	if p.AllowEmptyScope && !p.Prune {
+		return errors.New("AllowEmptyScope requires Prune; without it an empty in-scope set has nothing to do")
 	}
 	return nil
 }

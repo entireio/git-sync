@@ -396,6 +396,7 @@ func TestValidateRejectsUnusableScopedEmptyPolicies(t *testing.T) {
 		Policy: SyncPolicy{Mode: ModeReplicate},
 	}
 	scoped := RefScope{AllRefs: true, IncludeRefPrefixes: []string{"refs/heads/entire/native/"}}
+	base.Policy.Prune = true
 
 	noPrefixes := base
 	noPrefixes.Scope = RefScope{AllRefs: true}
@@ -427,6 +428,21 @@ func TestValidateRejectsUnusableScopedEmptyPolicies(t *testing.T) {
 		if err := malformed.Validate(); err == nil {
 			t.Errorf("expected include ref prefix %q to be rejected", bad)
 		}
+	}
+
+	noPrune := base
+	noPrune.Scope = scoped
+	noPrune.Policy.AllowEmptyScope = true
+	noPrune.Policy.Prune = false
+	if err := noPrune.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope without Prune to be rejected")
+	}
+
+	narrowed := base
+	narrowed.Scope = RefScope{IncludeRefPrefixes: []string{"refs/heads/entire/native/"}}
+	narrowed.Policy.AllowEmptyScope = true
+	if err := narrowed.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope without Scope.AllRefs to be rejected")
 	}
 
 	ok := base
