@@ -143,27 +143,26 @@ func IsRefExcluded(name plumbing.ReferenceName, excludePrefixes, excludeExact []
 // It is the single predicate every discovery and prune site asks, here and in
 // the syncer, so push scope and prune scope cannot disagree.
 func InScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
-	return includedByPrefix(name, cfg) && !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+	if len(cfg.IncludeRefPrefixes) > 0 && !hasAnyPrefix(name, cfg.IncludeRefPrefixes) {
+		return false
+	}
+	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
 }
 
-// includedByPrefix reports whether the include half of the scope admits name.
-// No prefixes narrows nothing.
-func includedByPrefix(name plumbing.ReferenceName, cfg PlanConfig) bool {
-	return len(cfg.IncludeRefPrefixes) == 0 || hasAnyPrefix(name, cfg.IncludeRefPrefixes)
-}
-
-// InTargetScope is InScope for a TARGET ref, except that refs/gitsync/
-// scaffolding answers to exclusions alone — prune is its only cleaner — and a
-// bootstrap marker takes its include scope from the branch it checkpoints.
+// InTargetScope is InScope for a TARGET ref, except for git-sync's own
+// refs/gitsync/ scaffolding: a run manages exactly the bootstrap markers of the
+// branches it manages, and other scaffolding answers to the exclusions alone
+// because prune is its only cleaner.
 func InTargetScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 	if !isGitSyncScaffoldingRef(name) {
 		return InScope(name, cfg)
 	}
-	// A marker is the resume state of its branch, and isLiveBootstrapMarker
-	// can only speak for THIS run's desired set — so a run whose scope does not
-	// cover the branch would read another writer's live marker as abandoned.
-	if branch, ok := BootstrapTempRefTarget(name); ok && !includedByPrefix(branch, cfg) {
-		return false
+	// A marker is its branch's resume state, and isLiveBootstrapMarker can
+	// only speak for THIS run's desired set — so a run that judged a marker by
+	// its own name would read another writer's live marker as abandoned. A
+	// branch this run does not manage was never bootstrapped by it.
+	if branch, ok := BootstrapTempRefTarget(name); ok {
+		return InScope(branch, cfg)
 	}
 	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
 }

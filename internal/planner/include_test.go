@@ -274,3 +274,35 @@ func TestIncludeRefPrefixesSpareOtherWritersMarkers(t *testing.T) {
 	// foreign is not this run's to judge at all.
 	assertNames(t, "deleted", deleted, []string{mine.String()})
 }
+
+// The same cross-writer collision reached through exclusions rather than
+// includes. An unscoped run that carves the namespace out still manages every
+// marker by its own name — a marker name starts refs/gitsync/, so no
+// refs/heads/ exclusion touches it — and the branch it checkpoints is not in
+// this run's desired set, so the marker reads as abandoned and is pruned. The
+// invariant that closes both doors: a run manages exactly the bootstrap
+// markers of the branches it manages.
+func TestExcludedBranchMarkersAreAnotherWritersBusiness(t *testing.T) {
+	t.Parallel()
+	cfg := PlanConfig{AllRefs: true, Prune: true, ExcludeRefPrefixes: []string{nativePrefix}}
+	desired, managed, err := BuildDesiredRefs(scopedSourceRefs(), cfg)
+	if err != nil {
+		t.Fatalf("BuildDesiredRefs: %v", err)
+	}
+	// Live by the other writer's reckoning: its branch is absent on the target
+	// and, being excluded here, can never enter this run's desired set.
+	foreign := BootstrapTempRef(plumbing.ReferenceName(nativePrefix + "x"))
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		"refs/heads/main": hash("1"),
+		foreign:           hash("2"),
+	}
+	plans, err := BuildReplicationPlans(desired, targetRefs, managed, cfg)
+	if err != nil {
+		t.Fatalf("BuildReplicationPlans: %v", err)
+	}
+	for _, p := range plans {
+		if p.TargetRef == foreign {
+			t.Fatalf("planned %s on an excluded branch's marker: %s", p.Action, p.TargetRef)
+		}
+	}
+}
