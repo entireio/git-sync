@@ -88,7 +88,7 @@ func BuildDesiredRefs(
 		selected := SelectBranches(branches, cfg.Branches)
 		for branch, hash := range selected {
 			refName := plumbing.NewBranchReferenceName(branch)
-			if !inScope(refName, cfg) {
+			if !InScope(refName, cfg) {
 				continue
 			}
 			if err := addManaged(refName, refName, RefKindBranch, hash); err != nil {
@@ -120,7 +120,7 @@ func BuildDesiredRefs(
 			default:
 				continue
 			}
-			if !inScope(refName, cfg) {
+			if !InScope(refName, cfg) {
 				continue
 			}
 			if _, ok := desired[refName]; ok {
@@ -324,7 +324,7 @@ func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
 	if _, ok := s.mapped[targetRef]; ok {
 		return true
 	}
-	if !inScope(targetRef, s.cfg) {
+	if !InScope(targetRef, s.cfg) {
 		return false
 	}
 	// The auto-discovery half: what BuildDesiredRefs would push, regardless of
@@ -366,7 +366,7 @@ func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
 // other namespaces, which it neither pushes nor prunes.
 func PruneTarget(targetRef plumbing.ReferenceName, cfg PlanConfig) (ManagedTarget, bool) {
 	cfg = normalizeAllRefs(cfg)
-	if !inScope(targetRef, cfg) {
+	if !InScope(targetRef, cfg) {
 		return ManagedTarget{}, false
 	}
 	switch {

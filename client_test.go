@@ -411,6 +411,24 @@ func TestValidateRejectsUnusableScopedEmptyPolicies(t *testing.T) {
 		t.Error("expected AllowEmptySource with IncludeRefPrefixes to be rejected")
 	}
 
+	syncMode := base
+	syncMode.Scope = scoped
+	syncMode.Policy = SyncPolicy{Mode: ModeSync, AllowEmptyScope: true}
+	if err := syncMode.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope outside replicate to be rejected")
+	}
+
+	// A prefix no ref name can start with scopes the request to nothing, which
+	// under AllowEmptyScope and prune is a zero-plan success forever.
+	for _, bad := range []string{"", "  ", "heads/entire/"} {
+		malformed := base
+		malformed.Scope = RefScope{AllRefs: true, IncludeRefPrefixes: []string{bad}}
+		malformed.Policy.AllowEmptyScope = true
+		if err := malformed.Validate(); err == nil {
+			t.Errorf("expected include ref prefix %q to be rejected", bad)
+		}
+	}
+
 	ok := base
 	ok.Scope = scoped
 	ok.Policy.AllowEmptyScope = true

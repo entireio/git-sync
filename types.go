@@ -96,16 +96,14 @@ type RefScope struct {
 	Mappings           []RefMapping `json:"mappings"`
 	AllRefs            bool         `json:"allRefs,omitempty"`
 	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
-	// IncludeRefPrefixes narrows auto-discovery to the named namespaces:
-	// with any set, a ref outside all of them is neither pushed nor pruned.
-	// Exclusions still apply within them, so a caller can mirror
-	// refs/heads/entire/native/ while reserving one name inside it. Not
-	// applied to explicit Mappings, matching the exclusions.
+	// IncludeRefPrefixes narrows auto-discovery to the named namespaces: with
+	// any set, a ref outside all of them is neither pushed nor pruned.
+	// Exclusions still apply within them, and explicit Mappings are exempt
+	// from both. Every entry must start with refs/.
 	//
-	// It narrows the request's scope, not the source ref listing: ls-refs
-	// still asks for refs/ under AllRefs, so an in-scope set that comes back
-	// empty is distinguishable from a source that advertised nothing at all
-	// (see SyncPolicy.AllowEmptyScope).
+	// It narrows the request's scope, not the source ref listing: ls-refs still
+	// asks for refs/ under AllRefs, so an empty in-scope set stays
+	// distinguishable from a source that advertised nothing (AllowEmptyScope).
 	IncludeRefPrefixes []string `json:"includeRefPrefixes,omitempty"`
 	// ExcludeRefs subtracts exact ref names from auto-discovery: matched
 	// whole (not by prefix), so a caller can reserve a directory-anchor name
@@ -187,14 +185,12 @@ type SyncPolicy struct {
 
 	// AllowEmptyScope opts into treating an empty IN-SCOPE desired set as
 	// ordinary work rather than an error, so the target's in-scope refs prune.
-	// It says nothing about the repository as a whole: the source still has to
-	// advertise at least one ref, which is what separates "this namespace is
-	// empty" — the owner deleted its last branch there — from "this source
-	// showed us nothing", the unverifiable case AllowEmptySource covers.
+	// It says nothing about the repository as a whole: the source must still
+	// advertise at least one ref, which separates "this namespace is empty"
+	// from "this source showed us nothing", the case AllowEmptySource covers.
 	//
-	// Requires RefScope.IncludeRefPrefixes, and is mutually exclusive with
-	// AllowEmptySource: that policy needs an unscoped request, because only an
-	// unscoped listing can speak for the repository.
+	// Replicate only, requires RefScope.IncludeRefPrefixes, and mutually
+	// exclusive with AllowEmptySource, whose claim needs the unscoped listing.
 	AllowEmptyScope bool `json:"allowEmptyScope,omitempty"`
 }
 
@@ -219,6 +215,11 @@ func (p SyncPolicy) Validate() error {
 	// read as the source withholding refs rather than as the caller's own
 	// protocol choice. ProtocolAuto is fine — it negotiates v2 wherever the
 	// server supports it.
+	// Same reason: no other mode has an empty-set branch to reach, so the
+	// policy would be carried in and then discarded in silence.
+	if p.AllowEmptyScope && p.Mode != ModeReplicate {
+		return errors.New("AllowEmptyScope applies to replicate only; set Mode to ModeReplicate or use Replicate")
+	}
 	if p.AllowEmptySource && p.Protocol == ProtocolV1 {
 		return errors.New("AllowEmptySource requires protocol v2 on the source; v1 cannot report an unborn HEAD, so emptiness can never be corroborated")
 	}

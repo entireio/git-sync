@@ -103,9 +103,9 @@ func ShortHash(hash plumbing.Hash) string {
 }
 
 // hasAnyPrefix reports whether name starts with any of the prefixes. Blank
-// entries are skipped rather than matched: an empty string is a prefix of
-// every ref, so honoring one would silently widen an exclusion to everything
-// and narrow an inclusion to nothing.
+// entries are skipped rather than matched: an empty string prefixes every ref,
+// so honoring one would widen an exclusion to "exclude everything" and an
+// inclusion to "include everything".
 func hasAnyPrefix(name plumbing.ReferenceName, prefixes []string) bool {
 	s := name.String()
 	for _, p := range prefixes {
@@ -135,15 +135,14 @@ func IsRefExcluded(name plumbing.ReferenceName, excludePrefixes, excludeExact []
 	return false
 }
 
-// inScope reports whether an auto-discovered ref is this request's to act on:
-// inside IncludeRefPrefixes when any are set, and outside the exclusions. The
-// two compose in that order, so an exclusion still carves a hole inside an
-// included namespace. Explicit Mappings bypass both.
+// InScope reports whether an auto-discovered ref is this request's to act on:
+// inside IncludeRefPrefixes when any are set, and outside the exclusions, in
+// that order — so an exclusion still carves a hole inside an included
+// namespace. Explicit Mappings bypass both.
 //
-// This is the single predicate every discovery and prune site asks, so push
-// scope and prune scope cannot disagree: a ref the request would not push is a
-// ref it must not delete either.
-func inScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
+// It is the single predicate every discovery and prune site asks, here and in
+// the syncer, so push scope and prune scope cannot disagree.
+func InScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 	if len(cfg.IncludeRefPrefixes) > 0 && !hasAnyPrefix(name, cfg.IncludeRefPrefixes) {
 		return false
 	}

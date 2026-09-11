@@ -224,10 +224,11 @@ func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPoli
 	if policy.AllowEmptySource && !scope.AllRefs {
 		return errors.New("AllowEmptySource requires Scope.AllRefs; a narrowed scope cannot establish that a repository is empty")
 	}
-	// The same treatment for the scoped half of the family: both rules pair a
-	// policy with the scope, so neither fits on SyncPolicy.Validate, and both
-	// would otherwise be discarded in silence. The syncer repeats them at its
-	// own edge, which is what covers callers that bypass this one.
+	// The scoped members of the same family. The syncer repeats them at the
+	// edge that covers the callers which bypass this one.
+	if err := validation.ValidateIncludeRefPrefixes(scope.IncludeRefPrefixes); err != nil {
+		return fmt.Errorf("validate include ref prefixes: %w", err)
+	}
 	if policy.AllowEmptyScope && len(scope.IncludeRefPrefixes) == 0 {
 		return errors.New("AllowEmptyScope requires Scope.IncludeRefPrefixes; without a scope to be empty the policy has nothing to act on")
 	}

@@ -830,6 +830,9 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	default:
 		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
 	}
+	if err := validation.ValidateIncludeRefPrefixes(cfg.IncludeRefPrefixes); err != nil {
+		return nil, fmt.Errorf("validate include ref prefixes: %w", err)
+	}
 	if err := validateEmptySourcePolicy(cfg); err != nil {
 		return nil, err
 	}
@@ -1259,10 +1262,8 @@ func (s *syncSession) replicateBootstrapRoute(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	batchableSource bool,
 ) (bool, string) {
-	// An empty desired set has nothing to import, and desiredTargetRefsAbsent
-	// is vacuously true for it. Only emptyScopePrunes reaches here with one,
-	// and that run belongs on the replicate path, where prune reaps the refs
-	// the source's namespace no longer has.
+	// Nothing to import, and desiredTargetRefsAbsent is vacuously true for an
+	// empty set. Such a run belongs on the replicate path, where prune works.
 	if len(desiredRefs) == 0 {
 		return false, ""
 	}
@@ -1287,11 +1288,12 @@ func (s *syncSession) replicateBootstrapRoute(
 // same pass. The route's caller has already established that every desired
 // target ref is absent, so a matching marker is live by definition.
 //
-// Exclusions are honored so a caller that carved the namespace out of its
-// scope keeps the routing it asked for (the emptiness heuristic then skips
+// The request's scope is honored so a caller that carved the namespace out of
+// its own keeps the routing it asked for (the emptiness heuristic then skips
 // the marker for the same reason, and the bootstrap it selects still resumes
 // — the marker stays in the target ref map).
 func (s *syncSession) hasBootstrapResumeMarker(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+	cfg := planConfig(s.cfg)
 	for targetRef, hash := range s.target.refMap {
 		if hash.IsZero() {
 			continue
@@ -1303,7 +1305,7 @@ func (s *syncSession) hasBootstrapResumeMarker(desiredRefs map[plumbing.Referenc
 		if _, desired := desiredRefs[branch]; !desired {
 			continue
 		}
-		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		if !planner.InScope(targetRef, cfg) {
 			continue
 		}
 		return true
@@ -1328,6 +1330,7 @@ func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.Refere
 	if !s.cfg.Prune {
 		return true
 	}
+	cfg := planConfig(s.cfg)
 	for targetRef, hash := range s.target.refMap {
 		if hash.IsZero() {
 			continue
@@ -1335,7 +1338,7 @@ func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.Refere
 		if _, ok := desiredRefs[targetRef]; ok {
 			continue
 		}
-		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		if !planner.InScope(targetRef, cfg) {
 			continue
 		}
 		// AllRefs overrides per-namespace allowlists: under "all refs" a

@@ -203,3 +203,19 @@ func TestNormalizeMappingStillAcceptsLegitimateNames(t *testing.T) {
 		}
 	}
 }
+
+// An include prefix that no ref name can start with scopes a request to
+// nothing, and nothing is a legal scope: the run plans zero refs and succeeds,
+// so the typo never surfaces. Rejecting the shape is the only signal.
+func TestValidateIncludeRefPrefixes(t *testing.T) {
+	for _, ok := range [][]string{nil, {}, {"refs/"}, {"refs/heads/entire/native/"}, {" refs/tags/ "}} {
+		if err := ValidateIncludeRefPrefixes(ok); err != nil {
+			t.Errorf("ValidateIncludeRefPrefixes(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range [][]string{{""}, {"  "}, {"heads/entire/"}, {"refs/heads/", "entire/"}} {
+		if err := ValidateIncludeRefPrefixes(bad); err == nil {
+			t.Errorf("ValidateIncludeRefPrefixes(%q) = nil, want an error", bad)
+		}
+	}
+}

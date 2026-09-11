@@ -129,6 +129,13 @@ func TestValidateEmptySourcePolicyScopeRules(t *testing.T) {
 			Config{Mode: modeReplicate, AllowEmptyScope: true},
 			"AllowEmptyScope requires IncludeRefPrefixes",
 		},
+		// Only replicate consults the policy; every other mode would carry it
+		// in, return the historical error, and keep the refs it was meant to
+		// prune — the silent-no-op class this whole family exists to prevent.
+		"empty scope outside replicate": {
+			Config{Mode: modeSync, AllowEmptyScope: true, IncludeRefPrefixes: []string{nativePrefix}},
+			"applies to replicate only",
+		},
 		"empty source with include prefixes": {
 			Config{Mode: modeReplicate, AllRefs: true, AllowEmptySource: true, IncludeRefPrefixes: []string{nativePrefix}},
 			"mutually exclusive",
