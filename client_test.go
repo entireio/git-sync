@@ -386,6 +386,39 @@ func TestValidateRejectsUnusableAllowEmptySource(t *testing.T) {
 	}
 }
 
+// The scoped half of the same family. AllowEmptyScope without a scope to be
+// empty is inert, and AllowEmptySource over a prefix-scoped listing contradicts
+// its own requirement of an unscoped one — both silently, before this.
+func TestValidateRejectsUnusableScopedEmptyPolicies(t *testing.T) {
+	base := SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+		Policy: SyncPolicy{Mode: ModeReplicate},
+	}
+	scoped := RefScope{AllRefs: true, IncludeRefPrefixes: []string{"refs/heads/entire/native/"}}
+
+	noPrefixes := base
+	noPrefixes.Scope = RefScope{AllRefs: true}
+	noPrefixes.Policy.AllowEmptyScope = true
+	if err := noPrefixes.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope without IncludeRefPrefixes to be rejected")
+	}
+
+	both := base
+	both.Scope = scoped
+	both.Policy.AllowEmptySource = true
+	if err := both.Validate(); err == nil {
+		t.Error("expected AllowEmptySource with IncludeRefPrefixes to be rejected")
+	}
+
+	ok := base
+	ok.Scope = scoped
+	ok.Policy.AllowEmptyScope = true
+	if err := ok.Validate(); err != nil {
+		t.Errorf("a prefix-scoped replicate with AllowEmptyScope must validate, got %v", err)
+	}
+}
+
 // buildProbeConfig is the one request-edge builder the guard above does not
 // cover, because ProbeRequest carries flat fields rather than a RefScope. It
 // drops nothing today — ProbeRequest has no ExcludeRefs — but it is exactly

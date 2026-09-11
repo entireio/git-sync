@@ -33,6 +33,11 @@ type PlanConfig struct {
 	// children — so a caller can reserve refs/heads/entire while still
 	// mirroring refs/heads/entire/foo. Explicit Mappings are not subject to it.
 	ExcludeRefs []string
+	// IncludeRefPrefixes narrows auto-discovery to the named namespaces: with
+	// any set, a ref outside all of them is neither pulled, pushed, nor
+	// pruned. Exclusions apply within them. Explicit Mappings are not subject
+	// to it. Leave empty for the historical behavior, which narrows nothing.
+	IncludeRefPrefixes []string
 }
 
 // BuildDesiredRefs constructs the set of desired refs and managed targets from
@@ -83,7 +88,7 @@ func BuildDesiredRefs(
 		selected := SelectBranches(branches, cfg.Branches)
 		for branch, hash := range selected {
 			refName := plumbing.NewBranchReferenceName(branch)
-			if IsRefExcluded(refName, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs) {
+			if !inScope(refName, cfg) {
 				continue
 			}
 			if err := addManaged(refName, refName, RefKindBranch, hash); err != nil {
@@ -115,7 +120,7 @@ func BuildDesiredRefs(
 			default:
 				continue
 			}
-			if IsRefExcluded(refName, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs) {
+			if !inScope(refName, cfg) {
 				continue
 			}
 			if _, ok := desired[refName]; ok {
@@ -313,12 +318,13 @@ func NewTargetScope(cfg PlanConfig) (TargetScope, error) {
 // a mapping-scoped AllRefs request still mirrors refs/notes/* and tags even
 // though prune leaves them alone.
 func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
-	// Mapping targets are not subject to exclusions, matching the mapping pass
-	// in BuildDesiredRefs, which applies exclusions only to auto-discovery.
+	// Mapping targets are not subject to the scope filters, matching the
+	// mapping pass in BuildDesiredRefs, which applies them to auto-discovery
+	// only.
 	if _, ok := s.mapped[targetRef]; ok {
 		return true
 	}
-	if IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+	if !inScope(targetRef, s.cfg) {
 		return false
 	}
 	// The auto-discovery half: what BuildDesiredRefs would push, regardless of
@@ -360,7 +366,7 @@ func (s TargetScope) Manages(targetRef plumbing.ReferenceName) bool {
 // other namespaces, which it neither pushes nor prunes.
 func PruneTarget(targetRef plumbing.ReferenceName, cfg PlanConfig) (ManagedTarget, bool) {
 	cfg = normalizeAllRefs(cfg)
-	if IsRefExcluded(targetRef, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs) {
+	if !inScope(targetRef, cfg) {
 		return ManagedTarget{}, false
 	}
 	switch {

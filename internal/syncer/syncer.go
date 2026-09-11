@@ -77,6 +77,7 @@ type Config struct {
 	AllRefs                       bool
 	ExcludeRefPrefixes            []string
 	ExcludeRefs                   []string
+	IncludeRefPrefixes            []string
 	IncludeTags                   bool
 	DryRun                        bool
 	Verbose                       bool
@@ -120,6 +121,12 @@ type Config struct {
 	// existing caller changes behavior. See resolveEmptyDesiredSet for what
 	// "verified" requires and which outcome each case produces.
 	AllowEmptySource bool
+
+	// AllowEmptyScope opts into treating an empty IN-SCOPE desired set as
+	// ordinary work rather than an error, so the target's in-scope refs prune.
+	// Requires IncludeRefPrefixes and is mutually exclusive with
+	// AllowEmptySource. See emptyScopePrunes.
+	AllowEmptyScope bool
 
 	// progressOut overrides the writer used by the live progress ticker.
 	// Defaults to os.Stderr when nil. Exposed for tests.
@@ -676,6 +683,7 @@ func planConfig(cfg Config) planner.PlanConfig {
 		AllRefs:            cfg.AllRefs,
 		ExcludeRefPrefixes: cfg.ExcludeRefPrefixes,
 		ExcludeRefs:        cfg.ExcludeRefs,
+		IncludeRefPrefixes: cfg.IncludeRefPrefixes,
 		Force:              cfg.ForceAny(),
 		Prune:              cfg.Prune,
 	}
@@ -1128,7 +1136,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
-	if len(desiredRefs) == 0 {
+	if len(desiredRefs) == 0 && !s.emptyScopePrunes() {
 		return s.resolveEmptyDesiredSet()
 	}
 
@@ -1251,6 +1259,13 @@ func (s *syncSession) replicateBootstrapRoute(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	batchableSource bool,
 ) (bool, string) {
+	// An empty desired set has nothing to import, and desiredTargetRefsAbsent
+	// is vacuously true for it. Only emptyScopePrunes reaches here with one,
+	// and that run belongs on the replicate path, where prune reaps the refs
+	// the source's namespace no longer has.
+	if len(desiredRefs) == 0 {
+		return false, ""
+	}
 	if !s.desiredTargetRefsAbsent(desiredRefs) {
 		return false, ""
 	}

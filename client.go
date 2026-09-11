@@ -159,6 +159,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		AllRefs:                       req.Scope.AllRefs,
 		ExcludeRefPrefixes:            append([]string(nil), req.Scope.ExcludeRefPrefixes...),
 		ExcludeRefs:                   append([]string(nil), req.Scope.ExcludeRefs...),
+		IncludeRefPrefixes:            append([]string(nil), req.Scope.IncludeRefPrefixes...),
 		IncludeTags:                   req.Policy.IncludeTags,
 		DryRun:                        dryRun,
 		ShowStats:                     req.CollectStats,
@@ -168,6 +169,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		Prune:                         req.Policy.Prune,
 		BestEffort:                    req.Policy.BestEffort,
 		AllowEmptySource:              req.Policy.AllowEmptySource,
+		AllowEmptyScope:               req.Policy.AllowEmptyScope,
 		SourceAssertedEmpty:           req.Policy.SourceAssertedEmpty,
 		TargetAssertedEmpty:           req.Policy.TargetAssertedEmpty,
 		ProtocolMode:                  string(req.Policy.Protocol),
@@ -221,6 +223,16 @@ func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPoli
 	// hint that their policy had been discarded.
 	if policy.AllowEmptySource && !scope.AllRefs {
 		return errors.New("AllowEmptySource requires Scope.AllRefs; a narrowed scope cannot establish that a repository is empty")
+	}
+	// The same treatment for the scoped half of the family: both rules pair a
+	// policy with the scope, so neither fits on SyncPolicy.Validate, and both
+	// would otherwise be discarded in silence. The syncer repeats them at its
+	// own edge, which is what covers callers that bypass this one.
+	if policy.AllowEmptyScope && len(scope.IncludeRefPrefixes) == 0 {
+		return errors.New("AllowEmptyScope requires Scope.IncludeRefPrefixes; without a scope to be empty the policy has nothing to act on")
+	}
+	if policy.AllowEmptySource && len(scope.IncludeRefPrefixes) > 0 {
+		return errors.New("AllowEmptySource and Scope.IncludeRefPrefixes are mutually exclusive; a prefix-scoped listing cannot establish that a repository is empty (use AllowEmptyScope)")
 	}
 	return nil
 }

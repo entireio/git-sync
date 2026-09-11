@@ -96,6 +96,17 @@ type RefScope struct {
 	Mappings           []RefMapping `json:"mappings"`
 	AllRefs            bool         `json:"allRefs,omitempty"`
 	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
+	// IncludeRefPrefixes narrows auto-discovery to the named namespaces:
+	// with any set, a ref outside all of them is neither pushed nor pruned.
+	// Exclusions still apply within them, so a caller can mirror
+	// refs/heads/entire/native/ while reserving one name inside it. Not
+	// applied to explicit Mappings, matching the exclusions.
+	//
+	// It narrows the request's scope, not the source ref listing: ls-refs
+	// still asks for refs/ under AllRefs, so an in-scope set that comes back
+	// empty is distinguishable from a source that advertised nothing at all
+	// (see SyncPolicy.AllowEmptyScope).
+	IncludeRefPrefixes []string `json:"includeRefPrefixes,omitempty"`
 	// ExcludeRefs subtracts exact ref names from auto-discovery: matched
 	// whole (not by prefix), so a caller can reserve a directory-anchor name
 	// like refs/heads/entire without also excluding its children
@@ -173,6 +184,18 @@ type SyncPolicy struct {
 	// Off by default: leave it unset and an empty source errors exactly as it
 	// always has.
 	AllowEmptySource bool `json:"allowEmptySource,omitempty"`
+
+	// AllowEmptyScope opts into treating an empty IN-SCOPE desired set as
+	// ordinary work rather than an error, so the target's in-scope refs prune.
+	// It says nothing about the repository as a whole: the source still has to
+	// advertise at least one ref, which is what separates "this namespace is
+	// empty" — the owner deleted its last branch there — from "this source
+	// showed us nothing", the unverifiable case AllowEmptySource covers.
+	//
+	// Requires RefScope.IncludeRefPrefixes, and is mutually exclusive with
+	// AllowEmptySource: that policy needs an unscoped request, because only an
+	// unscoped listing can speak for the repository.
+	AllowEmptyScope bool `json:"allowEmptyScope,omitempty"`
 }
 
 // Validate enforces SyncPolicy invariants at the request edge.

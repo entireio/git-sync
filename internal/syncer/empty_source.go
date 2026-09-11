@@ -93,6 +93,12 @@ var (
 // Failing at the edge is the same treatment SyncPolicy.Validate already gives
 // mode-specific force flags.
 func validateEmptySourcePolicy(cfg Config) error {
+	// Without include prefixes there is no in-scope set to be empty, so the
+	// policy would sit there doing nothing while its owner believed a prune
+	// was enabled — the failure mode this function exists to prevent.
+	if cfg.AllowEmptyScope && len(cfg.IncludeRefPrefixes) == 0 {
+		return errors.New("AllowEmptyScope requires IncludeRefPrefixes; without a scope to be empty the policy has nothing to act on")
+	}
 	if !cfg.AllowEmptySource {
 		// The assertions are inputs to this policy alone. Set without it they
 		// are inert by design — the opt-in is what makes the outcome
@@ -101,6 +107,13 @@ func validateEmptySourcePolicy(cfg Config) error {
 	}
 	if cfg.Mode != modeReplicate {
 		return fmt.Errorf("AllowEmptySource applies to replicate only, got mode %q", cfg.Mode)
+	}
+	// The two policies read the same empty listing and disagree about what it
+	// means, so a request carrying both is asking for two answers at once.
+	// AllowEmptySource is a claim about the repository and needs the unscoped
+	// listing to back it; include prefixes narrow that listing away.
+	if len(cfg.IncludeRefPrefixes) > 0 {
+		return errors.New("AllowEmptySource and IncludeRefPrefixes are mutually exclusive; a prefix-scoped listing cannot establish that a repository is empty (use AllowEmptyScope)")
 	}
 	// Protocol v1 has no unborn-HEAD signal at all, so the corroboration this
 	// policy requires can never be satisfied over it: every run would fail,
@@ -120,6 +133,22 @@ func validateEmptySourcePolicy(cfg Config) error {
 		return errors.New("AllowEmptySource requires an unscoped request (AllRefs); a narrowed scope cannot establish that a repository is empty")
 	}
 	return nil
+}
+
+// emptyScopePrunes reports whether an empty desired set is ordinary work
+// rather than an error: the caller scoped the request to a prefix, opted into
+// the empty case, and the source advertised refs. Nothing in scope then means
+// the source's namespace is empty — the owner deleted its last ref there — and
+// the run proceeds so prune reaps the target's copies.
+//
+// The advertisement check is what keeps this narrow. An empty in-scope set on
+// a source that showed nothing at all is the unverifiable case: it is equally
+// consistent with a hidden or withheld listing, so it stays with
+// resolveEmptyDesiredSet and its errors. The listing is never narrowed to the
+// include prefixes (see planner.RefPrefixes), so this distinction is real
+// wire evidence rather than a restatement of the scope.
+func (s *syncSession) emptyScopePrunes() bool {
+	return s.cfg.AllowEmptyScope && len(s.cfg.IncludeRefPrefixes) > 0 && len(s.sourceRefMap) > 0
 }
 
 // resolveEmptyDesiredSet decides what an empty desired set means when planning
@@ -146,6 +175,16 @@ func validateEmptySourcePolicy(cfg Config) error {
 // foreign scaffolding as content. It clears on its own once the source repo's
 // own bootstrap resumes and creates real branches.
 func (s *syncSession) resolveEmptyDesiredSet() (Result, error) {
+	// An AllowEmptyScope request only reaches here when the source advertised
+	// nothing at all — emptyScopePrunes claims every other case. That is the
+	// unverifiable observation, indistinguishable from a withheld listing, and
+	// pruning the namespace on it would delete the target's refs on the
+	// strength of a silence. It is reported as such rather than as the
+	// historical message: the caller opted into a scoped prune, so it needs to
+	// tell "your namespace is empty" from "we were shown nothing".
+	if s.cfg.AllowEmptyScope {
+		return Result{}, fmt.Errorf("%w: the source advertised no refs at all, so an empty in-scope set cannot be acted on", ErrSourceEmptyUnverified)
+	}
 	if !s.cfg.AllowEmptySource || !s.cfg.AllRefs {
 		return Result{}, errors.New("no source refs matched")
 	}
