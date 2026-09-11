@@ -151,8 +151,8 @@ func InScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 
 // InTargetScope is InScope for a TARGET ref, except for git-sync's own
 // refs/gitsync/ scaffolding: a run manages exactly the bootstrap markers of the
-// branches it manages, and other scaffolding answers to the exclusions alone
-// because prune is its only cleaner.
+// branches it manages, minus any it excludes by name, and other scaffolding
+// answers to the exclusions alone because prune is its only cleaner.
 func InTargetScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 	if !isGitSyncScaffoldingRef(name) {
 		return InScope(name, cfg)
@@ -160,9 +160,12 @@ func InTargetScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 	// A marker is its branch's resume state, and isLiveBootstrapMarker can
 	// only speak for THIS run's desired set — so a run that judged a marker by
 	// its own name would read another writer's live marker as abandoned. A
-	// branch this run does not manage was never bootstrapped by it.
+	// branch this run does not manage was never bootstrapped by it. Ownership
+	// is the branch's to confer; an exclusion naming the marker is the
+	// caller's own carve-out, and a request cannot be made to write where it
+	// documented it would not.
 	if branch, ok := BootstrapTempRefTarget(name); ok {
-		return InScope(branch, cfg)
+		return InScope(branch, cfg) && !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
 	}
 	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
 }

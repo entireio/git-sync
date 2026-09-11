@@ -306,3 +306,49 @@ func TestExcludedBranchMarkersAreAnotherWritersBusiness(t *testing.T) {
 		}
 	}
 }
+
+// Ownership comes from the branch, but an exclusion naming the marker itself
+// is the caller's deliberate carve-out and wins: a request that documents
+// refs/gitsync/ as out of bounds must not schedule a write there, however
+// stale the marker looks and whoever owns the branch.
+func TestMarkerExclusionsBeatBranchOwnership(t *testing.T) {
+	t.Parallel()
+	branch := plumbing.ReferenceName(nativePrefix + "one")
+	marker := BootstrapTempRef(branch)
+	cases := map[string]PlanConfig{
+		"namespace excluded by prefix": {
+			AllRefs: true, Prune: true,
+			IncludeRefPrefixes: []string{nativePrefix},
+			ExcludeRefPrefixes: []string{gitsyncRefPrefix},
+		},
+		"marker excluded by exact name": {
+			AllRefs: true, Prune: true,
+			IncludeRefPrefixes: []string{nativePrefix},
+			ExcludeRefs:        []string{marker.String()},
+		},
+	}
+	for name, cfg := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			desired, managed, err := BuildDesiredRefs(scopedSourceRefs(), cfg)
+			if err != nil {
+				t.Fatalf("BuildDesiredRefs: %v", err)
+			}
+			// Stale on this run's own reckoning — its branch exists on the
+			// target — so only the exclusion can spare it.
+			targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+				branch: hash("1"),
+				marker: hash("2"),
+			}
+			plans, err := BuildReplicationPlans(desired, targetRefs, managed, cfg)
+			if err != nil {
+				t.Fatalf("BuildReplicationPlans: %v", err)
+			}
+			for _, p := range plans {
+				if p.TargetRef == marker {
+					t.Fatalf("planned %s on an excluded marker: %s", p.Action, p.TargetRef)
+				}
+			}
+		})
+	}
+}
