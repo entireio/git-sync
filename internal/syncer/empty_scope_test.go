@@ -200,3 +200,28 @@ func TestHasBootstrapResumeMarkerUnderIncludeScope(t *testing.T) {
 		t.Fatal("resume marker undetected under a prefix-scoped request; the bootstrap can never resume")
 	}
 }
+
+// Mappings bypass the include prefixes in discovery, so a mapped branch
+// outside them is still this run's to bootstrap — and its marker is still its
+// resume state. Asking the prefixes alone disowned it, which loses the ENT-2054
+// route on exactly the branch the caller named explicitly.
+func TestHasBootstrapResumeMarkerForMappedBranch(t *testing.T) {
+	t.Parallel()
+	branch := plumbing.NewBranchReferenceName("main")
+	marker := planner.BootstrapTempRef(branch)
+	s := emptySourceSession(
+		Config{
+			AllRefs:            true,
+			Prune:              true,
+			IncludeRefPrefixes: []string{nativePrefix},
+			Mappings:           []RefMapping{{Source: "refs/heads/main", Target: "refs/heads/main"}},
+		},
+		nil,
+		map[plumbing.ReferenceName]plumbing.Hash{marker: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		unbornSource(),
+	)
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{branch: {TargetRef: branch}}
+	if !s.hasBootstrapResumeMarker(desired) {
+		t.Fatal("resume marker for an explicitly mapped branch went undetected; its bootstrap can never resume")
+	}
+}

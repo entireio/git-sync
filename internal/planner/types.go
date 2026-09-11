@@ -165,9 +165,31 @@ func InTargetScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 	// caller's own carve-out, and a request cannot be made to write where it
 	// documented it would not.
 	if branch, ok := BootstrapTempRefTarget(name); ok {
-		return InScope(branch, cfg) && !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+		return managesBranch(branch, cfg) && !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
 	}
 	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+}
+
+// managesBranch reports whether this run is responsible for a branch: inside
+// its scope, or named outright by a mapping, which bypasses the scope filters
+// in discovery and so must bypass them here too.
+func managesBranch(branch plumbing.ReferenceName, cfg PlanConfig) bool {
+	if InScope(branch, cfg) {
+		return true
+	}
+	// Every entry point validates mappings before planning, so an error here
+	// means a caller that skipped that; "not ours" is the answer that touches
+	// nothing.
+	normalized, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs)
+	if err != nil {
+		return false
+	}
+	for _, nm := range normalized {
+		if nm.TargetRef == branch {
+			return true
+		}
+	}
+	return false
 }
 
 // RefKindFromName infers the ref kind from a fully qualified ref name.
