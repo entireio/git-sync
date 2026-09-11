@@ -149,6 +149,19 @@ func InScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
 	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
 }
 
+// InTargetScope is InScope for a ref that exists on the TARGET. It differs in
+// one place: git-sync's own refs/gitsync/ scaffolding stays in scope however
+// the request is narrowed, because prune is the only cleaner a stale bootstrap
+// marker has and an include prefix would otherwise strand markers on a scoped
+// mirror forever. Exclusions still reach it, so a caller can still carve the
+// namespace out deliberately.
+func InTargetScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
+	if isGitSyncScaffoldingRef(name) {
+		return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+	}
+	return InScope(name, cfg)
+}
+
 // RefKindFromName infers the ref kind from a fully qualified ref name.
 // Returns RefKindOther for any refs/* outside refs/heads/ and refs/tags/,
 // and "" for names that don't start with refs/ at all.

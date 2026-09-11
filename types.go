@@ -215,8 +215,8 @@ func (p SyncPolicy) Validate() error {
 	// read as the source withholding refs rather than as the caller's own
 	// protocol choice. ProtocolAuto is fine — it negotiates v2 wherever the
 	// server supports it.
-	// Same reason: no other mode has an empty-set branch to reach, so the
-	// policy would be carried in and then discarded in silence.
+	// Only replicate's empty-set branch consults the policy; elsewhere the run
+	// returns the historical error and keeps the refs the caller meant to prune.
 	if p.AllowEmptyScope && p.Mode != ModeReplicate {
 		return errors.New("AllowEmptyScope applies to replicate only; set Mode to ModeReplicate or use Replicate")
 	}

@@ -197,3 +197,41 @@ func TestTargetScopeIncludeRefPrefixes(t *testing.T) {
 		})
 	}
 }
+
+// git-sync's own refs/gitsync/ scaffolding stays in TARGET prune scope however
+// the request is narrowed. Prune is the only cleaner a stale bootstrap marker
+// has, so an include prefix that swept the namespace out of scope would strand
+// markers on a prefix-scoped mirror forever, pinning the objects they hold and
+// starving the ENT-2054 resume route. Source-side discovery skips the
+// namespace on its own, so nothing starts mirroring them either way.
+func TestIncludeRefPrefixesKeepScaffoldingPrunable(t *testing.T) {
+	t.Parallel()
+	cfg := PlanConfig{AllRefs: true, Prune: true, IncludeRefPrefixes: []string{nativePrefix}}
+	desired, managed, err := BuildDesiredRefs(scopedSourceRefs(), cfg)
+	if err != nil {
+		t.Fatalf("BuildDesiredRefs: %v", err)
+	}
+	// Stale: its branch already exists on the target, so the bootstrap that
+	// wrote it finished. Live: its branch is still absent, so the marker is
+	// the only record of how far that bootstrap got.
+	stale := BootstrapTempRef(plumbing.ReferenceName(nativePrefix + "one"))
+	live := BootstrapTempRef(plumbing.ReferenceName(nativePrefix + "anchor"))
+	targetRefs := map[plumbing.ReferenceName]plumbing.Hash{
+		nativePrefix + "one": hash("6"),
+		stale:                hash("7"),
+		live:                 hash("8"),
+		"refs/heads/main":    hash("9"),
+	}
+	plans, err := BuildReplicationPlans(desired, targetRefs, managed, cfg)
+	if err != nil {
+		t.Fatalf("BuildReplicationPlans: %v", err)
+	}
+	var deleted []string
+	for _, p := range plans {
+		if p.Action == ActionDelete {
+			deleted = append(deleted, p.TargetRef.String())
+		}
+	}
+	sort.Strings(deleted)
+	assertNames(t, "deleted", deleted, []string{stale.String()})
+}

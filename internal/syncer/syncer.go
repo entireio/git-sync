@@ -1305,7 +1305,7 @@ func (s *syncSession) hasBootstrapResumeMarker(desiredRefs map[plumbing.Referenc
 		if _, desired := desiredRefs[branch]; !desired {
 			continue
 		}
-		if !planner.InScope(targetRef, cfg) {
+		if !planner.InTargetScope(targetRef, cfg) {
 			continue
 		}
 		return true
@@ -1338,7 +1338,7 @@ func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.Refere
 		if _, ok := desiredRefs[targetRef]; ok {
 			continue
 		}
-		if !planner.InScope(targetRef, cfg) {
+		if !planner.InTargetScope(targetRef, cfg) {
 			continue
 		}
 		// AllRefs overrides per-namespace allowlists: under "all refs" a

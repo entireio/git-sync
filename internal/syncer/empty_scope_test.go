@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
+
+	"entire.io/entire/git-sync/internal/planner"
 )
 
 const nativePrefix = "refs/heads/entire/native/"
@@ -163,5 +165,25 @@ func TestValidateEmptySourcePolicyScopeRules(t *testing.T) {
 		if err := validateEmptySourcePolicy(cfg); err != nil {
 			t.Errorf("%s: unexpected validation error: %v", name, err)
 		}
+	}
+}
+
+// The resume route reads the target's markers, so it asks the target-side
+// scope question too: a marker swept out of scope by an include prefix is a
+// bootstrap that can never be resumed, on exactly the large repositories
+// batching exists for.
+func TestHasBootstrapResumeMarkerUnderIncludeScope(t *testing.T) {
+	t.Parallel()
+	branch := plumbing.ReferenceName(nativePrefix + "one")
+	marker := planner.BootstrapTempRef(branch)
+	s := emptySourceSession(
+		Config{AllRefs: true, Prune: true, IncludeRefPrefixes: []string{nativePrefix}},
+		nil,
+		map[plumbing.ReferenceName]plumbing.Hash{marker: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		unbornSource(),
+	)
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{branch: {TargetRef: branch}}
+	if !s.hasBootstrapResumeMarker(desired) {
+		t.Fatal("resume marker undetected under a prefix-scoped request; the bootstrap can never resume")
 	}
 }
