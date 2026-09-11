@@ -159,6 +159,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		AllRefs:                       req.Scope.AllRefs,
 		ExcludeRefPrefixes:            append([]string(nil), req.Scope.ExcludeRefPrefixes...),
 		ExcludeRefs:                   append([]string(nil), req.Scope.ExcludeRefs...),
+		IncludeRefPrefixes:            append([]string(nil), req.Scope.IncludeRefPrefixes...),
 		IncludeTags:                   req.Policy.IncludeTags,
 		DryRun:                        dryRun,
 		ShowStats:                     req.CollectStats,
@@ -168,6 +169,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		Prune:                         req.Policy.Prune,
 		BestEffort:                    req.Policy.BestEffort,
 		AllowEmptySource:              req.Policy.AllowEmptySource,
+		AllowEmptyScope:               req.Policy.AllowEmptyScope,
 		SourceAssertedEmpty:           req.Policy.SourceAssertedEmpty,
 		TargetAssertedEmpty:           req.Policy.TargetAssertedEmpty,
 		ProtocolMode:                  string(req.Policy.Protocol),
@@ -221,6 +223,24 @@ func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPoli
 	// hint that their policy had been discarded.
 	if policy.AllowEmptySource && !scope.AllRefs {
 		return errors.New("AllowEmptySource requires Scope.AllRefs; a narrowed scope cannot establish that a repository is empty")
+	}
+	// The scoped members of the same family. The syncer repeats them at the
+	// edge that covers the callers which bypass this one.
+	if err := validation.ValidateIncludeRefPrefixes(scope.IncludeRefPrefixes); err != nil {
+		return fmt.Errorf("validate include ref prefixes: %w", err)
+	}
+	if policy.AllowEmptyScope && len(scope.IncludeRefPrefixes) == 0 {
+		return errors.New("AllowEmptyScope requires Scope.IncludeRefPrefixes; without a scope to be empty the policy has nothing to act on")
+	}
+	// The empty-scope rule reads "the source advertised refs" off a listing
+	// AllRefs keeps unnarrowed; under a narrower scope RefPrefixes asks for
+	// refs/heads/ alone, so a refs/tags/ include prefix would see an empty
+	// advertisement for a reason that has nothing to do with the namespace.
+	if policy.AllowEmptyScope && !scope.AllRefs {
+		return errors.New("AllowEmptyScope requires Scope.AllRefs; a narrowed listing cannot tell an empty namespace from one it never asked about")
+	}
+	if policy.AllowEmptySource && len(scope.IncludeRefPrefixes) > 0 {
+		return errors.New("AllowEmptySource and Scope.IncludeRefPrefixes are mutually exclusive; a prefix-scoped listing cannot establish that a repository is empty (use AllowEmptyScope)")
 	}
 	return nil
 }

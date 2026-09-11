@@ -386,6 +386,73 @@ func TestValidateRejectsUnusableAllowEmptySource(t *testing.T) {
 	}
 }
 
+// The scoped half of the same family. AllowEmptyScope without a scope to be
+// empty is inert, and AllowEmptySource over a prefix-scoped listing contradicts
+// its own requirement of an unscoped one — both silently, before this.
+func TestValidateRejectsUnusableScopedEmptyPolicies(t *testing.T) {
+	base := SyncRequest{
+		Source: Endpoint{URL: "https://source.example/repo.git"},
+		Target: Endpoint{URL: "https://target.example/repo.git"},
+		Policy: SyncPolicy{Mode: ModeReplicate},
+	}
+	scoped := RefScope{AllRefs: true, IncludeRefPrefixes: []string{"refs/heads/entire/native/"}}
+	base.Policy.Prune = true
+
+	noPrefixes := base
+	noPrefixes.Scope = RefScope{AllRefs: true}
+	noPrefixes.Policy.AllowEmptyScope = true
+	if err := noPrefixes.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope without IncludeRefPrefixes to be rejected")
+	}
+
+	both := base
+	both.Scope = scoped
+	both.Policy.AllowEmptySource = true
+	if err := both.Validate(); err == nil {
+		t.Error("expected AllowEmptySource with IncludeRefPrefixes to be rejected")
+	}
+
+	syncMode := base
+	syncMode.Scope = scoped
+	syncMode.Policy = SyncPolicy{Mode: ModeSync, AllowEmptyScope: true}
+	if err := syncMode.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope outside replicate to be rejected")
+	}
+
+	// A prefix no ref name can start with scopes the request to nothing, which
+	// under AllowEmptyScope and prune is a zero-plan success forever.
+	for _, bad := range []string{"", "  ", "heads/entire/"} {
+		malformed := base
+		malformed.Scope = RefScope{AllRefs: true, IncludeRefPrefixes: []string{bad}}
+		malformed.Policy.AllowEmptyScope = true
+		if err := malformed.Validate(); err == nil {
+			t.Errorf("expected include ref prefix %q to be rejected", bad)
+		}
+	}
+
+	noPrune := base
+	noPrune.Scope = scoped
+	noPrune.Policy.AllowEmptyScope = true
+	noPrune.Policy.Prune = false
+	if err := noPrune.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope without Prune to be rejected")
+	}
+
+	narrowed := base
+	narrowed.Scope = RefScope{IncludeRefPrefixes: []string{"refs/heads/entire/native/"}}
+	narrowed.Policy.AllowEmptyScope = true
+	if err := narrowed.Validate(); err == nil {
+		t.Error("expected AllowEmptyScope without Scope.AllRefs to be rejected")
+	}
+
+	ok := base
+	ok.Scope = scoped
+	ok.Policy.AllowEmptyScope = true
+	if err := ok.Validate(); err != nil {
+		t.Errorf("a prefix-scoped replicate with AllowEmptyScope must validate, got %v", err)
+	}
+}
+
 // buildProbeConfig is the one request-edge builder the guard above does not
 // cover, because ProbeRequest carries flat fields rather than a RefScope. It
 // drops nothing today — ProbeRequest has no ExcludeRefs — but it is exactly

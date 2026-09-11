@@ -9,6 +9,19 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
+// ValidateIncludeRefPrefixes rejects an include prefix no ref name can match.
+// Blank, or outside refs/ ("heads/entire/"), silently yields an empty scope —
+// under a prune policy a zero-plan success repeating forever, a typo shaped
+// exactly like a healthy no-op.
+func ValidateIncludeRefPrefixes(prefixes []string) error {
+	for _, p := range prefixes {
+		if p = strings.TrimSpace(p); !strings.HasPrefix(p, "refs/") {
+			return fmt.Errorf("include ref prefix %q must start with refs/", p)
+		}
+	}
+	return nil
+}
+
 const (
 	ProtocolAuto = "auto"
 	ProtocolV1   = "v1"

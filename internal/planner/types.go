@@ -102,28 +102,90 @@ func ShortHash(hash plumbing.Hash) string {
 	return s
 }
 
+// hasAnyPrefix reports whether name starts with any of the prefixes. Blank
+// entries are skipped rather than matched: an empty string prefixes every ref,
+// so honoring one would widen an exclusion to "exclude everything" and an
+// inclusion to "include everything".
+func hasAnyPrefix(name plumbing.ReferenceName, prefixes []string) bool {
+	s := name.String()
+	for _, p := range prefixes {
+		if p = strings.TrimSpace(p); p != "" && strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsRefExcluded reports whether name matches any of the exclude prefixes.
 // Empty prefixes are ignored. Used to subtract specific namespaces from
 // auto-discovery (e.g. refs/pull/* under --all-refs against GitHub).
 func IsRefExcluded(name plumbing.ReferenceName, excludePrefixes, excludeExact []string) bool {
-	if len(excludePrefixes) == 0 && len(excludeExact) == 0 {
-		return false
-	}
-	s := name.String()
-	for _, p := range excludePrefixes {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if strings.HasPrefix(s, p) {
-			return true
-		}
+	if hasAnyPrefix(name, excludePrefixes) {
+		return true
 	}
 	// Exact names match the whole ref, so a caller can reserve
 	// refs/heads/entire without also excluding refs/heads/entire/foo — which
 	// a prefix cannot express (it would also catch refs/heads/entirely).
+	s := name.String()
 	for _, e := range excludeExact {
 		if e = strings.TrimSpace(e); e != "" && s == e {
+			return true
+		}
+	}
+	return false
+}
+
+// InScope reports whether an auto-discovered ref is this request's to act on:
+// inside IncludeRefPrefixes when any are set, and outside the exclusions, in
+// that order — so an exclusion still carves a hole inside an included
+// namespace. Explicit Mappings bypass both.
+//
+// It is the single predicate every discovery and prune site asks, here and in
+// the syncer, so push scope and prune scope cannot disagree.
+func InScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
+	if len(cfg.IncludeRefPrefixes) > 0 && !hasAnyPrefix(name, cfg.IncludeRefPrefixes) {
+		return false
+	}
+	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+}
+
+// InTargetScope is InScope for a TARGET ref, except for git-sync's own
+// refs/gitsync/ scaffolding: a run manages exactly the bootstrap markers of the
+// branches it manages, minus any it excludes by name, and other scaffolding
+// answers to the exclusions alone because prune is its only cleaner.
+func InTargetScope(name plumbing.ReferenceName, cfg PlanConfig) bool {
+	if !isGitSyncScaffoldingRef(name) {
+		return InScope(name, cfg)
+	}
+	// A marker is its branch's resume state, and isLiveBootstrapMarker can
+	// only speak for THIS run's desired set — so a run that judged a marker by
+	// its own name would read another writer's live marker as abandoned. A
+	// branch this run does not manage was never bootstrapped by it. Ownership
+	// is the branch's to confer; an exclusion naming the marker is the
+	// caller's own carve-out, and a request cannot be made to write where it
+	// documented it would not.
+	if branch, ok := BootstrapTempRefTarget(name); ok {
+		return managesBranch(branch, cfg) && !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+	}
+	return !IsRefExcluded(name, cfg.ExcludeRefPrefixes, cfg.ExcludeRefs)
+}
+
+// managesBranch reports whether this run is responsible for a branch: inside
+// its scope, or named outright by a mapping, which bypasses the scope filters
+// in discovery and so must bypass them here too.
+func managesBranch(branch plumbing.ReferenceName, cfg PlanConfig) bool {
+	if InScope(branch, cfg) {
+		return true
+	}
+	// Every entry point validates mappings before planning, so an error here
+	// means a caller that skipped that; "not ours" is the answer that touches
+	// nothing.
+	normalized, err := validation.ValidateMappings(cfg.Mappings, cfg.AllRefs)
+	if err != nil {
+		return false
+	}
+	for _, nm := range normalized {
+		if nm.TargetRef == branch {
 			return true
 		}
 	}

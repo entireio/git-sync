@@ -77,6 +77,7 @@ type Config struct {
 	AllRefs                       bool
 	ExcludeRefPrefixes            []string
 	ExcludeRefs                   []string
+	IncludeRefPrefixes            []string
 	IncludeTags                   bool
 	DryRun                        bool
 	Verbose                       bool
@@ -120,6 +121,12 @@ type Config struct {
 	// existing caller changes behavior. See resolveEmptyDesiredSet for what
 	// "verified" requires and which outcome each case produces.
 	AllowEmptySource bool
+
+	// AllowEmptyScope opts into treating an empty IN-SCOPE desired set as
+	// ordinary work rather than an error, so the target's in-scope refs prune.
+	// Requires IncludeRefPrefixes and is mutually exclusive with
+	// AllowEmptySource. See emptyScopePrunes.
+	AllowEmptyScope bool
 
 	// progressOut overrides the writer used by the live progress ticker.
 	// Defaults to os.Stderr when nil. Exposed for tests.
@@ -676,6 +683,7 @@ func planConfig(cfg Config) planner.PlanConfig {
 		AllRefs:            cfg.AllRefs,
 		ExcludeRefPrefixes: cfg.ExcludeRefPrefixes,
 		ExcludeRefs:        cfg.ExcludeRefs,
+		IncludeRefPrefixes: cfg.IncludeRefPrefixes,
 		Force:              cfg.ForceAny(),
 		Prune:              cfg.Prune,
 	}
@@ -821,6 +829,9 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	case modeReplicate:
 	default:
 		return nil, fmt.Errorf("unsupported operation mode %q", cfg.Mode)
+	}
+	if err := validation.ValidateIncludeRefPrefixes(cfg.IncludeRefPrefixes); err != nil {
+		return nil, fmt.Errorf("validate include ref prefixes: %w", err)
 	}
 	if err := validateEmptySourcePolicy(cfg); err != nil {
 		return nil, err
@@ -1128,7 +1139,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
-	if len(desiredRefs) == 0 {
+	if len(desiredRefs) == 0 && !s.emptyScopePrunes() {
 		return s.resolveEmptyDesiredSet()
 	}
 
@@ -1251,6 +1262,11 @@ func (s *syncSession) replicateBootstrapRoute(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	batchableSource bool,
 ) (bool, string) {
+	// Nothing to import, and desiredTargetRefsAbsent is vacuously true for an
+	// empty set. Such a run belongs on the replicate path, where prune works.
+	if len(desiredRefs) == 0 {
+		return false, ""
+	}
 	if !s.desiredTargetRefsAbsent(desiredRefs) {
 		return false, ""
 	}
@@ -1272,11 +1288,12 @@ func (s *syncSession) replicateBootstrapRoute(
 // same pass. The route's caller has already established that every desired
 // target ref is absent, so a matching marker is live by definition.
 //
-// Exclusions are honored so a caller that carved the namespace out of its
-// scope keeps the routing it asked for (the emptiness heuristic then skips
+// The request's scope is honored so a caller that carved the namespace out of
+// its own keeps the routing it asked for (the emptiness heuristic then skips
 // the marker for the same reason, and the bootstrap it selects still resumes
 // — the marker stays in the target ref map).
 func (s *syncSession) hasBootstrapResumeMarker(desiredRefs map[plumbing.ReferenceName]planner.DesiredRef) bool {
+	cfg := planConfig(s.cfg)
 	for targetRef, hash := range s.target.refMap {
 		if hash.IsZero() {
 			continue
@@ -1288,7 +1305,7 @@ func (s *syncSession) hasBootstrapResumeMarker(desiredRefs map[plumbing.Referenc
 		if _, desired := desiredRefs[branch]; !desired {
 			continue
 		}
-		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		if !planner.InTargetScope(targetRef, cfg) {
 			continue
 		}
 		return true
@@ -1313,6 +1330,7 @@ func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.Refere
 	if !s.cfg.Prune {
 		return true
 	}
+	cfg := planConfig(s.cfg)
 	for targetRef, hash := range s.target.refMap {
 		if hash.IsZero() {
 			continue
@@ -1320,7 +1338,7 @@ func (s *syncSession) pruneDeletesNothingInScope(desiredRefs map[plumbing.Refere
 		if _, ok := desiredRefs[targetRef]; ok {
 			continue
 		}
-		if planner.IsRefExcluded(targetRef, s.cfg.ExcludeRefPrefixes, s.cfg.ExcludeRefs) {
+		if !planner.InTargetScope(targetRef, cfg) {
 			continue
 		}
 		// AllRefs overrides per-namespace allowlists: under "all refs" a

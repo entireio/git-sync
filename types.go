@@ -96,6 +96,15 @@ type RefScope struct {
 	Mappings           []RefMapping `json:"mappings"`
 	AllRefs            bool         `json:"allRefs,omitempty"`
 	ExcludeRefPrefixes []string     `json:"excludeRefPrefixes,omitempty"`
+	// IncludeRefPrefixes narrows auto-discovery to the named namespaces: with
+	// any set, a ref outside all of them is neither pushed nor pruned.
+	// Exclusions still apply within them, and explicit Mappings are exempt
+	// from both. Every entry must start with refs/.
+	//
+	// It narrows the request's scope, not the source ref listing: ls-refs still
+	// asks for refs/ under AllRefs, so an empty in-scope set stays
+	// distinguishable from a source that advertised nothing (AllowEmptyScope).
+	IncludeRefPrefixes []string `json:"includeRefPrefixes,omitempty"`
 	// ExcludeRefs subtracts exact ref names from auto-discovery: matched
 	// whole (not by prefix), so a caller can reserve a directory-anchor name
 	// like refs/heads/entire without also excluding its children
@@ -173,6 +182,16 @@ type SyncPolicy struct {
 	// Off by default: leave it unset and an empty source errors exactly as it
 	// always has.
 	AllowEmptySource bool `json:"allowEmptySource,omitempty"`
+
+	// AllowEmptyScope opts into treating an empty IN-SCOPE desired set as
+	// ordinary work rather than an error, so the target's in-scope refs prune.
+	// It says nothing about the repository as a whole: the source must still
+	// advertise at least one ref, which separates "this namespace is empty"
+	// from "this source showed us nothing", the case AllowEmptySource covers.
+	//
+	// Replicate only, requires RefScope.IncludeRefPrefixes, and mutually
+	// exclusive with AllowEmptySource, whose claim needs the unscoped listing.
+	AllowEmptyScope bool `json:"allowEmptyScope,omitempty"`
 }
 
 // Validate enforces SyncPolicy invariants at the request edge.
@@ -198,6 +217,16 @@ func (p SyncPolicy) Validate() error {
 	// server supports it.
 	if p.AllowEmptySource && p.Protocol == ProtocolV1 {
 		return errors.New("AllowEmptySource requires protocol v2 on the source; v1 cannot report an unborn HEAD, so emptiness can never be corroborated")
+	}
+	// Only replicate's empty-set branch consults the policy; elsewhere the run
+	// returns the historical error and keeps the refs the caller meant to prune.
+	if p.AllowEmptyScope && p.Mode != ModeReplicate {
+		return errors.New("AllowEmptyScope applies to replicate only; set Mode to ModeReplicate or use Replicate")
+	}
+	// Without prune there is no effect to deliver: the run turns the historical
+	// error into a green zero-plan pass and leaves the refs it was set to reap.
+	if p.AllowEmptyScope && !p.Prune {
+		return errors.New("AllowEmptyScope requires Prune; without it an empty in-scope set has nothing to do")
 	}
 	return nil
 }
