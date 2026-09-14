@@ -1,0 +1,23 @@
+moar-validation
+
+---
+
+Sketch a fix for: credentialInput (internal/auth/auth.go:165-189) formats URL components into the git-credential protocol stream with no newline check — and url.Parse percent-decodes %0A into both Path and userinfo
+
+---
+
+go ahead. Make sure that the fix aligns with the upstream implementation (~/git/go-git/git).
+
+Does Windows and MacOS additional checks need to be applied here (e.g. as per git config protectHFS and protectNTFS)
+
+---
+
+commit changes
+
+---
+
+rephrase, focusing in security/validation hardening language
+
+---
+
+go ahead

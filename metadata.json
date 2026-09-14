@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.7-nightly.202609110625.5f09e04de.0.20260911233110-174dca012af8",
+  "checkpoint_id": "01M2G3HRDWNNNBT39KS0YFXG42",
+  "strategy": "manual-commit",
+  "branch": "moar-validation",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "CHANGELOG.md",
+    "internal/auth/auth.go",
+    "internal/auth/auth_test.go",
+    "internal/syncer/syncer.go",
+    "internal/syncer/syncer_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 148,
+    "cache_creation_tokens": 134800,
+    "cache_read_tokens": 7097939,
+    "output_tokens": 41622,
+    "api_call_count": 74
+  }
+}
