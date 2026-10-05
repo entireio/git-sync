@@ -1906,7 +1906,7 @@ func TestGuardRedirectsPostBehavior(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var finalHit bool
-			final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				finalHit = true
 				w.WriteHeader(http.StatusOK)
 			}))
