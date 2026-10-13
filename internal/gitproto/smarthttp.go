@@ -37,24 +37,21 @@ var diagnosticHeaders = []string{
 	"Content-Type",
 }
 
-// httpError checks an HTTP response status and returns an error for non-2xx responses.
-func httpError(res *http.Response) error {
+// httpError checks an HTTP response status and returns an error for non-2xx
+// responses.
+//
+// The --follow-info-refs-redirect hint is shown only when redirectGuardBlocked
+// is set — i.e. only for the 3xx that this connection's own POST-redirect
+// guard produced (see guardRedirects). A 3xx can reach here some other way,
+// e.g. a caller-supplied CheckRedirect refusing the /info/refs GET for its
+// own reasons; the flag wouldn't change that outcome, so it gets the ordinary
+// non-2xx handling below instead, diagnostic headers and all.
+func (c *HTTPConn) httpError(res *http.Response) error {
 	if res.StatusCode >= http.StatusOK && res.StatusCode < http.StatusMultipleChoices {
 		return nil
 	}
-	// A 3xx here is typically guardRedirects refusing to follow a POST
-	// redirect with FollowInfoRefsRedirect unset (http.ErrUseLastResponse),
-	// since Go's http.Client otherwise follows every redirect itself before
-	// returning. Location
-	// names where the server tried to send the request, and the flag hint
-	// turns "why did my push get a 307" into an actionable answer instead
-	// of a bare status code.
-	if res.StatusCode < http.StatusBadRequest {
-		if location := res.Header.Get("Location"); location != "" {
-			return fmt.Errorf("http %d: server redirected to %s — use --source-follow-info-refs-redirect or --target-follow-info-refs-redirect to follow POST redirects",
-				res.StatusCode, location)
-		}
-	}
+	guardBlocked := c.redirectGuardBlocked
+	c.redirectGuardBlocked = false
 	var reason string
 	if res.Body != nil {
 		limited := io.LimitReader(res.Body, maxHTTPErrorBody+1)
@@ -78,6 +75,26 @@ func httpError(res *http.Response) error {
 	// leaving a token in the username position (https://<token>@host/...) in
 	// the clear — the form GitHub App and PAT URLs normally take.
 	loc := redact.Endpoint(res.Request.URL)
+	if guardBlocked {
+		if location := res.Header.Get("Location"); location != "" {
+			// Location is server-controlled and, like the body and
+			// diagnostic headers above, can carry control characters or
+			// embed credentials (https://user:token@host/...), so it gets
+			// the same redaction rather than going into the error as-is.
+			// It's resolved against the request URL first since a server
+			// may send a relative Location.
+			locHint := sanitize.Text(location)
+			if target, err := res.Request.URL.Parse(location); err == nil {
+				locHint = redact.Endpoint(target)
+			}
+			hint := fmt.Sprintf("server redirected to %s — use --source-follow-info-refs-redirect or --target-follow-info-refs-redirect to follow a POST redirect to a different host",
+				locHint)
+			if len(diag) > 0 {
+				return fmt.Errorf("http %d: %s [%s] %s", res.StatusCode, loc, strings.Join(diag, ", "), hint)
+			}
+			return fmt.Errorf("http %d: %s %s", res.StatusCode, loc, hint)
+		}
+	}
 	if len(diag) > 0 {
 		return fmt.Errorf("http %d: %s [%s] %s", res.StatusCode, loc, strings.Join(diag, ", "), reason)
 	}
@@ -255,13 +272,17 @@ type HTTPConn struct {
 	//     PostRPC* redirects are gated — see below), but the endpoint is
 	//     never adopted for later calls.
 	//   - POST (/git-upload-pack, /git-receive-pack): when false (the
-	//     default), a POST redirect is refused — guardRedirects returns
-	//     the 3xx to the caller instead of following it, matching vanilla
-	//     git's http.followRedirects=initial, which only auto-follows the
-	//     GET. When true, POST redirects are followed like GET ones.
+	//     default), a POST redirect is refused unless it lands on the same
+	//     host /info/refs's own redirect already reached (infoRefsRedirectHost)
+	//     — guardRedirects returns the 3xx to the caller for anywhere else,
+	//     instead of following it, matching vanilla git's
+	//     http.followRedirects=initial, which auto-follows the GET and then
+	//     sends the POSTs to the host it discovered there. When true, POST
+	//     redirects are followed anywhere, like GET ones.
 	//
-	// Off by default: EndpointURL stays stable and POST redirects surface
-	// as errors instead of being followed silently.
+	// Off by default: EndpointURL stays stable and a POST redirect to a host
+	// other than the one /info/refs already reached surfaces as an error
+	// instead of being followed silently.
 	FollowInfoRefsRedirect bool
 
 	// InsecureSkipTLSVerify mirrors the same-named transport setting and
@@ -318,6 +339,25 @@ type HTTPConn struct {
 	//
 	// Path/userinfo are copied from EndpointURL; only Scheme/Host differ.
 	resolvedEndpoint *url.URL
+
+	// infoRefsRedirectHost records the scheme/host /info/refs's GET landed
+	// on after a cross-host redirect, regardless of FollowInfoRefsRedirect.
+	// Unlike resolvedEndpoint, this is set unconditionally: guardRedirects
+	// reads it to let a same-host POST redirect through even with the flag
+	// off, matching vanilla git's behaviour of discovering the real host via
+	// /info/refs and sending the RPC POSTs there, rather than refusing a
+	// redirect to a host we already know is legitimate. A POST redirect
+	// to any other host is still refused unless the flag is set. Only
+	// Scheme/Host are meaningful here — there is no path/userinfo to carry.
+	infoRefsRedirectHost *url.URL
+
+	// redirectGuardBlocked is set by guardRedirects immediately before it
+	// refuses a POST redirect, and consumed (read-and-reset) by the next
+	// httpError call. It is how httpError tells "our guard produced this
+	// 3xx" apart from any other way a 3xx reached it, so the
+	// --follow-info-refs-redirect hint only shows when turning the flag on
+	// would actually change the outcome.
+	redirectGuardBlocked bool
 }
 
 // requestURL returns the URL outgoing requests should build from on this
@@ -413,20 +453,23 @@ func transportSkipsTLSVerify(rt http.RoundTripper) bool {
 const maxRedirects = 10
 
 // guardRedirects returns a shallow copy of client whose redirect policy
-// refuses to follow a POST redirect by default and strips credentials on a
-// hop that leaves the site of the request that was issued.
+// refuses to follow a POST redirect by default — except to the host
+// /info/refs's own redirect already landed on, which is let through — and
+// strips credentials on a hop that leaves the site of the request that was
+// issued.
 //
 // Vanilla git's HTTP transport defaults to http.followRedirects=initial: it
-// follows the /info/refs GET redirect to discover the actual host, but a POST
-// (/git-upload-pack, /git-receive-pack) does not follow — the 3xx is surfaced
-// to the caller instead. Go's http.Client follows every redirect regardless
-// of method, so without this gate a POST that 3xx's gets silently followed
-// where git itself would fail, and any Authorization on that POST is subject
-// to the same-site strip below without git-sync ever noticing the hop
-// happened. conn.FollowInfoRefsRedirect is the existing opt-in for this:
-// gating on it here (read live, since every caller sets it on the returned
-// *HTTPConn after construction) means "follow redirects" stays one setting
-// instead of two.
+// follows the /info/refs GET redirect to discover the actual host, and sends
+// the RPC POSTs (/git-upload-pack, /git-receive-pack) there directly; a POST
+// redirect anywhere else does not follow — the 3xx is surfaced to the caller
+// instead. Go's http.Client follows every redirect regardless of method, so
+// without this gate a POST that 3xx's gets silently followed where git
+// itself would fail, and any Authorization on that POST is subject to the
+// same-site strip below without git-sync ever noticing the hop happened.
+// conn.FollowInfoRefsRedirect is the existing opt-in for following a POST
+// redirect to anywhere else: gating on it here (read live, since every
+// caller sets it on the returned *HTTPConn after construction) means
+// "follow redirects" stays one setting instead of two.
 //
 // The stdlib already refuses to carry Authorization across a redirect, but its
 // notion of "same host" compares hostnames and ignores the port and scheme, so
@@ -460,8 +503,21 @@ func guardRedirects(conn *HTTPConn, client *http.Client) *http.Client {
 		// original request that started the chain, so it still says POST
 		// for all five redirect codes; req.Method would only catch
 		// 307/308, which are the only two codes that preserve it.
+		//
+		// A redirect to the same host /info/refs already landed on is let
+		// through even with the flag off: conn.infoRefsRedirectHost records
+		// that host, so this is only ever non-nil after a GET redirect this
+		// same conn followed, not an attacker-controlled value. Refusing it
+		// anyway would leave setups where discovery and the RPC POSTs
+		// redirect to the same replica broken by default, and git itself
+		// follows that case — it resolves the real host via /info/refs and
+		// sends the POSTs there directly. A redirect anywhere else is still
+		// refused unless the flag is set.
 		if len(via) > 0 && via[0].Method == http.MethodPost && !conn.FollowInfoRefsRedirect {
-			return http.ErrUseLastResponse
+			if !sameSite(conn.infoRefsRedirectHost, req.URL) {
+				conn.redirectGuardBlocked = true
+				return http.ErrUseLastResponse
+			}
 		}
 		if prev != nil {
 			if err := prev(req, via); err != nil {
@@ -616,7 +672,7 @@ func (c *HTTPConn) RequestInfoRefs(ctx context.Context, service string, gitProto
 // the HTTP status and advertisement content-type, applies any redirect to the
 // endpoint, and reads the body under a size cap. The caller closes res.Body.
 func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]byte, error) {
-	if err := httpError(res); err != nil {
+	if err := c.httpError(res); err != nil {
 		return nil, err
 	}
 	wantContentType := fmt.Sprintf("application/x-%s-advertisement", service)
@@ -630,16 +686,22 @@ func (c *HTTPConn) readInfoRefsResponse(res *http.Response, service string) ([]b
 	if gotMediaType != wantContentType {
 		return nil, fmt.Errorf("unexpected info/refs content-type %q, want %q", gotContentType, wantContentType)
 	}
-	if c.FollowInfoRefsRedirect && res.Request != nil && res.Request.URL != nil {
+	if res.Request != nil && res.Request.URL != nil {
 		final := res.Request.URL
 		current := c.requestURL()
 		if final.Host != current.Host || final.Scheme != current.Scheme {
-			// Don't mutate EndpointURL — record the resolved endpoint in
-			// a separate field so the user-typed URL stays available for
-			// display/logging/telemetry. Path/userinfo carry over from
-			// EndpointURL (same assumption as before: the redirect target
-			// serves the same repo path).
-			c.setResolvedEndpoint(final.Scheme, final.Host)
+			// Record the host unconditionally so guardRedirects can let a
+			// same-host POST redirect through even with the flag off (see
+			// infoRefsRedirectHost's doc comment).
+			c.infoRefsRedirectHost = &url.URL{Scheme: final.Scheme, Host: final.Host}
+			if c.FollowInfoRefsRedirect {
+				// Don't mutate EndpointURL — record the resolved endpoint in
+				// a separate field so the user-typed URL stays available for
+				// display/logging/telemetry. Path/userinfo carry over from
+				// EndpointURL (same assumption as before: the redirect target
+				// serves the same repo path).
+				c.setResolvedEndpoint(final.Scheme, final.Host)
+			}
 		}
 	}
 	// Bound the read to prevent unbounded memory allocation (issue #9).
@@ -710,7 +772,7 @@ func (c *HTTPConn) PostRPCStreamBody(ctx context.Context, service string, body i
 			return nil, err
 		}
 	}
-	httpErr := httpError(res)
+	httpErr := c.httpError(res)
 	// Settle helper credentials on the validated status: approve on a 2xx,
 	// reject on 401/403. For the POST path the HTTP status is the whole
 	// success signal — there's no advertisement body to validate further.

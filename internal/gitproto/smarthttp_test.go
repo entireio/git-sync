@@ -457,6 +457,115 @@ func TestRequestInfoRefs_DoesNotFollowByDefault(t *testing.T) {
 	}
 }
 
+// TestRequestInfoRefs_FlagOffPOSTRedirectToInfoRefsHostIsFollowed is the
+// regression for a host that redirects both /info/refs and the RPC POSTs to
+// the same replica: with the flag off, EndpointURL stays stable (no
+// resolvedEndpoint), but the POST redirect is still followed because it
+// lands on the exact host /info/refs's own redirect already reached —
+// matching vanilla git, which discovers the real host via /info/refs and
+// sends the POSTs there directly.
+func TestRequestInfoRefs_FlagOffPOSTRedirectToInfoRefsHostIsFollowed(t *testing.T) {
+	var nodeGotPOST bool
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs"):
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+				t.Errorf("node info/refs write: %v", err)
+			}
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-upload-pack"):
+			nodeGotPOST = true
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("node: unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer node.Close()
+
+	var entryGotPOST bool
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			entryGotPOST = true
+		}
+		http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+	}))
+	defer entry.Close()
+
+	ep, err := transport.ParseURL(entry.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
+	// FollowInfoRefsRedirect intentionally left off.
+
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if conn.resolvedEndpoint != nil {
+		t.Errorf("resolvedEndpoint must stay nil with the flag off, got %v", conn.resolvedEndpoint)
+	}
+
+	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack integration-test"); err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+
+	if !entryGotPOST {
+		t.Error("POST should still be addressed to the entry host first, not pre-resolved to node")
+	}
+	if !nodeGotPOST {
+		t.Error("POST redirect to the host /info/refs already reached should be followed even with the flag off")
+	}
+}
+
+// TestRequestInfoRefs_FlagOffPOSTRedirectToADifferentHostIsStillRefused
+// guards the narrow scope of the allowance above: a POST redirect to a host
+// other than the one /info/refs reached is still refused by default.
+func TestRequestInfoRefs_FlagOffPOSTRedirectToADifferentHostIsStillRefused(t *testing.T) {
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		if _, err := w.Write([]byte("001e# service=git-upload-pack\n0000")); err != nil {
+			t.Errorf("node write: %v", err)
+		}
+	}))
+	defer node.Close()
+
+	var otherGotPOST bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		otherGotPOST = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer other.Close()
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.Redirect(w, r, node.URL+r.URL.Path+"?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+			return
+		}
+		// The POST redirects to a THIRD host, different from the one
+		// /info/refs reached — this must stay refused.
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer entry.Close()
+
+	ep, err := transport.ParseURL(entry.URL + "/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	conn := NewHTTPConn(ep, "test", nil, http.DefaultTransport)
+
+	if _, err := RequestInfoRefs(t.Context(), conn, transport.UploadPackService, ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+
+	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), false, "upload-pack integration-test"); err == nil {
+		t.Fatal("expected PostRPC to fail: the redirect targets a host /info/refs never reached")
+	}
+	if otherGotPOST {
+		t.Error("POST must not reach a host other than the one /info/refs resolved, without the flag")
+	}
+}
+
 func TestHTTPErrorBoundsBodyRead(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://example.com/repo.git", nil)
 	if err != nil {
@@ -470,7 +579,8 @@ func TestHTTPErrorBoundsBodyRead(t *testing.T) {
 		Body:       body,
 	}
 
-	err = httpError(res)
+	conn := &HTTPConn{}
+	err = conn.httpError(res)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1979,6 +2089,68 @@ func TestPostRPC_RefusedRedirectErrorNamesLocationAndFlags(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--source-follow-info-refs-redirect") || !strings.Contains(err.Error(), "--target-follow-info-refs-redirect") {
 		t.Errorf("error must hint both flags that would allow the redirect, got %q", err)
+	}
+}
+
+// TestPostRPC_RefusedRedirectErrorRedactsCredentialsInLocation guards against
+// Location going into the error as-is: it is server-controlled and can embed
+// credentials (https://user:token@host/...), the same form a redirecting
+// host could use to try to get a token echoed into logs or --json output.
+// It must get the same redaction as the other server-supplied values
+// httpError already handles.
+func TestPostRPC_RefusedRedirectErrorRedactsCredentialsInLocation(t *testing.T) {
+	const location = "https://user:supersecrettoken@replica.example/repo.git/git-upload-pack"
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		res := &http.Response{
+			StatusCode: http.StatusTemporaryRedirect,
+			Request:    req,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+		}
+		res.Header.Set("Location", location)
+		return res, nil
+	}))
+	// FollowInfoRefsRedirect intentionally left off.
+
+	_, err := PostRPC(context.Background(), conn, "git-upload-pack", []byte("0000"), false, "phase")
+	if err == nil {
+		t.Fatal("expected an error from the refused redirect")
+	}
+	if strings.Contains(err.Error(), "supersecrettoken") || strings.Contains(err.Error(), "user:") {
+		t.Errorf("error must not leak the credential embedded in Location, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "replica.example") {
+		t.Errorf("error should still name the redirect target's host, got %q", err)
+	}
+}
+
+// TestHTTPError_HintOnlyShownWhenOurGuardBlocked guards Soph's other review
+// point: the --follow-info-refs-redirect hint must not appear for a 3xx that
+// reached httpError some other way, e.g. a caller-supplied CheckRedirect
+// refusing the /info/refs GET for its own reasons — turning the flag on
+// wouldn't change that outcome.
+func TestHTTPError_HintOnlyShownWhenOurGuardBlocked(t *testing.T) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com/repo.git/info/refs", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	res := &http.Response{
+		StatusCode: http.StatusTemporaryRedirect,
+		Request:    req,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("")),
+	}
+	res.Header.Set("Location", "https://replica.example/repo.git/info/refs")
+
+	conn := &HTTPConn{EndpointURL: req.URL}
+	// redirectGuardBlocked intentionally left false: this 3xx did not come
+	// from guardRedirects refusing a POST.
+	gotErr := conn.httpError(res)
+	if gotErr == nil {
+		t.Fatal("expected an error for the 3xx status")
+	}
+	if strings.Contains(gotErr.Error(), "follow-info-refs-redirect") {
+		t.Errorf("hint must not appear when our guard did not block this response, got %q", gotErr)
 	}
 }
 
