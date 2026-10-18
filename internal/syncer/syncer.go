@@ -895,15 +895,10 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	s.sourceConn.SetProgressWriter(&sessionStderr{s: s})
 	warnSSHStats(s.sourceConn, nil)
 
-	refPrefixes := planner.RefPrefixes(planConfig(cfg))
-	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
-	if err != nil {
-		return nil, fmt.Errorf("list source refs: %w", err)
-	}
-	sourceService.Verbose = cfg.Verbose
-	s.sourceService = sourceService
-	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
-
+	// Capture expected-old target refs before the source snapshot. Otherwise
+	// a concurrent sync can finish between the two reads and become the valid
+	// baseline for overwriting newer target refs with older source state.
+	// This still relies on the target ref changing to detect a conflict.
 	if needTarget {
 		targetConn, err := newConn(cfg.Target, "target", s.stats, cfg.HTTPClient)
 		if err != nil {
@@ -953,6 +948,16 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			}
 		}
 	}
+
+	refPrefixes := planner.RefPrefixes(planConfig(cfg))
+	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
+	if err != nil {
+		return nil, fmt.Errorf("list source refs: %w", err)
+	}
+	sourceService.Verbose = cfg.Verbose
+	s.sourceService = sourceService
+	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
+
 	// Start the live progress ticker only after auth resolution and the
 	// initial ref-listing round trips have completed. The auth path may
 	// shell out to `git credential fill`, which inherits our stderr and

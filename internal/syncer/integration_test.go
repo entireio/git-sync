@@ -4675,7 +4675,7 @@ func signature() object.Signature {
 	}
 }
 
-func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) { //nolint:unparam // kept as param for test readability
+func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) {
 	syncertest.AssertBranchHeadsMatch(t, sourceRepo, targetRepo, branch)
 }
 
