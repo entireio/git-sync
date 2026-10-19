@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A private GitHub repository over 1.5 GiB now bootstraps in batches.** The GitHub repository-size lookup that selects batched bootstrap sent no credentials, so GitHub answered 404 for every private repository and the bootstrap silently sent the whole repository as one pack, whatever its size. The lookup now carries the source credentials, which also moves public lookups off the anonymous rate limit shared by everything behind the same IP. Each lookup's outcome (HTTP status or error, reported size, chosen mode) is now logged through `Options.BootstrapLogger` without verbose mode, at warning level when the size could not be determined.
+
 - Preserve source-read errors when closing bootstrap observation, including `io.ErrUnexpectedEOF`; a truncated source is reported as `observer_failed`, not expected `observer_interrupted`. Intentional partial closure is unchanged. ([#120](https://github.com/entireio/git-sync/pull/120))
 
 - At source EOF, bootstrap upload guards enforce actual bytes without projection or the batching safety margin. Final bytes returned together with EOF remain subject to the byte limit, and diagnostic counters retain their observed values. ([#120](https://github.com/entireio/git-sync/pull/120))

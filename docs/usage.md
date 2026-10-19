@@ -37,6 +37,8 @@ git-sync sync \
   <target-url>
 ```
 
+A bootstrap from a `github.com` source that is not given `--target-max-pack-bytes` first asks the GitHub REST API (`GET /repos/{owner}/{repo}`) for the repository size, sending the source credentials so a private repository answers too. When GitHub reports more than 1.5 GiB, the bootstrap switches to batches of 512 MiB (or `--max-pack-bytes`, if smaller). When the lookup fails — no credentials for a private repository, an exhausted rate limit, an unreachable API — the bootstrap stays a single pack. The outcome, including the HTTP status or error, is logged with `-v` and through the library's `Options.BootstrapLogger`, at warning level when the lookup failed. Pass `--target-max-pack-bytes` to choose batching yourself and skip the lookup.
+
 ### Bootstrap chain ordering
 
 Batched bootstrap walks a chain of source commits and places sub-pack
@@ -392,6 +394,10 @@ cannot collect your token.
 If a redirect target legitimately needs credentials and is not same-site, store
 them in your git credential helper against that host; git-sync will find them
 there.
+
+The GitHub repository-size lookup described under [Examples](#examples) follows
+the same rule: source credentials for `github.com` go to `api.github.com`, a
+subdomain on the same port, and to no other host.
 
 ## Protocol Notes
 
