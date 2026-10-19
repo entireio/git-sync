@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -21,6 +22,7 @@ import (
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/sanitize"
 	"entire.io/entire/git-sync/internal/useragent"
 )
 
@@ -1824,13 +1826,14 @@ func packReaderForCheckpoint(
 // --- GitHub preflight ---
 
 // githubBatchLimit asks GitHub how large the source repository is and returns
-// the batch limit to bootstrap with when it is over githubLargeRepoThresholdKB.
-// It reports false, keeping the one-shot path, whenever the size is unknown.
+// the batch limit to bootstrap with when it is at or over
+// githubLargeRepoThresholdKB. It reports false, keeping the one-shot path,
+// whenever the size is unknown.
 //
 // Every lookup it makes is logged through PushLogger, which callers wire
-// independently of verbose mode: a failed lookup silently sends a repository
-// of any size as one pack, and that has to be visible to an operator without
-// a code read.
+// independently of verbose mode, and a failed one is also surfaced as a notice:
+// it sends a repository of any size as one pack, which an operator has to be
+// able to see without a code read.
 func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	if p.TargetMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint() == nil {
 		return 0, false
@@ -1842,25 +1845,41 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	limit := int64(defaultTargetMaxPackBytes)
-	if p.MaxPackBytes > 0 && p.MaxPackBytes < limit {
-		limit = p.MaxPackBytes
+	var limit int64
+	if lookup.err == nil && lookup.sizeKB >= githubLargeRepoThresholdKB {
+		limit = defaultTargetMaxPackBytes
+		if p.MaxPackBytes > 0 && p.MaxPackBytes < limit {
+			limit = p.MaxPackBytes
+		}
 	}
-	batched := lookup.err == nil && lookup.sizeKB >= githubLargeRepoThresholdKB && limit > 0
-	if !batched {
-		limit = 0
-	}
-	p.logGitHubPreflight(ctx, lookup, batched, limit)
-	return limit, batched
+	p.logGitHubPreflight(ctx, lookup, limit)
+	return limit, limit > 0
 }
 
-// githubSizeLookup is the outcome of one GitHub repository-size request.
+// githubPreflightTimeout bounds the size lookup. It only chooses between two
+// working strategies, so a stalled API must not hold the bootstrap.
+const githubPreflightTimeout = 30 * time.Second
+
+// maxGitHubRepoResponseBytes bounds how much of a repository metadata response
+// is read. The real document is a few KiB.
+const maxGitHubRepoResponseBytes = 1 << 20
+
+// maxGitHubErrorMessageBytes bounds the server-authored message carried into
+// logs and notices.
+const maxGitHubErrorMessageBytes = 200
+
+// githubSizeLookup is the outcome of one GitHub repository-size lookup.
 type githubSizeLookup struct {
-	owner, repo   string
+	owner, repo string
+	// authenticated reports whether the answer below came from a request
+	// carrying the source credentials.
 	authenticated bool
-	status        int   // HTTP status; 0 when no response arrived
-	sizeKB        int64 // valid only when err is nil
-	err           error
+	// refusedAuthStatus is the status of an authenticated attempt the API
+	// refused (401/403) before the anonymous retry; 0 when there was none.
+	refusedAuthStatus int
+	status            int   // HTTP status; 0 when no response arrived
+	sizeKB            int64 // valid only when err is nil
+	err               error
 }
 
 // lookupGitHubRepoSize asks the GitHub REST API for the size of the source
@@ -1870,9 +1889,12 @@ type githubSizeLookup struct {
 // The source credentials go along: GitHub answers 404 to an anonymous caller
 // for a private repository, and the anonymous rate limit (60 requests an hour,
 // shared by everything behind the same egress IP) fails public lookups too.
-// They are sent only to the GitHub API for a repository the user pointed at
-// github.com, and a redirect that leaves the API host drops them (the
-// connection's redirect guard, and Go's own cross-host rule beneath it).
+// They are sent only to the GitHub API, for a repository the user pointed at
+// github.com on its default port (see GitHubOwnerRepo), and a redirect that
+// leaves the API host drops them. A token the API refuses although git
+// accepted it (one not authorized for an organization's SSO, say) is retried
+// once anonymously, so a public repository is never worse off than before
+// credentials were sent.
 func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLookup, bool) {
 	httpConn, ok := conn.(*gitproto.HTTPConn)
 	if !ok || httpConn.HTTP == nil {
@@ -1882,64 +1904,82 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 	if !ok {
 		return githubSizeLookup{}, false
 	}
-	lookup := githubSizeLookup{owner: owner, repo: repo, authenticated: httpConn.Auth != nil}
-	apiURL := strings.TrimRight(GitHubRepoAPIBaseURL, "/") + "/repos/" + owner + "/" + repo
+	ctx, cancel := context.WithTimeout(ctx, githubPreflightTimeout)
+	defer cancel()
+	lookup := githubSizeLookup{owner: owner, repo: repo}
+	if httpConn.Auth != nil {
+		lookup.authenticated = true
+		requestGitHubRepoSize(ctx, httpConn, httpConn.Auth, &lookup)
+		if lookup.status != http.StatusUnauthorized && lookup.status != http.StatusForbidden {
+			return lookup, true
+		}
+		lookup = githubSizeLookup{owner: owner, repo: repo, refusedAuthStatus: lookup.status}
+	}
+	requestGitHubRepoSize(ctx, httpConn, nil, &lookup)
+	return lookup, true
+}
+
+func requestGitHubRepoSize(ctx context.Context, conn *gitproto.HTTPConn, auth gitproto.AuthMethod, lookup *githubSizeLookup) {
+	apiURL := strings.TrimRight(GitHubRepoAPIBaseURL, "/") + "/repos/" + lookup.owner + "/" + lookup.repo
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		lookup.err = fmt.Errorf("build request: %w", err)
-		return lookup, true
+		return
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-Github-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", useragent.Plain())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
-	gitproto.ApplyAuth(req, httpConn.Auth)
-	resp, err := httpConn.HTTP.Do(req)
+	gitproto.ApplyAuth(req, auth)
+	resp, err := conn.HTTP.Do(req)
 	if err != nil {
 		lookup.err = err
-		return lookup, true
+		return
 	}
 	defer resp.Body.Close()
 	lookup.status = resp.StatusCode
 	body := io.LimitReader(resp.Body, maxGitHubRepoResponseBytes)
 	if resp.StatusCode != http.StatusOK {
 		lookup.err = githubAPIError(resp.StatusCode, body)
-		return lookup, true
+		return
 	}
 	var payload struct {
 		Size *int64 `json:"size"`
 	}
 	if err := json.NewDecoder(body).Decode(&payload); err != nil {
 		lookup.err = fmt.Errorf("decode repository metadata: %w", err)
-		return lookup, true
+		return
 	}
-	if payload.Size == nil || *payload.Size < 0 {
-		lookup.err = errors.New("repository metadata has no size")
-		return lookup, true
+	// GitHub reports 0 both for an empty repository and for one whose size it
+	// has not computed yet (a fresh push or import), so 0 is not a size.
+	if payload.Size == nil || *payload.Size <= 0 {
+		lookup.err = errors.New("repository metadata reports no size")
+		return
 	}
 	lookup.sizeKB = *payload.Size
-	return lookup, true
 }
 
-// maxGitHubRepoResponseBytes bounds how much of a repository metadata response
-// is read. The real document is a few KiB.
-const maxGitHubRepoResponseBytes = 1 << 20
-
 // githubAPIError describes a non-200 answer, carrying GitHub's own message
-// ("Not Found", "API rate limit exceeded ...") when the body has one.
+// ("Not Found", "API rate limit exceeded ...") when the body has one. The
+// message is server-authored, so it is stripped of control characters and
+// bounded before it reaches a log or a terminal.
 func githubAPIError(status int, body io.Reader) error {
 	var payload struct {
 		Message string `json:"message"`
 	}
-	if err := json.NewDecoder(body).Decode(&payload); err == nil && payload.Message != "" {
-		return fmt.Errorf("github api returned %d: %s", status, payload.Message)
+	if err := json.NewDecoder(body).Decode(&payload); err != nil || payload.Message == "" {
+		return fmt.Errorf("github api returned %d", status)
 	}
-	return fmt.Errorf("github api returned %d", status)
+	msg := strings.Join(strings.Fields(sanitize.Text(payload.Message)), " ")
+	if len(msg) > maxGitHubErrorMessageBytes {
+		msg = strings.ToValidUTF8(msg[:maxGitHubErrorMessageBytes], "") + "..."
+	}
+	return fmt.Errorf("github api returned %d: %s", status, msg)
 }
 
-func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup, batched bool, limit int64) {
+func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup, limit int64) {
 	mode := "one_shot"
-	if batched {
+	if limit > 0 {
 		mode = "batched"
 	}
 	attrs := []any{
@@ -1949,15 +1989,22 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 		slog.Int64("threshold_kb", githubLargeRepoThresholdKB),
 		slog.String("mode", mode),
 	}
+	if lookup.refusedAuthStatus != 0 {
+		attrs = append(attrs, slog.Int("refused_auth_status", lookup.refusedAuthStatus))
+	}
 	if lookup.err != nil {
 		attrs = append(attrs, slog.String("error", lookup.err.Error()))
 	} else {
 		attrs = append(attrs, slog.Int64("size_kb", lookup.sizeKB))
 	}
-	if batched {
+	if limit > 0 {
 		attrs = append(attrs, slog.Int64("target_max_pack_bytes", limit))
 	}
 	p.log("bootstrap github preflight", attrs...)
+	if lookup.err != nil {
+		p.notice(fmt.Sprintf("could not read the GitHub repository size (%v) — bootstrapping as a single pack; pass --target-max-pack-bytes to batch",
+			lookup.err))
+	}
 	if p.PushLogger == nil {
 		return
 	}
@@ -1968,13 +2015,19 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 	p.PushLogger.InfoContext(ctx, "Bootstrap GitHub size preflight", attrs...)
 }
 
-// GitHubOwnerRepo extracts the owner/repo from a GitHub endpoint.
+// GitHubOwnerRepo extracts the owner/repo from a GitHub endpoint. Only
+// github.com on the default port of its scheme qualifies: the same host on
+// another port is a different service, which the GitHub API does not describe
+// and whose credentials it must not receive.
 func GitHubOwnerRepo(conn gitproto.Conn) (string, string, bool) {
 	if conn == nil || conn.Endpoint() == nil {
 		return "", "", false
 	}
 	ep := conn.Endpoint()
-	if ep.Scheme != "http" && ep.Scheme != "https" {
+	switch {
+	case ep.Scheme == "https" && (ep.Port() == "" || ep.Port() == "443"):
+	case ep.Scheme == "http" && (ep.Port() == "" || ep.Port() == "80"):
+	default:
 		return "", "", false
 	}
 	if !strings.EqualFold(ep.Hostname(), "github.com") {

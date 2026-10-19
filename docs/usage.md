@@ -37,7 +37,7 @@ git-sync sync \
   <target-url>
 ```
 
-A bootstrap from a `github.com` source that is not given `--target-max-pack-bytes` first asks the GitHub REST API (`GET /repos/{owner}/{repo}`) for the repository size, sending the source credentials so a private repository answers too. When GitHub reports more than 1.5 GiB, the bootstrap switches to batches of 512 MiB (or `--max-pack-bytes`, if smaller). When the lookup fails — no credentials for a private repository, an exhausted rate limit, an unreachable API — the bootstrap stays a single pack. The outcome, including the HTTP status or error, is logged with `-v` and through the library's `Options.BootstrapLogger`, at warning level when the lookup failed. Pass `--target-max-pack-bytes` to choose batching yourself and skip the lookup.
+A bootstrap from a `github.com` source that is not given `--target-max-pack-bytes` first asks the GitHub REST API (`GET /repos/{owner}/{repo}`) for the repository size, sending the source credentials so a private repository answers too. When GitHub reports 1.5 GiB or more, the bootstrap switches to batches of 512 MiB (or `--max-pack-bytes`, if smaller). A token the API refuses (401 or 403) is retried once without credentials, which is enough for a public repository. When the lookup fails anyway — no credentials for a private repository, an exhausted rate limit, an unreachable API — the bootstrap stays a single pack and git-sync prints a notice saying so. The outcome, including the HTTP status or error, is logged with `-v` and through the library's `Options.BootstrapLogger`, at warning level when the lookup failed. Pass `--target-max-pack-bytes` to choose batching yourself and skip the lookup.
 
 ### Bootstrap chain ordering
 
@@ -397,7 +397,8 @@ there.
 
 The GitHub repository-size lookup described under [Examples](#examples) follows
 the same rule: source credentials for `github.com` go to `api.github.com`, a
-subdomain on the same port, and to no other host.
+subdomain on the same port, and to no other host. A `github.com` URL with a
+non-default port is not treated as GitHub, so it gets no lookup at all.
 
 ## Protocol Notes
 

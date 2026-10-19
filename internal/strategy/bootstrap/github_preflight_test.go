@@ -20,14 +20,20 @@ import (
 	"entire.io/entire/git-sync/internal/planner"
 )
 
-const preflightToken = "ghs_preflight-secret"
+const (
+	preflightToken    = "ghs_preflight-secret"
+	preflightEndpoint = "https://github.com/acme/private.git"
+	largeRepoKB       = 7 * 1024 * 1024
+)
 
 var errBatchedPathReached = errors.New("batched path reached")
 
-// privateRepoAPI serves GET /repos/acme/private like GitHub does for a private
-// repository: 404 to an anonymous caller, the metadata to one presenting the
-// installation token.
-func privateRepoAPI(t *testing.T, sizeKB int64) *httptest.Server {
+func installationAuth() gitproto.AuthMethod {
+	return &transporthttp.BasicAuth{Username: "x-access-token", Password: preflightToken}
+}
+
+// repoAPI serves GET /repos/acme/private, answering through respond.
+func repoAPI(t *testing.T, respond func(http.ResponseWriter, *http.Request)) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/repos/acme/private" {
@@ -35,17 +41,40 @@ func privateRepoAPI(t *testing.T, sizeKB int64) *httptest.Server {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != "x-access-token" || pass != preflightToken {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}`))
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"full_name": "acme/private", "size": sizeKB})
+		respond(w, r)
 	}))
 	t.Cleanup(server.Close)
 	useGitHubAPI(t, server.URL)
 	return server
+}
+
+// privateRepoAPI answers like GitHub does for a private repository: 404 to an
+// anonymous caller, the metadata to one presenting the installation token.
+func privateRepoAPI(t *testing.T, sizeKB int64) *httptest.Server {
+	t.Helper()
+	return repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "x-access-token" || pass != preflightToken {
+			writeAPIError(t, w, http.StatusNotFound, "Not Found")
+			return
+		}
+		writeRepoSize(t, w, sizeKB)
+	})
+}
+
+func writeRepoSize(t *testing.T, w http.ResponseWriter, sizeKB int64) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(map[string]any{"full_name": "acme/private", "size": sizeKB}); err != nil {
+		t.Errorf("write repository metadata: %v", err)
+	}
+}
+
+func writeAPIError(t *testing.T, w http.ResponseWriter, status int, message string) {
+	t.Helper()
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"message": message, "documentation_url": "https://docs.github.com/rest"}); err != nil {
+		t.Errorf("write api error: %v", err)
+	}
 }
 
 func useGitHubAPI(t *testing.T, base string) {
@@ -57,7 +86,12 @@ func useGitHubAPI(t *testing.T, base string) {
 
 func preflightParams(t *testing.T, client *http.Client, auth gitproto.AuthMethod, out *bytes.Buffer) Params {
 	t.Helper()
-	ep, err := transport.ParseURL("https://github.com/acme/private.git")
+	return preflightParamsFor(t, preflightEndpoint, client, auth, out)
+}
+
+func preflightParamsFor(t *testing.T, endpoint string, client *http.Client, auth gitproto.AuthMethod, out *bytes.Buffer) Params {
+	t.Helper()
+	ep, err := transport.ParseURL(endpoint)
 	if err != nil {
 		t.Fatalf("parse endpoint: %v", err)
 	}
@@ -83,6 +117,15 @@ func preflightEvent(t *testing.T, out *bytes.Buffer) map[string]any {
 	return event
 }
 
+func eventError(t *testing.T, event map[string]any) string {
+	t.Helper()
+	msg, ok := event["error"].(string)
+	if !ok || msg == "" {
+		t.Fatalf("error = %v, want a non-empty string", event["error"])
+	}
+	return msg
+}
+
 func assertFields(t *testing.T, event map[string]any, want map[string]any) {
 	t.Helper()
 	for key, w := range want {
@@ -93,32 +136,53 @@ func assertFields(t *testing.T, event map[string]any, want map[string]any) {
 }
 
 func TestGitHubPreflightAuthenticatesPrivateRepoLookup(t *testing.T) {
-	server := privateRepoAPI(t, 7*1024*1024)
+	server := privateRepoAPI(t, largeRepoKB)
 	var out bytes.Buffer
-	auth := &transporthttp.BasicAuth{Username: "x-access-token", Password: preflightToken}
-	p := preflightParams(t, server.Client(), auth, &out)
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
 
 	limit, ok := githubBatchLimit(context.Background(), p)
 	if !ok || limit != defaultTargetMaxPackBytes {
 		t.Fatalf("githubBatchLimit = (%d, %v), want (%d, true): a private repo over the threshold must bootstrap batched",
 			limit, ok, int64(defaultTargetMaxPackBytes))
 	}
-	assertFields(t, preflightEvent(t, &out), map[string]any{
+	event := preflightEvent(t, &out)
+	assertFields(t, event, map[string]any{
 		"level":                 "INFO",
 		"repository":            "acme/private",
 		"authenticated":         true,
 		"http_status":           float64(http.StatusOK),
-		"size_kb":               float64(7 * 1024 * 1024),
+		"size_kb":               float64(largeRepoKB),
 		"threshold_kb":          float64(githubLargeRepoThresholdKB),
 		"mode":                  "batched",
 		"target_max_pack_bytes": float64(defaultTargetMaxPackBytes),
 	})
+	if _, ok := event["refused_auth_status"]; ok {
+		t.Fatalf("an accepted token logged a refusal: %v", event["refused_auth_status"])
+	}
+}
+
+func TestGitHubPreflightSendsBearerToken(t *testing.T) {
+	server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+preflightToken {
+			writeAPIError(t, w, http.StatusNotFound, "Not Found")
+			return
+		}
+		writeRepoSize(t, w, largeRepoKB)
+	})
+	var out bytes.Buffer
+	p := preflightParams(t, server.Client(), &transporthttp.TokenAuth{Token: preflightToken}, &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); !ok {
+		t.Fatalf("bearer credentials were not sent; log=%s", &out)
+	}
 }
 
 func TestGitHubPreflightLookupFailureLogsWarningAndKeepsOneShot(t *testing.T) {
-	server := privateRepoAPI(t, 7*1024*1024)
+	server := privateRepoAPI(t, largeRepoKB)
 	var out bytes.Buffer
+	var notices []string
 	p := preflightParams(t, server.Client(), nil, &out)
+	p.OnNotice = func(msg string) { notices = append(notices, msg) }
 
 	if limit, ok := githubBatchLimit(context.Background(), p); ok {
 		t.Fatalf("githubBatchLimit = (%d, true), want one-shot when the size is unknown", limit)
@@ -131,9 +195,61 @@ func TestGitHubPreflightLookupFailureLogsWarningAndKeepsOneShot(t *testing.T) {
 		"http_status":   float64(http.StatusNotFound),
 		"mode":          "one_shot",
 	})
-	if msg, _ := event["error"].(string); !strings.Contains(msg, "404") || !strings.Contains(msg, "Not Found") {
+	if msg := eventError(t, event); !strings.Contains(msg, "404") || !strings.Contains(msg, "Not Found") {
 		t.Fatalf("error = %q, want the status and GitHub's message", msg)
 	}
+	// Without a structured logger (the CLI), the notice is the only signal.
+	if len(notices) != 1 || !strings.Contains(notices[0], "404") || !strings.Contains(notices[0], "single pack") {
+		t.Fatalf("notices = %q, want one notice naming the failure and the one-shot fallback", notices)
+	}
+}
+
+// A token git accepted can still be refused by the REST API (an organization
+// enforcing SSO the token is not authorized for). A public repository must not
+// lose the batching an anonymous lookup would have given it.
+func TestGitHubPreflightRetriesAnonymouslyWhenTokenRefused(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "" {
+					writeAPIError(t, w, status, "Resource protected by organization SAML enforcement.")
+					return
+				}
+				writeRepoSize(t, w, largeRepoKB)
+			})
+			var out bytes.Buffer
+			p := preflightParams(t, server.Client(), installationAuth(), &out)
+
+			if _, ok := githubBatchLimit(context.Background(), p); !ok {
+				t.Fatalf("a refused token cost a public repo its batching; log=%s", &out)
+			}
+			assertFields(t, preflightEvent(t, &out), map[string]any{
+				"level":               "INFO",
+				"authenticated":       false,
+				"refused_auth_status": float64(status),
+				"http_status":         float64(http.StatusOK),
+				"mode":                "batched",
+			})
+		})
+	}
+}
+
+func TestGitHubPreflightDoesNotRetryOtherFailures(t *testing.T) {
+	requests := 0
+	server := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		writeAPIError(t, w, http.StatusNotFound, "Not Found")
+	})
+	var out bytes.Buffer
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); ok {
+		t.Fatal("githubBatchLimit selected batched mode without a size")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1: an anonymous retry cannot see more than the token", requests)
+	}
+	assertFields(t, preflightEvent(t, &out), map[string]any{"level": "WARN", "authenticated": true, "http_status": float64(http.StatusNotFound)})
 }
 
 func TestGitHubPreflightTransportErrorLogsWarning(t *testing.T) {
@@ -149,31 +265,59 @@ func TestGitHubPreflightTransportErrorLogsWarning(t *testing.T) {
 	}
 	event := preflightEvent(t, &out)
 	assertFields(t, event, map[string]any{"level": "WARN", "http_status": float64(0), "mode": "one_shot"})
-	if msg, _ := event["error"].(string); msg == "" {
-		t.Fatal("transport failure logged without an error")
+	eventError(t, event)
+}
+
+func TestGitHubPreflightUnusableBodyLogsWarning(t *testing.T) {
+	for name, body := range map[string]string{
+		"not json":  `<html>not json</html>`,
+		"no size":   `{"full_name":"acme/private"}`,
+		"zero size": `{"full_name":"acme/private","size":0}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+				if _, err := io.WriteString(w, body); err != nil {
+					t.Errorf("write body: %v", err)
+				}
+			})
+			var out bytes.Buffer
+			p := preflightParams(t, server.Client(), nil, &out)
+
+			if _, ok := githubBatchLimit(context.Background(), p); ok {
+				t.Fatal("githubBatchLimit selected batched mode without a size")
+			}
+			event := preflightEvent(t, &out)
+			assertFields(t, event, map[string]any{"level": "WARN", "http_status": float64(http.StatusOK), "mode": "one_shot"})
+			if _, ok := event["size_kb"]; ok {
+				t.Fatalf("an unknown size was logged as size_kb=%v", event["size_kb"])
+			}
+		})
 	}
 }
 
-func TestGitHubPreflightUnreadableBodyLogsWarning(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`<html>not json</html>`))
-	}))
-	t.Cleanup(server.Close)
-	useGitHubAPI(t, server.URL)
+func TestGitHubPreflightSanitizesServerMessage(t *testing.T) {
+	server := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeAPIError(t, w, http.StatusForbidden, "API rate limit exceeded\x1b[31m\n"+strings.Repeat("x", 1000))
+	})
 	var out bytes.Buffer
 	p := preflightParams(t, server.Client(), nil, &out)
 
-	if _, ok := githubBatchLimit(context.Background(), p); ok {
-		t.Fatal("githubBatchLimit selected batched mode without a size")
+	githubBatchLimit(context.Background(), p)
+	msg := eventError(t, preflightEvent(t, &out))
+	if strings.ContainsAny(msg, "\x1b\n") {
+		t.Fatalf("error carries control characters: %q", msg)
 	}
-	assertFields(t, preflightEvent(t, &out), map[string]any{"level": "WARN", "http_status": float64(http.StatusOK), "mode": "one_shot"})
+	if !strings.HasPrefix(msg, "github api returned 403: API rate limit exceeded") || len(msg) > 300 {
+		t.Fatalf("error = %q, want GitHub's message, bounded", msg)
+	}
 }
 
 func TestGitHubPreflightSmallRepoLogsOneShotDecision(t *testing.T) {
 	server := privateRepoAPI(t, 1024)
 	var out bytes.Buffer
-	auth := &transporthttp.BasicAuth{Username: "x-access-token", Password: preflightToken}
-	p := preflightParams(t, server.Client(), auth, &out)
+	var notices []string
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
+	p.OnNotice = func(msg string) { notices = append(notices, msg) }
 
 	if _, ok := githubBatchLimit(context.Background(), p); ok {
 		t.Fatal("githubBatchLimit selected batched mode for a repo under the threshold")
@@ -188,29 +332,69 @@ func TestGitHubPreflightSmallRepoLogsOneShotDecision(t *testing.T) {
 	if _, ok := event["error"]; ok {
 		t.Fatalf("a successful lookup logged an error: %v", event["error"])
 	}
+	if len(notices) != 0 {
+		t.Fatalf("a successful lookup raised notices: %q", notices)
+	}
 }
 
 func TestGitHubPreflightSkippedLogsNothing(t *testing.T) {
-	server := privateRepoAPI(t, 7*1024*1024)
-	var out bytes.Buffer
-	p := preflightParams(t, server.Client(), nil, &out)
-	p.TargetMaxPack = 1 << 20 // the caller already chose batched mode
+	for name, tc := range map[string]struct {
+		endpoint      string
+		targetMaxPack int64
+	}{
+		"caller chose batching": {endpoint: preflightEndpoint, targetMaxPack: 1 << 20},
+		// The same host on another port is a different service: GitHub's API
+		// does not describe it and must not receive its credentials.
+		"non-default port": {endpoint: "https://github.com:8443/acme/private.git"},
+		"http on 443":      {endpoint: "http://github.com:443/acme/private.git"},
+		"not github":       {endpoint: "https://example.com/acme/private.git"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("unexpected preflight request")
+				writeRepoSize(t, w, largeRepoKB)
+			})
+			var out bytes.Buffer
+			p := preflightParamsFor(t, tc.endpoint, server.Client(), installationAuth(), &out)
+			p.TargetMaxPack = tc.targetMaxPack
 
-	if limit, ok := githubBatchLimit(context.Background(), p); ok {
-		t.Fatalf("githubBatchLimit = (%d, true), want the caller's choice to stand", limit)
+			if limit, ok := githubBatchLimit(context.Background(), p); ok {
+				t.Fatalf("githubBatchLimit = (%d, true), want no preflight", limit)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("a skipped preflight logged: %s", &out)
+			}
+		})
 	}
-	if out.Len() != 0 {
-		t.Fatalf("a skipped preflight logged: %s", &out)
+}
+
+// The credentials go to the API host only: a redirect elsewhere must arrive
+// without them.
+func TestGitHubPreflightRedirectDropsCredentials(t *testing.T) {
+	var leaked string
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("Authorization")
+		writeRepoSize(t, w, largeRepoKB)
+	}))
+	t.Cleanup(elsewhere.Close)
+	server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	})
+	var out bytes.Buffer
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
+
+	githubBatchLimit(context.Background(), p)
+	if leaked != "" {
+		t.Fatalf("the redirect target received credentials: %q", leaked)
 	}
 }
 
 // The selection must reach Execute: a private repo over the threshold enters
 // batched mode instead of streaming the whole repository as one pack.
 func TestExecuteBatchesPrivateGitHubRepoFromAuthenticatedPreflight(t *testing.T) {
-	server := privateRepoAPI(t, 7*1024*1024)
+	server := privateRepoAPI(t, largeRepoKB)
 	var out bytes.Buffer
-	auth := &transporthttp.BasicAuth{Username: "x-access-token", Password: preflightToken}
-	p := preflightParams(t, server.Client(), auth, &out)
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
 	p.TargetPusher = fakeBootstrapPusher{}
 	mainRef := plumbing.NewBranchReferenceName("main")
 	p.DesiredRefs = map[plumbing.ReferenceName]planner.DesiredRef{
