@@ -45,6 +45,10 @@ type Pusher struct {
 	Adv         *packp.AdvRefs
 	Verbose     bool
 	OnRejection func(refName plumbing.ReferenceName, status string)
+	// TargetRefsNow optionally verifies a concurrent-ref rejection against a
+	// fresh advertisement. OnAlreadyCurrent records convergence, not a write.
+	TargetRefsNow    func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
+	OnAlreadyCurrent func(plumbing.ReferenceName, plumbing.Hash)
 
 	// MaxRefUpdates caps ref-update commands per receive-pack request. Zero
 	// uses the env-or-default limit (see MaxRefUpdatesEnv); a positive value
@@ -59,13 +63,14 @@ type Pusher struct {
 	lastOutcomes map[plumbing.ReferenceName]refAnswer
 }
 
-// refAnswer is one ref's entry in a decoded report-status.
+// refAnswer records a reported status or a subsequent convergence check.
 type refAnswer struct {
 	refused bool
+	current bool
 	reason  string
 }
 
-// RefOutcome is what a target did with one ref command in a push.
+// RefOutcome distinguishes a reported push result from observed convergence.
 type RefOutcome int
 
 const (
@@ -80,15 +85,21 @@ const (
 	// BestEffort that is survivable and the push still returns nil, which is
 	// why asking is necessary at all.
 	RefOutcomeRefused
+	// RefOutcomeAlreadyCurrent means a rejected update's desired hash was
+	// observed in a fresh target advertisement. The push did not apply it.
+	RefOutcomeAlreadyCurrent
 )
 
 // LastOutcome reports what the target did with name in the most recent Push*
-// call on this Pusher, and the target's "ng" reason when it refused. Answers
+// call on this Pusher (or whether it was subsequently found already current),
+// and the target's "ng" reason when it refused. Answers
 // by value rather than handing out the Pusher's map, so a caller cannot mutate
 // or race with push state it does not own.
 func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
 	answer, seen := p.lastOutcomes[name]
 	switch {
+	case seen && answer.current:
+		return RefOutcomeAlreadyCurrent, ""
 	case seen && answer.refused:
 		return RefOutcomeRefused, answer.reason
 	case seen:
@@ -103,8 +114,9 @@ func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
 // best-effort and strict — recording outcomes must not quietly turn every push
 // best-effort.
 type pushStatusSink struct {
-	Rejected func(plumbing.ReferenceName, string)
-	Applied  func(plumbing.ReferenceName)
+	Rejected  func(plumbing.ReferenceName, string)
+	Applied   func(plumbing.ReferenceName)
+	Reconcile func(context.Context, *packp.UpdateRequests, *packp.ReportStatus) *packp.ReportStatus
 }
 
 // fatalRejections reports whether a per-ref "ng" must fail the push.
@@ -131,12 +143,13 @@ func (s *pushStatusSink) record(report *packp.ReportStatus) {
 }
 
 // beginPush clears the previous push's outcomes and returns the sink for this
-// one. Applied is always recorded, so a strict caller — whose nil error really
-// does prove every command landed — can be told so without a second round
-// trip; Rejected is installed only when the caller opted into best-effort.
+// one. Applied records server acceptance; AlreadyCurrent separately records
+// verified convergence after a refusal. Rejected is installed only when the
+// caller opted into best-effort.
 func (p *Pusher) beginPush() *pushStatusSink {
 	p.lastOutcomes = nil
 	sink := &pushStatusSink{
+		Reconcile: p.reconcileRejections,
 		Applied: func(name plumbing.ReferenceName) {
 			p.answer(name, refAnswer{})
 		},
@@ -534,6 +547,7 @@ func sendReceivePack(
 	if err != nil {
 		return fmt.Errorf("target receive-pack: %w", err)
 	}
+	reader = CloseOnce(reader)
 	defer reader.Close()
 
 	// Unwrap sideband if negotiated; stream server-side progress to stderr
@@ -555,12 +569,19 @@ func sendReceivePack(
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}
+		if statuses != nil && statuses.Reconcile != nil {
+			// Finish this RPC before opening another one on the transport.
+			// A close failure cannot establish convergence; keep the rejection.
+			if err := reader.Close(); err == nil {
+				report = statuses.Reconcile(ctx, req, report)
+			}
+		}
 		if statuses.fatalRejections() {
 			if err := report.Error(); err != nil {
 				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
 			}
-			// Nothing was refused and refusals are fatal, so this nil really
-			// does mean the target applied every command it reported.
+			// The remaining statuses are accepted commands; verified concurrent
+			// updates were recorded separately as AlreadyCurrent.
 			statuses.record(report)
 			return nil
 		}
