@@ -1875,9 +1875,13 @@ type githubSizeLookup struct {
 	// authenticated reports whether the answer below came from a request
 	// carrying the source credentials.
 	authenticated bool
-	// refusedAuthStatus is the status of an authenticated attempt the API
-	// refused (401/403) before the anonymous retry; 0 when there was none.
+	// refusedAuthStatus and refusedAuthErr describe an authenticated attempt
+	// the API refused (401/403) before the anonymous retry; zero when there
+	// was none. The refusal names the real cause (SSO enforcement, an
+	// exhausted rate limit) that the retry's own answer, a 404 for a private
+	// repository, would hide.
 	refusedAuthStatus int
+	refusedAuthErr    error
 	status            int   // HTTP status; 0 when no response arrived
 	sizeKB            int64 // valid only when err is nil
 	err               error
@@ -1914,7 +1918,7 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 		if lookup.status != http.StatusUnauthorized && lookup.status != http.StatusForbidden {
 			return lookup, true
 		}
-		lookup = githubSizeLookup{owner: owner, repo: repo, refusedAuthStatus: lookup.status}
+		lookup = githubSizeLookup{owner: owner, repo: repo, refusedAuthStatus: lookup.status, refusedAuthErr: lookup.err}
 	}
 	requestGitHubRepoSize(ctx, httpConn, nil, &lookup)
 	return lookup, true
@@ -1926,13 +1930,15 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 // led to), else a token written into the endpoint URL. The latter never
 // becomes Auth — net/http derives Basic auth from req.URL.User on the git
 // requests — and the API request is built from a different URL, so it has to
-// be carried over here.
+// be carried over here, the way net/http sends it: a token written as the
+// username alone ("https://TOKEN@github.com/...") goes with an empty password.
 func sourceCredentials(conn *gitproto.HTTPConn) gitproto.AuthMethod {
 	if auth := conn.EndpointAuth(); auth != nil {
 		return auth
 	}
 	if user := conn.EndpointURL.User; user != nil {
-		if password, ok := user.Password(); ok && password != "" {
+		password, _ := user.Password()
+		if user.Username() != "" || password != "" {
 			return &transporthttp.BasicAuth{Username: user.Username(), Password: password}
 		}
 	}
@@ -1971,8 +1977,10 @@ func requestGitHubRepoSize(ctx context.Context, conn *gitproto.HTTPConn, auth gi
 		return
 	}
 	// GitHub reports 0 both for an empty repository and for one whose size it
-	// has not computed yet (a fresh push or import), so 0 is not a size.
-	if payload.Size == nil || *payload.Size <= 0 {
+	// has not computed yet (a fresh push or import). Either way it is an
+	// answer, not a failure: the one-shot path it selects is logged with
+	// size_kb=0 and raises no warning, which an empty source would not deserve.
+	if payload.Size == nil || *payload.Size < 0 {
 		lookup.err = errors.New("repository metadata reports no size")
 		return
 	}
@@ -2012,6 +2020,9 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 	if lookup.refusedAuthStatus != 0 {
 		attrs = append(attrs, slog.Int("refused_auth_status", lookup.refusedAuthStatus))
 	}
+	if lookup.refusedAuthErr != nil {
+		attrs = append(attrs, slog.String("refused_auth_error", lookup.refusedAuthErr.Error()))
+	}
 	if lookup.err != nil {
 		attrs = append(attrs, slog.String("error", lookup.err.Error()))
 	} else {
@@ -2022,8 +2033,12 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 	}
 	p.log("bootstrap github preflight", attrs...)
 	if lookup.err != nil {
-		p.notice(fmt.Sprintf("could not read the GitHub repository size (%v) — bootstrapping as a single pack; pass --target-max-pack-bytes to batch",
-			lookup.err))
+		reason := lookup.err.Error()
+		if lookup.refusedAuthErr != nil {
+			reason = fmt.Sprintf("source credentials refused: %v; anonymous retry: %v", lookup.refusedAuthErr, lookup.err)
+		}
+		p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — bootstrapping as a single pack; pass --target-max-pack-bytes to batch",
+			reason))
 	}
 	if p.PushLogger == nil {
 		return

@@ -37,9 +37,13 @@ import (
 //
 // A literal IP address has no subdomains, so those must match exactly.
 //
-// Credentials obtained from the git credential helper are out of scope here:
-// those are looked up keyed on the host actually being challenged, so they are
-// already bound to their destination by construction.
+// Credentials obtained from the git credential helper are out of scope for
+// redirects: those are looked up keyed on the host actually being challenged,
+// so they are already bound to their destination by construction. They are
+// not bound to that host alone, though: EndpointAuth hands helper credentials
+// looked up for the endpoint's site to a sibling service on that site (the
+// GitHub size lookup sends github.com's to api.github.com), and applies this
+// same rule to decide whether they qualify.
 func sameSite(orig, dest *url.URL) bool {
 	if orig == nil || dest == nil {
 		return false

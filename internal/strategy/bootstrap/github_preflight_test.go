@@ -175,6 +175,26 @@ func TestGitHubPreflightUsesURLCredentials(t *testing.T) {
 	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": true, "mode": "batched"})
 }
 
+// net/http sends a token written as the username alone with an empty
+// password, and git accepts that, so the lookup must send it too.
+func TestGitHubPreflightUsesURLTokenWithoutPassword(t *testing.T) {
+	server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != preflightToken || pass != "" {
+			writeAPIError(t, w, http.StatusNotFound, "Not Found")
+			return
+		}
+		writeRepoSize(t, w, largeRepoKB)
+	})
+	var out bytes.Buffer
+	p := preflightParamsFor(t, "https://"+preflightToken+"@github.com/acme/private.git", server.Client(), nil, &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); !ok {
+		t.Fatalf("a token written as the URL username was not sent; log=%s", &out)
+	}
+	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": true, "mode": "batched"})
+}
+
 func TestGitHubPreflightSendsBearerToken(t *testing.T) {
 	server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+preflightToken {
@@ -248,6 +268,40 @@ func TestGitHubPreflightRetriesAnonymouslyWhenTokenRefused(t *testing.T) {
 	}
 }
 
+// When the anonymous retry fails too (a private repository answers 404), the
+// refusal is the real cause and must not be lost behind the retry's answer.
+func TestGitHubPreflightReportsRefusalWhenAnonymousRetryFails(t *testing.T) {
+	const refusal = "Resource protected by organization SAML enforcement."
+	server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			writeAPIError(t, w, http.StatusForbidden, refusal)
+			return
+		}
+		writeAPIError(t, w, http.StatusNotFound, "Not Found")
+	})
+	var out bytes.Buffer
+	var notices []string
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
+	p.OnNotice = func(msg string) { notices = append(notices, msg) }
+
+	if _, ok := githubBatchLimit(context.Background(), p); ok {
+		t.Fatal("githubBatchLimit selected batched mode without a size")
+	}
+	event := preflightEvent(t, &out)
+	assertFields(t, event, map[string]any{
+		"level":               "WARN",
+		"authenticated":       false,
+		"http_status":         float64(http.StatusNotFound),
+		"refused_auth_status": float64(http.StatusForbidden),
+	})
+	if got, ok := event["refused_auth_error"].(string); !ok || !strings.Contains(got, refusal) {
+		t.Fatalf("refused_auth_error = %q, want GitHub's refusal message", got)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], refusal) || !strings.Contains(notices[0], "404") {
+		t.Fatalf("notices = %q, want one notice naming both the refusal and the retry's failure", notices)
+	}
+}
+
 func TestGitHubPreflightDoesNotRetryOtherFailures(t *testing.T) {
 	requests := 0
 	server := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -284,9 +338,9 @@ func TestGitHubPreflightTransportErrorLogsWarning(t *testing.T) {
 
 func TestGitHubPreflightUnusableBodyLogsWarning(t *testing.T) {
 	for name, body := range map[string]string{
-		"not json":  `<html>not json</html>`,
-		"no size":   `{"full_name":"acme/private"}`,
-		"zero size": `{"full_name":"acme/private","size":0}`,
+		"not json":      `<html>not json</html>`,
+		"no size":       `{"full_name":"acme/private"}`,
+		"negative size": `{"full_name":"acme/private","size":-1}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -348,6 +402,33 @@ func TestGitHubPreflightSmallRepoLogsOneShotDecision(t *testing.T) {
 	}
 	if len(notices) != 0 {
 		t.Fatalf("a successful lookup raised notices: %q", notices)
+	}
+}
+
+// GitHub reports 0 for an empty repository and for one it has not sized yet.
+// That is an answer, so it selects one-shot without a warning or a notice.
+func TestGitHubPreflightZeroSizeLogsOneShotWithoutWarning(t *testing.T) {
+	server := privateRepoAPI(t, 0)
+	var out bytes.Buffer
+	var notices []string
+	p := preflightParams(t, server.Client(), installationAuth(), &out)
+	p.OnNotice = func(msg string) { notices = append(notices, msg) }
+
+	if _, ok := githubBatchLimit(context.Background(), p); ok {
+		t.Fatal("githubBatchLimit selected batched mode for a repo reporting size 0")
+	}
+	event := preflightEvent(t, &out)
+	assertFields(t, event, map[string]any{
+		"level":       "INFO",
+		"http_status": float64(http.StatusOK),
+		"size_kb":     float64(0),
+		"mode":        "one_shot",
+	})
+	if _, ok := event["error"]; ok {
+		t.Fatalf("a size of 0 logged an error: %v", event["error"])
+	}
+	if len(notices) != 0 {
+		t.Fatalf("a size of 0 raised notices: %q", notices)
 	}
 }
 
