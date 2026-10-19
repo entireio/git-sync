@@ -598,6 +598,7 @@ func TestIsConcurrentMove(t *testing.T) {
 		{"entire-server create-side CAS rejection", "already exists", true},
 		{"create-side CAS with surrounding detail", "command error on refs/heads/PIE-11736: already exists", true},
 		{"already exists case-insensitive", "Already Exists", true},
+		{"stock git CAS miss", "incorrect old value provided", true},
 		{"force-with-lease stale info", "stale info", true},
 		{"stale info case-insensitive", "Stale Info", true},
 		// Deliberately NOT moves: a plain non-fast-forward that wasn't force-pushed
@@ -625,6 +626,7 @@ func TestAsRefRejectedErrorClassifiesAndPreserves(t *testing.T) {
 	}{
 		{"concurrent move (remote ref has changed)", "remote ref has changed", true},
 		{"concurrent create (already exists)", "already exists", true},
+		{"stock git CAS miss", "incorrect old value provided", true},
 		{"lease miss (stale info)", "stale info", true},
 		{"ambiguous non-fast-forward is not a move", "non-fast-forward", false},
 		{"policy rejection is not a move", "deny updating a hidden ref", false},

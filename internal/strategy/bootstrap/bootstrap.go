@@ -92,8 +92,8 @@ type Params struct {
 	OnNotice func(string)
 	// RefOutcome reports what the target did with a ref in the push that just
 	// returned: applied it, refused it (with the reason), said nothing, or a
-	// fresh advertisement verified it already at the desired hash. Consulted immediately after a push, since the answer describes
-	// that one request.
+	// fresh advertisement verified it already at the desired hash. Consulted
+	// immediately after a push, since the answer describes that one request.
 	//
 	// It exists because a nil error is not proof. When the caller pushes
 	// best-effort the pusher hands a per-ref "ng" to its OnRejection callback
@@ -164,10 +164,9 @@ func (p Params) refRefused(name plumbing.ReferenceName) (string, bool) {
 
 // createConfirmed reports whether the branch create was accepted or its exact
 // desired hash was observed after a concurrent rejection, and otherwise why it
-// remains in doubt. Doubt is not
-// failure: it is settled against the target's own ref listing, because whether
-// a branch is there is a fact the target can state and an ng reason's wording
-// is not.
+// remains in doubt. Doubt is settled against the target's own ref listing:
+// whether a branch is there is a fact the target can state, whereas an ng
+// reason's wording cannot establish it.
 func (p Params) createConfirmed(name plumbing.ReferenceName) (bool, string) {
 	switch outcome, reason := p.refOutcome(name); outcome {
 	case gitproto.RefOutcomeApplied, gitproto.RefOutcomeAlreadyCurrent:

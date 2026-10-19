@@ -348,19 +348,9 @@ The JSON interface is stable:
 
 ## Concurrent syncs and discovery order
 
-Operations using both remotes read target refs before source refs. This keeps a
-concurrent sync's newer target state from becoming the expected-old value for an
-older source snapshot. If a recognized concurrent-ref rejection occurs, git-sync
-re-reads the target: a create or update whose exact desired hash is already there
-succeeds as skipped work, without retrying the write. Other rejections remain
-unchanged. A missing advertised ref cannot prove a deletion because servers may
-hide refs, so delete rejections are not converted to success.
+Operations using both remotes read target refs before source refs. This keeps a concurrent sync's newer target state from becoming the expected-old value for an older source snapshot. If a recognized concurrent-ref rejection occurs, git-sync re-reads the target: a create or update whose exact desired hash is already there succeeds as skipped work, without retrying the write. Other rejections remain unchanged. A missing advertised ref cannot prove a deletion because servers may hide refs, so delete rejections are not converted to success.
 
-Target discovery may therefore prompt for credentials or fail before an
-inaccessible source is discovered. This ordering is intentional. SSH discovery
-closes its input and waits for the discovery process to finish before proceeding;
-it does not hold a receive-pack process open during source authentication.
-Source-only operations still contact only the source.
+Target discovery may therefore prompt for credentials or fail before an inaccessible source is discovered. This ordering is intentional. SSH discovery closes its input and waits for the discovery process to finish before proceeding; it does not hold a receive-pack process open during source authentication. Source-only operations still contact only the source.
 
 ## Auth
 

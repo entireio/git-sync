@@ -26,9 +26,15 @@ func (p *Pusher) reconcileRejections(ctx context.Context, req *packp.UpdateReque
 	}
 	needsRead := false
 	for _, status := range report.CommandStatuses {
+		if status.Error() == nil {
+			continue
+		}
 		if canVerifyRefRejection(status.Status) && !wanted[status.ReferenceName].IsZero() {
 			needsRead = true
-			break
+		} else if p.OnRejection == nil {
+			// Strict pushes still fail on this refusal. Avoid a full target read
+			// that cannot make the report successful.
+			return report
 		}
 	}
 	if !needsRead {

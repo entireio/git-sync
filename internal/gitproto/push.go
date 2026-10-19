@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -321,6 +322,7 @@ func buildUpdateRequest(
 // so substring matching is the only option absent upstream sentinels.
 var leaseFailureMarkers = []string{
 	"stale info",
+	"incorrect old value provided",
 	"fetch first",
 	"non-fast-forward",
 	"does not match",
@@ -437,16 +439,16 @@ func (e *RefRejectedError) Is(target error) bool {
 // "stale info" is git's force-with-lease lease-miss phrasing, kept for
 // consistency with leaseFailureMarkers and defence-in-depth; note it is
 // primarily a client-side status, so it may not arrive as a server ng reason on
-// every target. Stock git servers phrase a CAS miss differently again
-// ("failed to update ref" / "cannot lock ref ... but expected ..."), which this
-// set does NOT match — so against a non-entire target a genuine race may fall
-// through to a plain rejection. Extend this set as new server phrasings are
-// observed. Match is case-insensitive substring (Reason is free-form; see
-// RefRejectedError).
+// every target. Stock git also uses "incorrect old value provided", an explicit
+// compare-and-swap miss. Its generic "failed to update ref" can have other
+// causes, so that phrase only triggers desired-hash verification, not this
+// classification. Match is case-insensitive substring (Reason is free-form;
+// see RefRejectedError).
 var concurrentMoveMarkers = []string{
 	"remote ref has changed",
 	"already exists",
 	"stale info",
+	"incorrect old value provided",
 }
 
 // isConcurrentMove reports whether a receive-pack ng reason is an unambiguous
@@ -547,8 +549,8 @@ func sendReceivePack(
 	if err != nil {
 		return fmt.Errorf("target receive-pack: %w", err)
 	}
-	reader = CloseOnce(reader)
-	defer reader.Close()
+	closeResponse := sync.OnceValue(reader.Close)
+	defer closeResponse() //nolint:errcheck // finishReceivePack checks close errors; early failures keep the decode/drain error
 
 	// Unwrap sideband if negotiated; stream server-side progress to stderr
 	// when verbose so long-running pushes show "Resolving deltas ..." etc.
@@ -564,17 +566,25 @@ func sendReceivePack(
 		respReader = dem
 	}
 
+	var report *packp.ReportStatus
 	if req.Capabilities.Supports(capability.ReportStatus) {
-		report := &packp.ReportStatus{}
+		report = &packp.ReportStatus{}
 		if err := report.Decode(respReader); err != nil {
 			return fmt.Errorf("decode report-status: %w", err)
 		}
+	}
+	// A report's flush packet is not the end of the RPC: hooks may still be
+	// writing sideband output. Drain before closing so SSH/helper processes
+	// can finish normally, and before opening another RPC for verification.
+	if err := finishReceivePack(respReader, reader, closeResponse); err != nil {
+		if report != nil && report.Error() != nil {
+			return errors.Join(err, fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(report.Error()))))
+		}
+		return err
+	}
+	if report != nil {
 		if statuses != nil && statuses.Reconcile != nil {
-			// Finish this RPC before opening another one on the transport.
-			// A close failure cannot establish convergence; keep the rejection.
-			if err := reader.Close(); err == nil {
-				report = statuses.Reconcile(ctx, req, report)
-			}
+			report = statuses.Reconcile(ctx, req, report)
 		}
 		if statuses.fatalRejections() {
 			if err := report.Error(); err != nil {
@@ -597,6 +607,21 @@ func sendReceivePack(
 		// fail, but the silence is also not the target confirming the ref, and
 		// a caller that has to know can go and look.
 		statuses.record(report)
+	}
+	return nil
+}
+
+// finishReceivePack consumes sideband output through its flush, then the raw
+// stream through EOF before waiting for the transport process to exit.
+func finishReceivePack(response, raw io.Reader, closeResponse func() error) error {
+	if _, err := io.Copy(io.Discard, response); err != nil {
+		return fmt.Errorf("drain target receive-pack response: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, raw); err != nil {
+		return fmt.Errorf("drain target receive-pack stream: %w", err)
+	}
+	if err := closeResponse(); err != nil {
+		return fmt.Errorf("close target receive-pack response: %w", err)
 	}
 	return nil
 }
