@@ -39,11 +39,10 @@ import (
 //
 // Credentials obtained from the git credential helper are out of scope for
 // redirects: those are looked up keyed on the host actually being challenged,
-// so they are already bound to their destination by construction. They are
-// not bound to that host alone, though: EndpointAuth hands helper credentials
-// looked up for the endpoint's site to a sibling service on that site (the
-// GitHub size lookup sends github.com's to api.github.com), and applies this
-// same rule to decide whether they qualify.
+// so they are already bound to their destination by construction. A request
+// to another service beside the endpoint (the GitHub size lookup sends
+// github.com's credentials to api.github.com) goes through CredentialsFor
+// instead, which applies this rule from the URL each credential was bound to.
 func sameSite(orig, dest *url.URL) bool {
 	if orig == nil || dest == nil {
 		return false

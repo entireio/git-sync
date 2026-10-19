@@ -1941,45 +1941,56 @@ func newCyclicRT() http.RoundTripper {
 	return rt
 }
 
-// EndpointAuth answers for the site the user configured. Helper credentials
-// looked up for a host a redirect led to are bound to that host, so a caller
-// building a request to a sibling service of the endpoint must not get them.
-func TestEndpointAuthWithholdsHelperCredsResolvedForAnotherSite(t *testing.T) {
-	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
-	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Host {
-		case testOriginHost:
-			res := &http.Response{
-				StatusCode: http.StatusTemporaryRedirect,
-				Request:    req,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader("")),
-			}
-			res.Header.Set("Location", "https://"+testReplicaHost+"/repo.git/info/refs?service=git-upload-pack")
-			return res, nil
-		case testReplicaHost:
-			if req.Header.Get("Authorization") == "" {
-				return newUnauthorizedResponse(req), nil
-			}
-			return newAdvertisementResponse(req), nil
-		}
-		return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
-	}))
-	conn.CredentialHelper = helper
-	conn.FollowInfoRefsRedirect = true
+// apiURL is a sibling service on the endpoint's site, the way
+// api.github.com sits beside github.com.
+var apiURL = &url.URL{Scheme: "https", Host: "api." + testOriginHost, Path: "/repos/acme/repo"}
 
-	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
-		t.Fatalf("RequestInfoRefs: %v", err)
-	}
-	if conn.Auth == nil {
-		t.Fatal("precondition: the helper credentials for the replica were not attached")
-	}
-	if got := conn.EndpointAuth(); got != nil {
-		t.Fatalf("EndpointAuth() = %v, want nil for credentials looked up for %s", got, testReplicaHost)
+// Helper credentials looked up for a host a redirect led to are bound to that
+// host. A sibling of it is not a subdomain of it, so CredentialsFor must
+// withhold them even when the redirect stayed on the endpoint's site.
+func TestCredentialsForWithholdsHelperCredsBoundToRedirectHost(t *testing.T) {
+	for name, redirectHost := range map[string]string{
+		"other site":     testReplicaHost,
+		"same-site host": "git." + testOriginHost,
+	} {
+		t.Run(name, func(t *testing.T) {
+			helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+			conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				switch req.URL.Host {
+				case testOriginHost:
+					res := &http.Response{
+						StatusCode: http.StatusTemporaryRedirect,
+						Request:    req,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader("")),
+					}
+					res.Header.Set("Location", "https://"+redirectHost+"/repo.git/info/refs?service=git-upload-pack")
+					return res, nil
+				case redirectHost:
+					if req.Header.Get("Authorization") == "" {
+						return newUnauthorizedResponse(req), nil
+					}
+					return newAdvertisementResponse(req), nil
+				}
+				return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
+			}))
+			conn.CredentialHelper = helper
+			conn.FollowInfoRefsRedirect = true
+
+			if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+				t.Fatalf("RequestInfoRefs: %v", err)
+			}
+			if conn.Auth == nil {
+				t.Fatalf("precondition: the helper credentials for %s were not attached", redirectHost)
+			}
+			if got := conn.CredentialsFor(apiURL); got != nil {
+				t.Fatalf("CredentialsFor(%s) = %v, want nil for credentials looked up for %s", apiURL.Host, got, redirectHost)
+			}
+		})
 	}
 }
 
-func TestEndpointAuthReturnsSameSiteHelperCreds(t *testing.T) {
+func TestCredentialsForReturnsSameSiteHelperCreds(t *testing.T) {
 	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
 	attempts := 0
 	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -1994,15 +2005,66 @@ func TestEndpointAuthReturnsSameSiteHelperCreds(t *testing.T) {
 	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
 		t.Fatalf("RequestInfoRefs: %v", err)
 	}
-	if conn.EndpointAuth() == nil {
-		t.Fatal("EndpointAuth() = nil, want the helper credentials looked up for the endpoint")
+	if conn.CredentialsFor(apiURL) == nil {
+		t.Fatal("CredentialsFor() = nil, want the helper credentials looked up for the endpoint")
 	}
 }
 
-func TestEndpointAuthReturnsExplicitCreds(t *testing.T) {
+func TestCredentialsForExplicitCreds(t *testing.T) {
 	auth := &transporthttp.BasicAuth{Username: "u", Password: "p"}
 	conn := NewHTTPConn(&url.URL{Scheme: "https", Host: testOriginHost, Path: "/repo.git"}, "src", auth, http.DefaultTransport)
-	if conn.EndpointAuth() != auth {
-		t.Fatal("EndpointAuth() did not return the explicit credentials")
+	if conn.CredentialsFor(apiURL) != auth {
+		t.Fatal("CredentialsFor(sibling) did not return the explicit credentials")
+	}
+	for _, dest := range []*url.URL{
+		{Scheme: "https", Host: testReplicaHost, Path: "/repos/acme/repo"},
+		{Scheme: "http", Host: apiURL.Host, Path: apiURL.Path},
+		{Scheme: "https", Host: apiURL.Host + ":8443", Path: apiURL.Path},
+		nil,
+	} {
+		if got := conn.CredentialsFor(dest); got != nil {
+			t.Errorf("CredentialsFor(%v) = %v, want nil", dest, got)
+		}
+	}
+}
+
+// With TLS verification off a MITM cannot be told from the real host, so no
+// credential crosses to another host, the rule the helper paths already apply.
+func TestCredentialsForWithholdsAcrossHostsWithoutTLSVerification(t *testing.T) {
+	auth := &transporthttp.BasicAuth{Username: "u", Password: "p"}
+	conn := NewHTTPConn(&url.URL{Scheme: "https", Host: testOriginHost, Path: "/repo.git"}, "src", auth, http.DefaultTransport)
+	conn.InsecureSkipTLSVerify = true
+	if got := conn.CredentialsFor(apiURL); got != nil {
+		t.Fatalf("CredentialsFor(%s) = %v, want nil with TLS verification off", apiURL.Host, got)
+	}
+	if conn.CredentialsFor(&url.URL{Scheme: "https", Host: testOriginHost, Path: "/other"}) != auth {
+		t.Fatal("CredentialsFor(same host) withheld the credentials")
+	}
+}
+
+func TestCredentialsForURLUserinfo(t *testing.T) {
+	for name, tc := range map[string]struct {
+		user *url.Userinfo
+		want *transporthttp.BasicAuth
+	}{
+		"user and password": {url.UserPassword("x-access-token", "tok"), &transporthttp.BasicAuth{Username: "x-access-token", Password: "tok"}},
+		// An account name is as likely as a token: the API would refuse it.
+		"username only":  {url.User("alice"), nil},
+		"empty password": {url.UserPassword("alice", ""), nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := NewHTTPConn(&url.URL{Scheme: "https", User: tc.user, Host: testOriginHost, Path: "/repo.git"}, "src", nil, http.DefaultTransport)
+			got := conn.CredentialsFor(apiURL)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("CredentialsFor() = %v, want nil", got)
+				}
+				return
+			}
+			basic, ok := got.(*transporthttp.BasicAuth)
+			if !ok || *basic != *tc.want {
+				t.Fatalf("CredentialsFor() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

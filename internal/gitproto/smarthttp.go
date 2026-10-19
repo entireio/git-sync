@@ -269,9 +269,9 @@ type HTTPConn struct {
 	authWithheldWarned bool
 
 	// authOrigin is the URL helper-resolved credentials in Auth were looked
-	// up for; nil while Auth is explicit or unset. EndpointAuth compares it
-	// with EndpointURL, which a helper lookup keyed on a redirect target
-	// does not change.
+	// up for; nil while Auth is explicit or unset. CredentialsFor measures
+	// a destination against it, since a helper lookup keyed on a redirect
+	// target binds the credentials to that target, not to EndpointURL.
 	authOrigin *url.URL
 
 	// pendingHelperCreds tracks credentials supplied by the helper via
@@ -482,20 +482,47 @@ func (c *HTTPConn) warnAuthWithheld(target *url.URL) {
 
 func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
 
-// EndpointAuth returns the credentials this connection holds for the site of
-// the endpoint the user configured: explicit credentials, or helper-resolved
-// ones looked up for a host on that site. It returns nil when the only
-// credentials held were looked up for a host a redirect led elsewhere, so a
-// caller building a request to a service beside the endpoint (its hosting
-// provider's API, say) cannot hand one host's credentials to another.
-func (c *HTTPConn) EndpointAuth() AuthMethod {
-	if c.Auth == nil {
+// CredentialsFor returns the credentials this connection authenticates with
+// that may also be sent to dest, a service beside the endpoint (its hosting
+// provider's API, say) that a caller addresses with its own request. It
+// returns nil when none may.
+//
+// Each credential is measured from the URL it is bound to: explicit
+// credentials and a "user:password@" in the endpoint URL from EndpointURL,
+// helper-resolved ones from the URL they were looked up for. dest must be
+// same-site with that origin (see sameSite), and with TLS verification off
+// nothing crosses to another host at all, the rule tryHelperRetry and
+// EnsureAuthForService already apply: a MITM cannot be told from the real
+// host. A username without a password is not offered: it is as likely an
+// account name as a token, and the API would only refuse it.
+func (c *HTTPConn) CredentialsFor(dest *url.URL) AuthMethod {
+	if dest == nil {
 		return nil
 	}
-	if c.authOrigin != nil && !sameSite(c.EndpointURL, c.authOrigin) {
-		return nil
+	if c.Auth != nil {
+		origin := c.authOrigin
+		if c.authIsExplicit {
+			origin = c.EndpointURL
+		}
+		if c.mayCarry(origin, dest) {
+			return c.Auth
+		}
 	}
-	return c.Auth
+	if user := c.EndpointURL.User; user != nil {
+		if password, ok := user.Password(); ok && password != "" && c.mayCarry(c.EndpointURL, dest) {
+			return &transporthttp.BasicAuth{Username: user.Username(), Password: password}
+		}
+	}
+	return nil
+}
+
+// mayCarry reports whether credentials bound to origin may be sent to dest.
+// A nil origin is unknown provenance and fails closed.
+func (c *HTTPConn) mayCarry(origin, dest *url.URL) bool {
+	if origin == nil || !sameSite(origin, dest) {
+		return false
+	}
+	return origin.Host == dest.Host || !c.skipsTLSVerify()
 }
 
 func (c *HTTPConn) ProgressWriter() io.Writer { return c.ProgressOut }
