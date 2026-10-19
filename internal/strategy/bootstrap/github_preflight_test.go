@@ -161,6 +161,20 @@ func TestGitHubPreflightAuthenticatesPrivateRepoLookup(t *testing.T) {
 	}
 }
 
+// Credentials written into the source URL authenticate git through
+// req.URL.User and never become HTTPConn.Auth, so the lookup has to take them
+// from the endpoint itself.
+func TestGitHubPreflightUsesURLCredentials(t *testing.T) {
+	server := privateRepoAPI(t, largeRepoKB)
+	var out bytes.Buffer
+	p := preflightParamsFor(t, "https://x-access-token:"+preflightToken+"@github.com/acme/private.git", server.Client(), nil, &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); !ok {
+		t.Fatalf("credentials from the URL were not sent; log=%s", &out)
+	}
+	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": true, "mode": "batched"})
+}
+
 func TestGitHubPreflightSendsBearerToken(t *testing.T) {
 	server := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+preflightToken {

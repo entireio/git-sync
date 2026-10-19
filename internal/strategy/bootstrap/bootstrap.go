@@ -18,6 +18,7 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
@@ -1907,9 +1908,9 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 	ctx, cancel := context.WithTimeout(ctx, githubPreflightTimeout)
 	defer cancel()
 	lookup := githubSizeLookup{owner: owner, repo: repo}
-	if httpConn.Auth != nil {
+	if creds := sourceCredentials(httpConn); creds != nil {
 		lookup.authenticated = true
-		requestGitHubRepoSize(ctx, httpConn, httpConn.Auth, &lookup)
+		requestGitHubRepoSize(ctx, httpConn, creds, &lookup)
 		if lookup.status != http.StatusUnauthorized && lookup.status != http.StatusForbidden {
 			return lookup, true
 		}
@@ -1917,6 +1918,23 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 	}
 	requestGitHubRepoSize(ctx, httpConn, nil, &lookup)
 	return lookup, true
+}
+
+// sourceCredentials returns the credentials git authenticates the source
+// with: the connection's own (explicit or helper-resolved), else a token
+// written into the endpoint URL. The latter never becomes Auth — net/http
+// derives Basic auth from req.URL.User on the git requests — and the API
+// request is built from a different URL, so it has to be carried over here.
+func sourceCredentials(conn *gitproto.HTTPConn) gitproto.AuthMethod {
+	if conn.Auth != nil {
+		return conn.Auth
+	}
+	if user := conn.EndpointURL.User; user != nil {
+		if password, ok := user.Password(); ok && password != "" {
+			return &transporthttp.BasicAuth{Username: user.Username(), Password: password}
+		}
+	}
+	return nil
 }
 
 func requestGitHubRepoSize(ctx context.Context, conn *gitproto.HTTPConn, auth gitproto.AuthMethod, lookup *githubSizeLookup) {
