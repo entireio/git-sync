@@ -1,0 +1,8 @@
+can you review https://github.com/entireio/git-sync/pull/124
+
+---
+
+(2) undo this I will fix it separately 
+
+(1) fix it
+fix the nits too
