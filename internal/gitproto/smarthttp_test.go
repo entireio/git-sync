@@ -1940,3 +1940,69 @@ func newCyclicRT() http.RoundTripper {
 	rt.base = rt
 	return rt
 }
+
+// EndpointAuth answers for the site the user configured. Helper credentials
+// looked up for a host a redirect led to are bound to that host, so a caller
+// building a request to a sibling service of the endpoint must not get them.
+func TestEndpointAuthWithholdsHelperCredsResolvedForAnotherSite(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case testOriginHost:
+			res := &http.Response{
+				StatusCode: http.StatusTemporaryRedirect,
+				Request:    req,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+			res.Header.Set("Location", "https://"+testReplicaHost+"/repo.git/info/refs?service=git-upload-pack")
+			return res, nil
+		case testReplicaHost:
+			if req.Header.Get("Authorization") == "" {
+				return newUnauthorizedResponse(req), nil
+			}
+			return newAdvertisementResponse(req), nil
+		}
+		return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
+	}))
+	conn.CredentialHelper = helper
+	conn.FollowInfoRefsRedirect = true
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if conn.Auth == nil {
+		t.Fatal("precondition: the helper credentials for the replica were not attached")
+	}
+	if got := conn.EndpointAuth(); got != nil {
+		t.Fatalf("EndpointAuth() = %v, want nil for credentials looked up for %s", got, testReplicaHost)
+	}
+}
+
+func TestEndpointAuthReturnsSameSiteHelperCreds(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "alice", pass: "s3cret", ok: true}
+	attempts := 0
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return newUnauthorizedResponse(req), nil
+		}
+		return newAdvertisementResponse(req), nil
+	}))
+	conn.CredentialHelper = helper
+
+	if _, err := conn.RequestInfoRefs(context.Background(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if conn.EndpointAuth() == nil {
+		t.Fatal("EndpointAuth() = nil, want the helper credentials looked up for the endpoint")
+	}
+}
+
+func TestEndpointAuthReturnsExplicitCreds(t *testing.T) {
+	auth := &transporthttp.BasicAuth{Username: "u", Password: "p"}
+	conn := NewHTTPConn(&url.URL{Scheme: "https", Host: testOriginHost, Path: "/repo.git"}, "src", auth, http.DefaultTransport)
+	if conn.EndpointAuth() != auth {
+		t.Fatal("EndpointAuth() did not return the explicit credentials")
+	}
+}

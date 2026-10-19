@@ -1921,13 +1921,15 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 }
 
 // sourceCredentials returns the credentials git authenticates the source
-// with: the connection's own (explicit or helper-resolved), else a token
-// written into the endpoint URL. The latter never becomes Auth — net/http
-// derives Basic auth from req.URL.User on the git requests — and the API
-// request is built from a different URL, so it has to be carried over here.
+// with on the endpoint's own site: the connection's (explicit, or
+// helper-resolved for that site — never ones looked up for a host a redirect
+// led to), else a token written into the endpoint URL. The latter never
+// becomes Auth — net/http derives Basic auth from req.URL.User on the git
+// requests — and the API request is built from a different URL, so it has to
+// be carried over here.
 func sourceCredentials(conn *gitproto.HTTPConn) gitproto.AuthMethod {
-	if conn.Auth != nil {
-		return conn.Auth
+	if auth := conn.EndpointAuth(); auth != nil {
+		return auth
 	}
 	if user := conn.EndpointURL.User; user != nil {
 		if password, ok := user.Password(); ok && password != "" {

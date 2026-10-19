@@ -268,6 +268,12 @@ type HTTPConn struct {
 	// connection; the same redirect repeats on every RPC.
 	authWithheldWarned bool
 
+	// authOrigin is the URL helper-resolved credentials in Auth were looked
+	// up for; nil while Auth is explicit or unset. EndpointAuth compares it
+	// with EndpointURL, which a helper lookup keyed on a redirect target
+	// does not change.
+	authOrigin *url.URL
+
 	// pendingHelperCreds tracks credentials supplied by the helper via
 	// EnsureAuthForService but not yet validated against a real operation.
 	// The next RequestInfoRefs/PostRPCStreamBody approves on 2xx or rejects
@@ -475,6 +481,22 @@ func (c *HTTPConn) warnAuthWithheld(target *url.URL) {
 }
 
 func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
+
+// EndpointAuth returns the credentials this connection holds for the site of
+// the endpoint the user configured: explicit credentials, or helper-resolved
+// ones looked up for a host on that site. It returns nil when the only
+// credentials held were looked up for a host a redirect led elsewhere, so a
+// caller building a request to a service beside the endpoint (its hosting
+// provider's API, say) cannot hand one host's credentials to another.
+func (c *HTTPConn) EndpointAuth() AuthMethod {
+	if c.Auth == nil {
+		return nil
+	}
+	if c.authOrigin != nil && !sameSite(c.EndpointURL, c.authOrigin) {
+		return nil
+	}
+	return c.Auth
+}
 
 func (c *HTTPConn) ProgressWriter() io.Writer { return c.ProgressOut }
 
@@ -778,6 +800,7 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	}
 	c.Auth = &transporthttp.BasicAuth{Username: user, Password: pass}
 	c.authIsExplicit = false // looked up for challengeURL, so bound to it
+	c.authOrigin = challengeURL
 	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 	c.adoptChallengeHost(challengeURL)
 }
@@ -804,6 +827,7 @@ func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Resp
 	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
 		c.pendingHelperCreds = nil
 		c.Auth = nil
+		c.authOrigin = nil
 		c.CredentialHelper.Reject(ctx, creds.url, creds.user, creds.pass)
 	}
 	// Otherwise (e.g. a 2xx with a malformed/oversized body): leave the creds
@@ -904,6 +928,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		// status alone isn't proof the operation succeeded.
 		c.Auth = retryAuth
 		c.authIsExplicit = false // looked up for challengeURL, so bound to it
+		c.authOrigin = challengeURL
 		c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 		c.adoptChallengeHost(challengeURL)
 	}
