@@ -1,0 +1,97 @@
+yes
+
+---
+
+update it
+
+---
+
+can you ensure that this change can be used in /Users/nodo/work/entire/mirror-pipeline in production?
+
+---
+
+can you re-run and adverarial review on the git-sync pr?
+
+---
+
+<task-notification>
+<task-id>aa43c1f865625694a</task-id>
+<tool-use-id>toolu_01X49bBbzHN5orvS2EPC1ZAn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo-work-entire-git-sync--worktrees-info-size/288f8ed7-1ea9-45ee-b374-3ed03fc552bb/tasks/aa43c1f865625694a.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 124 high" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Ran at xhigh effort, reused from last time, because no level was picked up from `124 high`. Typing a level (for example `/code-review high`) changes it.
+
+I reviewed PR #124, which is this branch against `main` (`3e2933c7..6e753384`). It's the GitHub repo-size check before a bootstrap, which now sends credentials, logs its result and prints a notice when it fails. Tests pass for `bootstrap`, `gitproto` and `syncer`. Neither the user-level nor any repo `CLAUDE.md` has a rule that applies to this code. There are no crash-level bugs. The most important findings are where the credentials can end up (items 1–3).
+
+```json
+[
+  {
+    "file": "internal/gitproto/smarthttp.go",
+    "line": 495,
+    "summary": "EndpointAuth applies sameSite in the wrong direction: it checks that the host the helper credentials were looked up for is on the endpoint's site, never that the host they are actually sent to is allowed to receive them.",
+    "failure_scenario": "FollowInfoRefsRedirect is on and /info/refs redirects github.com -&gt; replica.github.com, which asks for a login. The helper looks up credentials for replica.github.com; sameSite(github.com, replica.github.com) is true, so EndpointAuth returns them and they go to api.github.com. That host is a sibling of replica.github.com, not a subdomain, so sameSite(replica.github.com, api.github.com) would refuse it. Credentials stored for one host reach another, against the rule samesite.go says this code 'applies'."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1936,
+    "summary": "Helper credentials looked up for github.com are sent to a different host (api.github.com) even when TLS verification is off. HTTPConn refuses exactly this cross-host use of helper credentials under InsecureSkipTLSVerify (tryHelperRetry, EnsureAuthForService); EndpointAuth and sourceCredentials never call skipsTLSVerify().",
+    "failure_scenario": "A source with SkipTLSVerify plus credentials from the helper: the lookup reuses the same client with verification off. Anyone who can intercept api.github.com with a self-signed certificate gets the github.com token. Before this PR the request carried no credentials. The guard the connection already enforces for every other cross-host send is skipped here."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1915,
+    "summary": "The git credential helper is only asked after a 401, so for a public repo the conn never holds helper credentials. The lookup stays anonymous, yet CHANGELOG/usage.md say it now sends the source credentials and 'moves public lookups off the anonymous rate limit'.",
+    "failure_scenario": "A CI runner using `gh auth` / the osxkeychain helper bootstraps many public github.com repos from one IP. Every lookup is still anonymous (60 an hour). Once the limit is spent, each run falls back to one pack and now also prints a notice plus a WARN record. The promised rate-limit relief applies only to --source-token or URL-embedded tokens."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 2040,
+    "summary": "The failure notice says the run is 'bootstrapping as a single pack' and tells the user to 'pass --target-max-pack-bytes'. Execute can still switch to batches after a push is rejected, and library callers have no such flag.",
+    "failure_scenario": "The lookup fails (rate limit), a single-pack push is attempted, the target rejects the body as too large, and autoTargetMaxPackBytes switches to batches. The operator sees the 'single pack' notice, then a 'switching to batched mode' notice. Library callers (unstable.Client, the Entire server) get a CLI flag hint on stderr through OnNotice. In -v mode the same failure is also printed twice (p.log line and notice)."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1939,
+    "summary": "sourceCredentials treats any username in the URL as a credential. A plain account name (`https://alice@github.com/...` or `https://git@github.com/...`) is sent to the API as Basic `alice:` and logged as authenticated=true.",
+    "failure_scenario": "Public repo, URL `https://alice@github.com/acme/public.git`, no helper credentials: the first API request carries Basic `alice:` and GitHub answers 401 'Bad credentials'. That costs an extra request, possibly a failed-login count against the account, and a refused_auth_status=401 record for something that was never a token. The code cannot tell token-as-username from username-only."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1916,
+    "summary": "lookup.authenticated is set when credentials are attached, not when they were actually received. guardRedirects strips Authorization on a cross-site hop, so the logged 'authenticated: true' can describe an answer that came from an anonymous request.",
+    "failure_scenario": "The API redirects to a host on another site: the header is dropped, that host answers 404, and the record shows authenticated=true, http_status=404. An operator reads that as 'the token cannot see the repo' instead of 'the token never arrived'."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 2001,
+    "summary": "The doc comment says GitHub's message is 'stripped of control characters', but sanitize.Text only filters single bytes, and strings.Fields only drops whitespace. C1 controls such as U+009B (CSI, bytes \\xc2\\x9b) and bidi overrides pass through into the terminal notice.",
+    "failure_scenario": "A response (from a redirect target, a proxy, or a test override of GitHubRepoAPIBaseURL) with message \"\\u009b2K\\u009b1Aok\" reaches p.notice and stderr unchanged. Terminals that act on UTF-8-encoded C1 controls rewrite the line, which is the spoofing that sanitize exists to stop."
+  },
+  {
+    "file": "internal/strategy/bootstrap/github_preflight_test.go",
+    "line": 482,
+    "summary": "TestGitHubPreflightRedirectDropsCredentials only checks `leaked == \"\"`, which is also true when the redirect target was never contacted, so the test can pass without proving anything.",
+    "failure_scenario": "If the redirect stops being followed (a CheckRedirect returning ErrUseLastResponse, or the redirect breaks), `elsewhere` gets no request, leaked stays empty and the test still passes. It should also assert that `elsewhere` received exactly one request."
+  },
+  {
+    "file": "internal/gitproto/smarthttp.go",
+    "line": 491,
+    "summary": "Altitude: the rule for which credentials may go to a sibling service is split in two. gitproto.EndpointAuth handles explicit and helper credentials; bootstrap.sourceCredentials re-derives net/http's URL-username rule. Neither checks the real destination, and GitHubRepoAPIBaseURL is trusted as-is.",
+    "failure_scenario": "Items 1, 2 and 5 all come from this split. A single HTTPConn method, e.g. CredentialsFor(dest *url.URL), applying sameSite(origin, dest) and the skip-TLS guard to explicit, helper and URL-username credentials would keep the policy in gitproto next to outgoingAuth. Callers would then have nothing to remember."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1873,
+    "summary": "Simplification: githubSizeLookup stores state it can derive. refusedAuthErr is always set whenever refusedAuthStatus is (every non-200 sets err). requestGitHubRepoSize reads owner/repo from the same pointer it writes results to. logGitHubPreflight logs one record to two loggers under different messages.",
+    "failure_scenario": "Keeping the refused attempt as one error (or a nested result) and having requestGitHubRepoSize return (status, sizeKB, err) removes the reset-and-copy at line 1921. The two messages ('bootstrap github preflight' in verbose, 'Bootstrap GitHub size preflight' in BootstrapLogger) mean a log query for one misses the other."
+  }
+]
+```</result>
+<usage><subagent_tokens>182040</subagent_tokens><tool_uses>37</tool_uses><duration_ms>554395</duration_ms></usage>
+</task-notification>
+
+---
+
+ok fix everything

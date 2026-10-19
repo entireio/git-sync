@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5AHETQ72WQ2NWA9M65233AD",
+  "strategy": "manual-commit",
+  "branch": "claude/practical-gauss-nj0xyd",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "CHANGELOG.md",
+    "docs/usage.md",
+    "internal/gitproto/samesite.go",
+    "internal/gitproto/smarthttp.go",
+    "internal/gitproto/smarthttp_test.go",
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/github_preflight_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 93680,
+    "cache_read_tokens": 8963495,
+    "output_tokens": 49072,
+    "api_call_count": 54,
+    "subagent_tokens": {
+      "input_tokens": 74,
+      "cache_creation_tokens": 178734,
+      "cache_read_tokens": 4210887,
+      "output_tokens": 3625,
+      "api_call_count": 37
+    }
+  }
+}
