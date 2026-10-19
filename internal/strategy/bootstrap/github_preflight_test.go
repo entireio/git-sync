@@ -521,6 +521,12 @@ func TestGitHubPreflightSkippedLogsNothing(t *testing.T) {
 		"non-default port": {endpoint: "https://github.com:8443/acme/private.git"},
 		"http on 443":      {endpoint: "http://github.com:443/acme/private.git"},
 		"not github":       {endpoint: "https://example.com/acme/private.git"},
+		// A dot segment would steer the credentialed request to another API
+		// endpoint once the path is joined (/repos/../user is /user).
+		"dot-dot owner":         {endpoint: "https://github.com/../user"},
+		"encoded dot-dot owner": {endpoint: "https://github.com/%2e%2e/user"},
+		"dot repo":              {endpoint: "https://github.com/acme/."},
+		"name outside charset":  {endpoint: "https://github.com/acme/pri%3Fvate"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {

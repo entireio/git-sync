@@ -2097,10 +2097,23 @@ func GitHubOwnerRepo(conn gitproto.Conn) (string, string, bool) {
 	}
 	path := strings.TrimSuffix(strings.Trim(ep.Path, "/"), ".git")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) != 2 || !isGitHubName(parts[0]) || !isGitHubName(parts[1]) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+// githubNamePattern is the character set GitHub allows in owner and
+// repository names.
+var githubNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// isGitHubName reports whether s can be a GitHub owner or repository name.
+// The names become segments of a credentialed API path, so a dot segment
+// ("." or "..", possibly percent-encoded in the source URL) must not get
+// through: path joining would resolve it and send the token to a different
+// endpoint.
+func isGitHubName(s string) bool {
+	return s != "." && s != ".." && githubNamePattern.MatchString(s)
 }
 
 func autoTargetMaxPackBytes(p Params, err error) (int64, bool) {
