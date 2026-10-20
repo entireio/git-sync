@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -578,6 +579,23 @@ func TestGitHubPreflightUnauthenticatedRefusalIsNotRetried(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// A caller-supplied transport may answer without Response.Request. The answer
+// is still used, but whether it was authenticated is unknown, so it is not
+// claimed.
+func TestGitHubPreflightResponseWithoutRequest(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `{"full_name":"acme/private","size":` + strconv.Itoa(largeRepoKB) + `}`
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	var out bytes.Buffer
+	p := preflightParams(t, client, installationAuth(), &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); !ok {
+		t.Fatalf("a usable answer without Response.Request was not used; log=%s", &out)
+	}
+	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": false, "mode": "batched"})
+}
 
 // Each attempt gets the whole timeout: a slow refusal must not starve the
 // anonymous retry that would have batched a public repository.

@@ -163,8 +163,10 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	defer resp.Body.Close()
 	// The redirect guard drops Authorization on a hop that leaves the API's
 	// site, so whether the answer was authenticated is read off the request
-	// that produced it, not the one sent.
-	answer.authenticated = resp.Request.Header.Get("Authorization") != ""
+	// that produced it, not the one sent. A caller-supplied transport may
+	// leave Response.Request unset; then the provenance is unknown and
+	// authentication is not claimed.
+	answer.authenticated = resp.Request != nil && resp.Request.Header.Get("Authorization") != ""
 	answer.status = resp.StatusCode
 	body := io.LimitReader(resp.Body, maxGitHubRepoResponseBytes)
 	if resp.StatusCode != http.StatusOK {
