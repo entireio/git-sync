@@ -525,7 +525,15 @@ func (c *HTTPConn) mayCarry(origin, dest *url.URL) bool {
 	if origin == nil || !sameSite(origin, dest) {
 		return false
 	}
-	return origin.Host == dest.Host || !c.skipsTLSVerify()
+	return !c.crossesHostUnverified(origin, dest)
+}
+
+// crossesHostUnverified reports whether credentials going from one host to
+// another would cross hosts with TLS verification off, where a MITM cannot be
+// told from the real host. Every path that hands credentials to another host
+// refuses that.
+func (c *HTTPConn) crossesHostUnverified(from, to *url.URL) bool {
+	return from.Host != to.Host && c.skipsTLSVerify()
 }
 
 func (c *HTTPConn) ProgressWriter() io.Writer { return c.ProgressOut }
@@ -817,7 +825,7 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 		return
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.skipsTLSVerify() && challengeURL.Host != c.requestURL().Host {
+	if c.crossesHostUnverified(c.requestURL(), challengeURL) {
 		// See tryHelperRetry: with TLS verification off we can't tell a
 		// real challenger from a MITM, so we won't attach helper creds
 		// after a cross-host probe redirect. The real op will surface
@@ -924,7 +932,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		return res, nil
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.skipsTLSVerify() && challengeURL.Host != c.requestURL().Host {
+	if c.crossesHostUnverified(c.requestURL(), challengeURL) {
 		// Refuse to hand helper-stored credentials to a redirect target we
 		// can't authenticate. With TLS verification off, the post-redirect
 		// host could be anyone presenting a self-signed cert for the host
