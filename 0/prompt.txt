@@ -1,0 +1,1 @@
+Create a herdr worktree and create a pr that bumps to go 1.27.2 and fix all the findings from govulncheck
