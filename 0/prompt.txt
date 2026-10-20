@@ -1,0 +1,11 @@
+sure
+
+---
+
+<pasted_content id="6cb3">
+The optional size lookup can panic with a custom HTTP transport — github_preflight.go:167 (https://github.com/entireio/git-sync/blob/8047180284cc29e121b03af533ff967519c4ccaa/internal/strategy/bootstrap/github_preflight.go#L167). It unconditionally dereferences resp.Request. A caller-supplied Options.HTTPClient transport can return a response without that field, causing the entire sync to panic even when the response contains valid repository metadata. Guard the dereference and handle unknown authentication provenance conservatively.
+
+Reproduced with a synthetic transport returning HTTP 200 and valid size JSON. The test fails with a nil-pointer panic; a temporary nil-guard overlay makes it pass. No repository files changed.
+
+No other actionable findings found. Full tests and affected-package race tests pass; all GitHub checks are green. Local lint failed during package loading, so I cannot claim a local lint pass.
+</pasted_content id="6cb3">
