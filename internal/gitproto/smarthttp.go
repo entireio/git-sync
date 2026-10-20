@@ -268,10 +268,10 @@ type HTTPConn struct {
 	// connection; the same redirect repeats on every RPC.
 	authWithheldWarned bool
 
-	// authOrigin is the URL helper-resolved credentials in Auth were looked
-	// up for; nil while Auth is explicit or unset. CredentialsFor measures
-	// a destination against it, since a helper lookup keyed on a redirect
-	// target binds the credentials to that target, not to EndpointURL.
+	// authOrigin is the URL the credentials in Auth are bound to: EndpointURL
+	// for explicit ones, the URL the helper looked them up for otherwise (a
+	// redirect target, possibly). nil while Auth is unset. CredentialsFor
+	// measures a destination against it.
 	authOrigin *url.URL
 
 	// pendingHelperCreds tracks credentials supplied by the helper via
@@ -336,6 +336,7 @@ func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClien
 		HTTP:           guardRedirects(httpClient),
 		Auth:           auth,
 		authIsExplicit: auth != nil,
+		authOrigin:     originFor(auth, ep),
 	}
 }
 
@@ -482,6 +483,14 @@ func (c *HTTPConn) warnAuthWithheld(target *url.URL) {
 
 func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
 
+// originFor is the URL explicit credentials are bound to: ep when there are any.
+func originFor(auth AuthMethod, ep *url.URL) *url.URL {
+	if auth == nil {
+		return nil
+	}
+	return ep
+}
+
 // CredentialsFor returns the credentials this connection authenticates with
 // that may also be sent to dest, a service beside the endpoint (its hosting
 // provider's API, say) that a caller addresses with its own request. It
@@ -499,14 +508,8 @@ func (c *HTTPConn) CredentialsFor(dest *url.URL) AuthMethod {
 	if dest == nil || c.EndpointURL == nil {
 		return nil
 	}
-	if c.Auth != nil {
-		origin := c.authOrigin
-		if c.authIsExplicit {
-			origin = c.EndpointURL
-		}
-		if c.mayCarry(origin, dest) {
-			return c.Auth
-		}
+	if c.Auth != nil && c.mayCarry(c.authOrigin, dest) {
+		return c.Auth
 	}
 	if user := c.EndpointURL.User; user != nil {
 		if password, ok := user.Password(); ok && password != "" && c.mayCarry(c.EndpointURL, dest) {
@@ -825,7 +828,13 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	if lookupErr != nil || !ok {
 		return
 	}
-	c.Auth = &transporthttp.BasicAuth{Username: user, Password: pass}
+	c.adoptHelperCreds(&transporthttp.BasicAuth{Username: user, Password: pass}, user, pass, challengeURL)
+}
+
+// adoptHelperCreds attaches credentials the helper supplied for challengeURL,
+// bound to that URL, pending validation by resolvePendingHelperCreds.
+func (c *HTTPConn) adoptHelperCreds(auth AuthMethod, user, pass string, challengeURL *url.URL) {
+	c.Auth = auth
 	c.authIsExplicit = false // looked up for challengeURL, so bound to it
 	c.authOrigin = challengeURL
 	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
@@ -953,11 +962,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		// Attach tentatively and defer approval to resolvePendingHelperCreds,
 		// which runs after the caller validates the response body — a 2xx
 		// status alone isn't proof the operation succeeded.
-		c.Auth = retryAuth
-		c.authIsExplicit = false // looked up for challengeURL, so bound to it
-		c.authOrigin = challengeURL
-		c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
-		c.adoptChallengeHost(challengeURL)
+		c.adoptHelperCreds(retryAuth, user, pass, challengeURL)
 	}
 	return res, nil
 }

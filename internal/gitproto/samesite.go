@@ -40,9 +40,9 @@ import (
 // Credentials obtained from the git credential helper are out of scope for
 // redirects: those are looked up keyed on the host actually being challenged,
 // so they are already bound to their destination by construction. A request
-// to another service beside the endpoint (the GitHub size lookup sends
-// github.com's credentials to api.github.com) goes through CredentialsFor
-// instead, which applies this rule from the URL each credential was bound to.
+// to another service beside the endpoint (a hosting provider's API) goes
+// through CredentialsFor instead, which applies this rule from the URL each
+// credential was bound to.
 func sameSite(orig, dest *url.URL) bool {
 	if orig == nil || dest == nil {
 		return false
@@ -101,4 +101,10 @@ func effectivePort(u *url.URL) string {
 	default:
 		return port
 	}
+}
+
+// UsesDefaultPort reports whether u addresses its scheme's default port,
+// spelled out or not.
+func UsesDefaultPort(u *url.URL) bool {
+	return effectivePort(u) == ""
 }

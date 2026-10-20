@@ -1671,9 +1671,7 @@ func TestExecuteRequiresTargetPusherBeforeGitHubPreflight(t *testing.T) {
 	}))
 	defer server.Close()
 
-	prevBaseURL := GitHubRepoAPIBaseURL
-	GitHubRepoAPIBaseURL = server.URL
-	defer func() { GitHubRepoAPIBaseURL = prevBaseURL }()
+	useGitHubAPI(t, server.URL)
 
 	ep, err := transport.ParseURL("https://github.com/acme/repo.git")
 	if err != nil {

@@ -27,11 +27,19 @@
 // (0x1b). The single-byte C1 introducers are not handled: in a UTF-8 stream they
 // are not valid standalone bytes, and terminals in UTF-8 mode do not act on
 // them.
+//
+// Line, for a server-authored message set inline into one line of git-sync's
+// own text, is stricter: every control character becomes a space, the C1 range
+// (U+0080-U+009F) included, since a terminal may act on an encoded U+009B as
+// CSI; bidi formatting characters, which reorder how the rest of the line
+// displays, are dropped; and whitespace collapses, so the message cannot break
+// the line it sits in.
 package sanitize
 
 import (
 	"io"
 	"strings"
+	"unicode"
 )
 
 func printable(b byte) bool { return b >= 0x20 && b != 0x7f }
@@ -74,6 +82,21 @@ func Text(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// Line returns s made safe for one line of a log or terminal: see the package
+// documentation.
+func Line(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsControl(r):
+			return ' '
+		case unicode.Is(unicode.Bidi_Control, r):
+			return -1
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // Writer wraps w so that control characters are filtered as bytes stream
