@@ -1,0 +1,113 @@
+ok can you run another adversarial review?
+
+---
+
+<task-notification>
+<task-id>af01796581ad96496</task-id>
+<tool-use-id>toolu_01G5eGumSgsduyagZahxpxrx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-worktree-clear-stone-5032/ef0d8c31-d21d-4202-8c48-454a59c8df33/tasks/af01796581ad96496.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 124 high" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No effort level was picked up, so this review reused xhigh. Typing a level (for example `/code-review high`) changes it. The "high" in `124 high` was not read as a level.
+
+I reviewed PR #124, whose head matches the local `nodo/pr124-nits` (02844f2c), against `main`. I ran two quick checks with a throwaway test, since deleted, and both confirmed the bug:
+- **Custom-header credentials:** they reach a host on another site when the API redirects there.
+- **Interrupted run:** cancelling the run (Ctrl-C) prints the "could not read the GitHub repository size … starting with a single pack" notice.
+
+No CLAUDE.md applies: the repo has none, and the user-level rules don't cover code.
+
+```json
+[
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1957,
+    "summary": "Credentials an authorizer puts in a header other than Authorization still reach a host on another site after an API redirect. The redirect guard only deletes Authorization, yet applyAuth/carriesAny are built to support exactly such authorizers, and the docs/PR say the guard strips credentials on any hop that leaves the site.",
+    "failure_scenario": "A custom AuthMethod sets X-Api-Key: &lt;token&gt;. api.github.com answers 307 to https://elsewhere/... Go's client copies X-Api-Key onto the redirected request and guardRedirects only deletes Authorization, so elsewhere receives the token (confirmed with a probe: leaked=\"ghs_preflight-secret\"). The record also logs authenticated=true. Fix: strip every header applyAuth reported, or limit the guard/auth to Authorization only."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1986,
+    "summary": "A reported size of 0 is accepted as a real answer ('empty repository'), but Execute only runs with at least one source ref. Here 0 can only mean GitHub has not sized the repo yet, which is an unknown size, and the PR's own rule warns on those.",
+    "failure_scenario": "A 5 GiB private repo was just pushed or imported to GitHub, so the API reports size 0. The bootstrap picks one-shot at INFO with no WARN and no notice, the same silent single pack this PR set out to make visible. Fix: treat 0 like a missing size (error, so WARN plus notice)."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 2087,
+    "summary": "When the run itself is cancelled, the lookup fails with 'context canceled' and still produces a WARN and the 'starting with a single pack' notice.",
+    "failure_scenario": "The user hits Ctrl-C, or a daemon shuts down, during the lookup. git-sync prints 'could not read the GitHub repository size (Get \"https://api.github.com/...\": context canceled) — starting with a single pack; set a target max pack size…' (confirmed with a probe), then Execute fails anyway. Fix: skip the notice and WARN when the parent ctx.Err() != nil."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1959,
+    "summary": "Only GitHub's JSON message is cleaned. Error text from the transport goes into the notice and the log unsanitized, so a server or proxy can put control characters there.",
+    "failure_scenario": "Under a MITM, x509.HostnameError prints the certificate's SAN dNSNames verbatim, and Go accepts ESC (0x1b) in an IA5String. A proxy's CONNECT status text is likewise passed through as-is. Either can carry ESC[2K sequences into the terminal notice that cleanServerMessage exists to prevent. Fix: run lookup.err.Error() through the same cleaner before notice/log."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1934,
+    "summary": "A 401/403 counts as 'credentials refused' even when the answering request carried no credentials (answer.authenticated == false), so the anonymous retry is pointless and the log blames a token the server never saw.",
+    "failure_scenario": "The authenticated request is redirected to another site, the guard strips Authorization, and that host answers 403. lookup.refused is set, an identical anonymous request is sent, and the notice says 'credentials refused: …'. Fix: only treat the answer as a refusal when answer.authenticated is true."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1930,
+    "summary": "One 30s timeout covers both the authenticated attempt and the anonymous retry, so a slow refusal leaves the retry almost no time.",
+    "failure_scenario": "The API takes 28s to answer 403 (an SSO check or secondary rate limit). The anonymous retry gets ~2s and fails with 'context deadline exceeded'. A public repo that would have batched starts with a single pack. Fix: give each attempt its own timeout."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1956,
+    "summary": "'authenticated' is set before client.Do and kept on a transport error, so a request that never produced an answer is logged authenticated=true. That contradicts the field's own doc ('the request that produced the answer').",
+    "failure_scenario": "A connection refused or TLS failure with a token attached logs authenticated=true and http_status=0. Operators may read that as 'GitHub saw our token'. Fix: set it false when there is no resp."
+  },
+  {
+    "file": "internal/gitproto/smarthttp.go",
+    "line": 511,
+    "summary": "CredentialsFor guards a nil dest but dereferences c.EndpointURL.User without a nil check, although Endpoint() can be nil and callers elsewhere check for it.",
+    "failure_scenario": "Any future caller that runs CredentialsFor before checking Endpoint() on a conn with a nil EndpointURL panics with a nil pointer. Today only GitHubOwnerRepo's prior check keeps it safe."
+  },
+  {
+    "file": "internal/gitproto/smarthttp.go",
+    "line": 512,
+    "summary": "A token in the username with no password, the common https://&lt;PAT&gt;@github.com/owner/repo form that git accepts, is never sent to the API. Such private repos still get a 404 and now print a WARN and a notice on every bootstrap.",
+    "failure_scenario": "Source URL https://ghp_xxx@github.com/acme/private.git: git authenticates fine, the lookup goes out anonymously and gets a 404, and the run stays one-shot with a notice each time. Consider sending username-only userinfo when it looks like a GitHub token (ghp_/gho_/ghs_/github_pat_ prefix)."
+  },
+  {
+    "file": "internal/syncer/syncer.go",
+    "line": 798,
+    "summary": "For library callers with no progress reporter, the new failure notice falls back to os.Stderr, in addition to the WARN record their BootstrapLogger already gets.",
+    "failure_scenario": "A server process mirrors many public github.com repos behind one egress IP and hits the anonymous 60/h limit. Each bootstrap writes an unrequested 'could not read the GitHub repository size…' line to the process's stderr and also logs the same WARN, doubling the output."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 2040,
+    "summary": "Reuse/altitude: cleanServerMessage adds a second sanitizer next to internal/sanitize.Text instead of extending it, whose package doc explicitly leaves C1 out of scope.",
+    "failure_scenario": "Two sanitizing rules now disagree. Every other path for server-written text (HTTP error bodies in smarthttp.go:55, receive-pack rejection reasons, ssh remote output) keeps the weaker rule with no C1/bidi handling. Fix it once in sanitize.Text, or add sanitize.Line, and call that."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1997,
+    "summary": "Simplification: applyAuth/carriesAny diff the whole header map to cover authorizers that write arbitrary headers. Production never builds those (auth.Resolve and the helper only produce Basic/Token auth), and the redirect guard would not strip them anyway.",
+    "failure_scenario": "Extra code and a test (headerAuth) suggest support that is unsafe on redirect (see the first finding). `answer.authenticated = auth != nil` plus `resp.Request.Header.Get(\"Authorization\") != \"\"` does the same job for every real AuthMethod."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 1914,
+    "summary": "Altitude: the bootstrap strategy now contains a hand-written authenticated client for a service beside the endpoint (credential scoping, header diffing, redirect-auth detection, retry, sanitizing), about 270 lines of GitHub API code in bootstrap.go.",
+    "failure_scenario": "The rules about where credentials may travel are split between gitproto (CredentialsFor, guardRedirects) and bootstrap (applyAuth, carriesAny, retry), so a future fix to one, such as stripping custom headers, misses the other. Prefer a gitproto method that sends a request to a sibling service and reports whether auth survived, with the GitHub client in its own file or package."
+  },
+  {
+    "file": "internal/strategy/bootstrap/bootstrap.go",
+    "line": 2053,
+    "summary": "Simplification: logGitHubPreflight branches on lookup.err != nil three separate times (attrs, notice vs verbose log, WARN vs INFO).",
+    "failure_scenario": "The success and failure paths are interleaved and hard to follow. A single if/else, with failure (error attr, notice, WARN) on one side and success (size_kb, p.log, INFO) on the other, says the same thing more clearly."
+  }
+]
+```</result>
+<usage><subagent_tokens>175198</subagent_tokens><tool_uses>32</tool_uses><duration_ms>498369</duration_ms></usage>
+</task-notification>
+
+---
+
+sounds good go ahead
