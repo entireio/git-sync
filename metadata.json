@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5CA7BX8R1E4YVYAWFRNZGAF",
+  "strategy": "manual-commit",
+  "branch": "nodo/receive-pack-success-drain",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/gitproto/convergence_test.go",
+    "internal/gitproto/push.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 104157,
+    "cache_read_tokens": 2492168,
+    "output_tokens": 20395,
+    "api_call_count": 23
+  }
+}

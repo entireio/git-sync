@@ -1,0 +1,24 @@
+review https://github.com/entireio/git-sync/pull/123
+
+---
+
+```
+
+
+<pasted_content id="eeea">
+1. Medium: a push the target fully accepted can now fail. Before, defer reader.Close() ignored close errors. An all-ok report returned nil.
+   - Now finishReceivePack runs on every push. A failure after the report fails the push and skips statuses.record. That covers a channel-3 sideband message, a truncated HTTP body, an SSH or helper process exiting non-zero, or a copyErr from the body goroutine.
+   - The result: refs the target applied show as RefOutcomeUnknown, and a strict run fails even though its writes landed.
+   - The drain is only needed before the verification read. Suggest one of:
+     - record the statuses before returning the error;
+     - or only treat drain/close errors as fatal when the report has rejections that need verifying.
+   - Either way, add a test for "all-ok report plus close error". TestPusherPreservesReceivePackCompletionErrors only covers the rejected case (push.go:578, push.go:540).
+</pasted_content id="eeea">
+
+```
+
+good findings, recommendation?
+
+---
+
+fix it

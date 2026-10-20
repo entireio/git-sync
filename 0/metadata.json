@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5CA7BX8R1E4YVYAWFRNZGAF",
+  "session_id": "3a3a4c9d-5364-4934-90ac-cee1609810be",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-20T09:28:07.298562Z",
+  "branch": "nodo/receive-pack-success-drain",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/gitproto/convergence_test.go",
+    "internal/gitproto/push.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "c6f3843ae9e3",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 104157,
+    "cache_read_tokens": 2492168,
+    "output_tokens": 20395,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 2
+  }
+}
