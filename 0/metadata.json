@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5C9ZCW16R8DR2083464JTX7",
+  "session_id": "ef0d8c31-d21d-4202-8c48-454a59c8df33",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-20T09:23:46.230155Z",
+  "branch": "nodo/pr124-nits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/strategy/bootstrap/bootstrap.go",
+    "internal/strategy/bootstrap/github_preflight_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "6fdf094064dc",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 106453,
+    "cache_read_tokens": 3105292,
+    "output_tokens": 22651,
+    "api_call_count": 30
+  },
+  "session_metrics": {
+    "turn_count": 1
+  }
+}

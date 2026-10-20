@@ -1,0 +1,5 @@
+review https://github.com/entireio/git-sync/pull/124
+
+---
+
+fix all the nits
