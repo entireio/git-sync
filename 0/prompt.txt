@@ -1,0 +1,36 @@
+push
+
+---
+
+can you simplify the pr description
+
+---
+
+Feedback:
+```
+
+
+<pasted_content id="eeea">
+New issues, all from the drain change in internal/gitproto/push.go
+
+1. Successful pushes can now fail (push.go:579). After the report, the response is read to EOF and the close error is checked. If ssh exits 255 on teardown, the helper exits non-zero, or the copy hits a broken pipe, a push whose report said every ref landed returns an error. That happens before statuses.record, so every ref's outcome ends up Unknown. It also happens under --best-effort. Before this PR, that close error was ignored.
+2. An early server refusal no longer stops the upload (push.go:616). If the target rejects the push early (for example "pack exceeds limit") and stops reading, the read to EOF waits. With the helper, that EOF only comes after the whole pack has been sent, so a multi-GB pack still uploads in full before the error appears. This breaks the early cutoff that the bootstrap size-limit handling relies on.
+3. The drain has no size limit (push.go:620). helper.finish caps the same kind of drain with maxDrainBytes. This one has no cap, so a peer that keeps writing after its report hangs the push until the context is cancelled.
+
+The simplest fix for all three is to keep the drain only for the rejection-recheck case, cap it like helper.finish, and not fail the push on close errors after an all-ok report.
+
+Other new findings
+
+4. Wrong pushed count (syncer.go:543). applyAlreadyCurrent compares the target's current hash with plan.SourceHash, but the pusher records the command's New hash. If those differ (mapped or materialized pushes), a ref that already matched is still counted in Result.Pushed. Checking the pusher's LastOutcome == RefOutcomeAlreadyCurrent instead would avoid that.
+5. Failed recheck is silent (convergence.go:44). If the target re-read itself fails (auth expired, network error), the error is dropped. The run then reports a plain concurrent-move rejection, and nothing shows that the recheck was attempted.
+6. "failed to update ref" can hide a real write failure (convergence.go:68). It's a generic error, so if our write fails for another reason (disk, lock) while another writer sets the same hash, the run reports success. The code comment acknowledges this; it's narrow, but it's a judgment call.
+7. Changelog links (CHANGELOG.md:32). The three new Fixed entries still have no [#123] link.
+</pasted_content id="eeea">
+
+```
+
+I think we have already address some of these can you check
+
+---
+
+sure
