@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5CD4YBTTCFDT178G8YNTDX1",
+  "strategy": "manual-commit",
+  "branch": "nodo/pr124-nits",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "internal/strategy/bootstrap/github_preflight.go",
+    "internal/strategy/bootstrap/github_preflight_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 8614,
+    "cache_read_tokens": 2938576,
+    "output_tokens": 6207,
+    "api_call_count": 13
+  }
+}
