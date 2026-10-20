@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_013KakNSEDPo3HGptJvPJKrA",
+  "agent_id": "a62d73e8e3eb009e9",
+  "subagent_type": "general-purpose",
+  "task_description": "Reuse review of PR diff",
+  "started_at": "2026-10-20T11:30:55.870254+02:00"
+}
