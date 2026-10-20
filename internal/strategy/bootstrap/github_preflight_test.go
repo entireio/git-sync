@@ -285,6 +285,34 @@ func TestGitHubPreflightSendsBearerToken(t *testing.T) {
 	}
 }
 
+// headerAuth authorizes with a header other than Authorization, as a custom
+// AuthProvider may.
+type headerAuth struct{ name, value string }
+
+func (a headerAuth) Authorizer(req *http.Request) error {
+	req.Header.Set(a.name, a.value)
+	return nil
+}
+
+// The record reports the credentials that went out, whichever header the
+// authorizer put them in.
+func TestGitHubPreflightLogsCustomHeaderAuthAsAuthenticated(t *testing.T) {
+	client := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != preflightToken {
+			writeAPIError(t, w, http.StatusNotFound, "Not Found")
+			return
+		}
+		writeRepoSize(t, w, largeRepoKB)
+	})
+	var out bytes.Buffer
+	p := preflightParams(t, client, headerAuth{name: "X-Api-Key", value: preflightToken}, &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); !ok {
+		t.Fatalf("custom-header credentials were not sent; log=%s", &out)
+	}
+	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": true, "mode": "batched"})
+}
+
 func TestGitHubPreflightLookupFailureLogsWarningAndKeepsOneShot(t *testing.T) {
 	client := privateRepoAPI(t, largeRepoKB)
 	var out bytes.Buffer
@@ -527,6 +555,8 @@ func TestGitHubPreflightSkippedLogsNothing(t *testing.T) {
 		"encoded dot-dot owner": {endpoint: "https://github.com/%2e%2e/user"},
 		"dot repo":              {endpoint: "https://github.com/acme/."},
 		"name outside charset":  {endpoint: "https://github.com/acme/pri%3Fvate"},
+		// A wiki has no repository of its own for the API to size.
+		"wiki": {endpoint: "https://github.com/acme/private.wiki.git"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1941,7 +1942,7 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 }
 
 func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url.URL, auth gitproto.AuthMethod) githubAPIAnswer {
-	answer := githubAPIAnswer{authenticated: auth != nil}
+	var answer githubAPIAnswer
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL.String(), nil)
 	if err != nil {
 		answer.err = fmt.Errorf("build request: %w", err)
@@ -1951,7 +1952,8 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	req.Header.Set("X-Github-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", useragent.Plain())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
-	gitproto.ApplyAuth(req, auth)
+	authHeaders := applyAuth(req, auth)
+	answer.authenticated = carriesAny(req.Header, authHeaders)
 	resp, err := client.Do(req)
 	if err != nil {
 		answer.err = err
@@ -1962,7 +1964,7 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	// site, so whether the answer was authenticated is read off the request
 	// that produced it, not the one sent.
 	if resp.Request != nil {
-		answer.authenticated = resp.Request.Header.Get("Authorization") != ""
+		answer.authenticated = carriesAny(resp.Request.Header, authHeaders)
 	}
 	answer.status = resp.StatusCode
 	body := io.LimitReader(resp.Body, maxGitHubRepoResponseBytes)
@@ -1987,6 +1989,26 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	}
 	answer.sizeKB = *payload.Size
 	return answer
+}
+
+// applyAuth authorizes req and returns the names of the headers the
+// authorizer set. That is usually Authorization, but a custom AuthMethod may
+// carry its credentials in any header.
+func applyAuth(req *http.Request, auth gitproto.AuthMethod) []string {
+	before := req.Header.Clone()
+	gitproto.ApplyAuth(req, auth)
+	var names []string
+	for name, values := range req.Header {
+		if !slices.Equal(before[name], values) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// carriesAny reports whether h still holds any of the named headers.
+func carriesAny(h http.Header, names []string) bool {
+	return slices.ContainsFunc(names, func(name string) bool { return len(h[name]) > 0 })
 }
 
 // githubAPIError describes a non-200 answer, carrying GitHub's own message
@@ -2062,7 +2084,7 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 		}
 		// "Starting": a target that rejects the pack as too large still
 		// switches the bootstrap to batches later.
-		p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — starting with a single pack; set a target max pack size (--target-max-pack-bytes) to batch from the start",
+		p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — starting with a single pack; set a target max pack size to batch from the start",
 			reason))
 	} else {
 		p.log(githubPreflightMsg, attrs...)
@@ -2080,7 +2102,8 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 // GitHubOwnerRepo extracts the owner/repo from a GitHub endpoint. Only
 // github.com on the default port of its scheme qualifies: the same host on
 // another port is a different service, which the GitHub API does not describe
-// and whose credentials it must not receive.
+// and whose credentials it must not receive. A wiki ("owner/repo.wiki")
+// does not qualify either: the API has no repository of that name to size.
 func GitHubOwnerRepo(conn gitproto.Conn) (string, string, bool) {
 	if conn == nil || conn.Endpoint() == nil {
 		return "", "", false
@@ -2097,7 +2120,7 @@ func GitHubOwnerRepo(conn gitproto.Conn) (string, string, bool) {
 	}
 	path := strings.TrimSuffix(strings.Trim(ep.Path, "/"), ".git")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || !isGitHubName(parts[0]) || !isGitHubName(parts[1]) {
+	if len(parts) != 2 || !isGitHubName(parts[0]) || !isGitHubName(parts[1]) || strings.HasSuffix(parts[1], ".wiki") {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
