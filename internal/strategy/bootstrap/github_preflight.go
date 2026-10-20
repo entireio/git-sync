@@ -154,19 +154,13 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	req.Header.Set("User-Agent", useragent.Plain())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
 	gitproto.ApplyAuth(req, auth)
-	answer.authenticated = req.Header.Get("Authorization") != "" // kept on a transport error
-	resp, err := client.Do(req)
+	answer.authenticated = req.Header.Get("Authorization") != ""
+	resp, err := trackAuth(client, &answer.authenticated).Do(req)
 	if err != nil {
 		answer.err = err
 		return answer
 	}
 	defer resp.Body.Close()
-	// The redirect guard drops Authorization on a hop that leaves the API's
-	// site, so whether the answer was authenticated is read off the request
-	// that produced it, not the one sent. A caller-supplied transport may
-	// leave Response.Request unset; then the provenance is unknown and
-	// authentication is not claimed.
-	answer.authenticated = resp.Request != nil && resp.Request.Header.Get("Authorization") != ""
 	answer.status = resp.StatusCode
 	body := io.LimitReader(resp.Body, maxGitHubRepoResponseBytes)
 	if resp.StatusCode != http.StatusOK {
@@ -193,6 +187,29 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	}
 	answer.sizeKB = *payload.Size
 	return answer
+}
+
+// trackAuth returns a copy of client that records in *authenticated whether
+// each redirected request still carries Authorization, read after client's
+// redirect policy has run: the guard drops the header on a hop that leaves the
+// API's site, so the answer is authenticated only if its own request was.
+// Response.Request would tell the same, but a caller-supplied transport may
+// leave it unset.
+func trackAuth(client *http.Client, authenticated *bool) *http.Client {
+	tracked := *client
+	policy := client.CheckRedirect
+	tracked.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if policy != nil {
+			if err := policy(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 { // net/http's default policy
+			return errors.New("stopped after 10 redirects")
+		}
+		*authenticated = req.Header.Get("Authorization") != ""
+		return nil
+	}
+	return &tracked
 }
 
 // githubAPIError describes a non-200 answer, carrying GitHub's own message

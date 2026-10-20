@@ -580,21 +580,31 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-// A caller-supplied transport may answer without Response.Request. The answer
-// is still used, but whether it was authenticated is unknown, so it is not
-// claimed.
+// A caller-supplied transport may answer without Response.Request, as
+// net/http allows. Whether the answer was authenticated is tracked from the
+// requests sent, so the record stays right and a refused token still gets its
+// anonymous retry.
 func TestGitHubPreflightResponseWithoutRequest(t *testing.T) {
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		status := http.StatusOK
 		body := `{"full_name":"acme/private","size":` + strconv.Itoa(largeRepoKB) + `}`
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		if req.Header.Get("Authorization") != "" {
+			status = http.StatusForbidden
+			body = `{"message":"Resource protected by organization SAML enforcement."}`
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})}
 	var out bytes.Buffer
 	p := preflightParams(t, client, installationAuth(), &out)
 
 	if _, ok := githubBatchLimit(context.Background(), p); !ok {
-		t.Fatalf("a usable answer without Response.Request was not used; log=%s", &out)
+		t.Fatalf("the refused token got no anonymous retry; log=%s", &out)
 	}
-	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": false, "mode": "batched"})
+	assertFields(t, preflightEvent(t, &out), map[string]any{
+		"authenticated":       false,
+		"refused_auth_status": float64(http.StatusForbidden),
+		"mode":                "batched",
+	})
 }
 
 // Each attempt gets the whole timeout: a slow refusal must not starve the
