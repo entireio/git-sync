@@ -1,0 +1,38 @@
+sure
+
+---
+
+what's the status?
+
+---
+
+can you see if this feedback is releavant:
+```
+
+
+<pasted_content id="6cb3">
+Correctness (worth fixing):
+
+1. The refusal is blamed on credentials even when none were sent (internal/strategy/bootstrap/bootstrap.go:1937). If the api.github.com request gets redirected to another site, the redirect guard drops the Authorization header. A 401/403 from there still sets lookup.refused. That triggers a pointless anonymous retry, and the notice and WARN say "credentials refused", sending the operator after a token that was never presented. It should only record a refusal when answer.authenticated is true.
+2. Ctrl-C or the sync deadline produces a false warning (bootstrap.go:1957). If the parent context is cancelled during the lookup, it's treated as a failed size lookup. The user gets a WARN and the "starting with a single pack; set --target-max-pack-bytes" advice just as the bootstrap aborts. A parent cancellation should be told apart from the lookup's own 30s timeout.
+3. Both attempts share one 30s budget (bootstrap.go:1929). If the credentialed request takes about 29s before GitHub returns 403, the anonymous retry hits the deadline almost immediately. A public repo that would have answered anonymously then gets bootstrapped as one pack. Each attempt should get its own timeout.
+
+Docs:
+
+4. Hard-wrapped paragraph (docs/usage.md:398). The new paragraph is wrapped at about 80 columns, while the other added paragraph is on one line. This only matters if the hard-wrap rule from your CLAUDE.md applies to this PR's author.
+
+Cleanups (optional):
+
+5. Second sanitizer in bootstrap only (bootstrap.go:2018). cleanServerMessage handles C1 controls and bidi characters locally, but the shared sanitize.Text still lets them through for every other server-authored string. Fixing sanitize.Text itself would cover all callers.
+6. Same host rule written out in three places (internal/gitproto/smarthttp.go:521). mayCarry repeats the "skip TLS verify ⇒ no cross-host credentials" check that is also written inline at lines 817 and 918. A security check like this shouldn't be able to drift between copies.
+7. authOrigin overlaps with authIsExplicit (smarthttp.go:503). Setting authOrigin = ep at construction would remove the special case in CredentialsFor. It would also stop a credential assigned after construction, outside the helper paths, from being silently withheld.
+8. Same condition checked three times (bootstrap.go:2048). logGitHubPreflight branches on lookup.err != nil in three places; one if/else would do.
+
+I can post these
+</pasted_content id="6cb3">
+
+```
+
+---
+
+ok let's do that

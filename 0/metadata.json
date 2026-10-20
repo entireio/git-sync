@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5D3RTAGH5944K7TTFQP0FGQ",
+  "session_id": "ef0d8c31-d21d-4202-8c48-454a59c8df33",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-20T16:54:34.194293Z",
+  "branch": "nodo/pr124-nits",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "internal/gitproto/smarthttp.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "c180d0909106",
+  "checkpoint_transcript_start": 1211,
+  "transcript_lines_at_start": 1211,
+  "compact_transcript_start": 116,
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 217063,
+    "cache_read_tokens": 2624051,
+    "output_tokens": 5315,
+    "api_call_count": 12
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01G5eGumSgsduyagZahxpxrx",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1393196fee59",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 452,
+        "end": 453,
+        "entry_ids": [
+          "09453261-42d2-46a4-96a5-ca8a94ba0702"
+        ],
+        "tool_use_id": "toolu_01G5eGumSgsduyagZahxpxrx"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01G5eGumSgsduyagZahxpxrx"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-simplify-2026-10-20T09:41:28.020423Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "54871e052fee",
+      "timestamp": "2026-10-20T09:41:28.020423Z",
+      "native": {
+        "command": "/simplify"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 18
+  }
+}
