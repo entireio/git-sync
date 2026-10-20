@@ -157,6 +157,14 @@ type Check struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// Names of the post-conversion checks runChecks reports.
+const (
+	checkConfig = "config"
+	checkHEAD   = "HEAD"
+	checkRefs   = "refs"
+	checkFsck   = "git fsck --full"
+)
+
 // previewMax caps how many items from a potentially-long list (ambiguous
 // prefixes, signed tags) are inlined into a Lines() summary before
 // switching to a "(N more)" suffix.
@@ -614,18 +622,18 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 	cfgFile, err := os.Open(filepath.Join(targetDir, "config"))
 	switch {
 	case err != nil:
-		checks = append(checks, Check{Name: "config", OK: false, Detail: err.Error()})
+		checks = append(checks, Check{Name: checkConfig, OK: false, Detail: err.Error()})
 	default:
 		cfg := formatcfg.New()
 		decodeErr := formatcfg.NewDecoder(cfgFile).Decode(cfg)
 		_ = cfgFile.Close()
 		switch {
 		case decodeErr != nil:
-			checks = append(checks, Check{Name: "config", OK: false, Detail: fmt.Sprintf("parse config: %v", decodeErr)})
+			checks = append(checks, Check{Name: checkConfig, OK: false, Detail: fmt.Sprintf("parse config: %v", decodeErr)})
 		case !strings.EqualFold(cfg.Section("extensions").Option("objectformat"), "sha256"):
-			checks = append(checks, Check{Name: "config", OK: false, Detail: "extensions.objectformat = sha256 not set"})
+			checks = append(checks, Check{Name: checkConfig, OK: false, Detail: "extensions.objectformat = sha256 not set"})
 		default:
-			checks = append(checks, Check{Name: "config", OK: true, Detail: "extensions.objectformat = sha256"})
+			checks = append(checks, Check{Name: checkConfig, OK: true, Detail: "extensions.objectformat = sha256"})
 		}
 	}
 
@@ -634,19 +642,19 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 	// HEAD to symlink to.
 	switch {
 	case !hasBranches:
-		checks = append(checks, Check{Name: "HEAD", OK: true, Skipped: true, Detail: "tags-only conversion; no branch to point at"})
+		checks = append(checks, Check{Name: checkHEAD, OK: true, Skipped: true, Detail: "tags-only conversion; no branch to point at"})
 	default:
 		head, err := repo.Reference(plumbing.HEAD, true)
 		switch {
 		case err != nil:
-			checks = append(checks, Check{Name: "HEAD", OK: false, Detail: err.Error()})
+			checks = append(checks, Check{Name: checkHEAD, OK: false, Detail: err.Error()})
 		case head.Hash().IsZero():
-			checks = append(checks, Check{Name: "HEAD", OK: false, Detail: "resolves to zero hash"})
+			checks = append(checks, Check{Name: checkHEAD, OK: false, Detail: "resolves to zero hash"})
 		default:
 			if _, err := repo.Storer.EncodedObject(plumbing.AnyObject, head.Hash()); err != nil {
-				checks = append(checks, Check{Name: "HEAD", OK: false, Detail: fmt.Sprintf("%s: %v", head.Hash(), err)})
+				checks = append(checks, Check{Name: checkHEAD, OK: false, Detail: fmt.Sprintf("%s: %v", head.Hash(), err)})
 			} else {
-				checks = append(checks, Check{Name: "HEAD", OK: true, Detail: head.Hash().String()})
+				checks = append(checks, Check{Name: checkHEAD, OK: true, Detail: head.Hash().String()})
 			}
 		}
 	}
@@ -661,7 +669,7 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 	missing := ""
 	refs, err := repo.References()
 	if err != nil {
-		checks = append(checks, Check{Name: "refs", OK: false, Detail: err.Error()})
+		checks = append(checks, Check{Name: checkRefs, OK: false, Detail: err.Error()})
 	} else {
 		walkErr := refs.ForEach(func(r *plumbing.Reference) error {
 			if r.Type() != plumbing.HashReference {
@@ -681,35 +689,35 @@ func runChecks(ctx context.Context, targetDir string, repo *git.Repository, refs
 		})
 		switch {
 		case walkErr != nil:
-			checks = append(checks, Check{Name: "refs", OK: false, Detail: walkErr.Error()})
+			checks = append(checks, Check{Name: checkRefs, OK: false, Detail: walkErr.Error()})
 		case missing != "":
-			checks = append(checks, Check{Name: "refs", OK: false, Detail: missing})
+			checks = append(checks, Check{Name: checkRefs, OK: false, Detail: missing})
 		case resolved < refsExpected:
-			checks = append(checks, Check{Name: "refs", OK: false, Detail: fmt.Sprintf("only %d / %d refs resolved", resolved, refsExpected)})
+			checks = append(checks, Check{Name: checkRefs, OK: false, Detail: fmt.Sprintf("only %d / %d refs resolved", resolved, refsExpected)})
 		default:
-			checks = append(checks, Check{Name: "refs", OK: true, Detail: fmt.Sprintf("%d / %d resolve to objects", resolved, refsExpected)})
+			checks = append(checks, Check{Name: checkRefs, OK: true, Detail: fmt.Sprintf("%d / %d resolve to objects", resolved, refsExpected)})
 		}
 	}
 
 	// 4. git fsck --full (if git is on PATH).
 	gitBin, err := exec.LookPath("git")
 	if err != nil {
-		checks = append(checks, Check{Name: "git fsck --full", OK: true, Skipped: true, Detail: "git not in PATH"})
+		checks = append(checks, Check{Name: checkFsck, OK: true, Skipped: true, Detail: "git not in PATH"})
 		return checks
 	}
 	cmd := exec.CommandContext(ctx, gitBin, "-C", targetDir, "fsck", "--full")
 	fsckOut, err := cmd.CombinedOutput()
 	switch {
 	case err != nil:
-		checks = append(checks, Check{Name: "git fsck --full", OK: false, Detail: fmt.Sprintf("%v\n%s", err, fsckOut)})
+		checks = append(checks, Check{Name: checkFsck, OK: false, Detail: fmt.Sprintf("%v\n%s", err, fsckOut)})
 	case fsckHasError(fsckOut):
 		// Belt-and-braces against a hypothetical git version that prints
 		// "error:" / "fatal:" lines but exits zero. Match line prefixes
 		// rather than a substring so a branch or path containing "error"
 		// in a benign dangling/warning line doesn't trip the check.
-		checks = append(checks, Check{Name: "git fsck --full", OK: false, Detail: strings.TrimSpace(string(fsckOut))})
+		checks = append(checks, Check{Name: checkFsck, OK: false, Detail: strings.TrimSpace(string(fsckOut))})
 	default:
-		checks = append(checks, Check{Name: "git fsck --full", OK: true, Detail: "clean"})
+		checks = append(checks, Check{Name: checkFsck, OK: true, Detail: "clean"})
 	}
 	return checks
 }

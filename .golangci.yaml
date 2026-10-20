@@ -118,3 +118,6 @@ linters:
         linters:
           - gosec
           - wrapcheck
+          # goconst skipped tests before golangci-lint v2.14; repeated
+          # fixture literals read better inline than as constants.
+          - goconst
