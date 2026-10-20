@@ -35,9 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Treat a recognized concurrent-ref rejection as skipped work when a fresh target advertisement confirms the exact desired hash. Other refusals remain unchanged, and later ref batches still run.
+- Treat a recognized concurrent-ref rejection as skipped work when a fresh target advertisement confirms the exact desired hash. Other refusals remain unchanged, and later ref batches still run. ([#123](https://github.com/entireio/git-sync/pull/123))
 
-- Read target refs before source refs so a concurrent sync that finishes between discovery reads cannot become the expected-old baseline for rewinding a branch or pruning a newly created ref from an older source snapshot.
+- Read target refs before source refs so a concurrent sync that finishes between discovery reads cannot become the expected-old baseline for rewinding a branch or pruning a newly created ref from an older source snapshot. ([#123](https://github.com/entireio/git-sync/pull/123))
 
 - Preserve source-read errors when closing bootstrap observation, including `io.ErrUnexpectedEOF`; a truncated source is reported as `observer_failed`, not expected `observer_interrupted`. Intentional partial closure is unchanged. ([#120](https://github.com/entireio/git-sync/pull/120))
 

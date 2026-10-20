@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -57,7 +56,8 @@ func TestReconcileConcurrentRefRejections(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			p := &Pusher{}
+			var warnings bytes.Buffer
+			p := &Pusher{Conn: &receivePackTestConn{progress: &warnings}}
 			if tc.bestEffort {
 				p.OnRejection = func(plumbing.ReferenceName, string) {}
 			}
@@ -92,9 +92,12 @@ func TestReconcileConcurrentRefRejections(t *testing.T) {
 			if tc.otherError {
 				report.CommandStatuses = append(report.CommandStatuses, &packp.CommandStatus{ReferenceName: other, Status: "protected branch"})
 			}
-			got := p.reconcileRejections(ctx, req, report)
+			got := p.reconcileRejections(ctx, req, report, nil)
 			if read != tc.wantRead {
 				t.Errorf("read = %v, want %v", read, tc.wantRead)
+			}
+			if warned := strings.Contains(warnings.String(), "could not check"); warned != (tc.readErr != nil) {
+				t.Errorf("warning = %q, want one only for a failed read", warnings.String())
 			}
 			outcome, _ := p.LastOutcome(main)
 			if (outcome == RefOutcomeAlreadyCurrent) != tc.wantCurrent || (len(current) == 1) != tc.wantCurrent {
@@ -154,7 +157,7 @@ func TestPusherAlreadyCurrentContinuesLaterBatches(t *testing.T) {
 // Enough trailing output to fill a pipe makes an early close break the writer.
 func lateReceivePackResponse() string {
 	report := FormatPktLine("unpack ok\n") + FormatPktLine("ng refs/heads/main stale info\n") + "0000"
-	progress := strings.Repeat(FormatPktLine("\x02"+strings.Repeat("hook output\n", 2048)), 64)
+	progress := strings.Repeat(FormatPktLine("\x02"+strings.Repeat("hook output\n", 2048)), 16)
 	return FormatPktLine("\x01"+report) + progress + FormatPktLine("\x02hook finished\n") + "0000"
 }
 
@@ -222,90 +225,73 @@ func (c *receivePackTestConn) PostRPCStreamBody(context.Context, string, io.Read
 
 func (c *receivePackTestConn) ProgressWriter() io.Writer { return c.progress }
 
-// failingReceivePackResponse serves report, then fails in phase ("read" or "close").
-func failingReceivePackResponse(report, phase string, failure error) *countingCloser {
-	if phase == "close" {
-		return &countingCloser{Reader: strings.NewReader(report), closeErr: failure}
-	}
-	return &countingCloser{Reader: io.MultiReader(strings.NewReader(report), iotest.ErrReader(failure))}
-}
-
-func TestPusherPreservesReceivePackCompletionErrors(t *testing.T) {
-	for _, phase := range []string{"read", "close"} {
-		t.Run(phase, func(t *testing.T) {
-			failure := fmt.Errorf("target %s failure", phase)
-			report := FormatPktLine("unpack ok\n") + FormatPktLine("ng refs/heads/main stale info\n") + "0000"
-			response := failingReceivePackResponse(report, phase, failure)
-			adv := &packp.AdvRefs{}
-			adv.Capabilities.Set(capability.ReportStatus)
-			p := NewPusher(&receivePackTestConn{response: response}, adv, false)
-			p.TargetRefsNow = func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-				t.Error("must not verify after transport failure")
-				return nil, failure
-			}
-			err := p.PushCommands(t.Context(), []PushCommand{{Name: "refs/heads/main", New: plumbing.NewHash("1111111111111111111111111111111111111111")}})
-			if !errors.Is(err, failure) || !errors.Is(err, ErrTargetRefMoved) {
-				t.Fatalf("lost transport or ref rejection: %v", err)
-			}
-			if !strings.Contains(err.Error(), "target receive-pack") || strings.Contains(err.Error(), "close pack reader") {
-				t.Fatalf("misleading error: %v", err)
-			}
-			if response.closes != 1 {
-				t.Fatalf("closed %d times", response.closes)
-			}
-		})
-	}
-}
-
-// receive-pack reports only after committing, so a transport failure after an
-// all-accepted report must not fail the push or lose the recorded outcomes.
-func TestPusherAcceptedReportSurvivesCompletionErrors(t *testing.T) {
+// The push response is drained only before a verification read. Otherwise the
+// report is authoritative: teardown errors are ignored as they always were, and
+// an early refusal closes at once instead of waiting for the peer to finish.
+func TestPusherReceivePackCompletion(t *testing.T) {
 	main := plumbing.ReferenceName("refs/heads/main")
-	other := plumbing.ReferenceName("refs/heads/other")
 	wanted := plumbing.NewHash("1111111111111111111111111111111111111111")
+	failure := errors.New("target transport failure")
+	accepted := FormatPktLine("unpack ok\n") + FormatPktLine("ok refs/heads/main\n") + "0000"
+	rejected := FormatPktLine("unpack ok\n") + FormatPktLine("ng refs/heads/main stale info\n") + "0000"
+	tooLarge := FormatPktLine("unpack push rejected: body exceeded size limit 10\n") + FormatPktLine("ng refs/heads/main unpacker error\n") + "0000"
 	for _, tc := range []struct {
-		name      string
-		phase     string
-		rejectOne bool
+		name        string
+		report      string
+		tail        io.Reader
+		closeErr    error
+		bestEffort  bool
+		wantErr     string
+		wantMoved   bool
+		wantWarning string
+		wantOutcome RefOutcome
 	}{
-		{name: "read_after_accept", phase: "read"},
-		{name: "close_after_accept", phase: "close"},
-		{name: "close_after_partial_reject", phase: "close", rejectOne: true},
+		{name: "accepted_tail_error", report: accepted, tail: iotest.ErrReader(failure), wantOutcome: RefOutcomeApplied},
+		{name: "accepted_close_error", report: accepted, closeErr: failure, wantOutcome: RefOutcomeApplied},
+		{name: "unpack_failure_not_drained", report: tooLarge, tail: iotest.ErrReader(failure), wantErr: "body exceeded size limit 10"},
+		{name: "rejected_tail_error", report: rejected, tail: iotest.ErrReader(failure), wantMoved: true, wantWarning: failure.Error()},
+		{name: "rejected_close_error", report: rejected, closeErr: failure, wantMoved: true, wantWarning: failure.Error()},
+		{name: "rejected_close_error_best_effort", report: rejected, closeErr: failure, bestEffort: true, wantWarning: failure.Error(), wantOutcome: RefOutcomeRefused},
+		{name: "rejected_oversized_tail", report: rejected, tail: strings.NewReader(strings.Repeat("x", maxDrainBytes+1)), wantMoved: true, wantWarning: "bytes after report-status"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			failure := fmt.Errorf("target %s failure", tc.phase)
-			otherStatus := "ok refs/heads/other\n"
-			if tc.rejectOne {
-				otherStatus = "ng refs/heads/other stale info\n"
+			var body io.Reader = strings.NewReader(tc.report)
+			if tc.tail != nil {
+				body = io.MultiReader(body, tc.tail)
 			}
-			report := FormatPktLine("unpack ok\n") + FormatPktLine("ok refs/heads/main\n") + FormatPktLine(otherStatus) + "0000"
-			response := failingReceivePackResponse(report, tc.phase, failure)
+			response := &countingCloser{Reader: body, closeErr: tc.closeErr}
 			var progress bytes.Buffer
 			adv := &packp.AdvRefs{}
 			adv.Capabilities.Set(capability.ReportStatus)
 			p := NewPusher(&receivePackTestConn{response: response, progress: &progress}, adv, false)
+			if tc.bestEffort {
+				p.OnRejection = func(plumbing.ReferenceName, string) {}
+			}
 			p.TargetRefsNow = func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-				t.Error("must not verify after transport failure")
+				t.Error("must not verify after an unclean finish")
 				return nil, failure
 			}
-			err := p.PushCommands(t.Context(), []PushCommand{{Name: main, New: wanted}, {Name: other, New: wanted}})
-			if outcome, _ := p.LastOutcome(main); outcome != RefOutcomeApplied {
-				t.Errorf("accepted ref outcome = %v, want applied", outcome)
-			}
-			if tc.rejectOne {
-				if !errors.Is(err, failure) || !errors.Is(err, ErrTargetRefMoved) {
-					t.Fatalf("lost transport or ref rejection: %v", err)
+			err := p.PushCommands(t.Context(), []PushCommand{{Name: main, New: wanted}})
+			switch {
+			case tc.wantErr != "":
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || errors.Is(err, failure) {
+					t.Fatalf("err = %v, want only %q", err, tc.wantErr)
 				}
-				return
+			case tc.wantMoved:
+				if !errors.Is(err, ErrTargetRefMoved) || errors.Is(err, failure) {
+					t.Fatalf("err = %v, want only the ref rejection", err)
+				}
+			case err != nil:
+				t.Fatalf("push failed: %v", err)
 			}
-			if err != nil {
-				t.Fatalf("accepted push failed: %v", err)
+			if outcome, _ := p.LastOutcome(main); outcome != tc.wantOutcome {
+				t.Errorf("outcome = %v, want %v", outcome, tc.wantOutcome)
 			}
-			if outcome, _ := p.LastOutcome(other); outcome != RefOutcomeApplied {
-				t.Errorf("accepted ref outcome = %v, want applied", outcome)
+			if got := progress.String(); (tc.wantWarning == "") != (got == "") || !strings.Contains(got, tc.wantWarning) {
+				t.Errorf("warning = %q, want %q", got, tc.wantWarning)
 			}
-			if !strings.Contains(progress.String(), "did not finish cleanly") || !strings.Contains(progress.String(), failure.Error()) {
-				t.Errorf("transport failure not surfaced: %q", progress.String())
+			if response.closes != 1 {
+				t.Fatalf("closed %d times", response.closes)
 			}
 		})
 	}

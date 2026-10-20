@@ -110,7 +110,7 @@ func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
 type pushStatusSink struct {
 	Rejected  func(plumbing.ReferenceName, string)
 	Applied   func(plumbing.ReferenceName)
-	Reconcile func(context.Context, *packp.UpdateRequests, *packp.ReportStatus) *packp.ReportStatus
+	Reconcile func(context.Context, *packp.UpdateRequests, *packp.ReportStatus, func() error) *packp.ReportStatus
 }
 
 // fatalRejections reports whether a per-ref "ng" must fail the push.
@@ -137,11 +137,11 @@ func (s *pushStatusSink) record(report *packp.ReportStatus) {
 }
 
 // reconcile lets the pusher drop verified concurrent rejections from report.
-func (s *pushStatusSink) reconcile(ctx context.Context, req *packp.UpdateRequests, report *packp.ReportStatus) *packp.ReportStatus {
+func (s *pushStatusSink) reconcile(ctx context.Context, req *packp.UpdateRequests, report *packp.ReportStatus, finish func() error) *packp.ReportStatus {
 	if s == nil || s.Reconcile == nil {
 		return report
 	}
-	return s.Reconcile(ctx, req, report)
+	return s.Reconcile(ctx, req, report, finish)
 }
 
 // beginPush clears the previous push's outcomes and returns the sink for this
@@ -260,8 +260,10 @@ func logRefUpdateBatch(conn Conn, verbose bool, batchNum, totalBatches, refs int
 
 // progressOut is conn's progress writer, or stderr when it has none.
 func progressOut(conn Conn) io.Writer {
-	if w := conn.ProgressWriter(); w != nil {
-		return w
+	if conn != nil {
+		if w := conn.ProgressWriter(); w != nil {
+			return w
+		}
 	}
 	return os.Stderr
 }
@@ -555,50 +557,38 @@ func sendReceivePack(
 		return fmt.Errorf("target receive-pack: %w", err)
 	}
 	closeResponse := sync.OnceValue(reader.Close)
-	defer closeResponse() //nolint:errcheck // finishReceivePack checks close errors; early failures keep the decode/drain error
+	defer closeResponse() //nolint:errcheck // teardown after a decoded report cannot change what the target committed
 
 	// Unwrap sideband if negotiated; stream server-side progress to stderr
 	// when verbose so long-running pushes show "Resolving deltas ..." etc.
-	var respReader io.Reader = reader
+	raw := &drainBudget{r: reader, remaining: -1}
+	var respReader io.Reader = raw
 	switch {
 	case req.Capabilities.Supports(capability.Sideband64k):
-		dem := sideband.NewDemuxer(sideband.Sideband64k, reader)
+		dem := sideband.NewDemuxer(sideband.Sideband64k, raw)
 		dem.Progress = progressSink(verbose, "target: ", conn.ProgressWriter())
 		respReader = dem
 	case req.Capabilities.Supports(capability.Sideband):
-		dem := sideband.NewDemuxer(sideband.Sideband, reader)
+		dem := sideband.NewDemuxer(sideband.Sideband, raw)
 		dem.Progress = progressSink(verbose, "target: ", conn.ProgressWriter())
 		respReader = dem
 	}
 
-	var report *packp.ReportStatus
-	if req.Capabilities.Supports(capability.ReportStatus) {
-		report = &packp.ReportStatus{}
-		if err := report.Decode(respReader); err != nil {
-			return fmt.Errorf("decode report-status: %w", err)
-		}
-	}
-	// A report's flush packet is not the end of the RPC: hooks may still be
-	// writing sideband output. Drain before closing so SSH/helper processes
-	// can finish normally, and before opening another RPC for verification.
-	finishErr := finishReceivePack(respReader, reader, closeResponse)
-	if report == nil {
-		// Without report-status the transport outcome is the only signal.
-		return finishErr
-	}
-	if finishErr != nil {
-		// receive-pack reports only after committing ref updates, so a
-		// trailing transport failure cannot undo an all-accepted report: only
-		// warn then. Otherwise keep both errors without verifying, which would
-		// open another RPC on an unclean transport.
-		statuses.record(report)
-		if err := report.Error(); err != nil {
-			return errors.Join(finishErr, reportStatusError(err))
-		}
-		warnReceivePackFinish(conn, finishErr)
+	if !req.Capabilities.Supports(capability.ReportStatus) {
 		return nil
 	}
-	report = statuses.reconcile(ctx, req, report)
+	report := &packp.ReportStatus{}
+	if err := report.Decode(respReader); err != nil {
+		return fmt.Errorf("decode report-status: %w", err)
+	}
+	// The report is authoritative: receive-pack sends it after committing, so
+	// the deferred close ignores teardown errors. Draining to EOF waits on the
+	// peer, which would also hold back an early refusal (such as a body limit)
+	// until the whole pack was sent, so finish runs only before verification.
+	report = statuses.reconcile(ctx, req, report, func() error {
+		raw.remaining = maxDrainBytes
+		return finishReceivePack(respReader, raw, closeResponse)
+	})
 	if statuses.fatalRejections() {
 		if err := report.Error(); err != nil {
 			return reportStatusError(err)
@@ -631,8 +621,32 @@ func unpackFailed(report *packp.ReportStatus) bool {
 	return report.UnpackStatus != "" && report.UnpackStatus != "ok"
 }
 
+// drainBudget caps reads once remaining is set non-negative, so a peer that
+// keeps writing after its report cannot stall the push (see maxDrainBytes).
+type drainBudget struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (d *drainBudget) Read(p []byte) (int, error) {
+	if d.remaining < 0 {
+		return d.r.Read(p) //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
+	}
+	if d.remaining == 0 {
+		return 0, fmt.Errorf("more than %d bytes after report-status", maxDrainBytes)
+	}
+	if int64(len(p)) > d.remaining {
+		p = p[:d.remaining]
+	}
+	n, err := d.r.Read(p)
+	d.remaining -= int64(n)
+	return n, err //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
+}
+
 // finishReceivePack consumes sideband output through its flush, then the raw
-// stream through EOF before waiting for the transport process to exit.
+// stream through EOF before waiting for the transport process to exit. Hooks
+// may still be writing after the report; closing early can break an SSH or
+// helper process before the verification RPC.
 func finishReceivePack(response, raw io.Reader, closeResponse func() error) error {
 	if _, err := io.Copy(io.Discard, response); err != nil {
 		return fmt.Errorf("drain target receive-pack response: %w", err)
@@ -644,12 +658,6 @@ func finishReceivePack(response, raw io.Reader, closeResponse func() error) erro
 		return fmt.Errorf("close target receive-pack response: %w", err)
 	}
 	return nil
-}
-
-// warnReceivePackFinish reports a transport failure after an all-accepted
-// report. The error can carry server-authored sideband text, so filter it.
-func warnReceivePackFinish(conn Conn, err error) {
-	fmt.Fprintf(progressOut(conn), "target: warning: receive-pack accepted all refs but did not finish cleanly: %s\n", sanitize.Text(err.Error()))
 }
 
 // pushObjects pushes locally-materialized objects to the target.
