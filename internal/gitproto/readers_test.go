@@ -128,12 +128,13 @@ func TestSortedUniqueHashes(t *testing.T) {
 type countingCloser struct {
 	io.Reader
 
-	closes int
+	closeErr error
+	closes   int
 }
 
 func (c *countingCloser) Close() error {
 	c.closes++
-	return nil
+	return c.closeErr
 }
 
 func TestCloseOnce(t *testing.T) {

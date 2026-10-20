@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +46,10 @@ type Pusher struct {
 	Adv         *packp.AdvRefs
 	Verbose     bool
 	OnRejection func(refName plumbing.ReferenceName, status string)
+	// TargetRefsNow optionally verifies a concurrent-ref rejection against a
+	// fresh advertisement. OnAlreadyCurrent records convergence, not a write.
+	TargetRefsNow    func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error)
+	OnAlreadyCurrent func(plumbing.ReferenceName, plumbing.Hash)
 
 	// MaxRefUpdates caps ref-update commands per receive-pack request. Zero
 	// uses the env-or-default limit (see MaxRefUpdatesEnv); a positive value
@@ -59,13 +64,13 @@ type Pusher struct {
 	lastOutcomes map[plumbing.ReferenceName]refAnswer
 }
 
-// refAnswer is one ref's entry in a decoded report-status.
+// refAnswer records a reported status or a subsequent convergence check.
 type refAnswer struct {
-	refused bool
+	outcome RefOutcome
 	reason  string
 }
 
-// RefOutcome is what a target did with one ref command in a push.
+// RefOutcome distinguishes a reported push result from observed convergence.
 type RefOutcome int
 
 const (
@@ -80,22 +85,22 @@ const (
 	// BestEffort that is survivable and the push still returns nil, which is
 	// why asking is necessary at all.
 	RefOutcomeRefused
+	// RefOutcomeAlreadyCurrent means a rejected update's desired hash was
+	// observed in a fresh target advertisement. The push did not apply it.
+	RefOutcomeAlreadyCurrent
 )
 
 // LastOutcome reports what the target did with name in the most recent Push*
-// call on this Pusher, and the target's "ng" reason when it refused. Answers
+// call on this Pusher (or whether it was subsequently found already current),
+// and the target's "ng" reason when it refused. Answers
 // by value rather than handing out the Pusher's map, so a caller cannot mutate
 // or race with push state it does not own.
 func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
 	answer, seen := p.lastOutcomes[name]
-	switch {
-	case seen && answer.refused:
-		return RefOutcomeRefused, answer.reason
-	case seen:
-		return RefOutcomeApplied, ""
-	default:
+	if !seen {
 		return RefOutcomeUnknown, ""
 	}
+	return answer.outcome, answer.reason
 }
 
 // pushStatusSink observes the target's per-ref answers for one request. A nil
@@ -103,8 +108,9 @@ func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
 // best-effort and strict — recording outcomes must not quietly turn every push
 // best-effort.
 type pushStatusSink struct {
-	Rejected func(plumbing.ReferenceName, string)
-	Applied  func(plumbing.ReferenceName)
+	Rejected  func(plumbing.ReferenceName, string)
+	Applied   func(plumbing.ReferenceName)
+	Reconcile func(context.Context, *packp.UpdateRequests, *packp.ReportStatus, func() error) *packp.ReportStatus
 }
 
 // fatalRejections reports whether a per-ref "ng" must fail the push.
@@ -130,20 +136,29 @@ func (s *pushStatusSink) record(report *packp.ReportStatus) {
 	}
 }
 
+// reconcile lets the pusher drop verified concurrent rejections from report.
+func (s *pushStatusSink) reconcile(ctx context.Context, req *packp.UpdateRequests, report *packp.ReportStatus, finish func() error) *packp.ReportStatus {
+	if s == nil || s.Reconcile == nil {
+		return report
+	}
+	return s.Reconcile(ctx, req, report, finish)
+}
+
 // beginPush clears the previous push's outcomes and returns the sink for this
-// one. Applied is always recorded, so a strict caller — whose nil error really
-// does prove every command landed — can be told so without a second round
-// trip; Rejected is installed only when the caller opted into best-effort.
+// one. Applied records server acceptance; AlreadyCurrent separately records
+// verified convergence after a refusal. Rejected is installed only when the
+// caller opted into best-effort.
 func (p *Pusher) beginPush() *pushStatusSink {
 	p.lastOutcomes = nil
 	sink := &pushStatusSink{
+		Reconcile: p.reconcileRejections,
 		Applied: func(name plumbing.ReferenceName) {
-			p.answer(name, refAnswer{})
+			p.answer(name, refAnswer{outcome: RefOutcomeApplied})
 		},
 	}
 	if p.OnRejection != nil {
 		sink.Rejected = func(name plumbing.ReferenceName, status string) {
-			p.answer(name, refAnswer{refused: true, reason: status})
+			p.answer(name, refAnswer{outcome: RefOutcomeRefused, reason: status})
 			p.OnRejection(name, status)
 		}
 	}
@@ -240,11 +255,17 @@ func logRefUpdateBatch(conn Conn, verbose bool, batchNum, totalBatches, refs int
 	if !verbose || totalBatches <= 1 {
 		return
 	}
-	w := conn.ProgressWriter()
-	if w == nil {
-		w = os.Stderr
+	fmt.Fprintf(progressOut(conn), "target: pushed ref-update batch %d/%d (%d refs)\n", batchNum, totalBatches, refs)
+}
+
+// progressOut is conn's progress writer, or stderr when it has none.
+func progressOut(conn Conn) io.Writer {
+	if conn != nil {
+		if w := conn.ProgressWriter(); w != nil {
+			return w
+		}
 	}
-	fmt.Fprintf(w, "target: pushed ref-update batch %d/%d (%d refs)\n", batchNum, totalBatches, refs)
+	return os.Stderr
 }
 
 // PushPack streams a pack to the target.
@@ -308,6 +329,7 @@ func buildUpdateRequest(
 // so substring matching is the only option absent upstream sentinels.
 var leaseFailureMarkers = []string{
 	"stale info",
+	"incorrect old value provided",
 	"fetch first",
 	"non-fast-forward",
 	"does not match",
@@ -424,16 +446,16 @@ func (e *RefRejectedError) Is(target error) bool {
 // "stale info" is git's force-with-lease lease-miss phrasing, kept for
 // consistency with leaseFailureMarkers and defence-in-depth; note it is
 // primarily a client-side status, so it may not arrive as a server ng reason on
-// every target. Stock git servers phrase a CAS miss differently again
-// ("failed to update ref" / "cannot lock ref ... but expected ..."), which this
-// set does NOT match — so against a non-entire target a genuine race may fall
-// through to a plain rejection. Extend this set as new server phrasings are
-// observed. Match is case-insensitive substring (Reason is free-form; see
-// RefRejectedError).
+// every target. Stock git also uses "incorrect old value provided", an explicit
+// compare-and-swap miss. Its generic "failed to update ref" can have other
+// causes, so that phrase only triggers desired-hash verification, not this
+// classification. Match is case-insensitive substring (Reason is free-form;
+// see RefRejectedError).
 var concurrentMoveMarkers = []string{
 	"remote ref has changed",
 	"already exists",
 	"stale info",
+	"incorrect old value provided",
 }
 
 // isConcurrentMove reports whether a receive-pack ng reason is an unambiguous
@@ -534,48 +556,111 @@ func sendReceivePack(
 	if err != nil {
 		return fmt.Errorf("target receive-pack: %w", err)
 	}
-	defer reader.Close()
+	closeResponse := sync.OnceValue(reader.Close)
+	defer closeResponse() //nolint:errcheck // teardown after a decoded report cannot change what the target committed
 
 	// Unwrap sideband if negotiated; stream server-side progress to stderr
 	// when verbose so long-running pushes show "Resolving deltas ..." etc.
-	var respReader io.Reader = reader
+	raw := &drainBudget{r: reader, remaining: -1}
+	var respReader io.Reader = raw
 	switch {
 	case req.Capabilities.Supports(capability.Sideband64k):
-		dem := sideband.NewDemuxer(sideband.Sideband64k, reader)
+		dem := sideband.NewDemuxer(sideband.Sideband64k, raw)
 		dem.Progress = progressSink(verbose, "target: ", conn.ProgressWriter())
 		respReader = dem
 	case req.Capabilities.Supports(capability.Sideband):
-		dem := sideband.NewDemuxer(sideband.Sideband, reader)
+		dem := sideband.NewDemuxer(sideband.Sideband, raw)
 		dem.Progress = progressSink(verbose, "target: ", conn.ProgressWriter())
 		respReader = dem
 	}
 
-	if req.Capabilities.Supports(capability.ReportStatus) {
-		report := &packp.ReportStatus{}
-		if err := report.Decode(respReader); err != nil {
-			return fmt.Errorf("decode report-status: %w", err)
+	if !req.Capabilities.Supports(capability.ReportStatus) {
+		return nil
+	}
+	report := &packp.ReportStatus{}
+	if err := report.Decode(respReader); err != nil {
+		return fmt.Errorf("decode report-status: %w", err)
+	}
+	// The report is authoritative: receive-pack sends it after committing, so
+	// the deferred close ignores teardown errors. Draining to EOF waits on the
+	// peer, which would also hold back an early refusal (such as a body limit)
+	// until the whole pack was sent, so finish runs only before verification.
+	report = statuses.reconcile(ctx, req, report, func() error {
+		raw.remaining = maxDrainBytes
+		return finishReceivePack(respReader, raw, closeResponse)
+	})
+	if statuses.fatalRejections() {
+		if err := report.Error(); err != nil {
+			return reportStatusError(err)
 		}
-		if statuses.fatalRejections() {
-			if err := report.Error(); err != nil {
-				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
-			}
-			// Nothing was refused and refusals are fatal, so this nil really
-			// does mean the target applied every command it reported.
-			statuses.record(report)
-			return nil
-		}
-		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
-			// Server-authored, and formatted directly rather than wrapped, so
-			// it needs filtering here — the sibling branch above gets it from
-			// sanitizedError.
-			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
-		}
-		// A conforming receive-pack reports one status per command, so a
-		// command this report never mentions stays RefOutcomeUnknown. That is
-		// deliberately not a refusal: nothing was refused, so nothing should
-		// fail, but the silence is also not the target confirming the ref, and
-		// a caller that has to know can go and look.
+		// The remaining statuses are accepted commands; verified concurrent
+		// updates were recorded separately as AlreadyCurrent.
 		statuses.record(report)
+		return nil
+	}
+	if unpackFailed(report) {
+		// Server-authored, and formatted directly rather than wrapped, so
+		// it needs filtering here — the sibling branch above gets it from
+		// sanitizedError.
+		return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
+	}
+	// A conforming receive-pack reports one status per command, so a
+	// command this report never mentions stays RefOutcomeUnknown. That is
+	// deliberately not a refusal: nothing was refused, so nothing should
+	// fail, but the silence is also not the target confirming the ref, and
+	// a caller that has to know can go and look.
+	statuses.record(report)
+	return nil
+}
+
+func reportStatusError(err error) error {
+	return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
+}
+
+func unpackFailed(report *packp.ReportStatus) bool {
+	return report.UnpackStatus != "" && report.UnpackStatus != "ok"
+}
+
+// drainBudget caps reads once remaining is set non-negative, so a peer that
+// keeps writing after its report cannot stall the push (see maxDrainBytes).
+type drainBudget struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (d *drainBudget) Read(p []byte) (int, error) {
+	if d.remaining < 0 {
+		return d.r.Read(p) //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
+	}
+	if d.remaining == 0 {
+		// Probe one byte so a stream ending exactly at the limit reads as EOF.
+		var probe [1]byte
+		if n, err := d.r.Read(probe[:]); n == 0 {
+			return 0, err //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
+		}
+		return 0, fmt.Errorf("more than %d bytes after report-status", maxDrainBytes)
+	}
+	if int64(len(p)) > d.remaining {
+		p = p[:d.remaining]
+	}
+	n, err := d.r.Read(p)
+	d.remaining -= int64(n)
+	return n, err //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
+}
+
+// finishReceivePack consumes sideband output through its flush, then the raw
+// stream through EOF before waiting for the transport process to exit. Hooks
+// may still be writing after the report; closing early can break an SSH or
+// helper process before the verification RPC.
+func finishReceivePack(response, raw io.Reader, closeResponse func() error) error {
+	if _, err := io.Copy(io.Discard, response); err != nil {
+		return fmt.Errorf("drain target receive-pack response: %w", err)
+	}
+	if _, err := io.Copy(io.Discard, raw); err != nil {
+		return fmt.Errorf("drain target receive-pack stream: %w", err)
+	}
+	if err := closeResponse(); err != nil {
+		return fmt.Errorf("close target receive-pack response: %w", err)
 	}
 	return nil
 }

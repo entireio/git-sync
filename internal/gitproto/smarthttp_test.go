@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"entire.io/entire/git-sync/internal/syncertest"
+
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	transporthttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 )
@@ -479,11 +481,7 @@ func TestHTTPErrorBoundsBodyRead(t *testing.T) {
 	}
 }
 
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
+type roundTripperFunc = syncertest.RoundTripperFunc
 
 func newAdvertisementResponse(req *http.Request) *http.Response {
 	res := &http.Response{

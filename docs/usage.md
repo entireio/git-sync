@@ -346,6 +346,12 @@ The JSON interface is stable:
 - each item in `plans` includes stable string fields such as `branch`, `sourceRef`, `targetRef`, `sourceHash`, `targetHash`, `kind`, `action`, and `reason`
 - `execution.sourceHead` (sync/plan/replicate/bootstrap) and `sourceHead` (probe) carry the source's symref HEAD target when advertised
 
+## Concurrent syncs and discovery order
+
+Operations using both remotes read target refs before source refs. This keeps a concurrent sync's newer target state from becoming the expected-old value for an older source snapshot. If a recognized concurrent-ref rejection occurs, git-sync re-reads the target: a create or update whose exact desired hash is already there succeeds as skipped work, without retrying the write. Other rejections remain unchanged. A missing advertised ref cannot prove a deletion because servers may hide refs, so delete rejections are not converted to success.
+
+Target discovery may therefore prompt for credentials or fail before an inaccessible source is discovered. This ordering is intentional. SSH discovery closes its input and waits for the discovery process to finish before proceeding; it does not hold a receive-pack process open during source authentication. Source-only operations still contact only the source.
+
 ## Auth
 
 For GitHub and similar providers, use basic auth with a token as the password.

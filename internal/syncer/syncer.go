@@ -524,10 +524,32 @@ func (s *syncSession) finalizeCounts(pushPlans []BranchPlan, result *Result) {
 			s.applyRejections(result.Plans)
 			result.Warned += warned
 		}
+		result.Skipped += s.applyAlreadyCurrent(pushPlans)
+		s.applyAlreadyCurrent(result.Plans)
 	}
 	pushed, deleted := tallyActions(pushPlans)
 	result.Pushed += pushed
 	result.Deleted += deleted
+}
+
+// applyAlreadyCurrent counts verified convergence as skipped work, not as a
+// write performed by this run. Refusals and later updates to a different hash
+// must not be overwritten by an earlier convergence observation.
+func (s *syncSession) applyAlreadyCurrent(plans []BranchPlan) int {
+	if len(s.alreadyCurrent) == 0 {
+		return 0
+	}
+	skipped := 0
+	for i := range plans {
+		p := &plans[i]
+		if (p.Action == ActionCreate || p.Action == ActionUpdate) &&
+			!p.SourceHash.IsZero() && s.alreadyCurrent[p.TargetRef] == p.SourceHash {
+			p.Action = ActionSkip
+			p.Reason = "target already at desired hash after concurrent update"
+			skipped++
+		}
+	}
+	return skipped
 }
 
 // classifyPlans splits planned actions into pushable plans, tallying skips and
@@ -624,14 +646,12 @@ func (s *syncSession) refOutcome(name plumbing.ReferenceName) (gitproto.RefOutco
 	return outcome, sanitize.Text(reason)
 }
 
-// targetRefsNow re-reads the target's refs mid-run. Answers
-// bootstrap.Params.TargetRefsNow, which asks it only to settle whether a branch
-// whose create no push could confirm is actually there — one advertisement
-// round trip against a transfer measured in gigabytes.
+// targetRefsNow re-reads the target's refs mid-run to verify convergence after
+// a concurrent-ref rejection, or settle an unconfirmed bootstrap branch create.
 //
 // It is the receive-pack advertisement, so receive.hideRefs can omit a ref that
 // is really there (the same caveat Config.TargetAssertedEmpty documents). That
-// direction is safe for the one question asked here: a hidden branch reads as
+// direction is safe for these presence checks: a hidden branch reads as
 // absent, which keeps a resume marker that was not needed rather than dropping
 // one that was.
 func (s *syncSession) targetRefsNow(ctx context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
@@ -762,7 +782,8 @@ type syncSession struct {
 	measurementDone func() Measurement
 	progress        *progressReporter
 	// rejections records target ng statuses; nil unless BestEffort.
-	rejections map[plumbing.ReferenceName]string
+	rejections     map[plumbing.ReferenceName]string
+	alreadyCurrent map[plumbing.ReferenceName]plumbing.Hash
 }
 
 // finish releases the resources owned by the session: the live progress
@@ -895,15 +916,10 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	s.sourceConn.SetProgressWriter(&sessionStderr{s: s})
 	warnSSHStats(s.sourceConn, nil)
 
-	refPrefixes := planner.RefPrefixes(planConfig(cfg))
-	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
-	if err != nil {
-		return nil, fmt.Errorf("list source refs: %w", err)
-	}
-	sourceService.Verbose = cfg.Verbose
-	s.sourceService = sourceService
-	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
-
+	// Capture expected-old target refs before the source snapshot. Otherwise
+	// a concurrent sync can finish between the two reads and become the valid
+	// baseline for overwriting newer target refs with older source state.
+	// This still relies on the target ref changing to detect a conflict.
 	if needTarget {
 		targetConn, err := newConn(cfg.Target, "target", s.stats, cfg.HTTPClient)
 		if err != nil {
@@ -938,6 +954,11 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		}
 		s.target.pusher = gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
 		s.target.pusher.MaxRefUpdates = cfg.TargetMaxRefUpdates
+		s.target.pusher.TargetRefsNow = s.targetRefsNow
+		s.alreadyCurrent = make(map[plumbing.ReferenceName]plumbing.Hash)
+		s.target.pusher.OnAlreadyCurrent = func(name plumbing.ReferenceName, hash plumbing.Hash) {
+			s.alreadyCurrent[name] = hash
+		}
 		if cfg.BestEffort {
 			s.rejections = make(map[plumbing.ReferenceName]string)
 			s.target.pusher.OnRejection = func(name plumbing.ReferenceName, status string) {
@@ -953,6 +974,16 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			}
 		}
 	}
+
+	refPrefixes := planner.RefPrefixes(planConfig(cfg))
+	sourceRefs, sourceService, err := gitproto.ListSourceRefs(ctx, s.sourceConn, cfg.ProtocolMode, refPrefixes)
+	if err != nil {
+		return nil, fmt.Errorf("list source refs: %w", err)
+	}
+	sourceService.Verbose = cfg.Verbose
+	s.sourceService = sourceService
+	s.sourceRefMap = gitproto.RefHashMap(sourceRefs)
+
 	// Start the live progress ticker only after auth resolution and the
 	// initial ref-listing round trips have completed. The auth path may
 	// shell out to `git credential fill`, which inherits our stderr and
@@ -1493,9 +1524,10 @@ func bootstrapWithInputs(
 	}
 	plans := bResult.Plans
 	warned := s.applyRejections(plans)
+	skipped := s.applyAlreadyCurrent(plans)
 	pushed, _ := tallyActions(plans)
 	return Result{
-		Plans: plans, Pushed: pushed, Warned: warned, OperationMode: s.cfg.Mode,
+		Plans: plans, Pushed: pushed, Skipped: skipped, Warned: warned, OperationMode: s.cfg.Mode,
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,

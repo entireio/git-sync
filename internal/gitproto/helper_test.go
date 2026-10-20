@@ -113,6 +113,9 @@ func runFakeHelper(mode string, stdin io.Reader, stdout io.Writer) error {
 		if _, err := io.Copy(io.Discard, br); err != nil {
 			return fmt.Errorf("drain request: %w", err)
 		}
+		if mode == "late-rejection" {
+			return write(lateReceivePackResponse())
+		}
 		return write(fakeReportStatus)
 	default:
 		return write("fallback\n")
