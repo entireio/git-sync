@@ -536,6 +536,9 @@ func (s *syncSession) finalizeCounts(pushPlans []BranchPlan, result *Result) {
 // write performed by this run. Refusals and later updates to a different hash
 // must not be overwritten by an earlier convergence observation.
 func (s *syncSession) applyAlreadyCurrent(plans []BranchPlan) int {
+	if len(s.alreadyCurrent) == 0 {
+		return 0
+	}
 	skipped := 0
 	for i := range plans {
 		p := &plans[i]
@@ -952,10 +955,8 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		s.target.pusher = gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
 		s.target.pusher.MaxRefUpdates = cfg.TargetMaxRefUpdates
 		s.target.pusher.TargetRefsNow = s.targetRefsNow
+		s.alreadyCurrent = make(map[plumbing.ReferenceName]plumbing.Hash)
 		s.target.pusher.OnAlreadyCurrent = func(name plumbing.ReferenceName, hash plumbing.Hash) {
-			if s.alreadyCurrent == nil {
-				s.alreadyCurrent = make(map[plumbing.ReferenceName]plumbing.Hash)
-			}
 			s.alreadyCurrent[name] = hash
 		}
 		if cfg.BestEffort {

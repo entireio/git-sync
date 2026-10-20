@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -221,30 +222,20 @@ func (c *receivePackTestConn) PostRPCStreamBody(context.Context, string, io.Read
 
 func (c *receivePackTestConn) ProgressWriter() io.Writer { return c.progress }
 
-type receivePackTestResponse struct {
-	io.Reader
-
-	closeErr error
-	closes   int
+// failingReceivePackResponse serves report, then fails in phase ("read" or "close").
+func failingReceivePackResponse(report, phase string, failure error) *countingCloser {
+	if phase == "close" {
+		return &countingCloser{Reader: strings.NewReader(report), closeErr: failure}
+	}
+	return &countingCloser{Reader: io.MultiReader(strings.NewReader(report), iotest.ErrReader(failure))}
 }
-
-func (r *receivePackTestResponse) Close() error { r.closes++; return r.closeErr }
-
-type receivePackReadError struct{ err error }
-
-func (r receivePackReadError) Read([]byte) (int, error) { return 0, r.err }
 
 func TestPusherPreservesReceivePackCompletionErrors(t *testing.T) {
 	for _, phase := range []string{"read", "close"} {
 		t.Run(phase, func(t *testing.T) {
 			failure := fmt.Errorf("target %s failure", phase)
 			report := FormatPktLine("unpack ok\n") + FormatPktLine("ng refs/heads/main stale info\n") + "0000"
-			response := &receivePackTestResponse{Reader: strings.NewReader(report)}
-			if phase == "close" {
-				response.closeErr = failure
-			} else {
-				response.Reader = io.MultiReader(response.Reader, receivePackReadError{failure})
-			}
+			response := failingReceivePackResponse(report, phase, failure)
 			adv := &packp.AdvRefs{}
 			adv.Capabilities.Set(capability.ReportStatus)
 			p := NewPusher(&receivePackTestConn{response: response}, adv, false)
@@ -288,12 +279,7 @@ func TestPusherAcceptedReportSurvivesCompletionErrors(t *testing.T) {
 				otherStatus = "ng refs/heads/other stale info\n"
 			}
 			report := FormatPktLine("unpack ok\n") + FormatPktLine("ok refs/heads/main\n") + FormatPktLine(otherStatus) + "0000"
-			response := &receivePackTestResponse{Reader: strings.NewReader(report)}
-			if tc.phase == "close" {
-				response.closeErr = failure
-			} else {
-				response.Reader = io.MultiReader(response.Reader, receivePackReadError{failure})
-			}
+			response := failingReceivePackResponse(report, tc.phase, failure)
 			var progress bytes.Buffer
 			adv := &packp.AdvRefs{}
 			adv.Capabilities.Set(capability.ReportStatus)

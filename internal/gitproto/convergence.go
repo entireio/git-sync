@@ -13,7 +13,7 @@ import (
 // Each report is checked separately so split pushes still execute later batches
 // and cannot hide an unrelated rejection behind a converged ref.
 func (p *Pusher) reconcileRejections(ctx context.Context, req *packp.UpdateRequests, report *packp.ReportStatus) *packp.ReportStatus {
-	if p.TargetRefsNow == nil || ctx.Err() != nil || (report.UnpackStatus != "" && report.UnpackStatus != "ok") {
+	if p.TargetRefsNow == nil || ctx.Err() != nil || unpackFailed(report) || report.Error() == nil {
 		return report
 	}
 	wanted := make(map[plumbing.ReferenceName]plumbing.Hash)
@@ -24,20 +24,20 @@ func (p *Pusher) reconcileRejections(ctx context.Context, req *packp.UpdateReque
 			wanted[cmd.Name] = cmd.New
 		}
 	}
-	needsRead := false
+	candidates := make(map[plumbing.ReferenceName]plumbing.Hash)
 	for _, status := range report.CommandStatuses {
 		if status.Error() == nil {
 			continue
 		}
-		if canVerifyRefRejection(status.Status) && !wanted[status.ReferenceName].IsZero() {
-			needsRead = true
+		if hash := wanted[status.ReferenceName]; canVerifyRefRejection(status.Status) && !hash.IsZero() {
+			candidates[status.ReferenceName] = hash
 		} else if p.OnRejection == nil {
 			// Strict pushes still fail on this refusal. Avoid a full target read
 			// that cannot make the report successful.
 			return report
 		}
 	}
-	if !needsRead {
+	if len(candidates) == 0 {
 		return report
 	}
 	refs, err := p.TargetRefsNow(ctx)
@@ -47,9 +47,8 @@ func (p *Pusher) reconcileRejections(ctx context.Context, req *packp.UpdateReque
 	filtered := &packp.ReportStatus{UnpackStatus: report.UnpackStatus}
 	for _, status := range report.CommandStatuses {
 		name := status.ReferenceName
-		hash := wanted[name]
-		if canVerifyRefRejection(status.Status) && !hash.IsZero() && refs[name] == hash {
-			p.answer(name, refAnswer{current: true})
+		if hash, ok := candidates[name]; ok && status.Error() != nil && refs[name] == hash {
+			p.answer(name, refAnswer{outcome: RefOutcomeAlreadyCurrent})
 			if p.OnAlreadyCurrent != nil {
 				p.OnAlreadyCurrent(name, hash)
 			}

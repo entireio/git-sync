@@ -66,8 +66,7 @@ type Pusher struct {
 
 // refAnswer records a reported status or a subsequent convergence check.
 type refAnswer struct {
-	refused bool
-	current bool
+	outcome RefOutcome
 	reason  string
 }
 
@@ -98,16 +97,10 @@ const (
 // or race with push state it does not own.
 func (p *Pusher) LastOutcome(name plumbing.ReferenceName) (RefOutcome, string) {
 	answer, seen := p.lastOutcomes[name]
-	switch {
-	case seen && answer.current:
-		return RefOutcomeAlreadyCurrent, ""
-	case seen && answer.refused:
-		return RefOutcomeRefused, answer.reason
-	case seen:
-		return RefOutcomeApplied, ""
-	default:
+	if !seen {
 		return RefOutcomeUnknown, ""
 	}
+	return answer.outcome, answer.reason
 }
 
 // pushStatusSink observes the target's per-ref answers for one request. A nil
@@ -143,6 +136,14 @@ func (s *pushStatusSink) record(report *packp.ReportStatus) {
 	}
 }
 
+// reconcile lets the pusher drop verified concurrent rejections from report.
+func (s *pushStatusSink) reconcile(ctx context.Context, req *packp.UpdateRequests, report *packp.ReportStatus) *packp.ReportStatus {
+	if s == nil || s.Reconcile == nil {
+		return report
+	}
+	return s.Reconcile(ctx, req, report)
+}
+
 // beginPush clears the previous push's outcomes and returns the sink for this
 // one. Applied records server acceptance; AlreadyCurrent separately records
 // verified convergence after a refusal. Rejected is installed only when the
@@ -152,12 +153,12 @@ func (p *Pusher) beginPush() *pushStatusSink {
 	sink := &pushStatusSink{
 		Reconcile: p.reconcileRejections,
 		Applied: func(name plumbing.ReferenceName) {
-			p.answer(name, refAnswer{})
+			p.answer(name, refAnswer{outcome: RefOutcomeApplied})
 		},
 	}
 	if p.OnRejection != nil {
 		sink.Rejected = func(name plumbing.ReferenceName, status string) {
-			p.answer(name, refAnswer{refused: true, reason: status})
+			p.answer(name, refAnswer{outcome: RefOutcomeRefused, reason: status})
 			p.OnRejection(name, status)
 		}
 	}
@@ -254,11 +255,15 @@ func logRefUpdateBatch(conn Conn, verbose bool, batchNum, totalBatches, refs int
 	if !verbose || totalBatches <= 1 {
 		return
 	}
-	w := conn.ProgressWriter()
-	if w == nil {
-		w = os.Stderr
+	fmt.Fprintf(progressOut(conn), "target: pushed ref-update batch %d/%d (%d refs)\n", batchNum, totalBatches, refs)
+}
+
+// progressOut is conn's progress writer, or stderr when it has none.
+func progressOut(conn Conn) io.Writer {
+	if w := conn.ProgressWriter(); w != nil {
+		return w
 	}
-	fmt.Fprintf(w, "target: pushed ref-update batch %d/%d (%d refs)\n", batchNum, totalBatches, refs)
+	return os.Stderr
 }
 
 // PushPack streams a pack to the target.
@@ -576,52 +581,54 @@ func sendReceivePack(
 	// A report's flush packet is not the end of the RPC: hooks may still be
 	// writing sideband output. Drain before closing so SSH/helper processes
 	// can finish normally, and before opening another RPC for verification.
-	if err := finishReceivePack(respReader, reader, closeResponse); err != nil {
-		switch {
-		case report == nil:
-			// Without report-status the transport outcome is the only signal.
-			return err
-		case report.Error() == nil:
-			// receive-pack reports only after committing ref updates, so a
-			// trailing transport failure cannot undo them. Surface it without
-			// failing a push whose every command the target accepted.
-			statuses.record(report)
-			warnReceivePackFinish(conn, err)
-			return nil
-		default:
-			// Verification would open another RPC on an unclean transport.
-			// Keep both errors, and still record what the report stated.
-			statuses.record(report)
-			return errors.Join(err, fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(report.Error()))))
-		}
+	finishErr := finishReceivePack(respReader, reader, closeResponse)
+	if report == nil {
+		// Without report-status the transport outcome is the only signal.
+		return finishErr
 	}
-	if report != nil {
-		if statuses != nil && statuses.Reconcile != nil {
-			report = statuses.Reconcile(ctx, req, report)
-		}
-		if statuses.fatalRejections() {
-			if err := report.Error(); err != nil {
-				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
-			}
-			// The remaining statuses are accepted commands; verified concurrent
-			// updates were recorded separately as AlreadyCurrent.
-			statuses.record(report)
-			return nil
-		}
-		if report.UnpackStatus != "" && report.UnpackStatus != "ok" {
-			// Server-authored, and formatted directly rather than wrapped, so
-			// it needs filtering here — the sibling branch above gets it from
-			// sanitizedError.
-			return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
-		}
-		// A conforming receive-pack reports one status per command, so a
-		// command this report never mentions stays RefOutcomeUnknown. That is
-		// deliberately not a refusal: nothing was refused, so nothing should
-		// fail, but the silence is also not the target confirming the ref, and
-		// a caller that has to know can go and look.
+	if finishErr != nil {
+		// receive-pack reports only after committing ref updates, so a
+		// trailing transport failure cannot undo an all-accepted report: only
+		// warn then. Otherwise keep both errors without verifying, which would
+		// open another RPC on an unclean transport.
 		statuses.record(report)
+		if err := report.Error(); err != nil {
+			return errors.Join(finishErr, reportStatusError(err))
+		}
+		warnReceivePackFinish(conn, finishErr)
+		return nil
 	}
+	report = statuses.reconcile(ctx, req, report)
+	if statuses.fatalRejections() {
+		if err := report.Error(); err != nil {
+			return reportStatusError(err)
+		}
+		// The remaining statuses are accepted commands; verified concurrent
+		// updates were recorded separately as AlreadyCurrent.
+		statuses.record(report)
+		return nil
+	}
+	if unpackFailed(report) {
+		// Server-authored, and formatted directly rather than wrapped, so
+		// it needs filtering here — the sibling branch above gets it from
+		// sanitizedError.
+		return fmt.Errorf("report-status: unpack error: %s", sanitize.Text(report.UnpackStatus))
+	}
+	// A conforming receive-pack reports one status per command, so a
+	// command this report never mentions stays RefOutcomeUnknown. That is
+	// deliberately not a refusal: nothing was refused, so nothing should
+	// fail, but the silence is also not the target confirming the ref, and
+	// a caller that has to know can go and look.
+	statuses.record(report)
 	return nil
+}
+
+func reportStatusError(err error) error {
+	return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
+}
+
+func unpackFailed(report *packp.ReportStatus) bool {
+	return report.UnpackStatus != "" && report.UnpackStatus != "ok"
 }
 
 // finishReceivePack consumes sideband output through its flush, then the raw
@@ -642,11 +649,7 @@ func finishReceivePack(response, raw io.Reader, closeResponse func() error) erro
 // warnReceivePackFinish reports a transport failure after an all-accepted
 // report. The error can carry server-authored sideband text, so filter it.
 func warnReceivePackFinish(conn Conn, err error) {
-	w := conn.ProgressWriter()
-	if w == nil {
-		w = os.Stderr
-	}
-	fmt.Fprintf(w, "target: warning: receive-pack accepted all refs but did not finish cleanly: %s\n", sanitize.Text(err.Error()))
+	fmt.Fprintf(progressOut(conn), "target: warning: receive-pack accepted all refs but did not finish cleanly: %s\n", sanitize.Text(err.Error()))
 }
 
 // pushObjects pushes locally-materialized objects to the target.

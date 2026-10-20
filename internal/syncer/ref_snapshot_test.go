@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"entire.io/entire/git-sync/internal/gitproto"
@@ -91,25 +92,17 @@ func TestRun_ConcurrentSyncRefSnapshots(t *testing.T) {
 				t.Fatal(err)
 			}
 			feature := plumbing.NewBranchReferenceName("new-branch")
-			var mu sync.Mutex
-			triggered := false
-			var newerErr error
-			runNewerSync := func() error {
-				mu.Lock()
-				defer mu.Unlock()
-				if triggered {
-					return newerErr
-				}
-				triggered = true
+			var triggered atomic.Bool
+			runNewerSync := sync.OnceValue(func() error {
+				triggered.Store(true)
 				for _, ref := range []plumbing.ReferenceName{main, feature} {
 					if err := source.Storer.SetReference(plumbing.NewHashReference(ref, newHead.Hash())); err != nil {
-						newerErr = err
 						return err
 					}
 				}
-				_, newerErr = Run(t.Context(), cfg)
-				return newerErr
-			}
+				_, err := Run(t.Context(), cfg)
+				return err
+			})
 
 			sourceURL, err := url.Parse(cfg.Source.URL)
 			if err != nil {
@@ -152,11 +145,11 @@ func TestRun_ConcurrentSyncRefSnapshots(t *testing.T) {
 				return resp, nil
 			})}
 			result, err := Run(t.Context(), older)
-			mu.Lock()
-			fired, hookErr := triggered, newerErr
-			mu.Unlock()
-			if !fired || hookErr != nil {
-				t.Fatalf("concurrent sync triggered=%v, error=%v", fired, hookErr)
+			if !triggered.Load() {
+				t.Fatal("concurrent sync was not triggered")
+			}
+			if err := runNewerSync(); err != nil {
+				t.Fatalf("concurrent sync: %v", err)
 			}
 			assertHeadsMatch(t, source, target, testBranch)
 			assertHeadsMatch(t, source, target, feature.Short())
