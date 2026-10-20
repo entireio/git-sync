@@ -241,6 +241,7 @@ func TestPusherReceivePackCompletion(t *testing.T) {
 		tail        io.Reader
 		closeErr    error
 		bestEffort  bool
+		wantVerify  bool
 		wantErr     string
 		wantMoved   bool
 		wantWarning string
@@ -252,6 +253,7 @@ func TestPusherReceivePackCompletion(t *testing.T) {
 		{name: "rejected_tail_error", report: rejected, tail: iotest.ErrReader(failure), wantMoved: true, wantWarning: failure.Error()},
 		{name: "rejected_close_error", report: rejected, closeErr: failure, wantMoved: true, wantWarning: failure.Error()},
 		{name: "rejected_close_error_best_effort", report: rejected, closeErr: failure, bestEffort: true, wantWarning: failure.Error(), wantOutcome: RefOutcomeRefused},
+		{name: "rejected_tail_at_limit", report: rejected, tail: strings.NewReader(strings.Repeat("x", maxDrainBytes)), wantVerify: true, wantOutcome: RefOutcomeAlreadyCurrent},
 		{name: "rejected_oversized_tail", report: rejected, tail: strings.NewReader(strings.Repeat("x", maxDrainBytes+1)), wantMoved: true, wantWarning: "bytes after report-status"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -268,8 +270,11 @@ func TestPusherReceivePackCompletion(t *testing.T) {
 				p.OnRejection = func(plumbing.ReferenceName, string) {}
 			}
 			p.TargetRefsNow = func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
-				t.Error("must not verify after an unclean finish")
-				return nil, failure
+				if !tc.wantVerify {
+					t.Error("must not verify after an unclean finish")
+					return nil, failure
+				}
+				return map[plumbing.ReferenceName]plumbing.Hash{main: wanted}, nil
 			}
 			err := p.PushCommands(t.Context(), []PushCommand{{Name: main, New: wanted}})
 			switch {

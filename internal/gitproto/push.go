@@ -633,6 +633,11 @@ func (d *drainBudget) Read(p []byte) (int, error) {
 		return d.r.Read(p) //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
 	}
 	if d.remaining == 0 {
+		// Probe one byte so a stream ending exactly at the limit reads as EOF.
+		var probe [1]byte
+		if n, err := d.r.Read(probe[:]); n == 0 {
+			return 0, err //nolint:wrapcheck // io.Reader contract requires forwarding EOF and stream errors as-is
+		}
 		return 0, fmt.Errorf("more than %d bytes after report-status", maxDrainBytes)
 	}
 	if int64(len(p)) > d.remaining {
