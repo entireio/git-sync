@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/transport"
@@ -285,34 +286,6 @@ func TestGitHubPreflightSendsBearerToken(t *testing.T) {
 	}
 }
 
-// headerAuth authorizes with a header other than Authorization, as a custom
-// AuthProvider may.
-type headerAuth struct{ name, value string }
-
-func (a headerAuth) Authorizer(req *http.Request) error {
-	req.Header.Set(a.name, a.value)
-	return nil
-}
-
-// The record reports the credentials that went out, whichever header the
-// authorizer put them in.
-func TestGitHubPreflightLogsCustomHeaderAuthAsAuthenticated(t *testing.T) {
-	client := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Api-Key") != preflightToken {
-			writeAPIError(t, w, http.StatusNotFound, "Not Found")
-			return
-		}
-		writeRepoSize(t, w, largeRepoKB)
-	})
-	var out bytes.Buffer
-	p := preflightParams(t, client, headerAuth{name: "X-Api-Key", value: preflightToken}, &out)
-
-	if _, ok := githubBatchLimit(context.Background(), p); !ok {
-		t.Fatalf("custom-header credentials were not sent; log=%s", &out)
-	}
-	assertFields(t, preflightEvent(t, &out), map[string]any{"authenticated": true, "mode": "batched"})
-}
-
 func TestGitHubPreflightLookupFailureLogsWarningAndKeepsOneShot(t *testing.T) {
 	client := privateRepoAPI(t, largeRepoKB)
 	var out bytes.Buffer
@@ -512,8 +485,9 @@ func TestGitHubPreflightSmallRepoLogsOneShotDecision(t *testing.T) {
 }
 
 // GitHub reports 0 for an empty repository and for one it has not sized yet.
-// That is an answer, so it selects one-shot without a warning or a notice.
-func TestGitHubPreflightZeroSizeLogsOneShotWithoutWarning(t *testing.T) {
+// Bootstrap only runs with source refs, so here 0 means not sized yet: an
+// unknown size, which warns like any other.
+func TestGitHubPreflightZeroSizeLogsWarning(t *testing.T) {
 	client := privateRepoAPI(t, 0)
 	var out bytes.Buffer
 	var notices []string
@@ -525,16 +499,112 @@ func TestGitHubPreflightZeroSizeLogsOneShotWithoutWarning(t *testing.T) {
 	}
 	event := preflightEvent(t, &out)
 	assertFields(t, event, map[string]any{
-		"level":       "INFO",
+		"level":       "WARN",
 		"http_status": float64(http.StatusOK),
-		"size_kb":     float64(0),
 		"mode":        "one_shot",
 	})
-	if _, ok := event["error"]; ok {
-		t.Fatalf("a size of 0 logged an error: %v", event["error"])
+	if _, ok := event["size_kb"]; ok {
+		t.Fatalf("an unsized repo was logged as size_kb=%v", event["size_kb"])
 	}
-	if len(notices) != 0 {
-		t.Fatalf("a size of 0 raised notices: %q", notices)
+	if msg := eventError(t, event); !strings.Contains(msg, "size 0") {
+		t.Fatalf("error = %q, want it to name the reported size", msg)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "single pack") {
+		t.Fatalf("notices = %q, want one notice for the unknown size", notices)
+	}
+}
+
+// A cancelled run is not a failed lookup: it must not tell the operator the
+// bootstrap is starting with a single pack.
+func TestGitHubPreflightCancelledRunLogsNothing(t *testing.T) {
+	client := repoAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeRepoSize(t, w, largeRepoKB)
+	})
+	var out bytes.Buffer
+	var notices []string
+	p := preflightParams(t, client, installationAuth(), &out)
+	p.OnNotice = func(msg string) { notices = append(notices, msg) }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, ok := githubBatchLimit(ctx, p); ok {
+		t.Fatal("githubBatchLimit selected batched mode for a cancelled run")
+	}
+	if out.Len() != 0 || len(notices) != 0 {
+		t.Fatalf("a cancelled run reported a failed lookup: log=%s notices=%q", &out, notices)
+	}
+}
+
+// Transport errors carry server- or proxy-authored text (a certificate's
+// names, a CONNECT status line), so they are cleaned like GitHub's message.
+func TestGitHubPreflightSanitizesTransportError(t *testing.T) {
+	var out bytes.Buffer
+	var notices []string
+	p := Params{PushLogger: slog.New(slog.NewJSONHandler(&out, nil))}
+	p.OnNotice = func(msg string) { notices = append(notices, msg) }
+	lookup := githubSizeLookup{owner: "acme", repo: "private"}
+	lookup.err = errors.New("x509: certificate is valid for evil\x1b[2K\u009b2K\u202e, not api.github.com")
+	lookup.refused = &githubAPIAnswer{status: http.StatusForbidden, err: errors.New("refused\x1b[31m")}
+
+	p.logGitHubPreflight(context.Background(), lookup, 0)
+	event := preflightEvent(t, &out)
+	refusedText, ok := event["refused_auth_error"].(string)
+	if !ok {
+		t.Fatalf("refused_auth_error = %v, want a string", event["refused_auth_error"])
+	}
+	for _, got := range append([]string{eventError(t, event), refusedText}, notices...) {
+		if strings.ContainsAny(got, "\x1b\u009b\u202e") {
+			t.Fatalf("control characters reached the operator: %q", got)
+		}
+	}
+}
+
+// A 403 to a request that carried no credentials (a redirect stripped them)
+// is not a refused token: there is nothing to retry and nothing to blame.
+func TestGitHubPreflightUnauthenticatedRefusalIsNotRetried(t *testing.T) {
+	var hits int
+	elsewhere := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		writeAPIError(t, w, http.StatusForbidden, "Forbidden")
+	}))
+	t.Cleanup(elsewhere.Close)
+	client := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	})
+	var out bytes.Buffer
+	p := preflightParams(t, client, installationAuth(), &out)
+
+	githubBatchLimit(context.Background(), p)
+	if hits != 1 {
+		t.Fatalf("redirect target hits = %d, want 1: an anonymous retry repeats the same request", hits)
+	}
+	event := preflightEvent(t, &out)
+	assertFields(t, event, map[string]any{"authenticated": false, "http_status": float64(http.StatusForbidden)})
+	if _, ok := event["refused_auth_status"]; ok {
+		t.Fatalf("a request without credentials was logged as a refused token: %v", event["refused_auth_status"])
+	}
+}
+
+// Each attempt gets the whole timeout: a slow refusal must not starve the
+// anonymous retry that would have batched a public repository.
+func TestGitHubPreflightRetryGetsItsOwnTimeout(t *testing.T) {
+	prev := githubPreflightTimeout
+	githubPreflightTimeout = time.Second
+	t.Cleanup(func() { githubPreflightTimeout = prev })
+	client := repoAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			time.Sleep(700 * time.Millisecond)
+			writeAPIError(t, w, http.StatusForbidden, "Resource protected by organization SAML enforcement.")
+			return
+		}
+		time.Sleep(600 * time.Millisecond)
+		writeRepoSize(t, w, largeRepoKB)
+	})
+	var out bytes.Buffer
+	p := preflightParams(t, client, installationAuth(), &out)
+
+	if _, ok := githubBatchLimit(context.Background(), p); !ok {
+		t.Fatalf("the anonymous retry ran out of time; log=%s", &out)
 	}
 }
 

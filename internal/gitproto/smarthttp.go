@@ -496,7 +496,7 @@ func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
 // host. A username without a password is not offered: it is as likely an
 // account name as a token, and the API would only refuse it.
 func (c *HTTPConn) CredentialsFor(dest *url.URL) AuthMethod {
-	if dest == nil {
+	if dest == nil || c.EndpointURL == nil {
 		return nil
 	}
 	if c.Auth != nil {

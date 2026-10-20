@@ -2010,6 +2010,13 @@ func TestCredentialsForReturnsSameSiteHelperCreds(t *testing.T) {
 	}
 }
 
+func TestCredentialsForWithoutEndpoint(t *testing.T) {
+	conn := &HTTPConn{}
+	if got := conn.CredentialsFor(apiURL); got != nil {
+		t.Fatalf("CredentialsFor() = %v, want nil without an endpoint", got)
+	}
+}
+
 func TestCredentialsForExplicitCreds(t *testing.T) {
 	auth := &transporthttp.BasicAuth{Username: "u", Password: "p"}
 	conn := NewHTTPConn(&url.URL{Scheme: "https", Host: testOriginHost, Path: "/repo.git"}, "src", auth, http.DefaultTransport)

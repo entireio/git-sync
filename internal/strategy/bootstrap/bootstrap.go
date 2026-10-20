@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1844,7 +1843,9 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 		return 0, false
 	}
 	lookup, ok := lookupGitHubRepoSize(ctx, p.SourceConn)
-	if !ok {
+	if !ok || ctx.Err() != nil {
+		// A cancelled run is not a failed lookup, and the bootstrap it would
+		// report on is not going to start.
 		return 0, false
 	}
 	var limit int64
@@ -1858,9 +1859,11 @@ func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
 	return limit, limit > 0
 }
 
-// githubPreflightTimeout bounds the size lookup. It only chooses between two
-// working strategies, so a stalled API must not hold the bootstrap.
-const githubPreflightTimeout = 30 * time.Second
+// githubPreflightTimeout bounds each size-lookup request. The lookup only
+// chooses between two working strategies, so a stalled API must not hold the
+// bootstrap. Each attempt gets its own, so a slow refusal does not starve the
+// anonymous retry. A variable so tests can shorten it.
+var githubPreflightTimeout = 30 * time.Second
 
 // maxGitHubRepoResponseBytes bounds how much of a repository metadata response
 // is read. The real document is a few KiB.
@@ -1927,11 +1930,13 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 		return lookup, true
 	}
 	apiURL := base.JoinPath("repos", owner, repo)
-	ctx, cancel := context.WithTimeout(ctx, githubPreflightTimeout)
-	defer cancel()
 	if creds := httpConn.CredentialsFor(apiURL); creds != nil {
 		answer := requestGitHubRepoSize(ctx, httpConn.HTTP, apiURL, creds)
-		if answer.status != http.StatusUnauthorized && answer.status != http.StatusForbidden {
+		// Only an answer to a request that still carried the credentials
+		// refuses them; one a redirect stripped them from would get the
+		// same answer again anonymously.
+		refused := answer.status == http.StatusUnauthorized || answer.status == http.StatusForbidden
+		if !refused || !answer.authenticated {
 			lookup.githubAPIAnswer = answer
 			return lookup, true
 		}
@@ -1942,6 +1947,8 @@ func lookupGitHubRepoSize(ctx context.Context, conn gitproto.Conn) (githubSizeLo
 }
 
 func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url.URL, auth gitproto.AuthMethod) githubAPIAnswer {
+	ctx, cancel := context.WithTimeout(ctx, githubPreflightTimeout)
+	defer cancel()
 	var answer githubAPIAnswer
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL.String(), nil)
 	if err != nil {
@@ -1952,8 +1959,8 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	req.Header.Set("X-Github-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", useragent.Plain())
 	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
-	authHeaders := applyAuth(req, auth)
-	answer.authenticated = carriesAny(req.Header, authHeaders)
+	gitproto.ApplyAuth(req, auth)
+	answer.authenticated = req.Header.Get("Authorization") != ""
 	resp, err := client.Do(req)
 	if err != nil {
 		answer.err = err
@@ -1964,7 +1971,7 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 	// site, so whether the answer was authenticated is read off the request
 	// that produced it, not the one sent.
 	if resp.Request != nil {
-		answer.authenticated = carriesAny(resp.Request.Header, authHeaders)
+		answer.authenticated = resp.Request.Header.Get("Authorization") != ""
 	}
 	answer.status = resp.StatusCode
 	body := io.LimitReader(resp.Body, maxGitHubRepoResponseBytes)
@@ -1979,36 +1986,19 @@ func requestGitHubRepoSize(ctx context.Context, client *http.Client, apiURL *url
 		answer.err = fmt.Errorf("decode repository metadata: %w", err)
 		return answer
 	}
-	// GitHub reports 0 both for an empty repository and for one whose size it
-	// has not computed yet (a fresh push or import). Either way it is an
-	// answer, not a failure: the one-shot path it selects is logged with
-	// size_kb=0 and raises no warning, which an empty source would not deserve.
 	if payload.Size == nil || *payload.Size < 0 {
 		answer.err = errors.New("repository metadata reports no size")
 		return answer
 	}
+	// GitHub reports 0 for an empty repository and for one whose size it has
+	// not computed yet (a fresh push or import). Bootstrap only runs with
+	// source refs, so here it is the latter: a size as unknown as no size.
+	if *payload.Size == 0 {
+		answer.err = errors.New("repository metadata reports size 0; GitHub may not have sized it yet")
+		return answer
+	}
 	answer.sizeKB = *payload.Size
 	return answer
-}
-
-// applyAuth authorizes req and returns the names of the headers the
-// authorizer set. That is usually Authorization, but a custom AuthMethod may
-// carry its credentials in any header.
-func applyAuth(req *http.Request, auth gitproto.AuthMethod) []string {
-	before := req.Header.Clone()
-	gitproto.ApplyAuth(req, auth)
-	var names []string
-	for name, values := range req.Header {
-		if !slices.Equal(before[name], values) {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-// carriesAny reports whether h still holds any of the named headers.
-func carriesAny(h http.Header, names []string) bool {
-	return slices.ContainsFunc(names, func(name string) bool { return len(h[name]) > 0 })
 }
 
 // githubAPIError describes a non-200 answer, carrying GitHub's own message
@@ -2062,13 +2052,19 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 		slog.Int64("threshold_kb", githubLargeRepoThresholdKB),
 		slog.String("mode", mode),
 	}
+	// Transport errors carry server- or proxy-authored text too (a
+	// certificate's names, a CONNECT status line), so every error is cleaned,
+	// not only GitHub's message.
+	var errText, refusedText string
 	if lookup.refused != nil {
+		refusedText = cleanServerMessage(lookup.refused.err.Error())
 		attrs = append(attrs,
 			slog.Int("refused_auth_status", lookup.refused.status),
-			slog.String("refused_auth_error", lookup.refused.err.Error()))
+			slog.String("refused_auth_error", refusedText))
 	}
 	if lookup.err != nil {
-		attrs = append(attrs, slog.String("error", lookup.err.Error()))
+		errText = cleanServerMessage(lookup.err.Error())
+		attrs = append(attrs, slog.String("error", errText))
 	} else {
 		attrs = append(attrs, slog.Int64("size_kb", lookup.sizeKB))
 	}
@@ -2078,9 +2074,9 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 	if lookup.err != nil {
 		// The notice reaches the operator verbose or not, so the verbose log
 		// stays out of it rather than print the failure twice under -v.
-		reason := lookup.err.Error()
+		reason := errText
 		if lookup.refused != nil {
-			reason = fmt.Sprintf("credentials refused: %v; anonymous retry: %v", lookup.refused.err, lookup.err)
+			reason = fmt.Sprintf("credentials refused: %s; anonymous retry: %s", refusedText, errText)
 		}
 		// "Starting": a target that rejects the pack as too large still
 		// switches the bootstrap to batches later.
