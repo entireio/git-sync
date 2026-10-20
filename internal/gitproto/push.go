@@ -577,10 +577,23 @@ func sendReceivePack(
 	// writing sideband output. Drain before closing so SSH/helper processes
 	// can finish normally, and before opening another RPC for verification.
 	if err := finishReceivePack(respReader, reader, closeResponse); err != nil {
-		if report != nil && report.Error() != nil {
+		switch {
+		case report == nil:
+			// Without report-status the transport outcome is the only signal.
+			return err
+		case report.Error() == nil:
+			// receive-pack reports only after committing ref updates, so a
+			// trailing transport failure cannot undo them. Surface it without
+			// failing a push whose every command the target accepted.
+			statuses.record(report)
+			warnReceivePackFinish(conn, err)
+			return nil
+		default:
+			// Verification would open another RPC on an unclean transport.
+			// Keep both errors, and still record what the report stated.
+			statuses.record(report)
 			return errors.Join(err, fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(report.Error()))))
 		}
-		return err
 	}
 	if report != nil {
 		if statuses != nil && statuses.Reconcile != nil {
@@ -624,6 +637,16 @@ func finishReceivePack(response, raw io.Reader, closeResponse func() error) erro
 		return fmt.Errorf("close target receive-pack response: %w", err)
 	}
 	return nil
+}
+
+// warnReceivePackFinish reports a transport failure after an all-accepted
+// report. The error can carry server-authored sideband text, so filter it.
+func warnReceivePackFinish(conn Conn, err error) {
+	w := conn.ProgressWriter()
+	if w == nil {
+		w = os.Stderr
+	}
+	fmt.Fprintf(w, "target: warning: receive-pack accepted all refs but did not finish cleanly: %s\n", sanitize.Text(err.Error()))
 }
 
 // pushObjects pushes locally-materialized objects to the target.

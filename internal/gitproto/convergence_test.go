@@ -212,11 +212,14 @@ type receivePackTestConn struct {
 	stubConn
 
 	response io.ReadCloser
+	progress io.Writer
 }
 
 func (c *receivePackTestConn) PostRPCStreamBody(context.Context, string, io.Reader, bool, string) (io.ReadCloser, error) {
 	return c.response, nil
 }
+
+func (c *receivePackTestConn) ProgressWriter() io.Writer { return c.progress }
 
 type receivePackTestResponse struct {
 	io.Reader
@@ -258,6 +261,65 @@ func TestPusherPreservesReceivePackCompletionErrors(t *testing.T) {
 			}
 			if response.closes != 1 {
 				t.Fatalf("closed %d times", response.closes)
+			}
+		})
+	}
+}
+
+// receive-pack reports only after committing, so a transport failure after an
+// all-accepted report must not fail the push or lose the recorded outcomes.
+func TestPusherAcceptedReportSurvivesCompletionErrors(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	other := plumbing.ReferenceName("refs/heads/other")
+	wanted := plumbing.NewHash("1111111111111111111111111111111111111111")
+	for _, tc := range []struct {
+		name      string
+		phase     string
+		rejectOne bool
+	}{
+		{name: "read_after_accept", phase: "read"},
+		{name: "close_after_accept", phase: "close"},
+		{name: "close_after_partial_reject", phase: "close", rejectOne: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := fmt.Errorf("target %s failure", tc.phase)
+			otherStatus := "ok refs/heads/other\n"
+			if tc.rejectOne {
+				otherStatus = "ng refs/heads/other stale info\n"
+			}
+			report := FormatPktLine("unpack ok\n") + FormatPktLine("ok refs/heads/main\n") + FormatPktLine(otherStatus) + "0000"
+			response := &receivePackTestResponse{Reader: strings.NewReader(report)}
+			if tc.phase == "close" {
+				response.closeErr = failure
+			} else {
+				response.Reader = io.MultiReader(response.Reader, receivePackReadError{failure})
+			}
+			var progress bytes.Buffer
+			adv := &packp.AdvRefs{}
+			adv.Capabilities.Set(capability.ReportStatus)
+			p := NewPusher(&receivePackTestConn{response: response, progress: &progress}, adv, false)
+			p.TargetRefsNow = func(context.Context) (map[plumbing.ReferenceName]plumbing.Hash, error) {
+				t.Error("must not verify after transport failure")
+				return nil, failure
+			}
+			err := p.PushCommands(t.Context(), []PushCommand{{Name: main, New: wanted}, {Name: other, New: wanted}})
+			if outcome, _ := p.LastOutcome(main); outcome != RefOutcomeApplied {
+				t.Errorf("accepted ref outcome = %v, want applied", outcome)
+			}
+			if tc.rejectOne {
+				if !errors.Is(err, failure) || !errors.Is(err, ErrTargetRefMoved) {
+					t.Fatalf("lost transport or ref rejection: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("accepted push failed: %v", err)
+			}
+			if outcome, _ := p.LastOutcome(other); outcome != RefOutcomeApplied {
+				t.Errorf("accepted ref outcome = %v, want applied", outcome)
+			}
+			if !strings.Contains(progress.String(), "did not finish cleanly") || !strings.Contains(progress.String(), failure.Error()) {
+				t.Errorf("transport failure not surfaced: %q", progress.String())
 			}
 		})
 	}
