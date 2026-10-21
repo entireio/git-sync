@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018XaAqUJZshzSAi5xnEx29S",
+  "agent_id": "a130eb4feb6a8890c",
+  "subagent_type": "general-purpose",
+  "task_description": "Simplification review of PR diff",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 80247,
+    "cache_read_tokens": 468838,
+    "output_tokens": 369,
+    "api_call_count": 7
+  },
+  "started_at": "2026-10-20T11:41:55.193349+02:00",
+  "completed_at": "2026-10-21T18:22:11.910517+02:00"
+}

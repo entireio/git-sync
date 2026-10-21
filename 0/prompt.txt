@@ -1,0 +1,25 @@
+<task-notification>
+<task-id>bwonv9y7e</task-id>
+<tool-use-id>toolu_015cTczEBjbwhAz4fcrAgdKg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-worktree-clear-stone-5032/ef0d8c31-d21d-4202-8c48-454a59c8df33/tasks/bwonv9y7e.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 126 checks to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+status?
+
+---
+
+rebase 124 onto main
+
+---
+
+<task-notification>
+<task-id>bk4yez2yj</task-id>
+<tool-use-id>toolu_0179ptvoQ2b3wLC8eruUH9nK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-worktree-clear-stone-5032/ef0d8c31-d21d-4202-8c48-454a59c8df33/tasks/bk4yez2yj.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 124 checks to finish" completed (exit code 0)</summary>
+</task-notification>
