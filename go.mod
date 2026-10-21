@@ -2,7 +2,7 @@ module entire.io/entire/git-sync
 
 go 1.26.0
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	github.com/go-git/go-billy/v6 v6.0.0-alpha.2
