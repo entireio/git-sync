@@ -1,0 +1,42 @@
+did you commit and push
+
+---
+
+ok let's take a step back, what is this pr doing
+
+---
+
+tell me more about (4)
+
+---
+
+pr link?
+
+---
+
+thoughts on ```
+
+<pasted_content id="6cb3">
+New, worth raising:
+1. Size 0 now causes a false warning (internal/strategy/bootstrap/github_preflight.go:185). A size of 0 from the API used to be a quiet one-shot decision. Now it counts as a failed lookup, which logs a WARN and tells the operator to set a pack size. A new or small repo that GitHub hasn't sized yet makes the same decision as before but gets a false alarm on every bootstrap. The docs sentence explaining size 0 was also removed.
+2. The notice no longer names the flag (github_preflight.go:274). It now says "set a target max pack size" instead of naming --target-max-pack-bytes, so CLI users lose the exact flag.
+
+New, minor:
+3. Redirect fallback that never runs (github_preflight.go:207). The nil-redirect-policy branch in trackAuth can never execute, and it carries its own limit of 10 redirects, which differs from maxRedirects.
+4. Doc comment now above the wrong test (internal/sanitize/sanitize_test.go:60). The new test was inserted between TestWriterKeepsCarriageReturnForProgress and its doc comment, so the comment now documents the wrong test.
+5. Package doc contradicts itself on C1 (internal/sanitize/sanitize.go:33). Line 27 says C1 control characters are harmless in UTF-8 terminals. The new paragraph says an encoded U+009B can act as CSI.
+</pasted_content id="6cb3">
+
+```
+
+---
+
+(1) will be retried by mirror-worker right?
+
+---
+
+recommendation?
+
+---
+
+go ahead
