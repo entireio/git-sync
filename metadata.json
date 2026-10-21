@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.11.5",
+  "checkpoint_id": "01M5FF7ZZ5YMZ1MXS08K6CFJYY",
+  "strategy": "manual-commit",
+  "branch": "nodo/go-1.27.3",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "CHANGELOG.md",
+    "go.mod",
+    "mise.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 11360,
+    "cache_read_tokens": 4663767,
+    "output_tokens": 6109,
+    "api_call_count": 18
+  }
+}

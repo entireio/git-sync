@@ -1,0 +1,19 @@
+yes retrigger both
+
+---
+
+monitor ci and comments, tell me when green
+
+---
+
+<task-notification>
+<task-id>bbd13hwh7</task-id>
+<tool-use-id>toolu_01JEgHTs2nRR3gs7mBAbNaQ1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-worktree-clear-stone-5032/ef0d8c31-d21d-4202-8c48-454a59c8df33/tasks/bbd13hwh7.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 124 CI and bot reviews until done" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+sure
