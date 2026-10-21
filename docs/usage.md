@@ -37,7 +37,7 @@ git-sync sync \
   <target-url>
 ```
 
-A bootstrap from a `github.com` source without `--target-max-pack-bytes` first asks the GitHub REST API (`GET /repos/{owner}/{repo}`) for the repository size, sending the source credentials git-sync already holds so a private repository answers too (see [Credentials and redirects](#credentials-and-redirects)). At 1.5 GiB or more it switches to batches of 512 MiB (or `--max-pack-bytes`, if smaller). If the lookup fails, the bootstrap starts with a single pack and git-sync prints a notice naming the cause; it still switches to batches if the target rejects the pack as too large. The outcome goes to the library's `Options.BootstrapLogger` (warning level on failure) and, on success, to `-v`. Pass `--target-max-pack-bytes` to choose batching yourself and skip the lookup.
+A bootstrap from a `github.com` source without `--target-max-pack-bytes` first asks the GitHub REST API (`GET /repos/{owner}/{repo}`) for the repository size, sending the source credentials git-sync already holds so a private repository answers too (see [Credentials and redirects](#credentials-and-redirects)). At 1.5 GiB or more it switches to batches of 512 MiB (or `--max-pack-bytes`, if smaller). A reported size of 0 counts as unknown: bootstrap only runs on a repository with refs, so 0 means GitHub has not sized it yet. If the lookup fails or the size is unknown, the bootstrap starts with a single pack and git-sync prints a notice naming the cause; it still switches to batches if the target rejects the pack as too large. The outcome goes to the library's `Options.BootstrapLogger` (warning level on failure) and, on success, to `-v`. Pass `--target-max-pack-bytes` to choose batching yourself and skip the lookup.
 
 ### Bootstrap chain ordering
 

@@ -332,8 +332,9 @@ func TestGitHubPreflightLookupFailureLogsWarningAndKeepsOneShot(t *testing.T) {
 		t.Fatalf("error = %q, want the status and GitHub's message", msg)
 	}
 	// Without a structured logger (the CLI), the notice is the only signal.
-	if len(*notices) != 1 || !strings.Contains((*notices)[0], "404") || !strings.Contains((*notices)[0], "single pack") {
-		t.Fatalf("notices = %q, want one notice naming the failure and the one-shot fallback", *notices)
+	if len(*notices) != 1 || !strings.Contains((*notices)[0], "404") || !strings.Contains((*notices)[0], "single pack") ||
+		!strings.Contains((*notices)[0], "--target-max-pack-bytes") {
+		t.Fatalf("notices = %q, want one notice naming the failure, the one-shot fallback and the flag", *notices)
 	}
 }
 

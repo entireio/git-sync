@@ -54,9 +54,6 @@ func TestTextDefeatsLineRewriteSpoofing(t *testing.T) {
 	}
 }
 
-// Writer keeps CR because git's in-place progress depends on it, and the line
-// prefix bounds what overwriting a row can achieve. This is the deliberate
-// asymmetry with Text.
 func TestLineKeepsMessageOnOneSafeLine(t *testing.T) {
 	got := Line("rate limit\x1b[31m exceeded\r\n\u009b2K \u202eevil\t ")
 	want := "rate limit [31m exceeded 2K evil"
@@ -65,6 +62,9 @@ func TestLineKeepsMessageOnOneSafeLine(t *testing.T) {
 	}
 }
 
+// Writer keeps CR because git's in-place progress depends on it, and the line
+// prefix bounds what overwriting a row can achieve. This is the deliberate
+// asymmetry with Text.
 func TestWriterKeepsCarriageReturnForProgress(t *testing.T) {
 	var buf bytes.Buffer
 	w := Writer(&buf)

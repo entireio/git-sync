@@ -24,16 +24,16 @@
 //
 // Both keep tab and newline, and drop everything else below 0x20 plus DEL. That
 // covers what a terminal acts on, since ANSI CSI and OSC both begin with ESC
-// (0x1b). The single-byte C1 introducers are not handled: in a UTF-8 stream they
-// are not valid standalone bytes, and terminals in UTF-8 mode do not act on
-// them.
+// (0x1b). The raw single-byte C1 introducers (0x80-0x9f) are not handled: in a
+// UTF-8 stream they are not valid standalone bytes, and terminals in UTF-8 mode
+// do not act on them.
 //
 // Line, for a server-authored message set inline into one line of git-sync's
-// own text, is stricter: every control character becomes a space, the C1 range
-// (U+0080-U+009F) included, since a terminal may act on an encoded U+009B as
-// CSI; bidi formatting characters, which reorder how the rest of the line
-// displays, are dropped; and whitespace collapses, so the message cannot break
-// the line it sits in.
+// own text, is stricter. Every control character becomes a space, including the
+// C1 characters U+0080-U+009F encoded as valid UTF-8 (0xc2 0x9b for U+009B),
+// which unlike the raw bytes some terminals do act on as CSI. Bidi formatting
+// characters, which reorder how the rest of the line displays, are dropped, and
+// whitespace collapses, so the message cannot break the line it sits in.
 package sanitize
 
 import (

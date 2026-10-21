@@ -271,7 +271,7 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 		}
 		// "Starting": a target that rejects the pack as too large still
 		// switches the bootstrap to batches later.
-		p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — starting with a single pack; set a target max pack size to batch from the start",
+		p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — starting with a single pack; set a target max pack size (--target-max-pack-bytes) to batch from the start",
 			reason))
 	}
 	if p.PushLogger != nil {
