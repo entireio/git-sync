@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- Bumped the Go toolchain to `1.27.3` (go.mod `toolchain` and the mise pin), clearing GO-2026-6809: `crypto/x509` now distrusts compromised intermediate certificates. It is reachable through TLS verification on every HTTPS remote.
+
 - Bumped the Go toolchain to `1.27.2` (go.mod `toolchain` and the mise pin), clearing ten standard-library advisories reachable from the HTTP transport and the `convert-sha256` filesystem paths — among them HTTP/1 client desynchronization after a `CONNECT` rejection (GO-2026-6605), a memory-limit bypass parsing MIME headers in `net/textproto` (GO-2026-6608), malformed ECH outer extension references accepted by `crypto/tls` (GO-2026-6607), and HTTP/2 transport accepting malformed framing headers (GO-2026-6610). Released binaries are built from the go.mod toolchain; `govulncheck ./...` goes from 10 called vulnerabilities to 0. The `go` directive stays at `1.26`, so the minimum Go version for library consumers is unchanged. golangci-lint moves to `v2.15.0`, since releases before `v2.13.0` refuse to lint a module targeting Go 1.27
 
 - Bumped `golang.org/x/crypto` to `v0.58.0` and `golang.org/x/net` to `v0.61.0` (raised as indirect dependencies; `golang.org/x/sys` follows to `v0.49.0`), clearing three SSH advisories in packages git-sync imports (GO-2026-6303, GO-2026-6354, GO-2026-6355) and five HTTP/2 advisories in `golang.org/x/net`. None was reachable from git-sync's call graph. The remaining module-level finding, GO-2026-5932 (`golang.org/x/crypto/openpgp` is unmaintained), has no fix and git-sync does not import that package
