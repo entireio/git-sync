@@ -268,6 +268,12 @@ type HTTPConn struct {
 	// connection; the same redirect repeats on every RPC.
 	authWithheldWarned bool
 
+	// authOrigin is the URL the credentials in Auth are bound to: EndpointURL
+	// for explicit ones, the URL the helper looked them up for otherwise (a
+	// redirect target, possibly). nil while Auth is unset. CredentialsFor
+	// measures a destination against it.
+	authOrigin *url.URL
+
 	// pendingHelperCreds tracks credentials supplied by the helper via
 	// EnsureAuthForService but not yet validated against a real operation.
 	// The next RequestInfoRefs/PostRPCStreamBody approves on 2xx or rejects
@@ -330,6 +336,7 @@ func NewHTTPConnWithClient(ep *url.URL, label string, auth AuthMethod, httpClien
 		HTTP:           guardRedirects(httpClient),
 		Auth:           auth,
 		authIsExplicit: auth != nil,
+		authOrigin:     originFor(auth, ep),
 	}
 }
 
@@ -475,6 +482,59 @@ func (c *HTTPConn) warnAuthWithheld(target *url.URL) {
 }
 
 func (c *HTTPConn) Endpoint() *url.URL { return c.EndpointURL }
+
+// originFor is the URL explicit credentials are bound to: ep when there are any.
+func originFor(auth AuthMethod, ep *url.URL) *url.URL {
+	if auth == nil {
+		return nil
+	}
+	return ep
+}
+
+// CredentialsFor returns the credentials this connection authenticates with
+// that may also be sent to dest, a service beside the endpoint (its hosting
+// provider's API, say) that a caller addresses with its own request. It
+// returns nil when none may.
+//
+// Each credential is measured from the URL it is bound to: explicit
+// credentials and a "user:password@" in the endpoint URL from EndpointURL,
+// helper-resolved ones from the URL they were looked up for. dest must be
+// same-site with that origin (see sameSite), and with TLS verification off
+// nothing crosses to another host at all, the rule tryHelperRetry and
+// EnsureAuthForService already apply: a MITM cannot be told from the real
+// host. A username without a password is not offered: it is as likely an
+// account name as a token, and the API would only refuse it.
+func (c *HTTPConn) CredentialsFor(dest *url.URL) AuthMethod {
+	if dest == nil || c.EndpointURL == nil {
+		return nil
+	}
+	if c.Auth != nil && c.mayCarry(c.authOrigin, dest) {
+		return c.Auth
+	}
+	if user := c.EndpointURL.User; user != nil {
+		if password, ok := user.Password(); ok && password != "" && c.mayCarry(c.EndpointURL, dest) {
+			return &transporthttp.BasicAuth{Username: user.Username(), Password: password}
+		}
+	}
+	return nil
+}
+
+// mayCarry reports whether credentials bound to origin may be sent to dest.
+// A nil origin is unknown provenance and fails closed.
+func (c *HTTPConn) mayCarry(origin, dest *url.URL) bool {
+	if origin == nil || !sameSite(origin, dest) {
+		return false
+	}
+	return !c.crossesHostUnverified(origin, dest)
+}
+
+// crossesHostUnverified reports whether credentials going from one host to
+// another would cross hosts with TLS verification off, where a MITM cannot be
+// told from the real host. Every path that hands credentials to another host
+// refuses that.
+func (c *HTTPConn) crossesHostUnverified(from, to *url.URL) bool {
+	return from.Host != to.Host && c.skipsTLSVerify()
+}
 
 func (c *HTTPConn) ProgressWriter() io.Writer { return c.ProgressOut }
 
@@ -765,7 +825,7 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 		return
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.skipsTLSVerify() && challengeURL.Host != c.requestURL().Host {
+	if c.crossesHostUnverified(c.requestURL(), challengeURL) {
 		// See tryHelperRetry: with TLS verification off we can't tell a
 		// real challenger from a MITM, so we won't attach helper creds
 		// after a cross-host probe redirect. The real op will surface
@@ -776,8 +836,15 @@ func (c *HTTPConn) EnsureAuthForService(ctx context.Context, service string) {
 	if lookupErr != nil || !ok {
 		return
 	}
-	c.Auth = &transporthttp.BasicAuth{Username: user, Password: pass}
+	c.adoptHelperCreds(&transporthttp.BasicAuth{Username: user, Password: pass}, user, pass, challengeURL)
+}
+
+// adoptHelperCreds attaches credentials the helper supplied for challengeURL,
+// bound to that URL, pending validation by resolvePendingHelperCreds.
+func (c *HTTPConn) adoptHelperCreds(auth AuthMethod, user, pass string, challengeURL *url.URL) {
+	c.Auth = auth
 	c.authIsExplicit = false // looked up for challengeURL, so bound to it
+	c.authOrigin = challengeURL
 	c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
 	c.adoptChallengeHost(challengeURL)
 }
@@ -804,6 +871,7 @@ func (c *HTTPConn) resolvePendingHelperCreds(ctx context.Context, res *http.Resp
 	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
 		c.pendingHelperCreds = nil
 		c.Auth = nil
+		c.authOrigin = nil
 		c.CredentialHelper.Reject(ctx, creds.url, creds.user, creds.pass)
 	}
 	// Otherwise (e.g. a 2xx with a malformed/oversized body): leave the creds
@@ -864,7 +932,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		return res, nil
 	}
 	challengeURL := challengeURLFor(c.EndpointURL, res)
-	if c.skipsTLSVerify() && challengeURL.Host != c.requestURL().Host {
+	if c.crossesHostUnverified(c.requestURL(), challengeURL) {
 		// Refuse to hand helper-stored credentials to a redirect target we
 		// can't authenticate. With TLS verification off, the post-redirect
 		// host could be anyone presenting a self-signed cert for the host
@@ -902,10 +970,7 @@ func (c *HTTPConn) tryHelperRetry(ctx context.Context, res *http.Response, retry
 		// Attach tentatively and defer approval to resolvePendingHelperCreds,
 		// which runs after the caller validates the response body — a 2xx
 		// status alone isn't proof the operation succeeded.
-		c.Auth = retryAuth
-		c.authIsExplicit = false // looked up for challengeURL, so bound to it
-		c.pendingHelperCreds = &helperCreds{user: user, pass: pass, url: challengeURL}
-		c.adoptChallengeHost(challengeURL)
+		c.adoptHelperCreds(retryAuth, user, pass, challengeURL)
 	}
 	return res, nil
 }

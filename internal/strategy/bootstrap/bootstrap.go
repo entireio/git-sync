@@ -5,12 +5,10 @@ package bootstrap
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,18 +19,13 @@ import (
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
-	"entire.io/entire/git-sync/internal/useragent"
 )
 
 const (
-	defaultTargetMaxPackBytes  = 512 * 1024 * 1024
-	githubLargeRepoThresholdKB = 1536 * 1024
+	defaultTargetMaxPackBytes = 512 * 1024 * 1024
 )
 
 var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
-
-// GitHubRepoAPIBaseURL is the base for GitHub API calls (replaceable in tests).
-var GitHubRepoAPIBaseURL = "https://api.github.com"
 
 // Params holds the inputs for a bootstrap execution.
 type Params struct {
@@ -232,8 +225,6 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	// GitHub large-repo preflight
 	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
 		p.TargetMaxPack = batchLimit
-		p.log("bootstrap github preflight selected batched mode",
-			"target_max_pack_bytes", p.TargetMaxPack)
 	}
 
 	planTargetRefs := p.TargetRefs
@@ -1821,84 +1812,6 @@ func packReaderForCheckpoint(
 		return nil, fmt.Errorf("fetch checkpoint pack: %w", err)
 	}
 	return gitproto.LimitPackReader(packReader, batchLimit), nil
-}
-
-// --- GitHub preflight ---
-
-func githubBatchLimit(ctx context.Context, p Params) (int64, bool) {
-	if p.TargetMaxPack > 0 || p.SourceConn == nil || p.SourceConn.Endpoint() == nil {
-		return 0, false
-	}
-	if p.SourceService == nil || !p.SourceService.SupportsBootstrapBatch() {
-		return 0, false
-	}
-	repoSizeKB, ok := lookupGitHubRepoSizeKB(ctx, p.SourceConn)
-	if !ok || repoSizeKB < githubLargeRepoThresholdKB {
-		return 0, false
-	}
-	limit := int64(defaultTargetMaxPackBytes)
-	if p.MaxPackBytes > 0 && p.MaxPackBytes < limit {
-		limit = p.MaxPackBytes
-	}
-	if limit <= 0 {
-		return 0, false
-	}
-	return limit, true
-}
-
-func lookupGitHubRepoSizeKB(ctx context.Context, conn gitproto.Conn) (int64, bool) {
-	httpConn, ok := conn.(*gitproto.HTTPConn)
-	if !ok {
-		return 0, false
-	}
-	owner, repo, ok := GitHubOwnerRepo(conn)
-	if !ok {
-		return 0, false
-	}
-	apiURL := strings.TrimRight(GitHubRepoAPIBaseURL, "/") + "/repos/" + owner + "/" + repo
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return 0, false
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-Github-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", useragent.Plain())
-	req.Header.Set(gitproto.StatsPhaseHeader, "github repo metadata")
-	resp, err := httpConn.HTTP.Do(req)
-	if err != nil {
-		return 0, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, false
-	}
-	var payload struct {
-		Size int64 `json:"size"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil || payload.Size <= 0 {
-		return 0, false
-	}
-	return payload.Size, true
-}
-
-// GitHubOwnerRepo extracts the owner/repo from a GitHub endpoint.
-func GitHubOwnerRepo(conn gitproto.Conn) (string, string, bool) {
-	if conn == nil || conn.Endpoint() == nil {
-		return "", "", false
-	}
-	ep := conn.Endpoint()
-	if ep.Scheme != "http" && ep.Scheme != "https" {
-		return "", "", false
-	}
-	if !strings.EqualFold(ep.Hostname(), "github.com") {
-		return "", "", false
-	}
-	path := strings.TrimSuffix(strings.Trim(ep.Path, "/"), ".git")
-	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
 }
 
 func autoTargetMaxPackBytes(p Params, err error) (int64, bool) {
