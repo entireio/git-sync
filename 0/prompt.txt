@@ -1,0 +1,83 @@
+can you review https://github.com/entireio/git-sync/pull/128
+
+---
+
+<task-notification>
+<task-id>a422231fde31e1232</task-id>
+<tool-use-id>toolu_01QyamRMJkUD23HrEafFu25v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph--herdr-worktrees-git-sync-worktree-silver-stone-9077/84bc267b-33cd-4d77-af7f-df8671c19382/tasks/a422231fde31e1232.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review https://github.com/entireio/git-sync…" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed PR #128 on a temporary checkout of the PR head, which I removed afterwards. The most important result: `go test ./internal/gitproto/` fails on the PR branch on this machine, every run, and passes on `main`.
+
+- **Failing test:** `TestSSHConnPostRPCStreamBodyHonorsContext` fails 10 out of 10 runs. Close returns `write |1: broken pipe / signal: killed` instead of `context deadline exceeded`.
+- **Why:** shell startup here takes longer than the test's 50ms deadline. The deadline kills ssh while the advertisement is still being read. `discardSSHAdvertisement` treats that EOF as "no advertisement" and reports success. Because of the PR's reordering, the body is written only after that, into a dead pipe. `sshRPCStream.Close` then returns early on the copy error and never adds `ctx.Err()`.
+- **Main risk:** `closeJoin` now fails fetches that actually succeeded, whenever closing the stream returns an error (ssh or remote-helper teardown). This is the reverse of the intent behind `requestInfoRefsWithCommand`, which deliberately ignores teardown errors after reads. I could not confirm how `git-remote-entire` exits when stdin closes, so treat that part as a risk to check.
+
+No CLAUDE.md applies to these files (there is none in the repo), and the CHANGELOG prose is not hard-wrapped, so the conventions angle found nothing.
+
+```json
+[
+  {
+    "file": "internal/gitproto/ssh.go",
+    "line": 104,
+    "summary": "Reading the advertisement before starting the body copy means that if ctx expires (or ssh dies) mid-advertisement, discardSSHAdvertisement's EOF branch returns success; the body is then written into a dead pipe and sshRPCStream.Close reports the broken pipe but not the context error. This makes TestSSHConnPostRPCStreamBodyHonorsContext fail every time.",
+    "failure_scenario": "On the PR branch, go test ./internal/gitproto/ -run TestSSHConnPostRPCStreamBodyHonorsContext -count=10 fails 10/10 on this macOS host: 'reader.Close error = write |1: broken pipe / wait for ssh command: signal: killed, want context deadline exceeded'. It passes 10/10 on main. In production, a fetch cancelled during a large (e.g. 36 MB) advertisement reports a confusing broken-pipe error instead of the cancellation or deadline."
+  },
+  {
+    "file": "internal/gitproto/ssh.go",
+    "line": 333,
+    "summary": "In sshRPCStream.Close, the copyErr branch returns before the ctx.Err() join. The reorder makes a copy error after cancellation the normal case, so cancellation is hidden behind EPIPE.",
+    "failure_scenario": "ctx is cancelled after the advertisement is read but before io.Copy finishes. Copy gets EPIPE, Close returns 'write |1: broken pipe' + 'signal: killed', and errors.Is(err, context.Canceled/DeadlineExceeded) is false. Callers that check for cancellation treat it as a hard transport failure."
+  },
+  {
+    "file": "internal/gitproto/fetch.go",
+    "line": 213,
+    "summary": "closeJoin now turns any Close error into a fetch failure even after the pack was stored successfully. sshRPCStream.Close closes stdout before waiting, and helperRPCStream.Close closes stdin and stdout before waiting, so an exit status caused by that teardown now fails a good fetch.",
+    "failure_scenario": "A v2 fetch over SSH or git-remote-entire: storeV2FetchPack returns nil once the packfile section is consumed, while the server or helper still has trailing bytes (flush/0002) to write, or exits non-zero when stdin closes. Close closes the read end first, the process gets EPIPE or exits with status 255/1, and fetchToStoreV2 returns 'wait for ssh command: exit status 255' although every object was written. requestInfoRefsWithCommand already documents that teardown-induced exits must not be reported as the cause."
+  },
+  {
+    "file": "internal/gitproto/fetch.go",
+    "line": 491,
+    "summary": "fetchToStoreV1 has the same new risk: once UpdateObjectStorage succeeds, a teardown error from closing the stream (EPIPE or SIGPIPE exit on any unread trailing sideband/flush data) fails the whole sync.",
+    "failure_scenario": "A v1 SSH fetch whose server writes a trailing sideband flush or progress after the pack trailer. The consumer stops after the pack, Close closes stdout, ssh's last write fails, ssh exits 255, and the sync aborts with a wait error after a correct pack."
+  },
+  {
+    "file": "internal/gitproto/ssh.go",
+    "line": 104,
+    "summary": "A synchronous advertisement read before any stdin write deadlocks against a server that sends nothing until it receives input. The EOF and non-pktline branches of discardSSHAdvertisement were written to tolerate such servers; that tolerance now only works when the server exits or writes non-pktline data first.",
+    "failure_scenario": "An SSH endpoint or wrapper that does not advertise until it receives input (the same shape the old newSSHShimEnv with an empty advert had). Peek(4) blocks forever waiting for output, the server blocks waiting for stdin, and without a ctx deadline the sync hangs indefinitely."
+  },
+  {
+    "file": "internal/gitproto/ssh.go",
+    "line": 105,
+    "summary": "The new advertisement-failure path does not add ctx.Err() to its error, unlike requestInfoRefsWithCommand. Cancellation during the advertisement surfaces as a pktline read error.",
+    "failure_scenario": "ctx is cancelled mid-advertisement and the kill truncates a pkt-line. The error is 'git-upload-pack advertisement: read pktline header: EOF ... signal: killed', and errors.Is(err, context.Canceled) is false."
+  },
+  {
+    "file": "internal/gitproto/ssh_test.go",
+    "line": 302,
+    "summary": "The regression test depends on timing: it relies on the old code writing and closing stdin within 'sleep 0.2', and 'read -t 0' only detects data that has already arrived.",
+    "failure_scenario": "On a loaded CI runner where the Go copy goroutine has not written within 200ms (shell startup alone took over 50ms on this host), the old ordering also passes. The test then no longer guards the regression it was added for."
+  },
+  {
+    "file": "internal/gitproto/fetch.go",
+    "line": 218,
+    "summary": "closeJoin largely re-implements go-git's ioutil.CheckClose, which is still used in the same file (FetchCommitParents, line 142). The bug was the unnamed return, not CheckClose.",
+    "failure_scenario": "Two close-error helpers in one file behave differently: CheckClose keeps only the first error, closeJoin joins both. FetchCommitParents still drops close errors when it already failed, while fetchToStore* do not, so the next reader has to work out which semantics each call site wants."
+  },
+  {
+    "file": "internal/gitproto/fetch.go",
+    "line": 220,
+    "summary": "errors.Join on the error path appends a multi-line teardown error (exit status plus remote stderr) to every decode or update failure. That is noisy, and it duplicates the stderr text the stream's own errors already carry.",
+    "failure_scenario": "A decode error in fetchToStoreV1 causes an early return. Close kills ssh, and the user sees 'decode server response: ...\\nwait for ssh command: signal: broken pipe: &lt;stderr&gt;', a teardown artefact presented as a second failure."
+  }
+]
+```</result>
+<usage><subagent_tokens>80820</subagent_tokens><tool_uses>13</tool_uses><duration_ms>273419</duration_ms></usage>
+</task-notification>
+
+---
+
+ok, can you just go throught each validate the issue and then do a fix on top of pauls branch?

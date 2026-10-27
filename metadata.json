@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.1-nightly.202610240623.b9639ba5b.0.20261024111809-d05c0a14437f",
+  "checkpoint_id": "01M5YA23E1KZE36JHAW9VQQ9Z0",
+  "strategy": "manual-commit",
+  "branch": "paul/ssh-empty-packfile",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "internal/gitproto/fetch.go",
+    "internal/gitproto/fetch_test.go",
+    "internal/gitproto/ssh.go",
+    "internal/gitproto/ssh_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 69802,
+    "cache_read_tokens": 1689343,
+    "output_tokens": 16809,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 26,
+      "cache_creation_tokens": 78087,
+      "cache_read_tokens": 748375,
+      "output_tokens": 11889,
+      "api_call_count": 13
+    }
+  },
+  "redaction": {
+    "replacements": 2,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 2,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
