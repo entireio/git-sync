@@ -1,0 +1,65 @@
+can you review https://github.com/entireio/git-sync/pull/129
+
+---
+
+<task-notification>
+<task-id>a1776c5c8f5cf8880</task-id>
+<tool-use-id>toolu_01Vkz91zzNjQLrpGRVay7Qrp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph--herdr-worktrees-git-sync-worktree-brave-valley-a4f8/d21e51eb-a859-4ec7-9268-8f1c3eee4dcc/tasks/a1776c5c8f5cf8880.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 129" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "internal/syncer/ssh_integration_test.go",
+    "line": 35,
+    "summary": "The existing syncer SSH integration test still expects the old argv layout and old remote-command format, so it fails on this PR.",
+    "failure_scenario": "Its shim skips only one `-o` pair. With the new `-o SendEnv=GIT_PROTOCOL` pair it reads dest=\"-o\" and runs remote=\"SendEnv=GIT_PROTOCOL\" through `sh -c`, which prints nothing. Confirmed on the PR head: `go test ./internal/syncer -run TestRun_IntegrationSyncOverSSHShimV2` fails with \"list source refs: peek pktline: EOF\". The check `strings.Contains(line, \"GIT_PROTOCOL='version=2' git-upload-pack\")` at line 92 can also never match now. The PR updated ssh_test.go but missed this file."
+  },
+  {
+    "file": "internal/gitproto/ssh.go",
+    "line": 225,
+    "summary": "Removing the env-prefixed remote command drops protocol v2 for SSH servers that run a login shell. These worked before, because the shell applied the `GIT_PROTOCOL=` prefix.",
+    "failure_scenario": "A self-hosted git server with stock OpenSSH has `AcceptEnv LANG LC_*` and a normal shell. Before this PR, `GIT_PROTOCOL='version=2' git-upload-pack ...` negotiated v2. Now sshd drops the variable, so `auto` quietly falls to v1 and re-sends the full advertisement on every RPC, and `--protocol v2` now fails with \"source did not negotiate protocol v2\" where it used to work. The CHANGELOG files this under Fixed and does not call out the regression. A possible fix is to keep the prefix as a retry when the server answers v0/v1 to a SendEnv attempt."
+  },
+  {
+    "file": "internal/gitproto/refs.go",
+    "line": 102,
+    "summary": "The SSH-only error fallback in auto mode was a workaround for hosts rejecting the env-prefixed command. That cause is gone, but every SSH error still triggers a second ssh connection.",
+    "failure_scenario": "An auth failure, unknown host, or network timeout now runs two full ssh handshakes, and the user gets a joined, duplicated error. Servers that ignore `GIT_PROTOCOL` already fall back through the v0/v1 advertisement decode path, so the `isSSHScheme` error branch is now vestigial and hides real failures. Remove it, or limit it to real protocol-rejection errors."
+  },
+  {
+    "file": "internal/gitproto/ssh.go",
+    "line": 232,
+    "summary": "sshEnv strips inherited `GIT_PROTOCOL` with a case-sensitive prefix match, but Windows environment variable names are case-insensitive.",
+    "failure_scenario": "On Windows, an inherited `git_protocol=version=2` (or any other casing) is not removed for v1 calls, so it reaches ssh next to, or in place of, the intended value. This defeats the PR's stated guarantee that a caller's env cannot force v2 on v1 paths, for example when the user's ssh_config has `SendEnv GIT_*`."
+  },
+  {
+    "file": "internal/gitproto/ssh_test.go",
+    "line": 189,
+    "summary": "The new test helper runs `git init -b main`, which needs git 2.28 or later, but the test only skips when git is missing entirely.",
+    "failure_scenario": "On a CI image or dev box with git older than 2.28, `TestSSHAutoNegotiation` fails with \"unknown switch `b'\" instead of skipping. The setup also inherits the user's `init.defaultBranch` and hooks, apart from the global config it overrides."
+  },
+  {
+    "file": "internal/gitproto/ssh_test.go",
+    "line": 101,
+    "summary": "TestSSHRPCProtocolEnv sets `GIT_PROTOCOL=version=2` in the process env but never checks that a v1 call with a v1-only server stays v1 end to end. It only checks what the shim saw.",
+    "failure_scenario": "The test proves the env is stripped before ssh starts. It does not cover the user-config case, where `SendEnv GIT_PROTOCOL` or `SetEnv GIT_PROTOCOL=version=2` in ssh_config would still force v2 on a v1 RPC (`SetEnv` is not affected by the process env). PostRPCStreamBody would then decode a v2 response as v1. Add `-o SetEnv=GIT_PROTOCOL=` or document the limitation."
+  }
+]
+```
+
+I found 6 findings. Only the first is confirmed by running it: on the PR head, `go test ./internal/syncer -run TestRun_IntegrationSyncOverSSHShimV2` fails with "list source refs: peek pktline: EOF", while the `./internal/gitproto` SSH tests pass. The other five come from reading the code and were not run.
+
+No repo-level CLAUDE.md applies to these files, and the CHANGELOG entry is one line per paragraph, so the global no-hard-wrap rule holds. To run the tests I checked out a local branch `pr129` from `pull/129/head`, then switched back to `worktree/brave-valley-a4f8`.</result>
+<usage><subagent_tokens>67820</subagent_tokens><tool_uses>8</tool_uses><duration_ms>94787</duration_ms></usage>
+</task-notification>
+
+---
+
+1. : how can it be broken in main but ci is green?
+
+---
+
+ok, can you just go throught each validate the issue and then do a fix on top of pauls branch?
