@@ -1,9 +1,8 @@
 {
-  "cli_version": "0.12.1-nightly.202610240623.b9639ba5b.0.20261024111809-d05c0a14437f",
+  "cli_version": "0.12.1",
   "checkpoint_id": "01M5Y9VFR7NTK5E9MP3XXCS3R7",
   "strategy": "manual-commit",
-  "branch": "fix/pr129-review",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "CHANGELOG.md",
     "internal/syncer/ssh_integration_test.go"
@@ -15,14 +14,21 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 36,
-    "cache_creation_tokens": 57964,
-    "cache_read_tokens": 1068381,
-    "output_tokens": 8347,
-    "api_call_count": 16,
+    "input_tokens": 78,
+    "cache_creation_tokens": 162012,
+    "cache_read_tokens": 3454569,
+    "output_tokens": 21639,
+    "api_call_count": 37,
     "subagent_tokens": {
       "input_tokens": 18,
       "cache_creation_tokens": 46571,
@@ -44,5 +50,6 @@
       "provider_token": 0,
       "shell_stdin": 0
     }
-  }
+  },
+  "has_review": true
 }
