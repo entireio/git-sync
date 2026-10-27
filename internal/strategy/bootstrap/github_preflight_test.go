@@ -722,7 +722,7 @@ func TestExecuteBatchesPrivateGitHubRepoFromAuthenticatedPreflight(t *testing.T)
 			t.Fatal("a private repo over the threshold fetched a one-shot pack")
 			return nil, nil //nolint:nilnil // unreachable after t.Fatal
 		},
-		fetchCommitParents: func(context.Context, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+		fetchCommitParents: func(context.Context, gitproto.Conn, []plumbing.Hash, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 			return nil, errBatchedPathReached
 		},
 	}

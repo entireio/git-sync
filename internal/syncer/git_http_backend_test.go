@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/http/cgi"
@@ -748,6 +749,18 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 	}
 	handler.Stderr = &lockedBuffer{server: s}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// net/http/cgi refuses chunked request bodies, and git-sync streams
+		// its pushes. Buffer the body so the CGI gets a Content-Length.
+		if len(r.TransferEncoding) > 0 {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+			r.TransferEncoding = nil
+		}
 		handler.ServeHTTP(w, r)
 	}))
 	return s
@@ -833,4 +846,97 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.server.mu.Lock()
 	defer b.server.mu.Unlock()
 	return b.server.stderr.Write(p)
+}
+
+// TestBootstrap_GitHTTPBackendBatchedManyBranches seeds a target from a source
+// shaped like a busy public repository: a trunk, many short branches, branches
+// already merged into the trunk, one branch too big to share a pack, and a tag.
+// Every ref must land, and no temp ref may be left behind.
+func TestBootstrap_GitHTTPBackendBatchedManyBranches(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", sourceBare)
+	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+	for i := range 5 {
+		writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("trunk-%d.bin", i)), int64(200_000+i*13))
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", fmt.Sprintf("trunk-%d", i))
+	}
+	runGit(t, worktree, "tag", "-a", "v1", "-m", "version 1")
+
+	branches := []string{testBranch}
+	const small = 30
+	for i := range small {
+		name := fmt.Sprintf("feature-%02d", i)
+		runGit(t, worktree, "switch", "-q", "-c", name, testBranch+"~2")
+		writeFile(t, filepath.Join(worktree, name+".txt"), name+"\n")
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", name)
+		branches = append(branches, name)
+	}
+	for i := range 2 {
+		name := fmt.Sprintf("merged-%d", i)
+		runGit(t, worktree, "branch", name, fmt.Sprintf("%s~%d", testBranch, i+1))
+		branches = append(branches, name)
+	}
+	runGit(t, worktree, "switch", "-q", "-c", "big", testBranch+"~3")
+	for i := range 3 {
+		writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("big-%d.bin", i)), int64(210_000+i*7))
+		runGit(t, worktree, "add", ".")
+		runGit(t, worktree, "commit", "-m", fmt.Sprintf("big-%d", i))
+	}
+	branches = append(branches, "big")
+	runGit(t, worktree, "switch", "-q", testBranch)
+	runGit(t, worktree, "push", "-q", "origin", "--all")
+	runGit(t, worktree, "push", "-q", "origin", "refs/tags/v1")
+	runGit(t, sourceBare, "symbolic-ref", "HEAD", "refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	result, err := Bootstrap(context.Background(), Config{
+		Source:             Endpoint{URL: server.RepoURL("source.git")},
+		Target:             Endpoint{URL: server.RepoURL("target.git")},
+		IncludeTags:        true,
+		TargetMaxPackBytes: 350_000,
+	})
+	if err != nil {
+		t.Fatalf("batched bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
+	}
+	if !result.Batching || result.RelayMode != relayModeBootstrapBatch {
+		t.Fatalf("expected a batched bootstrap, got %+v", result)
+	}
+	if want := len(branches) + 1; result.Pushed != want {
+		t.Fatalf("Pushed = %d, want %d", result.Pushed, want)
+	}
+	// Small branches share packs. One push per branch would need at least as
+	// many batches as there are branches, before the trunk's own checkpoints.
+	if result.BatchCount >= len(branches) {
+		t.Fatalf("BatchCount = %d for %d branches; small branches were not grouped", result.BatchCount, len(branches))
+	}
+	for _, name := range branches {
+		ref := plumbing.NewBranchReferenceName(name)
+		assertGitRefEqual(t, sourceBare, targetBare, ref)
+		assertGitRefAbsent(t, targetBare, planner.BootstrapTempRef(ref))
+	}
+	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewTagReferenceName("v1"))
+	runGit(t, targetBare, "fsck", "--connectivity-only")
 }

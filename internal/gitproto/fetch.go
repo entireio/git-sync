@@ -101,14 +101,15 @@ func (s *RefService) FetchPack(
 // during this call is dominated by the result map plus a small fixed
 // delta-resolution cache; no commit content is retained.
 //
-// Optional haves let the source skip commits already reachable from those
-// hashes, which is valuable when planning later branches that share history
-// with an already-planned trunk.
+// Every want is served by one request, so planning many branches costs one
+// round trip, not one per branch. Optional haves let the source skip commits
+// already reachable from those hashes, which is valuable when planning later
+// branches that share history with an already-planned trunk.
 // Returns an empty map (not nil) when the source has no new commits.
 func (s *RefService) FetchCommitParents(
 	ctx context.Context,
 	conn Conn,
-	ref DesiredRef,
+	wants []plumbing.Hash,
 	haves []plumbing.Hash,
 ) (parents map[plumbing.Hash][]plumbing.Hash, err error) {
 	if s.Protocol != "v2" {
@@ -117,15 +118,21 @@ func (s *RefService) FetchCommitParents(
 	if !s.V2Caps.FetchSupports("filter") {
 		return nil, errors.New("source does not advertise fetch filter support")
 	}
+	sortedWants := SortedUniqueHashes(wants)
+	if len(sortedWants) == 0 {
+		return map[plumbing.Hash][]plumbing.Hash{}, nil
+	}
 
 	sortedHaves := SortedUniqueHashes(haves)
-	cmdArgs := make([]string, 0, 4+len(sortedHaves))
+	cmdArgs := make([]string, 0, 4+len(sortedWants)+len(sortedHaves))
 	cmdArgs = append(cmdArgs,
 		"ofs-delta",
 		"no-progress",
 		"filter tree:0",
-		"want "+ref.SourceHash.String(),
 	)
+	for _, h := range sortedWants {
+		cmdArgs = append(cmdArgs, "want "+h.String())
+	}
 	for _, h := range sortedHaves {
 		cmdArgs = append(cmdArgs, "have "+h.String())
 	}
