@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -138,6 +139,7 @@ func (c *SSHConn) startRPC(ctx context.Context, service string, gitProtocol stri
 		return nil, nil, err
 	}
 	cmd := exec.CommandContext(ctx, c.sshPath, args...)
+	cmd.Env = sshEnv(os.Environ(), gitProtocol)
 	stderr := &sshCommandError{}
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
@@ -159,11 +161,15 @@ func sshInvocationArgs(ep *url.URL, service string, gitProtocol string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	remoteCommand, err := sshRemoteCommand(ep, service, gitProtocol)
+	remoteCommand, err := sshRemoteCommand(ep, service)
 	if err != nil {
 		return nil, err
 	}
 	args := []string{"-o", "BatchMode=yes"}
+	if gitProtocol != "" {
+		// Like git; servers may ignore it.
+		args = append(args, "-o", "SendEnv=GIT_PROTOCOL")
+	}
 	if port := ep.Port(); port != "" {
 		if err := rejectOptionLike("SSH port", port); err != nil {
 			return nil, err
@@ -219,19 +225,25 @@ func rejectOptionLike(what, value string) error {
 // the shell here: git-upload-pack resolves the path through enter_repo(),
 // which interpolates a leading "~" itself. Canonical git quotes the whole path
 // for the same reason.
-func sshRemoteCommand(ep *url.URL, service string, gitProtocol string) (string, error) {
+func sshRemoteCommand(ep *url.URL, service string) (string, error) {
 	if ep == nil || ep.Path == "" {
 		return "", errors.New("missing SSH repository path")
 	}
-	path := shellQuote(ep.Path)
-	if gitProtocol != "" {
-		return gitProtocolEnv(gitProtocol) + " " + service + " " + path, nil
-	}
-	return service + " " + path, nil
+	return service + " " + shellQuote(ep.Path), nil
 }
 
-func gitProtocolEnv(gitProtocol string) string {
-	return "GIT_PROTOCOL=" + shellQuote(gitProtocol)
+// sshEnv sets GIT_PROTOCOL only when requested.
+func sshEnv(base []string, gitProtocol string) []string {
+	env := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if !strings.HasPrefix(kv, "GIT_PROTOCOL=") {
+			env = append(env, kv)
+		}
+	}
+	if gitProtocol != "" {
+		env = append(env, "GIT_PROTOCOL="+gitProtocol)
+	}
+	return env
 }
 
 func shellQuote(s string) string {
