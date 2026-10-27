@@ -133,6 +133,40 @@ func TestWrappedRCClose(t *testing.T) {
 	}
 }
 
+// trailingBody fails Close when bytes are left unread, like ssh or the remote
+// helper exiting on EPIPE when the stream is closed before its last write.
+type trailingBody struct {
+	*strings.Reader
+}
+
+func (b trailingBody) Close() error {
+	if b.Len() > 0 {
+		return errors.New("signal: broken pipe")
+	}
+	return nil
+}
+
+func TestCloseJoinDrainsTrailingBytesOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	var err error
+	closeJoin(trailingBody{strings.NewReader("00000002")}, &err)
+	if err != nil {
+		t.Fatalf("closeJoin error = %v, want nil", err)
+	}
+}
+
+func TestCloseJoinKeepsCloseErrorOnFailure(t *testing.T) {
+	t.Parallel()
+
+	fetchErr := errors.New("update object storage: empty packfile")
+	err := fetchErr
+	closeJoin(trailingBody{strings.NewReader("remaining")}, &err)
+	if !errors.Is(err, fetchErr) || !strings.Contains(err.Error(), "broken pipe") {
+		t.Fatalf("closeJoin error = %v, want fetch error joined with close error", err)
+	}
+}
+
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }

@@ -178,7 +178,7 @@ func fetchToStoreV2(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
-) error {
+) (err error) {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
 	if len(wants) == 0 {
@@ -210,8 +210,26 @@ func fetchToStoreV2(
 	if err != nil {
 		return err
 	}
-	defer ioutil.CheckClose(reader, &err)
+	defer closeJoin(reader, &err)
 	return storeV2FetchPack(store, reader, verbose, conn.ProgressWriter())
+}
+
+// maxTrailingResponseBytes bounds how much closeJoin reads past the pack. Only
+// a flush or response-end packet should follow it.
+const maxTrailingResponseBytes = 64 << 10
+
+// closeJoin keeps the stream's close error. On success it first drains what
+// follows the pack: closing with those bytes unwritten makes ssh or the
+// remote helper die on EPIPE, which would fail a fetch that stored every
+// object.
+func closeJoin(c io.ReadCloser, err *error) {
+	if *err == nil {
+		//nolint:errcheck // a read error here also surfaces from Close
+		_, _ = io.CopyN(io.Discard, c, maxTrailingResponseBytes)
+	}
+	if cerr := c.Close(); cerr != nil {
+		*err = errors.Join(*err, cerr)
+	}
 }
 
 func fetchPackV2(
@@ -472,7 +490,7 @@ func fetchToStoreV1(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
-) error {
+) (err error) {
 	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose)
 	if err != nil {
 		return err
@@ -481,7 +499,7 @@ func fetchToStoreV1(
 	if err != nil {
 		return fmt.Errorf("source upload-pack: %w", err)
 	}
-	defer ioutil.CheckClose(reader, &err)
+	defer closeJoin(reader, &err)
 
 	// Decode server response (ACK/NAK) then read pack with sideband demux.
 	buffered := bufio.NewReader(reader)

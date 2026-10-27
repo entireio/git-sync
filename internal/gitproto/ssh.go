@@ -101,6 +101,19 @@ func (c *SSHConn) PostRPCStreamBody(ctx context.Context, service string, body io
 	if err != nil {
 		return nil, err
 	}
+	// Like git: read refs before sending.
+	// A cancelled ctx kills ssh, which can read as an empty advertisement;
+	// don't send the request then.
+	stdout, err := discardSSHAdvertisement(cmd.Stdout)
+	if err != nil || ctx.Err() != nil {
+		_ = cmd.Stdin.Close()
+		_ = cmd.Stdout.Close()
+		waitErr := cmd.wait()
+		if ctx.Err() != nil {
+			return nil, errors.Join(ctx.Err(), stderr.wrap(err), waitErr)
+		}
+		return nil, fmt.Errorf("%s advertisement: %w", service, errors.Join(stderr.wrap(err), waitErr))
+	}
 	copyErr := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(cmd.Stdin, body)
@@ -111,12 +124,6 @@ func (c *SSHConn) PostRPCStreamBody(ctx context.Context, service string, body io
 		}
 		copyErr <- closeErr
 	}()
-	stdout, err := discardSSHAdvertisement(cmd.Stdout)
-	if err != nil {
-		_ = cmd.Stdout.Close()
-		waitErr := cmd.wait()
-		return nil, fmt.Errorf("%s advertisement: %w", service, errors.Join(stderr.wrap(err), waitErr))
-	}
 	return &sshRPCStream{
 		ctx:     ctx,
 		stdout:  stdout,
@@ -340,17 +347,9 @@ func (s *sshRPCStream) Close() error {
 	closeErr := s.stdout.Close()
 	s.waitOnce.Do(func() {
 		copyErr := <-s.copyErr
-		waitErr := s.wait()
-		if copyErr != nil {
-			s.waitErr = copyErr
-			if waitErr != nil {
-				s.waitErr = errors.Join(copyErr, s.stderr.wrap(waitErr))
-			}
-			return
-		}
-		if waitErr != nil {
-			s.waitErr = s.stderr.wrap(waitErr)
-		}
+		s.waitErr = errors.Join(copyErr, s.stderr.wrap(s.wait()))
+		// Cancellation kills ssh, so the body copy usually fails with EPIPE;
+		// report the cancellation, not just the broken pipe.
 		if s.ctx != nil && s.ctx.Err() != nil {
 			s.waitErr = errors.Join(s.ctx.Err(), s.waitErr)
 		}
