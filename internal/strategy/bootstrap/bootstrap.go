@@ -475,7 +475,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		}
 		batch := batches[i]
 		if len(batch.group) > 0 {
-			standalone, err := pushBranchGroups(ctx, p, batch.group, groupPushState{
+			next, err := pushBranchGroups(ctx, p, batch.group, groupPushState{
 				completedRefs:   completedRefs,
 				budget:          &selfImposedBudget,
 				fromObservation: &budgetFromObservation,
@@ -487,8 +487,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				return result, err
 			}
 			// A branch too big to share a pack runs next on its own
-			// checkpoints, where its chain can be subdivided.
-			batches = slices.Insert(batches, i+1, standalone...)
+			// checkpoints, where its chain can be subdivided, ahead of the
+			// groups still pending.
+			batches = slices.Insert(batches, i+1, next...)
 			continue
 		}
 		if batch.subsumed {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -123,30 +124,39 @@ type groupPushState struct {
 // ref: a member is small, so a failed push costs little to repeat.
 //
 // A group whose pack is too big splits into as many parts as its size needs.
-// A single branch that is still too big is returned, so the caller can run it
-// on its own checkpoints.
+// It returns the batches the caller must run next, in order. When a single
+// branch is too big to share a pack, it stops there and returns that branch
+// first, then the groups still pending. The branch then runs on its own
+// checkpoints before those groups fetch again. When branches share a large
+// history, that history lands once and becomes a have for the groups, instead
+// of being re-fetched by every smaller split.
 func pushBranchGroups(ctx context.Context, p Params, group []plannedBatch, st groupPushState, result *Result) ([]plannedBatch, error) {
-	var standalone []plannedBatch
 	queue := [][]plannedBatch{group}
 	for len(queue) > 0 {
 		members := queue[0]
 		queue = queue[1:]
-		parts, err := pushBranchGroup(ctx, p, members, st, result)
+		pending, parts, err := pushBranchGroup(ctx, p, members, st, result)
 		if err != nil {
 			return nil, err
 		}
-		if parts == 0 {
+		switch len(pending) {
+		case 0:
 			continue
-		}
-		if len(members) == 1 {
+		case 1:
 			p.log("bootstrap batch group member too big for a shared pack; pushing on its own checkpoints",
-				"branch", members[0].Plan.TargetRef.String())
-			standalone = append(standalone, members[0])
-			continue
+				"branch", pending[0].Plan.TargetRef.String(),
+				"groups_pending", len(queue))
+			next := make([]plannedBatch, 0, 1+len(queue))
+			next = append(next, pending[0])
+			for _, g := range queue {
+				next = append(next, plannedBatch{group: g})
+			}
+			return next, nil
+		default:
+			queue = append(splitGroup(pending, parts), queue...)
 		}
-		queue = append(splitGroup(members, parts), queue...)
 	}
-	return standalone, nil
+	return nil, nil
 }
 
 // splitGroup divides members into parts groups of near-equal size, at least
@@ -161,10 +171,26 @@ func splitGroup(members []plannedBatch, parts int) [][]plannedBatch {
 	return out
 }
 
-// pushBranchGroup pushes members in one pack. When the pack is too big it
-// returns, with no error, the number of parts to split the group into; it
-// returns 0 when the push landed.
-func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st groupPushState, result *Result) (int, error) {
+// limitWatcher records whether the source pack passed its byte limit, which
+// arrives as a read error the pusher may wrap or replace.
+type limitWatcher struct {
+	io.ReadCloser
+
+	hit bool
+}
+
+func (w *limitWatcher) Read(b []byte) (int, error) {
+	n, err := w.ReadCloser.Read(b)
+	if errors.Is(err, gitproto.ErrSourcePackTooLarge) {
+		w.hit = true
+	}
+	return n, err //nolint:wrapcheck // passes the reader's own error through, io.EOF included
+}
+
+// pushBranchGroup pushes members in one pack. When the push lands it returns
+// no pending members. When the pack is too big it returns, with no error, the
+// members still to deliver and the number of parts to split them into.
+func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st groupPushState, result *Result) ([]plannedBatch, int, error) {
 	plans := make([]planner.BranchPlan, len(members))
 	for i, member := range members {
 		plans[i] = member.Plan
@@ -181,12 +207,16 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 	case errors.Is(err, git.NoErrAlreadyUpToDate):
 		// Earlier pushes already delivered every object; only the refs are new.
 		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
-			return 0, fmt.Errorf("create bootstrap branch group refs: %w", err)
+			return nil, 0, fmt.Errorf("create bootstrap branch group refs: %w", err)
 		}
 	case err != nil:
-		return 0, fmt.Errorf("fetch bootstrap branch group pack: %w", err)
+		return nil, 0, fmt.Errorf("fetch bootstrap branch group pack: %w", err)
 	default:
-		packReader = gitproto.CloseOnce(gitproto.LimitPackReader(packReader, st.fetchLimit))
+		// MaxPackBytes bounds one source fetch. Each member can fit while
+		// their union does not, so passing it splits the group rather than
+		// failing the run. The limit itself still holds for every fetch.
+		watcher := &limitWatcher{ReadCloser: gitproto.LimitPackReader(packReader, st.fetchLimit)}
+		packReader = gitproto.CloseOnce(watcher)
 		// The static per-object estimate, not the run's calibrated one: the
 		// calibration comes from the trunk's checkpoints, and one large blob
 		// there would make every group of small commits look over budget.
@@ -199,7 +229,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			return true
 		})
 		if err != nil {
-			return 0, fmt.Errorf("check bootstrap branch group pack size: %w", err)
+			return nil, 0, fmt.Errorf("check bootstrap branch group pack size: %w", err)
 		}
 		if parts > 0 {
 			p.log("bootstrap batch group pack estimate over budget; splitting",
@@ -207,7 +237,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 				"object_count", objectCount,
 				"budget_bytes", budget,
 				"parts", parts)
-			return max(parts, 2), nil
+			return members, max(parts, 2), nil
 		}
 
 		p.log("bootstrap batch group push attempting",
@@ -223,18 +253,27 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			pushErr = closeErr
 		}
 		if pushErr != nil {
-			if observer.Aborted() || isBatchableTargetPushError(pushErr) {
-				parts := learnFromGroupRejection(st, observer, objectCount, budget, pushErr)
-				p.log("bootstrap batch group push too big or too slow; splitting",
-					"branch_count", len(plans),
-					"sent_bytes", observer.Bytes(),
-					"aborted_early", observer.Aborted(),
-					"budget_bytes", *st.budget,
-					"parts", parts,
-					"error", pushErr.Error())
-				return parts, nil
+			var parts int
+			switch {
+			case watcher.hit:
+				// A source-side limit says nothing about the target.
+				parts = 2
+			case observer.Aborted() || isBatchableTargetPushError(pushErr):
+				parts = learnFromGroupRejection(st, observer, objectCount, budget, pushErr)
+			default:
+				return nil, 0, fmt.Errorf("push bootstrap branch group: %w", pushErr)
 			}
-			return 0, fmt.Errorf("push bootstrap branch group: %w", pushErr)
+			pending := dropAppliedMembers(p, members, st)
+			p.log("bootstrap batch group push too big or too slow; splitting",
+				"branch_count", len(plans),
+				"pending", len(pending),
+				"sent_bytes", observer.Bytes(),
+				"aborted_early", observer.Aborted(),
+				"source_limit_hit", watcher.hit,
+				"budget_bytes", *st.budget,
+				"parts", parts,
+				"error", pushErr.Error())
+			return pending, parts, nil
 		}
 	}
 
@@ -257,7 +296,23 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 	p.log("bootstrap batch group pushed",
 		"branch_count", len(plans),
 		"confirmed", confirmed)
-	return 0, nil
+	return nil, 0, nil
+}
+
+// dropAppliedMembers records the members a failed push still created and
+// returns the rest. The pusher splits ref updates across requests, so an
+// earlier request can land before a later one fails. Retrying a created ref
+// with a zero old hash fails on a target that checks it.
+func dropAppliedMembers(p Params, members []plannedBatch, st groupPushState) []plannedBatch {
+	pending := make([]plannedBatch, 0, len(members))
+	for _, member := range members {
+		if outcome, _ := p.refOutcome(member.Plan.TargetRef); outcome == gitproto.RefOutcomeApplied {
+			st.completedRefs[member.Plan.TargetRef] = member.Plan.SourceHash
+			continue
+		}
+		pending = append(pending, member)
+	}
+	return pending
 }
 
 // learnFromGroupRejection records what a failed group push showed about the

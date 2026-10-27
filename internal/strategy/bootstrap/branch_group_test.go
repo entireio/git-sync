@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -362,6 +363,13 @@ func TestPushBranchGroupsLearnsTargetLimit(t *testing.T) {
 		return nil
 	}
 	h.params.TargetPusher = pusher
+	// A rejected request reports no per-ref status.
+	h.params.RefOutcome = func(plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+		if pushes == 1 {
+			return gitproto.RefOutcomeUnknown, ""
+		}
+		return gitproto.RefOutcomeApplied, ""
+	}
 
 	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
 	if err != nil {
@@ -416,5 +424,156 @@ func TestSplitGroup(t *testing.T) {
 		if total != len(members) {
 			t.Errorf("splitGroup(5, %d) covers %d members, want %d", tc.parts, total, len(members))
 		}
+	}
+}
+
+// The pusher splits ref updates across requests, so a failed push can still
+// have created some refs. Those are recorded and never retried: a second
+// create with a zero old hash fails on a target that checks it.
+func TestPushBranchGroupsDoesNotRetryAppliedRefs(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 4)
+	applied := h.forkRefs[0]
+	pushes := 0
+	var retried []gitproto.PushCommand
+	pusher, ok := h.params.TargetPusher.(fakeBootstrapPusher)
+	if !ok {
+		t.Fatalf("harness pusher is %T", h.params.TargetPusher)
+	}
+	pusher.pushPack = func(_ context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error {
+		_ = pack.Close()
+		pushes++
+		if pushes == 1 {
+			return errors.New("target receive-pack: http 408: request timeout")
+		}
+		retried = append(retried, cmds...)
+		return nil
+	}
+	h.params.TargetPusher = pusher
+	h.params.RefOutcome = func(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+		if pushes == 1 && name != applied {
+			return gitproto.RefOutcomeUnknown, ""
+		}
+		return gitproto.RefOutcomeApplied, ""
+	}
+
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	if err != nil {
+		t.Fatalf("planAfterTrunk: %v", err)
+	}
+	st := newTestGroupState(h.params.TargetMaxPack)
+	if _, err := pushBranchGroups(context.Background(), h.params, batches[0].group, st, &Result{}); err != nil {
+		t.Fatalf("pushBranchGroups: %v", err)
+	}
+	for _, cmd := range retried {
+		if cmd.Name == applied {
+			t.Errorf("retried the create of %s, which the failed push already applied", applied)
+		}
+	}
+	if st.completedRefs[applied].IsZero() {
+		t.Errorf("%s was applied by the failed push but not recorded as completed", applied)
+	}
+	if len(retried) != len(h.forkRefs)-1 {
+		t.Errorf("retried %d creates, want %d", len(retried), len(h.forkRefs)-1)
+	}
+}
+
+// Every member can fit the source fetch limit while their union does not.
+// That splits the group instead of failing the run.
+func TestPushBranchGroupsSplitsOnSourceFetchLimit(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 2)
+	src, ok := h.params.SourceService.(fakeBootstrapSource)
+	if !ok {
+		t.Fatalf("harness source is %T", h.params.SourceService)
+	}
+	src.fetchPack = func(_ context.Context, _ gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
+		header := packWithObjects(1)
+		if len(desired) == 1 {
+			return header, nil
+		}
+		// Header, then more bytes than the fetch limit allows.
+		return io.NopCloser(io.MultiReader(header, bytes.NewReader(make([]byte, 4096)))), nil
+	}
+	h.params.SourceService = src
+	pushes := 0
+	pusher, ok := h.params.TargetPusher.(fakeBootstrapPusher)
+	if !ok {
+		t.Fatalf("harness pusher is %T", h.params.TargetPusher)
+	}
+	pusher.pushPack = func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+		defer pack.Close()
+		pushes++
+		_, err := io.Copy(io.Discard, pack)
+		return err
+	}
+	h.params.TargetPusher = pusher
+	h.params.RefOutcome = func(plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+		return gitproto.RefOutcomeUnknown, ""
+	}
+
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	if err != nil {
+		t.Fatalf("planAfterTrunk: %v", err)
+	}
+	st := newTestGroupState(h.params.TargetMaxPack)
+	st.fetchLimit = 1024
+	if _, err := pushBranchGroups(context.Background(), h.params, batches[0].group, st, &Result{}); err != nil {
+		t.Fatalf("pushBranchGroups failed instead of splitting: %v", err)
+	}
+	if pushes != 3 {
+		t.Errorf("pushes = %d, want the over-limit group and then one per member", pushes)
+	}
+	if *st.announced != 0 || *st.budget != h.params.TargetMaxPack {
+		t.Errorf("a source-side limit changed the target state: announced=%d budget=%d", *st.announced, *st.budget)
+	}
+}
+
+// A branch too big to share a pack runs before the groups still pending, so
+// the history it shares with them lands once and becomes their have.
+func TestPushBranchGroupsReturnsOversizedBranchBeforePendingGroups(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 4)
+	big := h.forkRefs[0]
+	h.objectsFor = func(desired map[plumbing.ReferenceName]gitproto.DesiredRef) uint32 {
+		if _, ok := desired[big]; ok {
+			return 1_000_000
+		}
+		return 1
+	}
+
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	if err != nil {
+		t.Fatalf("planAfterTrunk: %v", err)
+	}
+	next, err := pushBranchGroups(context.Background(), h.params, batches[0].group, newTestGroupState(h.params.TargetMaxPack), &Result{})
+	if err != nil {
+		t.Fatalf("pushBranchGroups: %v", err)
+	}
+	if len(next) < 2 || len(next[0].group) != 0 || next[0].Plan.TargetRef != big {
+		t.Fatalf("next[0] must be the oversized branch on its own, then the pending groups; got %+v", next)
+	}
+	pending := 0
+	for _, batch := range next[1:] {
+		if len(batch.group) == 0 {
+			t.Errorf("after the oversized branch, want only groups; got %s", batch.Plan.TargetRef)
+		}
+		pending += len(batch.group)
+	}
+	if pending == 0 {
+		t.Error("no groups left pending; the oversized branch did not stop the split queue")
+	}
+}
+
+func newTestGroupState(budget int64) groupPushState {
+	fromObservation := false
+	bytesPerObject := int64(estimatedBytesPerObject)
+	announced := int64(0)
+	return groupPushState{
+		completedRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		budget:          &budget,
+		fromObservation: &fromObservation,
+		bytesPerObject:  &bytesPerObject,
+		announced:       &announced,
 	}
 }
