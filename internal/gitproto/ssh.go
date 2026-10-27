@@ -100,6 +100,14 @@ func (c *SSHConn) PostRPCStreamBody(ctx context.Context, service string, body io
 	if err != nil {
 		return nil, err
 	}
+	// Like git: read refs before sending.
+	stdout, err := discardSSHAdvertisement(cmd.Stdout)
+	if err != nil {
+		_ = cmd.Stdin.Close()
+		_ = cmd.Stdout.Close()
+		waitErr := cmd.wait()
+		return nil, fmt.Errorf("%s advertisement: %w", service, errors.Join(stderr.wrap(err), waitErr))
+	}
 	copyErr := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(cmd.Stdin, body)
@@ -110,12 +118,6 @@ func (c *SSHConn) PostRPCStreamBody(ctx context.Context, service string, body io
 		}
 		copyErr <- closeErr
 	}()
-	stdout, err := discardSSHAdvertisement(cmd.Stdout)
-	if err != nil {
-		_ = cmd.Stdout.Close()
-		waitErr := cmd.wait()
-		return nil, fmt.Errorf("%s advertisement: %w", service, errors.Join(stderr.wrap(err), waitErr))
-	}
 	return &sshRPCStream{
 		ctx:     ctx,
 		stdout:  stdout,

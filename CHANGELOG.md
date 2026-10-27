@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- SSH fetches from GitHub intermittently failed with `update object storage: empty packfile`. The SSH transport wrote the request and closed stdin while the server was still streaming its ref advertisement (36 MB for `NixOS/nixpkgs`), and GitHub sometimes dropped a request that arrived that early. The request is now sent only after the advertisement is read, which is what `git` does. On the old code, 2 of 4 runs against `git@github.com:NixOS/nixpkgs.git` failed; with the change, 7 of 7 passed.
+- Errors from closing an upload-pack stream (the ssh exit status and the remote's stderr) were dropped in `fetchToStoreV1` and `fetchToStoreV2`, because `CheckClose` wrote to a shadowed `err`. They are now joined into the returned error.
+
 ## [0.10.0] - 2026-10-21
 
 ### Security

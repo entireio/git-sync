@@ -250,7 +250,7 @@ func writeShellStub(t *testing.T, path, body string) {
 }
 
 func TestSSHConnPostRPCStreamBodyCanBeCalledRepeatedly(t *testing.T) {
-	env := newSSHShimEnv(t)
+	env := newSSHShimEnvWith(t, "0000")
 	conn := newSSHTestConn(t, "ssh://example.com/repo.git", env.script)
 
 	reader1, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", strings.NewReader("first-body"), false, "fetch one")
@@ -291,6 +291,48 @@ func TestSSHConnPostRPCStreamBodyCanBeCalledRepeatedly(t *testing.T) {
 	}
 }
 
+// GitHub drops requests sent mid-advertisement.
+func TestSSHConnPostRPCStreamBodyWaitsForAdvertisement(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "strict-ssh.sh")
+	bodyFile := filepath.Join(dir, "body")
+	content := strings.Join([]string{
+		"#!/usr/bin/env bash",
+		"printf '0009hello'",
+		"sleep 0.2",
+		"if read -t 0; then exit 0; fi",
+		"printf '0000'",
+		"cat >" + shellQuote(bodyFile),
+		"printf 'response'",
+	}, "\n")
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatalf("write shim: %v", err)
+	}
+	conn := newSSHTestConn(t, "ssh://example.com/repo.git", script)
+
+	reader, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", strings.NewReader("request"), false, "fetch")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close response: %v", err)
+	}
+	if string(data) != "response" {
+		t.Fatalf("response = %q, want %q", data, "response")
+	}
+	body, err := os.ReadFile(bodyFile)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "request" {
+		t.Fatalf("request body = %q, want %q", body, "request")
+	}
+}
+
 func TestSSHConnRequestInfoRefsHonorsContext(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "ssh-sleep.sh")
@@ -314,7 +356,7 @@ func TestSSHConnRequestInfoRefsHonorsContext(t *testing.T) {
 func TestSSHConnPostRPCStreamBodyHonorsContext(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "ssh-read-sleep.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >/dev/null\nsleep 5\n"), 0o755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '0000'\ncat >/dev/null\nsleep 5\n"), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
@@ -378,6 +420,12 @@ func (f closeReaderFunc) Close() error             { return f() }
 
 func newSSHShimEnv(t *testing.T) sshShimEnv {
 	t.Helper()
+	return newSSHShimEnvWith(t, "")
+}
+
+// advert is printed before reading stdin.
+func newSSHShimEnvWith(t *testing.T, advert string) sshShimEnv {
+	t.Helper()
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "ssh.log")
 	countFile := filepath.Join(dir, "count")
@@ -409,6 +457,7 @@ func newSSHShimEnv(t *testing.T) sshShimEnv {
 		"fi",
 		"remote=\"$2\"",
 		"printf '%s\\t%s\\n' \"$dest\" \"$remote\" >>" + shellQuote(logFile),
+		"printf '%s' " + shellQuote(advert),
 		"cat >" + shellQuote(bodyPrefix) + "\"$count\"",
 		"printf 'response-%s' \"$count\"",
 	}, "\n")
