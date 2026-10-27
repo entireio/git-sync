@@ -214,8 +214,19 @@ func fetchToStoreV2(
 	return storeV2FetchPack(store, reader, verbose, conn.ProgressWriter())
 }
 
-// closeJoin keeps the stream's close error.
-func closeJoin(c io.Closer, err *error) {
+// maxTrailingResponseBytes bounds how much closeJoin reads past the pack. Only
+// a flush or response-end packet should follow it.
+const maxTrailingResponseBytes = 64 << 10
+
+// closeJoin keeps the stream's close error. On success it first drains what
+// follows the pack: closing with those bytes unwritten makes ssh or the
+// remote helper die on EPIPE, which would fail a fetch that stored every
+// object.
+func closeJoin(c io.ReadCloser, err *error) {
+	if *err == nil {
+		//nolint:errcheck // a read error here also surfaces from Close
+		_, _ = io.CopyN(io.Discard, c, maxTrailingResponseBytes)
+	}
 	if cerr := c.Close(); cerr != nil {
 		*err = errors.Join(*err, cerr)
 	}

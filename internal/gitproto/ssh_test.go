@@ -364,7 +364,12 @@ func TestSSHConnPostRPCStreamBodyHonorsContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
+	// The deadline can expire before the shim advertises (a new script's
+	// first exec is slow on macOS), and then PostRPCStreamBody reports it.
 	reader, err := conn.PostRPCStreamBody(ctx, "git-upload-pack", strings.NewReader("body"), false, "fetch")
+	if errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
 	if err != nil {
 		t.Fatalf("PostRPCStreamBody: %v", err)
 	}
@@ -373,6 +378,42 @@ func TestSSHConnPostRPCStreamBodyHonorsContext(t *testing.T) {
 	}
 	if err := reader.Close(); err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("reader.Close error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestSSHConnPostRPCStreamBodyAdvertisementHonorsContext(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "ssh-partial-advert.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '0009hel'\nsleep 5\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	conn := newSSHTestConn(t, "ssh://example.com/repo.git", script)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err := conn.PostRPCStreamBody(ctx, "git-upload-pack", strings.NewReader("body"), false, "fetch")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("PostRPCStreamBody error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestSSHRPCStreamCloseReportsContextOverCopyError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	copyErr := make(chan error, 1)
+	copyErr <- errors.New("write |1: broken pipe")
+	stream := &sshRPCStream{
+		ctx:     ctx,
+		stdout:  closeReaderFunc(func() error { return nil }),
+		wait:    func() error { return errors.New("signal: killed") },
+		copyErr: copyErr,
+		stderr:  &sshCommandError{},
+	}
+	if err := stream.Close(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close error = %v, want context canceled", err)
 	}
 }
 
