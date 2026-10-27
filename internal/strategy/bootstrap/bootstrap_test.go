@@ -1202,10 +1202,10 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, wants []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				graphFetches++
-				if ref.SourceRef != mainRef {
-					t.Errorf("unexpected commit-graph fetch for %s; subsumed branch should have been skipped", ref.SourceRef)
+				if len(wants) != 1 || wants[0] != mainHash {
+					t.Errorf("unexpected commit-graph fetch for %v; subsumed branch should have been skipped", wants)
 				}
 				store := memory.NewStorage()
 				writeLinearCommitChain(t, store, 3)
@@ -1267,7 +1267,7 @@ func TestExecuteBatchedSubsumedBranchSkipsPack(t *testing.T) {
 
 type fakeBootstrapSource struct {
 	fetchPack          func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-	fetchCommitParents func(context.Context, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error)
+	fetchCommitParents func(context.Context, gitproto.Conn, []plumbing.Hash, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error)
 }
 
 func (f fakeBootstrapSource) FetchPack(
@@ -1282,11 +1282,11 @@ func (f fakeBootstrapSource) FetchPack(
 func (f fakeBootstrapSource) FetchCommitParents(
 	ctx context.Context,
 	conn gitproto.Conn,
-	ref gitproto.DesiredRef,
+	wants []plumbing.Hash,
 	haves []plumbing.Hash,
 ) (map[plumbing.Hash][]plumbing.Hash, error) {
 	if f.fetchCommitParents != nil {
-		return f.fetchCommitParents(ctx, conn, ref, haves)
+		return f.fetchCommitParents(ctx, conn, wants, haves)
 	}
 	return map[plumbing.Hash][]plumbing.Hash{}, nil
 }
@@ -1544,7 +1544,7 @@ func TestExecuteBatchedClosesCheckpointPackOnPushError(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				store := memory.NewStorage()
 				writeLinearCommitChain(t, store, 1)
 				return parentsFromCommitChainStore(t, store), nil
@@ -1585,7 +1585,7 @@ func TestExecuteBatchedClosesCheckpointPackOnReadInterruption(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				store := memory.NewStorage()
 				writeLinearCommitChain(t, store, 1)
 				return parentsFromCommitChainStore(t, store), nil
@@ -1769,10 +1769,10 @@ func forkedCommitGraph(tb testing.TB, trunkLen int) (parents map[plumbing.Hash][
 }
 
 // reachableParents narrows a commit-parents map to the commits reachable from
-// tip.
-func reachableParents(parents map[plumbing.Hash][]plumbing.Hash, tip plumbing.Hash) map[plumbing.Hash][]plumbing.Hash {
+// tips.
+func reachableParents(parents map[plumbing.Hash][]plumbing.Hash, tips ...plumbing.Hash) map[plumbing.Hash][]plumbing.Hash {
 	out := map[plumbing.Hash][]plumbing.Hash{}
-	queue := []plumbing.Hash{tip}
+	queue := append([]plumbing.Hash(nil), tips...)
 	for len(queue) > 0 {
 		hash := queue[0]
 		queue = queue[1:]
@@ -1840,11 +1840,11 @@ func newBatchedHarness(t *testing.T, refused map[plumbing.ReferenceName]string, 
 	h.trunkTempRef = planner.BootstrapTempRef(h.trunkRef)
 	h.params = Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, ref gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
-				// Only the requested ref's ancestry, as a real commit-graph
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, wants []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+				// Only the requested refs' ancestry, as a real commit-graph
 				// fetch answers: handing back the whole graph would put the
 				// fork tip in trunk's stop set and plan it as subsumed.
-				return reachableParents(parents, ref.SourceHash), nil
+				return reachableParents(parents, wants...), nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
 				h.fetchHaves = append(h.fetchHaves, planner.CopyRefHashMap(haves))
@@ -2170,7 +2170,7 @@ func bottomOutParams(t *testing.T, budget, announced int64, push func(int, io.Re
 
 	return Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			// Fresh reader per attempt: a retry re-fetches.
@@ -2351,7 +2351,7 @@ func TestExecuteBatchedNoSafetyMarginAtAnnouncedLimit(t *testing.T) {
 
 	result, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2404,7 +2404,7 @@ func TestExecuteOneShotRejectionCapturesAnnouncedLimitForRelaxedRetry(t *testing
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2458,7 +2458,7 @@ func TestExecuteBatchedInLoopRejectionCapturesAnnouncedLimit(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2507,7 +2507,7 @@ func TestExecuteBatchedReportsBatchingWhenCheckpointPlanningFails(t *testing.T) 
 
 	result, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return nil, errors.New("commit graph fetch exploded")
 			},
 		},
@@ -2563,7 +2563,7 @@ func TestExecuteBatchedDivisibleCheckpointKeepsTheSmallBudget(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2618,7 +2618,7 @@ func TestExecuteBatchedEscalatesWhenBudgetEqualsAnnouncedLimit(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2662,7 +2662,7 @@ func TestExecuteBatchedObservedCutoffBlocksAnnouncedEscalation(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2725,7 +2725,7 @@ func TestExecuteBatchedIndivisibleSpanIsNotRePushedWhileLaterGapsSplit(t *testin
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2778,7 +2778,7 @@ func TestExecuteBatchedDeadlineDoesNotDisableEscalation(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2883,7 +2883,7 @@ func TestExecuteBatchedPreFlightDoesNotResplitAnIndivisibleSpan(t *testing.T) {
 	// The outcome is irrelevant here; the fetch count is the assertion.
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -2964,7 +2964,7 @@ func TestExecuteBatchedObservedCutoffBlocksConfiguredFallback(t *testing.T) {
 
 	_, err := Execute(context.Background(), Params{
 		SourceService: fakeBootstrapSource{
-			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ gitproto.DesiredRef, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+			fetchCommitParents: func(_ context.Context, _ gitproto.Conn, _ []plumbing.Hash, _ []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 				return parents, nil
 			},
 			fetchPack: func(_ context.Context, _ gitproto.Conn, _ map[plumbing.ReferenceName]gitproto.DesiredRef, _ map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {
@@ -3045,7 +3045,7 @@ func TestObservedCutoffBlocksFallbackRegardlessOfBudgetMovement(t *testing.T) {
 				TargetMaxPack: budget, FallbackMaxPackBytes: budget * 4,
 				DesiredRefs: desired, TargetRefs: map[plumbing.ReferenceName]plumbing.Hash{},
 				SourceService: fakeBootstrapSource{
-					fetchCommitParents: func(context.Context, gitproto.Conn, gitproto.DesiredRef, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+					fetchCommitParents: func(context.Context, gitproto.Conn, []plumbing.Hash, []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
 						return parents, nil
 					},
 					fetchPack: func(context.Context, gitproto.Conn, map[plumbing.ReferenceName]gitproto.DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error) {

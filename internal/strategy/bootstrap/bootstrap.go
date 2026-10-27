@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -32,7 +33,7 @@ type Params struct {
 	SourceConn    gitproto.Conn
 	SourceService interface {
 		FetchPack(ctx context.Context, conn gitproto.Conn, desired map[plumbing.ReferenceName]gitproto.DesiredRef, haves map[plumbing.ReferenceName]plumbing.Hash) (io.ReadCloser, error)
-		FetchCommitParents(ctx context.Context, conn gitproto.Conn, ref gitproto.DesiredRef, haves []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error)
+		FetchCommitParents(ctx context.Context, conn gitproto.Conn, wants []plumbing.Hash, haves []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error)
 		SupportsBootstrapBatch() bool
 	}
 	TargetPusher interface {
@@ -214,6 +215,9 @@ type plannedBatch struct {
 	// fetch, the temp ref, and the pack push — emitting only a single ref
 	// create command.
 	subsumed bool
+	// group, when non-empty, makes this entry a shared pack for several small
+	// branches instead of one branch's checkpoints. See pushBranchGroups.
+	group []plannedBatch
 }
 
 // Execute runs the bootstrap strategy (one-shot or batched).
@@ -401,11 +405,17 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	}
 	tailDesired := convert.DesiredRefsForPlans(p.DesiredRefs, tailPlans)
 
-	var batches []plannedBatch
+	var (
+		batches []plannedBatch
+		// deferred holds the branches after the trunk. They are planned only
+		// once the trunk's batches have run, so a run that times out still
+		// leaves the trunk on the target (ENT-3617).
+		deferred *deferredBranches
+	)
 	if len(planRefs) > 0 {
 		p.log("bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
 		var err error
-		batches, err = planBatches(ctx, p, planRefs)
+		batches, deferred, err = planBatches(ctx, p, planRefs)
 		if err != nil {
 			return result, err
 		}
@@ -451,7 +461,37 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 	// cutoff branch 1 demonstrated.
 	budgetFromObservation := false
 
-	for _, batch := range batches {
+	for i := 0; ; i++ {
+		if i == len(batches) && deferred != nil {
+			more, err := planAfterTrunk(ctx, p, *deferred, selfImposedBudget)
+			deferred = nil
+			if err != nil {
+				return result, err
+			}
+			batches = append(batches, more...)
+		}
+		if i >= len(batches) {
+			break
+		}
+		batch := batches[i]
+		if len(batch.group) > 0 {
+			next, err := pushBranchGroups(ctx, p, batch.group, groupPushState{
+				completedRefs:   completedRefs,
+				budget:          &selfImposedBudget,
+				fromObservation: &budgetFromObservation,
+				bytesPerObject:  &calibratedBytesPerObject,
+				announced:       &p.AnnouncedTargetLimit,
+				fetchLimit:      fetchLimit,
+			}, &result)
+			if err != nil {
+				return result, err
+			}
+			// A branch too big to share a pack runs next on its own
+			// checkpoints, where its chain can be subdivided, ahead of the
+			// groups still pending.
+			batches = slices.Insert(batches, i+1, next...)
+			continue
+		}
 		if batch.subsumed {
 			cmds := []gitproto.PushCommand{{
 				Name: batch.Plan.TargetRef,
@@ -1181,7 +1221,18 @@ func tailPhaseLabel(plans []planner.BranchPlan) string {
 
 // --- Checkpoint planning ---
 
-func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, error) {
+// deferredBranches is the work planBatches leaves for after the trunk: the
+// branches still to plan, and the trunk's history to plan them against.
+type deferredBranches struct {
+	refs   []planner.DesiredRef
+	haves  []plumbing.Hash
+	stopAt map[plumbing.Hash]struct{}
+}
+
+// planBatches plans the trunk alone and defers every other branch to
+// planAfterTrunk, which runs after the trunk is pushed. Without a trunk there
+// is no shared history to plan against, so each branch is planned in turn.
+func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, *deferredBranches, error) {
 	ordered, trunkIdx := orderTrunkFirst(desired, p.SourceHeadTarget)
 	switch {
 	case p.SourceHeadTarget == "":
@@ -1195,67 +1246,65 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 			"source_head_target", p.SourceHeadTarget.String(),
 			"trunk_target_ref", ordered[trunkIdx].TargetRef.String())
 	}
-	out := make([]plannedBatch, 0, len(ordered))
 
-	var (
-		trunkStopSet map[plumbing.Hash]struct{}
-		trunkHaves   []plumbing.Hash
-	)
-
-	for i, ref := range ordered {
-		// Branches whose tip is already reachable from trunk's ancestry need
-		// no pack transfer — trunk's batches already delivered every object.
-		// Emit a subsumed batch that the executor handles with a single ref
-		// create command.
-		if i != trunkIdx && trunkStopSet != nil {
-			if _, subsumed := trunkStopSet[ref.SourceHash]; subsumed {
-				p.log("bootstrap batch branch subsumed by trunk",
-					"branch", ref.TargetRef.String(),
-					"source_hash", planner.ShortHash(ref.SourceHash))
-				out = append(out, plannedBatch{
-					BootstrapBatch: planner.BootstrapBatch{
-						Plan: planner.BranchPlan{
-							Branch: ref.Label, SourceRef: ref.SourceRef,
-							TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
-							Kind: ref.Kind, Action: planner.ActionCreate,
-						},
-					},
-					subsumed: true,
-				})
-				continue
+	if trunkIdx < 0 {
+		out := make([]plannedBatch, 0, len(ordered))
+		for _, ref := range ordered {
+			checkpoints, chain, _, err := planCheckpointsFromChain(ctx, p, ref, nil, nil)
+			if err != nil {
+				return nil, nil, err
 			}
+			out = append(out, newPlannedBatch(p, ref, checkpoints, chain))
 		}
-		var (
-			haves  []plumbing.Hash
-			stopAt map[plumbing.Hash]struct{}
-		)
-		if i != trunkIdx && trunkStopSet != nil {
-			haves = trunkHaves
-			stopAt = trunkStopSet
-		}
-		checkpoints, chain, ancestors, err := planCheckpointsFromChain(ctx, p, ref, haves, stopAt)
-		if err != nil {
-			return nil, err
-		}
-		if i == trunkIdx && trunkIdx >= 0 {
-			trunkStopSet = ancestors
-			trunkHaves = []plumbing.Hash{ref.SourceHash}
-		}
-		out = append(out, plannedBatch{
-			BootstrapBatch: planner.BootstrapBatch{
-				Plan: planner.BranchPlan{
-					Branch: ref.Label, SourceRef: ref.SourceRef,
-					TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
-					Kind: ref.Kind, Action: planner.ActionCreate,
-				},
-				TempRef:     planner.BootstrapTempRef(ref.TargetRef),
-				ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
-				Checkpoints: checkpoints,
-			},
-			chain: chain,
-		})
+		return out, nil, nil
 	}
-	return out, nil
+
+	trunk := ordered[trunkIdx]
+	checkpoints, chain, ancestors, err := planCheckpointsFromChain(ctx, p, trunk, nil, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	batches := []plannedBatch{newPlannedBatch(p, trunk, checkpoints, chain)}
+	if len(ordered) == 1 {
+		return batches, nil, nil
+	}
+	return batches, &deferredBranches{
+		refs:   ordered[trunkIdx+1:],
+		haves:  []plumbing.Hash{trunk.SourceHash},
+		stopAt: ancestors,
+	}, nil
+}
+
+// newPlannedBatch builds the checkpointed batch that creates ref.
+func newPlannedBatch(p Params, ref planner.DesiredRef, checkpoints, chain []plumbing.Hash) plannedBatch {
+	return plannedBatch{
+		BootstrapBatch: planner.BootstrapBatch{
+			Plan: planner.BranchPlan{
+				Branch: ref.Label, SourceRef: ref.SourceRef,
+				TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
+				Kind: ref.Kind, Action: planner.ActionCreate,
+			},
+			TempRef:     planner.BootstrapTempRef(ref.TargetRef),
+			ResumeHash:  p.TargetRefs[planner.BootstrapTempRef(ref.TargetRef)],
+			Checkpoints: checkpoints,
+		},
+		chain: chain,
+	}
+}
+
+// subsumedBatch builds the batch for a branch whose tip the trunk already
+// delivered: a single ref create, with no pack.
+func subsumedBatch(ref planner.DesiredRef) plannedBatch {
+	return plannedBatch{
+		BootstrapBatch: planner.BootstrapBatch{
+			Plan: planner.BranchPlan{
+				Branch: ref.Label, SourceRef: ref.SourceRef,
+				TargetRef: ref.TargetRef, SourceHash: ref.SourceHash,
+				Kind: ref.Kind, Action: planner.ActionCreate,
+			},
+		},
+		subsumed: true,
+	}
 }
 
 // orderTrunkFirst returns desired reordered so the branch matching
@@ -1315,27 +1364,13 @@ func planCheckpointsFromChain(
 	// cache). See internal/gitproto.ExtractCommitParents. With trunk
 	// haves the source sends only divergent commits, so feature
 	// branches' planning is already small either way.
-	gpRef := gitproto.DesiredRef{SourceRef: ref.SourceRef, TargetRef: ref.TargetRef, SourceHash: ref.SourceHash}
-	parentsMap, err := p.SourceService.FetchCommitParents(ctx, p.SourceConn, gpRef, trunkHaves)
+	parentsMap, err := p.SourceService.FetchCommitParents(ctx, p.SourceConn, []plumbing.Hash{ref.SourceHash}, trunkHaves)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("fetch bootstrap commit parents for %s: %w", ref.TargetRef, err)
 	}
-	var chain []plumbing.Hash
-	switch p.Strategy {
-	case "", "first-parent":
-		c, walkErr := planner.FirstParentChainFromParents(parentsMap, ref.SourceHash, trunkStopAt)
-		if walkErr != nil {
-			return nil, nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, walkErr)
-		}
-		chain = c
-	case "topo":
-		c, walkErr := planner.TopoChainFromParents(parentsMap, ref.SourceHash, trunkStopAt)
-		if walkErr != nil {
-			return nil, nil, nil, fmt.Errorf("walk topo chain for %s: %w", ref.TargetRef, walkErr)
-		}
-		chain = c
-	default:
-		return nil, nil, nil, fmt.Errorf("unsupported bootstrap strategy %q (want \"first-parent\" or \"topo\")", p.Strategy)
+	checkpoints, chain, err := checkpointsFromParents(p, ref, parentsMap, trunkStopAt)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	// Every commit the source sent is now an ancestor we can use as a
 	// stop set for subsequent branches. Map keys give us the set
@@ -1343,6 +1378,35 @@ func planCheckpointsFromChain(
 	ancestors := make(map[plumbing.Hash]struct{}, len(parentsMap))
 	for h := range parentsMap {
 		ancestors[h] = struct{}{}
+	}
+	return checkpoints, chain, ancestors, nil
+}
+
+// checkpointsFromParents derives a branch's chain and checkpoints from a
+// commit-parents map that is already fetched, so several branches can share
+// one commit-graph fetch. The walk stops at stopAt.
+func checkpointsFromParents(
+	p Params,
+	ref planner.DesiredRef,
+	parentsMap map[plumbing.Hash][]plumbing.Hash,
+	stopAt map[plumbing.Hash]struct{},
+) ([]plumbing.Hash, []plumbing.Hash, error) {
+	var chain []plumbing.Hash
+	switch p.Strategy {
+	case "", "first-parent":
+		c, walkErr := planner.FirstParentChainFromParents(parentsMap, ref.SourceHash, stopAt)
+		if walkErr != nil {
+			return nil, nil, fmt.Errorf("walk first-parent chain for %s: %w", ref.TargetRef, walkErr)
+		}
+		chain = c
+	case "topo":
+		c, walkErr := planner.TopoChainFromParents(parentsMap, ref.SourceHash, stopAt)
+		if walkErr != nil {
+			return nil, nil, fmt.Errorf("walk topo chain for %s: %w", ref.TargetRef, walkErr)
+		}
+		chain = c
+	default:
+		return nil, nil, fmt.Errorf("unsupported bootstrap strategy %q (want \"first-parent\" or \"topo\")", p.Strategy)
 	}
 
 	if len(chain) == 0 {
@@ -1360,7 +1424,7 @@ func planCheckpointsFromChain(
 		"chain_len", len(chain),
 		"estimated_batches", len(checkpoints))
 
-	return checkpoints, chain, ancestors, nil
+	return checkpoints, chain, nil
 }
 
 func estimateBatchCount(chainLen int64, batchMaxPack int64) int {

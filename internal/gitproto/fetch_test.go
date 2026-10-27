@@ -392,7 +392,7 @@ func TestFetchPackUnsupportedProtocol(t *testing.T) {
 
 func TestFetchCommitParentsRequiresV2(t *testing.T) {
 	rs := &RefService{Protocol: "v1"}
-	parents, err := rs.FetchCommitParents(t.Context(), nil, DesiredRef{}, nil)
+	parents, err := rs.FetchCommitParents(t.Context(), nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for non-v2 protocol")
 	}
@@ -408,7 +408,7 @@ func TestFetchCommitParentsRequiresFilter(t *testing.T) {
 		},
 	}
 	rs := &RefService{Protocol: "v2", V2Caps: caps}
-	parents, err := rs.FetchCommitParents(t.Context(), nil, DesiredRef{}, nil)
+	parents, err := rs.FetchCommitParents(t.Context(), nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when filter not supported")
 	}
