@@ -88,9 +88,143 @@ func TestSSHConnRequestInfoRefsHonorsUserConfigAndProtocolV2(t *testing.T) {
 	}
 
 	logLine := env.logLines(t)[0]
-	if got, want := logLine, "example.com\tGIT_PROTOCOL='version=2' git-upload-pack '/repo.git'"; got != want {
+	if got, want := logLine, "example.com\tgit-upload-pack '/repo.git'"; got != want {
 		t.Fatalf("ssh invocation = %q, want %q", got, want)
 	}
+	if got, want := env.optLines(t)[0], "BatchMode=yes SendEnv=GIT_PROTOCOL\tversion=2"; got != want {
+		t.Fatalf("ssh options and GIT_PROTOCOL = %q, want %q", got, want)
+	}
+}
+
+// v2 rides the ssh env; v1 doesn't.
+func TestSSHRPCProtocolEnv(t *testing.T) {
+	t.Setenv("GIT_PROTOCOL", "version=2")
+	env := newSSHShimEnv(t)
+	conn := newSSHTestConn(t, "ssh://example.com/repo.git", env.script)
+
+	for _, v2 := range []bool{true, false} {
+		reader, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", strings.NewReader("body"), v2, "fetch")
+		if err != nil {
+			t.Fatalf("PostRPCStreamBody(v2=%v): %v", v2, err)
+		}
+		if _, err := io.ReadAll(reader); err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close response: %v", err)
+		}
+	}
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs v1: %v", err)
+	}
+
+	want := []string{
+		"BatchMode=yes SendEnv=GIT_PROTOCOL\tversion=2",
+		"BatchMode=yes\t",
+		"BatchMode=yes\t",
+	}
+	if got := env.optLines(t); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("ssh options and GIT_PROTOCOL = %q, want %q", got, want)
+	}
+	for i, line := range env.logLines(t) {
+		if got, want := line, "example.com\tgit-upload-pack '/repo.git'"; got != want {
+			t.Fatalf("ssh invocation %d = %q, want %q", i+1, got, want)
+		}
+	}
+}
+
+// Auto mode negotiates v2 or falls back.
+func TestSSHAutoNegotiation(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	repo := newSSHTestRepo(t)
+	for _, tc := range []struct {
+		name   string
+		accept bool
+		want   string
+	}{
+		{"server accepts GIT_PROTOCOL", true, "v2"},
+		{"server ignores GIT_PROTOCOL", false, "v1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := newSSHLocalServer(t, tc.accept)
+			conn := newSSHTestConn(t, "ssh://example.com"+repo, script)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			refs, svc, err := ListSourceRefs(ctx, conn, "auto", []string{"refs/heads/"})
+			if err != nil {
+				t.Fatalf("ListSourceRefs: %v", err)
+			}
+			if svc.Protocol != tc.want {
+				t.Fatalf("negotiated protocol = %q, want %q", svc.Protocol, tc.want)
+			}
+			if svc.HeadTarget != "refs/heads/main" {
+				t.Fatalf("HEAD target = %q, want refs/heads/main", svc.HeadTarget)
+			}
+			found := false
+			for _, ref := range refs {
+				found = found || ref.Name() == "refs/heads/main"
+			}
+			if !found {
+				t.Fatalf("refs/heads/main missing from %v", refs)
+			}
+		})
+	}
+}
+
+// newSSHTestRepo makes a one-commit repository.
+func newSSHTestRepo(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", dir},
+		{"-C", dir, "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (output %q)", args, err, out)
+		}
+	}
+	return dir
+}
+
+// newSSHLocalServer fakes ssh and sshd.
+func newSSHLocalServer(t *testing.T, accept bool) string {
+	t.Helper()
+	// Like sshd: forward only if accepted.
+	forward := ""
+	if !accept {
+		forward = "sendenv=\"\""
+	}
+	script := filepath.Join(t.TempDir(), "ssh-local.sh")
+	content := strings.Join([]string{
+		"#!/bin/sh",
+		"sendenv=\"\"",
+		"while [ \"$1\" = \"-o\" ]; do",
+		"  if [ \"$2\" = \"SendEnv=GIT_PROTOCOL\" ]; then sendenv=1; fi",
+		"  shift 2",
+		"done",
+		"if [ \"$1\" = \"--\" ]; then shift; fi",
+		forward,
+		"if [ -z \"$sendenv\" ]; then unset GIT_PROTOCOL; fi",
+		// Reject env-prefixed commands, like GitHub.
+		"case \"$2\" in git-upload-pack\\ *) ;; *) echo \"Invalid command: $2\" >&2; exit 1;; esac",
+		"PATH=\"$(git --exec-path):$PATH\"",
+		"exec /bin/sh -c \"$2\"",
+	}, "\n")
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatalf("write ssh shim: %v", err)
+	}
+	return script
 }
 
 func TestSSHConnRequestInfoRefsSupportsSCPStyleAndPort(t *testing.T) {
@@ -178,7 +312,7 @@ func TestSSHRemoteCommandQuotesShellMetacharacters(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseURL(%q): %v", tc.raw, err)
 			}
-			got, err := sshRemoteCommand(ep, "git-upload-pack", "")
+			got, err := sshRemoteCommand(ep, "git-upload-pack")
 			if err != nil {
 				t.Fatalf("sshRemoteCommand: %v", err)
 			}
@@ -209,7 +343,7 @@ func TestSSHRemoteCommandSurvivesShellInterpretation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseURL(%q): %v", raw, err)
 			}
-			remoteCommand, err := sshRemoteCommand(ep, "git-upload-pack", "")
+			remoteCommand, err := sshRemoteCommand(ep, "git-upload-pack")
 			if err != nil {
 				t.Fatalf("sshRemoteCommand: %v", err)
 			}
@@ -363,6 +497,7 @@ func TestRequestInfoRefsCleansUpWhenStdinCloseFails(t *testing.T) {
 type sshShimEnv struct {
 	script     string
 	logFile    string
+	optsFile   string
 	bodyPrefix string
 }
 
@@ -380,6 +515,7 @@ func newSSHShimEnv(t *testing.T) sshShimEnv {
 	t.Helper()
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "ssh.log")
+	optsFile := filepath.Join(dir, "opts.log")
 	countFile := filepath.Join(dir, "count")
 	bodyPrefix := filepath.Join(dir, "body-")
 	script := filepath.Join(dir, "ssh-shim.sh")
@@ -392,9 +528,12 @@ func newSSHShimEnv(t *testing.T) sshShimEnv {
 		"dest=\"\"",
 		"remote=\"\"",
 		"port=\"\"",
-		"if [ \"$1\" = \"-o\" ]; then",
+		"opts=\"\"",
+		"while [ \"$1\" = \"-o\" ]; do",
+		"  opts=\"$opts $2\"",
 		"  shift 2",
-		"fi",
+		"done",
+		"printf '%s\\t%s\\n' \"${opts# }\" \"${GIT_PROTOCOL-}\" >>" + shellQuote(optsFile),
 		"if [ \"$1\" = \"-p\" ]; then",
 		"  port=\"$2\"",
 		"  shift 2",
@@ -415,7 +554,7 @@ func newSSHShimEnv(t *testing.T) sshShimEnv {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatalf("write ssh shim: %v", err)
 	}
-	return sshShimEnv{script: script, logFile: logFile, bodyPrefix: bodyPrefix}
+	return sshShimEnv{script: script, logFile: logFile, optsFile: optsFile, bodyPrefix: bodyPrefix}
 }
 
 func newSSHTestConn(t *testing.T, rawURL, script string) *SSHConn {
@@ -437,11 +576,22 @@ func newSSHTestConn(t *testing.T, rawURL, script string) *SSHConn {
 
 func (e sshShimEnv) logLines(t *testing.T) []string {
 	t.Helper()
-	data, err := os.ReadFile(e.logFile)
+	return readLogLines(t, e.logFile)
+}
+
+// optLines lists "-o" values and GIT_PROTOCOL.
+func (e sshShimEnv) optLines(t *testing.T) []string {
+	t.Helper()
+	return readLogLines(t, e.optsFile)
+}
+
+func readLogLines(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read log: %v", err)
 	}
-	trimmed := strings.TrimSpace(string(data))
+	trimmed := strings.TrimRight(string(data), "\n")
 	if trimmed == "" {
 		return nil
 	}

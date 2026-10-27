@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **SSH sources now negotiate protocol v2.** git-sync sent `GIT_PROTOCOL` as a prefix of the remote command, which hosts without a login shell reject (GitHub answers "Invalid command"), so `auto` fell back to v1 on every SSH sync and re-read the full ref advertisement on each RPC. It now sets `GIT_PROTOCOL` in the ssh environment and passes `-o SendEnv=GIT_PROTOCOL`, as git does. A server that does not accept the variable answers v0/v1 and `auto` falls back as before; `--protocol v2` against such a server fails with "source did not negotiate protocol v2".
+
 ## [0.10.0] - 2026-10-21
 
 ### Security
