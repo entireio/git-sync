@@ -296,11 +296,14 @@ func TestSSHConnPostRPCStreamBodyWaitsForAdvertisement(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "strict-ssh.sh")
 	bodyFile := filepath.Join(dir, "body")
+	// The marker appears just before the closing flush-pkt, so a body read
+	// that finds it missing came before the advertisement was read.
+	marker := filepath.Join(dir, "advertised")
 	content := strings.Join([]string{
-		"#!/usr/bin/env bash",
+		"#!/bin/sh",
 		"printf '0009hello'",
 		"sleep 0.2",
-		"if read -t 0; then exit 0; fi",
+		": >" + shellQuote(marker),
 		"printf '0000'",
 		"cat >" + shellQuote(bodyFile),
 		"printf 'response'",
@@ -310,7 +313,8 @@ func TestSSHConnPostRPCStreamBodyWaitsForAdvertisement(t *testing.T) {
 	}
 	conn := newSSHTestConn(t, "ssh://example.com/repo.git", script)
 
-	reader, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", strings.NewReader("request"), false, "fetch")
+	body := &markerCheckedReader{t: t, marker: marker, Reader: strings.NewReader("request")}
+	reader, err := conn.PostRPCStreamBody(t.Context(), "git-upload-pack", body, false, "fetch")
 	if err != nil {
 		t.Fatalf("PostRPCStreamBody: %v", err)
 	}
@@ -324,13 +328,32 @@ func TestSSHConnPostRPCStreamBodyWaitsForAdvertisement(t *testing.T) {
 	if string(data) != "response" {
 		t.Fatalf("response = %q, want %q", data, "response")
 	}
-	body, err := os.ReadFile(bodyFile)
+	sent, err := os.ReadFile(bodyFile)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	if string(body) != "request" {
-		t.Fatalf("request body = %q, want %q", body, "request")
+	if string(sent) != "request" {
+		t.Fatalf("request body = %q, want %q", sent, "request")
 	}
+}
+
+// markerCheckedReader fails the test if it is read before marker exists.
+type markerCheckedReader struct {
+	io.Reader
+
+	t       *testing.T
+	marker  string
+	checked bool
+}
+
+func (r *markerCheckedReader) Read(p []byte) (int, error) {
+	if !r.checked {
+		r.checked = true
+		if _, err := os.Stat(r.marker); err != nil {
+			r.t.Errorf("request body read before the advertisement finished: %v", err)
+		}
+	}
+	return r.Reader.Read(p)
 }
 
 func TestSSHConnRequestInfoRefsHonorsContext(t *testing.T) {
