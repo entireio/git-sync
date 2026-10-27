@@ -32,9 +32,9 @@ func TestRun_IntegrationSyncOverSSHShimV2(t *testing.T) {
 
 	shimBody := strings.Join([]string{
 		"#!/bin/sh",
-		"if [ \"$1\" = \"-o\" ]; then",
+		"while [ \"$1\" = \"-o\" ]; do",
 		"  shift 2",
-		"fi",
+		"done",
 		"if [ \"$1\" = \"-p\" ]; then",
 		"  shift 2",
 		"fi",
@@ -43,7 +43,7 @@ func TestRun_IntegrationSyncOverSSHShimV2(t *testing.T) {
 		"fi",
 		"dest=\"$1\"",
 		"remote=\"$2\"",
-		"printf '%s\\t%s\\n' \"$dest\" \"$remote\" >>" + shSingleQuote(logFile),
+		"printf '%s\\t%s\\t%s\\n' \"$dest\" \"$remote\" \"${GIT_PROTOCOL-}\" >>" + shSingleQuote(logFile),
 		"exec sh -c \"$remote\"",
 	}, "\n")
 	if err := os.WriteFile(shim, []byte(shimBody), 0o755); err != nil {
@@ -89,7 +89,7 @@ func TestRun_IntegrationSyncOverSSHShimV2(t *testing.T) {
 		case strings.Contains(line, "git-receive-pack"):
 			receivePackCalls++
 		}
-		if strings.Contains(line, "GIT_PROTOCOL='version=2' git-upload-pack") {
+		if strings.Contains(line, "git-upload-pack") && strings.HasSuffix(line, "\tversion=2") {
 			v2Calls++
 		}
 	}
