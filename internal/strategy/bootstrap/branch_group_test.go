@@ -59,6 +59,8 @@ func packWithObjects(count uint32) io.ReadCloser {
 // groupHarness records what a fan-out bootstrap fetched and pushed, in order.
 type groupHarness struct {
 	params   Params
+	parents  map[plumbing.Hash][]plumbing.Hash
+	trunkTip plumbing.Hash
 	trunkRef plumbing.ReferenceName
 	forkRefs []plumbing.ReferenceName
 	events   []string
@@ -74,6 +76,8 @@ func newGroupHarness(t *testing.T, forks int) *groupHarness {
 	t.Helper()
 	parents, trunkTip, forkTips := fanOutCommitGraph(t, 4, forks)
 	h := &groupHarness{
+		parents:    parents,
+		trunkTip:   trunkTip,
 		trunkRef:   plumbing.NewBranchReferenceName("main"),
 		objectsFor: func(map[plumbing.ReferenceName]gitproto.DesiredRef) uint32 { return 1 },
 	}
@@ -292,5 +296,125 @@ func TestExecuteBatchedBranchWithResumeMarkerRunsStandalone(t *testing.T) {
 	}
 	if !h.pushedCreate(h.forkRefs[1]) {
 		t.Errorf("%s was not created: %v", h.forkRefs[1], h.packPushes)
+	}
+}
+
+// deferredForks is what planBatches would leave for after the trunk: every
+// fork, planned against the trunk's history.
+func (h *groupHarness) deferredForks() deferredBranches {
+	stopAt := map[plumbing.Hash]struct{}{}
+	for hash := range reachableParents(h.parents, h.trunkTip) {
+		stopAt[hash] = struct{}{}
+	}
+	refs := make([]planner.DesiredRef, len(h.forkRefs))
+	for i, ref := range h.forkRefs {
+		refs[i] = h.params.DesiredRefs[ref]
+	}
+	return deferredBranches{refs: refs, haves: []plumbing.Hash{h.trunkTip}, stopAt: stopAt}
+}
+
+// Groups are sized with the run's current budget. When the trunk's pushes have
+// already lowered it below TargetMaxPack, groups must shrink with it.
+func TestPlanAfterTrunkSizesGroupsWithCurrentBudget(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 4)
+
+	countGroups := func(budget int64) int {
+		batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), budget)
+		if err != nil {
+			t.Fatalf("planAfterTrunk: %v", err)
+		}
+		groups := 0
+		for _, batch := range batches {
+			if len(batch.group) > 0 {
+				groups++
+			}
+		}
+		return groups
+	}
+	if got := countGroups(h.params.TargetMaxPack); got != 1 {
+		t.Errorf("groups at TargetMaxPack = %d, want 1", got)
+	}
+	// Two one-commit forks per group.
+	if got := countGroups(2 * estimatedBytesPerCommit); got != 2 {
+		t.Errorf("groups at a lowered budget = %d, want 2", got)
+	}
+}
+
+// A rejected group push teaches the run the target's limit, as a rejected
+// checkpoint push does, so later pushes start under it instead of
+// rediscovering it.
+func TestPushBranchGroupsLearnsTargetLimit(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 4)
+	const announced = 200_000
+	pushes := 0
+	pusher, ok := h.params.TargetPusher.(fakeBootstrapPusher)
+	if !ok {
+		t.Fatalf("harness pusher is %T", h.params.TargetPusher)
+	}
+	pusher.pushPack = func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+		_ = pack.Close()
+		pushes++
+		if pushes == 1 {
+			return fmt.Errorf("target receive-pack: http 413: body exceeded size limit %d", announced)
+		}
+		return nil
+	}
+	h.params.TargetPusher = pusher
+
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	if err != nil {
+		t.Fatalf("planAfterTrunk: %v", err)
+	}
+	if len(batches) != 1 || len(batches[0].group) != 4 {
+		t.Fatalf("expected one group of 4, got %+v", batches)
+	}
+	budget := h.params.TargetMaxPack
+	fromObservation := false
+	bytesPerObject := int64(estimatedBytesPerObject)
+	announcedLimit := int64(0)
+	standalone, err := pushBranchGroups(context.Background(), h.params, batches[0].group, groupPushState{
+		completedRefs:   map[plumbing.ReferenceName]plumbing.Hash{},
+		budget:          &budget,
+		fromObservation: &fromObservation,
+		bytesPerObject:  &bytesPerObject,
+		announced:       &announcedLimit,
+	}, &Result{})
+	if err != nil {
+		t.Fatalf("pushBranchGroups: %v", err)
+	}
+	if len(standalone) != 0 {
+		t.Errorf("standalone = %d branches, want 0", len(standalone))
+	}
+	if announcedLimit != announced {
+		t.Errorf("announced limit = %d, want %d", announcedLimit, announced)
+	}
+	if budget != announced {
+		t.Errorf("budget = %d, want the announced %d", budget, announced)
+	}
+	if pushes < 3 {
+		t.Errorf("pushes = %d, want the rejected group and then its parts", pushes)
+	}
+}
+
+func TestSplitGroup(t *testing.T) {
+	t.Parallel()
+	members := make([]plannedBatch, 5)
+	for _, tc := range []struct{ parts, want int }{{0, 2}, {2, 2}, {3, 3}, {9, 5}} {
+		got := splitGroup(members, tc.parts)
+		if len(got) != tc.want {
+			t.Errorf("splitGroup(5, %d) = %d parts, want %d", tc.parts, len(got), tc.want)
+		}
+		total := 0
+		for _, part := range got {
+			if len(part) == 0 {
+				t.Errorf("splitGroup(5, %d) produced an empty part", tc.parts)
+			}
+			total += len(part)
+		}
+		if total != len(members) {
+			t.Errorf("splitGroup(5, %d) covers %d members, want %d", tc.parts, total, len(members))
+		}
 	}
 }

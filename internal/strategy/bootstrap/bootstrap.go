@@ -463,7 +463,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 
 	for i := 0; ; i++ {
 		if i == len(batches) && deferred != nil {
-			more, err := planAfterTrunk(ctx, p, *deferred)
+			more, err := planAfterTrunk(ctx, p, *deferred, selfImposedBudget)
 			deferred = nil
 			if err != nil {
 				return result, err
@@ -476,7 +476,12 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		batch := batches[i]
 		if len(batch.group) > 0 {
 			standalone, err := pushBranchGroups(ctx, p, batch.group, groupPushState{
-				completedRefs: completedRefs, budget: selfImposedBudget, fetchLimit: fetchLimit,
+				completedRefs:   completedRefs,
+				budget:          &selfImposedBudget,
+				fromObservation: &budgetFromObservation,
+				bytesPerObject:  &calibratedBytesPerObject,
+				announced:       &p.AnnouncedTargetLimit,
+				fetchLimit:      fetchLimit,
 			}, &result)
 			if err != nil {
 				return result, err
