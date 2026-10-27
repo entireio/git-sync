@@ -178,7 +178,7 @@ func fetchToStoreV2(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
-) error {
+) (err error) {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
 	if len(wants) == 0 {
@@ -210,8 +210,15 @@ func fetchToStoreV2(
 	if err != nil {
 		return err
 	}
-	defer ioutil.CheckClose(reader, &err)
+	defer closeJoin(reader, &err)
 	return storeV2FetchPack(store, reader, verbose, conn.ProgressWriter())
+}
+
+// closeJoin keeps the stream's close error.
+func closeJoin(c io.Closer, err *error) {
+	if cerr := c.Close(); cerr != nil {
+		*err = errors.Join(*err, cerr)
+	}
 }
 
 func fetchPackV2(
@@ -472,7 +479,7 @@ func fetchToStoreV1(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
-) error {
+) (err error) {
 	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose)
 	if err != nil {
 		return err
@@ -481,7 +488,7 @@ func fetchToStoreV1(
 	if err != nil {
 		return fmt.Errorf("source upload-pack: %w", err)
 	}
-	defer ioutil.CheckClose(reader, &err)
+	defer closeJoin(reader, &err)
 
 	// Decode server response (ACK/NAK) then read pack with sideband demux.
 	buffered := bufio.NewReader(reader)
