@@ -1,0 +1,45 @@
+can you look at the changes that got merged in the last 12h, this was due to an incident with a large repo with a lot of refs being stuck on mirroring in the mirror-pipeline (~/Work/entire/devenv/mirror-pipeline) the thing I'M wondering is, I tested many refs before I also remember working on logic that the main branch should be synced first so refs are synced faster since then their commits are already there, but this was part of replicate and not bootstrap maybe!?
+
+---
+
+did we add integration tests for this to prevent a regression around this?
+
+---
+
+and the chunking parts are they in replicate or bootstrap?
+
+---
+
+yeah let's validate if this is a real gap, start with an integration test
+
+---
+
+yeah do 1
+
+---
+
+hmm but the tests sound related to what we do?
+
+---
+
+<task-notification>
+<task-id>b7x600mmx</task-id>
+<tool-use-id>toolu_01TX251GzqJjfg9yaai7RM6B</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph--herdr-worktrees-git-sync-worktree-brave-meadow-88a8/96cd20fb-09c1-476b-963c-3df41141a4e5/tasks/b7x600mmx.output</output-file>
+<status>completed</status>
+<summary>Background command "Check the test passes at an old commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b398ng1y0</task-id>
+<tool-use-id>toolu_01EPczbisj1qepPfQyRoDEND</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-soph--herdr-worktrees-git-sync-worktree-brave-meadow-88a8/96cd20fb-09c1-476b-963c-3df41141a4e5/tasks/b398ng1y0.output</output-file>
+<status>completed</status>
+<summary>Background command "See why the test fails at the April commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yes, do as suggested
