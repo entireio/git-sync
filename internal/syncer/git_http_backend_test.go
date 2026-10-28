@@ -461,8 +461,11 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	if result.BatchCount < 2 {
 		t.Fatalf("expected multiple bootstrap batches, got %+v", result)
 	}
-	if result.PlannedBatchCount != result.BatchCount {
-		t.Fatalf("expected fresh batched bootstrap to complete all planned batches, got %+v", result)
+	// The plan sizes checkpoints from an estimate per commit, and these blobs
+	// are bigger than it, so pushes split further against the budget as they
+	// go. Every planned checkpoint still runs.
+	if result.BatchCount < result.PlannedBatchCount {
+		t.Fatalf("expected fresh batched bootstrap to run at least the planned batches, got %+v", result)
 	}
 	if len(result.TempRefs) != 1 || result.TempRefs[0] != planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)).String() {
 		t.Fatalf("unexpected temp refs in batched bootstrap result: %+v", result)
@@ -557,8 +560,19 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	if !result.Relay || result.RelayMode != relayModeBootstrapBatch || !result.Batching {
 		t.Fatalf("expected batched bootstrap resume relay result, got %+v", result)
 	}
-	if result.BatchCount >= len(checkpoints) {
-		t.Fatalf("expected resume to execute fewer batches than full run, got %+v checkpoints=%d", result, len(checkpoints))
+	// Packs split at push time against the budget, so the plan's checkpoint
+	// count is no measure of a full run. Run one to a second target instead.
+	fresh := filepath.Join(root, "fresh.git")
+	runGit(t, root, "init", "--bare", fresh)
+	runGit(t, fresh, "config", "http.receivepack", "true")
+	freshCfg := cfg
+	freshCfg.Target = Endpoint{URL: server.RepoURL("fresh.git")}
+	full, err := Bootstrap(context.Background(), freshCfg)
+	if err != nil {
+		t.Fatalf("full batched bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
+	}
+	if result.BatchCount >= full.BatchCount {
+		t.Fatalf("expected resume to execute fewer batches than a full run, got %d, full run %d", result.BatchCount, full.BatchCount)
 	}
 	if result.PlannedBatchCount != len(checkpoints) {
 		t.Fatalf("expected resume result to report planned checkpoint count, got %+v checkpoints=%d", result, len(checkpoints))
