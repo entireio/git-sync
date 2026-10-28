@@ -2615,6 +2615,81 @@ func TestRun_IntegrationReplicateBootstrapBatchesWhenConfigured(t *testing.T) {
 	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
 }
 
+// TestRun_IntegrationReplicateBatchesMissingRefsAfterTargetBodyLimit covers the
+// replicate run after a bootstrap cut short once the trunk landed: the trunk
+// is on the target, the other branches are not, and the pack that would create
+// them all is over the target's body limit. Replicate must create them in
+// batches instead of sending that pack again on every run.
+func TestRun_IntegrationReplicateBatchesMissingRefsAfterTargetBodyLimit(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	trunkRef := plumbing.NewBranchReferenceName(testBranch)
+	trunk, err := sourceRepo.Reference(trunkRef, true)
+	if err != nil {
+		t.Fatalf("resolve trunk: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{trunkRef}); err != nil {
+		t.Fatalf("copy trunk to target: %v", err)
+	}
+
+	// Stack one branch on each large commit, then move the trunk back so only
+	// the branches carry them.
+	const branches = 6
+	makeLargeCommits(t, sourceRepo, sourceFS, branches, 100_000)
+	tip, err := sourceRepo.Reference(trunkRef, true)
+	if err != nil {
+		t.Fatalf("resolve tip: %v", err)
+	}
+	hash := tip.Hash()
+	branchRefs := make([]plumbing.ReferenceName, 0, branches)
+	for i := branches - 1; i >= 0; i-- {
+		ref := plumbing.NewBranchReferenceName(fmt.Sprintf("feature-%d", i))
+		if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(ref, hash)); err != nil {
+			t.Fatalf("set %s: %v", ref, err)
+		}
+		branchRefs = append(branchRefs, ref)
+		commit, err := sourceRepo.CommitObject(hash)
+		if err != nil {
+			t.Fatalf("read commit %s: %v", hash, err)
+		}
+		hash = commit.ParentHashes[0]
+	}
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(trunkRef, trunk.Hash())); err != nil {
+		t.Fatalf("reset trunk: %v", err)
+	}
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackBodyLimit = 300_000
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		Mode:         modeReplicate,
+		Prune:        true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("replicate after target body limit failed: %v", err)
+	}
+	if result.RelayMode != relayModeBootstrapBatch || result.RelayReason != planner.ReasonReplicatePackRejected || !result.Batching {
+		t.Fatalf("expected batched creates after the rejected replicate pack, got %+v", result)
+	}
+	if result.Pushed != branches {
+		t.Fatalf("Pushed = %d, want %d", result.Pushed, branches)
+	}
+	for _, ref := range append(branchRefs, trunkRef) {
+		assertHeadsMatch(t, sourceRepo, targetRepo, ref.Short())
+	}
+}
+
 // refCreateDenier is a receive-pack hook that refuses to create one ref while
 // applying every other command in the same request for real.
 //
@@ -4675,7 +4750,7 @@ func signature() object.Signature {
 	}
 }
 
-func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) { //nolint:unparam // kept as param for test readability
+func assertHeadsMatch(t *testing.T, sourceRepo, targetRepo *git.Repository, branch string) {
 	syncertest.AssertBranchHeadsMatch(t, sourceRepo, targetRepo, branch)
 }
 

@@ -577,3 +577,120 @@ func newTestGroupState(budget int64) groupPushState {
 		announced:       &announced,
 	}
 }
+
+// A replicate run whose pack the target refused hands bootstrap only the
+// missing refs, with the trunk already on the target. Every branch is planned
+// in one commit-graph fetch against the target's refs, and a branch whose
+// history the target already holds is created without a pack.
+func TestExecuteBatchedPlansAgainstRefsAlreadyOnTarget(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 3)
+	merged := plumbing.NewBranchReferenceName("merged")
+	mergedTip := h.parents[h.trunkTip][0]
+	delete(h.params.DesiredRefs, h.trunkRef)
+	h.params.DesiredRefs[merged] = planner.DesiredRef{SourceRef: merged, TargetRef: merged, SourceHash: mergedTip, Kind: planner.RefKindBranch, Label: "merged"}
+	h.params.TargetRefs = map[plumbing.ReferenceName]plumbing.Hash{h.trunkRef: h.trunkTip}
+
+	var graphHaves [][]plumbing.Hash
+	source, ok := h.params.SourceService.(fakeBootstrapSource)
+	if !ok {
+		t.Fatalf("unexpected source service %T", h.params.SourceService)
+	}
+	source.fetchCommitParents = func(_ context.Context, _ gitproto.Conn, wants, haves []plumbing.Hash) (map[plumbing.Hash][]plumbing.Hash, error) {
+		h.events = append(h.events, fmt.Sprintf("graph:%d", len(wants)))
+		graphHaves = append(graphHaves, slices.Clone(haves))
+		// As a source answers: nothing reachable from a have.
+		onTarget := reachableParents(h.parents, haves...)
+		out := map[plumbing.Hash][]plumbing.Hash{}
+		for hash, ps := range reachableParents(h.parents, wants...) {
+			if _, have := onTarget[hash]; !have {
+				out[hash] = ps
+			}
+		}
+		return out, nil
+	}
+	h.params.SourceService = source
+	var refCreates []gitproto.PushCommand
+	pusher, ok := h.params.TargetPusher.(fakeBootstrapPusher)
+	if !ok {
+		t.Fatalf("unexpected pusher %T", h.params.TargetPusher)
+	}
+	pusher.pushCommands = func(_ context.Context, cmds []gitproto.PushCommand) error {
+		refCreates = append(refCreates, cmds...)
+		return nil
+	}
+	h.params.TargetPusher = pusher
+
+	result, err := Execute(context.Background(), h.params, planner.ReasonReplicatePackRejected)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if want := []string{"graph:4", "push:3"}; !slices.Equal(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+	if len(graphHaves) != 1 || !slices.Equal(graphHaves[0], []plumbing.Hash{h.trunkTip}) {
+		t.Fatalf("commit-graph haves = %v, want the trunk on the target", graphHaves)
+	}
+	for _, ref := range h.forkRefs {
+		if !h.pushedCreate(ref) {
+			t.Errorf("%s was not created by the group push: %v", ref, h.packPushes)
+		}
+	}
+	if len(refCreates) != 1 || refCreates[0].Name != merged || refCreates[0].New != mergedTip {
+		t.Errorf("ref-only creates = %v, want %s at %s", refCreates, merged, mergedTip)
+	}
+	if result.Pushed != 4 {
+		t.Errorf("Pushed = %d, want 4", result.Pushed)
+	}
+}
+
+// A refused single-pack push handed in by the caller starts Execute in batched
+// mode, so the pack the target already refused is not sent again.
+func TestExecuteRejectedPushStartsBatched(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 2)
+	h.params.TargetMaxPack = 0
+	h.params.RejectedPush = errors.New("http 413: request body too large")
+
+	if _, err := Execute(context.Background(), h.params, planner.ReasonReplicatePackRejected); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// One-shot would be a single push of all three refs.
+	if want := []string{"graph:1", "push:2", "graph:2", "push:2"}; !slices.Equal(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+}
+
+// A refused push that batching cannot fix is the caller's error, unchanged.
+func TestExecuteRejectedPushNotBatchable(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 2)
+	h.params.TargetMaxPack = 0
+	refused := errors.New("http 403: forbidden")
+	h.params.RejectedPush = refused
+
+	if _, err := Execute(context.Background(), h.params, planner.ReasonReplicatePackRejected); !errors.Is(err, refused) {
+		t.Fatalf("Execute error = %v, want %v", err, refused)
+	}
+	if len(h.events) != 0 {
+		t.Fatalf("events = %v, want no fetch or push", h.events)
+	}
+}
+
+func TestTargetHavesSkipsResumeMarkers(t *testing.T) {
+	t.Parallel()
+	main := plumbing.NewBranchReferenceName("main")
+	feature := plumbing.NewBranchReferenceName("feature")
+	a := plumbing.NewHash("1111111111111111111111111111111111111111")
+	b := plumbing.NewHash("2222222222222222222222222222222222222222")
+	got := targetHaves(map[plumbing.ReferenceName]plumbing.Hash{
+		main:                                    b,
+		plumbing.NewTagReferenceName("v1"):      a,
+		plumbing.NewBranchReferenceName("same"): b,
+		planner.BootstrapTempRef(feature):       plumbing.NewHash("3333333333333333333333333333333333333333"),
+		plumbing.NewBranchReferenceName("gone"): plumbing.ZeroHash,
+	})
+	if want := []plumbing.Hash{a, b}; !slices.Equal(got, want) {
+		t.Fatalf("targetHaves = %v, want %v", got, want)
+	}
+}

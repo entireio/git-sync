@@ -67,6 +67,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		groupBytes int64
 		groups     int
 		standalone int
+		onTarget   int
 	)
 	flush := func() {
 		if len(group) == 0 {
@@ -77,6 +78,16 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		group, groupBytes = nil, 0
 	}
 	for _, ref := range divergent {
+		// The source sends no commit reachable from a have. A tip it left out
+		// is already on the target, with every object it needs.
+		if _, sent := parents[ref.SourceHash]; !sent && len(d.haves) > 0 {
+			p.log("bootstrap batch branch already reachable on target",
+				"branch", ref.TargetRef.String(),
+				"source_hash", planner.ShortHash(ref.SourceHash))
+			out = append(out, subsumedBatch(ref))
+			onTarget++
+			continue
+		}
 		checkpoints, chain, err := checkpointsFromParents(p, ref, parents, d.stopAt)
 		if err != nil {
 			return nil, err
@@ -97,6 +108,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 	flush()
 	p.log("bootstrap batch planned remaining branches",
 		"subsumed", len(d.refs)-len(divergent),
+		"already_on_target", onTarget,
 		"grouped_packs", groups,
 		"standalone_branches", standalone)
 	return out, nil
