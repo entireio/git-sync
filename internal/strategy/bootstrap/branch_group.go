@@ -61,6 +61,10 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 	if err != nil {
 		return nil, fmt.Errorf("fetch bootstrap commit parents for %d remaining branches: %w", len(divergent), err)
 	}
+	stopAt := d.stopAt
+	if stopAt == nil && len(d.haves) > 0 {
+		stopAt = boundaryCommits(parents)
+	}
 
 	var (
 		group      []plannedBatch
@@ -88,7 +92,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 			onTarget++
 			continue
 		}
-		checkpoints, chain, err := checkpointsFromParents(p, ref, parents, d.stopAt)
+		checkpoints, chain, err := checkpointsFromParents(p, ref, parents, stopAt)
 		if err != nil {
 			return nil, err
 		}
@@ -112,6 +116,22 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		"grouped_packs", groups,
 		"standalone_branches", standalone)
 	return out, nil
+}
+
+// boundaryCommits returns the parents a commit-graph fetch named but did not
+// send. Sent with haves, the fetch leaves out every commit reachable from
+// them, so these are where the target's history begins. The topological walk
+// needs them as a stop set: it fails on a parent it cannot find.
+func boundaryCommits(parents map[plumbing.Hash][]plumbing.Hash) map[plumbing.Hash]struct{} {
+	boundary := make(map[plumbing.Hash]struct{})
+	for _, ps := range parents {
+		for _, parent := range ps {
+			if _, sent := parents[parent]; !sent {
+				boundary[parent] = struct{}{}
+			}
+		}
+	}
+	return boundary
 }
 
 // groupPushState is the executeBatched state a group push reads and updates.

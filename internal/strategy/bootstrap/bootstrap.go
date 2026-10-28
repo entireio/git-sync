@@ -1245,7 +1245,8 @@ func tailPhaseLabel(plans []planner.BranchPlan) string {
 // deferredBranches is the work planBatches leaves for after the trunk: the
 // branches still to plan, and the history to plan them against. That history
 // is the trunk's, or the refs already on the target when the trunk is one of
-// them; stopAt is nil in the second case, and haves alone mark the boundary.
+// them. stopAt is nil in the second case: planAfterTrunk takes it from the
+// commit-graph fetch, which stops where the haves begin.
 type deferredBranches struct {
 	refs   []planner.DesiredRef
 	haves  []plumbing.Hash

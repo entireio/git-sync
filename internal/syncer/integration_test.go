@@ -2690,6 +2690,51 @@ func TestRun_IntegrationReplicateBatchesMissingRefsAfterTargetBodyLimit(t *testi
 	}
 }
 
+// TestRun_IntegrationReplicateRejectedPackUpdateUsesCreatedRefs covers the
+// update pushed after the batched creates. The trunk moves onto a branch
+// those creates delivered, so the update pack must offer that branch as a
+// have, or it re-sends the branch's history and hits the limit again.
+func TestRun_IntegrationReplicateRejectedPackUpdateUsesCreatedRefs(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	trunkRef := plumbing.NewBranchReferenceName(testBranch)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{trunkRef}); err != nil {
+		t.Fatalf("copy trunk to target: %v", err)
+	}
+
+	makeLargeCommits(t, sourceRepo, sourceFS, 4, 100_000)
+	featureRef := plumbing.NewBranchReferenceName("feature")
+	syncertest.SetRefAtBranch(t, sourceRepo, featureRef, testBranch)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	targetServer.receivePackBodyLimit = 300_000
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: sourceServer.RepoURL()},
+		Target:       Endpoint{URL: targetServer.RepoURL()},
+		Mode:         modeReplicate,
+		Prune:        true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("replicate after target body limit failed: %v", err)
+	}
+	if result.RelayReason != planner.ReasonReplicatePackRejected || result.Pushed != 2 {
+		t.Fatalf("expected the batched create and the update, got %+v", result)
+	}
+	assertHeadsMatch(t, sourceRepo, targetRepo, testBranch)
+	assertHeadsMatch(t, sourceRepo, targetRepo, "feature")
+}
+
 // refCreateDenier is a receive-pack hook that refuses to create one ref while
 // applying every other command in the same request for real.
 //

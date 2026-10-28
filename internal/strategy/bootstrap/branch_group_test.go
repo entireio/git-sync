@@ -584,7 +584,18 @@ func newTestGroupState(budget int64) groupPushState {
 // history the target already holds is created without a pack.
 func TestExecuteBatchedPlansAgainstRefsAlreadyOnTarget(t *testing.T) {
 	t.Parallel()
+	for _, strategy := range []string{"first-parent", "topo"} {
+		t.Run(strategy, func(t *testing.T) {
+			t.Parallel()
+			testPlansAgainstRefsAlreadyOnTarget(t, strategy)
+		})
+	}
+}
+
+func testPlansAgainstRefsAlreadyOnTarget(t *testing.T, strategy string) {
+	t.Helper()
 	h := newGroupHarness(t, 3)
+	h.params.Strategy = strategy
 	merged := plumbing.NewBranchReferenceName("merged")
 	mergedTip := h.parents[h.trunkTip][0]
 	delete(h.params.DesiredRefs, h.trunkRef)

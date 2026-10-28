@@ -1196,7 +1196,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				return result, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
 			}
 		}
-		repResult, err := s.executeReplicate(ctx, desiredRefs, pushPlans)
+		repResult, err := s.executeReplicate(ctx, desiredRefs, s.target.refMap, pushPlans)
 		switch {
 		case err == nil:
 			result.Relay = repResult.Relay
@@ -1289,7 +1289,15 @@ func (s *syncSession) replicateBatchedAfterRejection(
 		}
 	}
 	if len(rest) > 0 {
-		if _, err := s.executeReplicate(ctx, desiredRefs, rest); err != nil {
+		// Offer the refs bootstrap just created as haves too. A branch it
+		// created can hold the commits an update moves to, and without them
+		// the update pack re-sends that history.
+		if len(creates) > 0 {
+			if targetRefs, err = s.targetRefsNow(ctx); err != nil {
+				return result, fmt.Errorf("re-read target refs after batched creates: %w", err)
+			}
+		}
+		if _, err := s.executeReplicate(ctx, desiredRefs, targetRefs, rest); err != nil {
 			return result, err
 		}
 	}
@@ -1630,11 +1638,12 @@ func (s *syncSession) executeMaterialized(
 func (s *syncSession) executeReplicate(
 	ctx context.Context,
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
 	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
-		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
+		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 	})
 	if repErr != nil {
