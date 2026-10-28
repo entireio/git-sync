@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"entire.io/entire/git-sync/internal/gitproto"
@@ -461,8 +462,11 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	if result.BatchCount < 2 {
 		t.Fatalf("expected multiple bootstrap batches, got %+v", result)
 	}
-	if result.PlannedBatchCount != result.BatchCount {
-		t.Fatalf("expected fresh batched bootstrap to complete all planned batches, got %+v", result)
+	// The plan sizes checkpoints from an estimate per commit, and these blobs
+	// are bigger than it, so pushes split further against the budget as they
+	// go. Every planned checkpoint still runs.
+	if result.BatchCount < result.PlannedBatchCount {
+		t.Fatalf("expected fresh batched bootstrap to run at least the planned batches, got %+v", result)
 	}
 	if len(result.TempRefs) != 1 || result.TempRefs[0] != planner.BootstrapTempRef(plumbing.NewBranchReferenceName(testBranch)).String() {
 		t.Fatalf("unexpected temp refs in batched bootstrap result: %+v", result)
@@ -557,8 +561,19 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	if !result.Relay || result.RelayMode != relayModeBootstrapBatch || !result.Batching {
 		t.Fatalf("expected batched bootstrap resume relay result, got %+v", result)
 	}
-	if result.BatchCount >= len(checkpoints) {
-		t.Fatalf("expected resume to execute fewer batches than full run, got %+v checkpoints=%d", result, len(checkpoints))
+	// Packs split at push time against the budget, so the plan's checkpoint
+	// count is no measure of a full run. Run one to a second target instead.
+	fresh := filepath.Join(root, "fresh.git")
+	runGit(t, root, "init", "--bare", fresh)
+	runGit(t, fresh, "config", "http.receivepack", "true")
+	freshCfg := cfg
+	freshCfg.Target = Endpoint{URL: server.RepoURL("fresh.git")}
+	full, err := Bootstrap(context.Background(), freshCfg)
+	if err != nil {
+		t.Fatalf("full batched bootstrap failed: %v\nbackend-stderr:\n%s", err, server.Stderr())
+	}
+	if result.BatchCount >= full.BatchCount {
+		t.Fatalf("expected resume to execute fewer batches than a full run, got %d, full run %d", result.BatchCount, full.BatchCount)
 	}
 	if result.PlannedBatchCount != len(checkpoints) {
 		t.Fatalf("expected resume result to report planned checkpoint count, got %+v checkpoints=%d", result, len(checkpoints))
@@ -726,6 +741,9 @@ type gitHTTPBackendServer struct {
 	root   string
 	mu     sync.Mutex
 	stderr bytes.Buffer
+	// maxPushBody, when set, refuses receive-pack POST bodies over that many
+	// bytes with a 413, as a hosted target's request body limit does.
+	maxPushBody atomic.Int64
 }
 
 func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
@@ -760,6 +778,10 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 			r.TransferEncoding = nil
+		}
+		if limit := s.maxPushBody.Load(); limit > 0 && strings.HasSuffix(r.URL.Path, "/git-receive-pack") && r.ContentLength > limit {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
 		}
 		handler.ServeHTTP(w, r)
 	}))
@@ -939,4 +961,102 @@ func TestBootstrap_GitHTTPBackendBatchedManyBranches(t *testing.T) {
 	}
 	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewTagReferenceName("v1"))
 	runGit(t, targetBare, "fsck", "--connectivity-only")
+}
+
+// TestReplicate_GitHTTPBackendResumeAfterTrunkLanded covers a replicate run
+// that follows a timed-out bootstrap. Bootstrap pushes the trunk first and
+// creates grouped branches directly, so a run cut short leaves real refs on
+// the target and no temp ref to mark it as resumable. The next run must still
+// fit its pushes under the target's request body limit.
+func TestReplicate_GitHTTPBackendResumeAfterTrunkLanded(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	const (
+		branchCount = 20
+		branchBlob  = 120_000
+		pushLimit   = 1_000_000
+	)
+
+	for _, tc := range []struct {
+		name string
+		// seedTrunk is the trunk revision already on the target, if any.
+		seedTrunk  string
+		wantReason string
+	}{
+		{name: "empty target", wantReason: planner.ReasonEmptyTargetManagedRefs},
+		{name: "trunk already on target", seedTrunk: testBranch, wantReason: planner.ReasonReplicatePackRejected},
+		// The trunk moved on since: one update rides along with the creates.
+		{name: "trunk behind on target", seedTrunk: testBranch + "~1", wantReason: planner.ReasonReplicatePackRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+
+			runGit(t, root, "init", "--bare", sourceBare)
+			runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+			runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+			runGit(t, root, "init", "--bare", targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+			for i := range 3 {
+				writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("trunk-%d.bin", i)), int64(150_000+i*13))
+				runGit(t, worktree, "add", ".")
+				runGit(t, worktree, "commit", "-m", fmt.Sprintf("trunk-%d", i))
+			}
+			branches := []string{testBranch}
+			for i := range branchCount {
+				name := fmt.Sprintf("feature-%02d", i)
+				runGit(t, worktree, "switch", "-q", "-c", name, testBranch)
+				writePseudoRandomFile(t, filepath.Join(worktree, name+".bin"), int64(branchBlob+i*11))
+				runGit(t, worktree, "add", ".")
+				runGit(t, worktree, "commit", "-m", name)
+				branches = append(branches, name)
+			}
+			runGit(t, worktree, "switch", "-q", testBranch)
+			runGit(t, worktree, "push", "-q", "origin", "--all")
+			runGit(t, sourceBare, "symbolic-ref", "HEAD", "refs/heads/"+testBranch)
+
+			// What a bootstrap that timed out after the trunk leaves behind:
+			// the trunk under its real name, every other branch missing.
+			if tc.seedTrunk != "" {
+				runGit(t, worktree, "push", "-q", targetBare, tc.seedTrunk+":refs/heads/"+testBranch)
+			}
+
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
+			server.maxPushBody.Store(pushLimit)
+
+			// The mirror-pipeline worker's policy: replicate, prune, tags, and
+			// no configured pack limit, so the target's 413 is the only signal.
+			result, err := Run(context.Background(), Config{
+				Source:      Endpoint{URL: server.RepoURL("source.git")},
+				Target:      Endpoint{URL: server.RepoURL("target.git")},
+				Mode:        modeReplicate,
+				Prune:       true,
+				IncludeTags: true,
+			})
+			t.Logf("relay mode %q, reason %q, pushed %d, batches %d", result.RelayMode, result.RelayReason, result.Pushed, result.BatchCount)
+			if err != nil {
+				t.Fatalf("replicate failed: %v", err)
+			}
+			if result.RelayMode != relayModeBootstrapBatch || result.RelayReason != tc.wantReason {
+				t.Fatalf("relay = %q (%q), want %q (%q)", result.RelayMode, result.RelayReason, relayModeBootstrapBatch, tc.wantReason)
+			}
+			for _, name := range branches {
+				assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(name))
+			}
+			runGit(t, targetBare, "fsck", "--connectivity-only")
+		})
+	}
 }

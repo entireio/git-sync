@@ -61,12 +61,17 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 	if err != nil {
 		return nil, fmt.Errorf("fetch bootstrap commit parents for %d remaining branches: %w", len(divergent), err)
 	}
+	stopAt := d.stopAt
+	if stopAt == nil && len(d.haves) > 0 {
+		stopAt = boundaryCommits(parents)
+	}
 
 	var (
 		group      []plannedBatch
 		groupBytes int64
 		groups     int
 		standalone int
+		onTarget   int
 	)
 	flush := func() {
 		if len(group) == 0 {
@@ -77,7 +82,17 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		group, groupBytes = nil, 0
 	}
 	for _, ref := range divergent {
-		checkpoints, chain, err := checkpointsFromParents(p, ref, parents, d.stopAt)
+		// The source sends no commit reachable from a have. A tip it left out
+		// is already on the target, with every object it needs.
+		if _, sent := parents[ref.SourceHash]; !sent && len(d.haves) > 0 {
+			p.log("bootstrap batch branch already reachable on target",
+				"branch", ref.TargetRef.String(),
+				"source_hash", planner.ShortHash(ref.SourceHash))
+			out = append(out, subsumedBatch(ref))
+			onTarget++
+			continue
+		}
+		checkpoints, chain, err := checkpointsFromParents(p, ref, parents, stopAt)
 		if err != nil {
 			return nil, err
 		}
@@ -97,9 +112,26 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 	flush()
 	p.log("bootstrap batch planned remaining branches",
 		"subsumed", len(d.refs)-len(divergent),
+		"already_on_target", onTarget,
 		"grouped_packs", groups,
 		"standalone_branches", standalone)
 	return out, nil
+}
+
+// boundaryCommits returns the parents a commit-graph fetch named but did not
+// send. Sent with haves, the fetch leaves out every commit reachable from
+// them, so these are where the target's history begins. The topological walk
+// needs them as a stop set: it fails on a parent it cannot find.
+func boundaryCommits(parents map[plumbing.Hash][]plumbing.Hash) map[plumbing.Hash]struct{} {
+	boundary := make(map[plumbing.Hash]struct{})
+	for _, ps := range parents {
+		for _, parent := range ps {
+			if _, sent := parents[parent]; !sent {
+				boundary[parent] = struct{}{}
+			}
+		}
+	}
+	return boundary
 }
 
 // groupPushState is the executeBatched state a group push reads and updates.

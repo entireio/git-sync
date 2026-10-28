@@ -34,10 +34,13 @@ func SupportsReplicateRelay(target RelayTargetPolicy) (bool, string) {
 // ReasonEmptyTargetManagedRefs labels a bootstrap selected because no desired
 // target ref exists yet; ReasonBootstrapResumeMarker labels one selected
 // because a batched-bootstrap resume marker survived on the target (the
-// bootstrap will resume from it rather than start fresh).
+// bootstrap will resume from it rather than start fresh);
+// ReasonReplicatePackRejected labels a batched bootstrap of the missing refs
+// after the target refused replicate's single pack.
 const (
 	ReasonEmptyTargetManagedRefs = "empty-target-managed-refs"
 	ReasonBootstrapResumeMarker  = "bootstrap-resume-marker"
+	ReasonReplicatePackRejected  = "replicate-pack-rejected"
 )
 
 // CanBootstrapRelay checks whether all desired target refs are absent on the target,

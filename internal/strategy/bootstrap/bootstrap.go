@@ -24,6 +24,7 @@ import (
 
 const (
 	defaultTargetMaxPackBytes = 512 * 1024 * 1024
+	relayModeBootstrap        = "bootstrap"
 )
 
 var bodyLimitPattern = regexp.MustCompile(`body exceeded size limit ([0-9]+)`)
@@ -120,6 +121,11 @@ type Params struct {
 	// with no announced target limit. It never overrides a measured cutoff.
 	// Non-positive disables the fallback. MaxPackBytes still bounds source reads.
 	FallbackMaxPackBytes int64
+	// RejectedPush is the error from a single-pack push of these refs that the
+	// caller already tried and the target refused. When it is a body limit or
+	// a push deadline, Execute starts in batched mode instead of sending the
+	// same pack again. Any other error is returned as the push failure.
+	RejectedPush error
 }
 
 // ErrCheckpointExceedsTargetLimit reports a single commit whose pack the
@@ -223,12 +229,17 @@ type plannedBatch struct {
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
 	if p.TargetPusher == nil {
-		return Result{Relay: true, RelayMode: "bootstrap", RelayReason: relayReason}, errors.New("bootstrap strategy requires TargetPusher")
+		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason}, errors.New("bootstrap strategy requires TargetPusher")
 	}
 
 	// GitHub large-repo preflight
 	if batchLimit, ok := githubBatchLimit(ctx, p); ok {
 		p.TargetMaxPack = batchLimit
+	}
+
+	if p.RejectedPush != nil && p.TargetMaxPack <= 0 && !batchAfterPushError(&p, p.RejectedPush) {
+		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason},
+			fmt.Errorf("push target refs: %w", actionableTargetPushError(p, p.RejectedPush))
 	}
 
 	planTargetRefs := p.TargetRefs
@@ -241,7 +252,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 
 	result := Result{
-		Plans: plans, Relay: true, RelayMode: "bootstrap", RelayReason: relayReason,
+		Plans: plans, Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason,
 	}
 
 	if p.TargetMaxPack > 0 {
@@ -284,32 +295,42 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
-		autoBatch, ok := autoTargetMaxPackBytes(p, pushErr)
-		if !ok {
+		if !batchAfterPushError(&p, pushErr) {
 			return result, fmt.Errorf("push target refs: %w", actionableTargetPushError(p, pushErr))
-		}
-		reason := "target rejected pack"
-		if isTargetPushDeadlineError(pushErr) {
-			reason = "target push timed out"
-		}
-		p.log("bootstrap retrying with batched mode after batchable push failure",
-			"target_max_pack_bytes", autoBatch, "reason", reason)
-		p.notice(fmt.Sprintf("%s — switching to batched mode (limit %s)",
-			reason, gitproto.HumanBytes(autoBatch)))
-		p.TargetMaxPack = autoBatch
-		// Remember what the target actually said, separately from the (smaller)
-		// batching budget derived from it. Without this the announced figure is
-		// consumed by autoTargetMaxPackBytes and lost, leaving the batch loop
-		// unable to tell "too big for the server" from "too big for the budget
-		// we chose".
-		if announced := targetBodyLimit(pushErr); announced > p.AnnouncedTargetLimit {
-			p.AnnouncedTargetLimit = announced
 		}
 		return executeBatched(ctx, p, plans, result)
 	}
 
 	result.Pushed = len(plans)
 	return result, nil
+}
+
+// batchAfterPushError switches p to batched mode after the target refused a
+// single-pack push with err. It reports false when err is not one batching can
+// fix, or the source cannot serve batched bootstrap.
+func batchAfterPushError(p *Params, err error) bool {
+	autoBatch, ok := autoTargetMaxPackBytes(*p, err)
+	if !ok {
+		return false
+	}
+	reason := "target rejected pack"
+	if isTargetPushDeadlineError(err) {
+		reason = "target push timed out"
+	}
+	p.log("bootstrap retrying with batched mode after batchable push failure",
+		"target_max_pack_bytes", autoBatch, "reason", reason)
+	p.notice(fmt.Sprintf("%s — switching to batched mode (limit %s)",
+		reason, gitproto.HumanBytes(autoBatch)))
+	p.TargetMaxPack = autoBatch
+	// Remember what the target actually said, separately from the (smaller)
+	// batching budget derived from it. Without this the announced figure is
+	// consumed by autoTargetMaxPackBytes and lost, leaving the batch loop
+	// unable to tell "too big for the server" from "too big for the budget
+	// we chose".
+	if announced := targetBodyLimit(err); announced > p.AnnouncedTargetLimit {
+		p.AnnouncedTargetLimit = announced
+	}
+	return true
 }
 
 // hoistSourceHeadPlan moves the plan whose source ref matches the
@@ -1222,7 +1243,10 @@ func tailPhaseLabel(plans []planner.BranchPlan) string {
 // --- Checkpoint planning ---
 
 // deferredBranches is the work planBatches leaves for after the trunk: the
-// branches still to plan, and the trunk's history to plan them against.
+// branches still to plan, and the history to plan them against. That history
+// is the trunk's, or the refs already on the target when the trunk is one of
+// them. stopAt is nil in the second case: planAfterTrunk takes it from the
+// commit-graph fetch, which stops where the haves begin.
 type deferredBranches struct {
 	refs   []planner.DesiredRef
 	haves  []plumbing.Hash
@@ -1230,8 +1254,10 @@ type deferredBranches struct {
 }
 
 // planBatches plans the trunk alone and defers every other branch to
-// planAfterTrunk, which runs after the trunk is pushed. Without a trunk there
-// is no shared history to plan against, so each branch is planned in turn.
+// planAfterTrunk, which runs after the trunk is pushed. Without a trunk to
+// push, the refs already on the target are the shared history, and every
+// branch is deferred to plan against them. With neither there is no shared
+// history to plan against, so each branch is planned in turn.
 func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, *deferredBranches, error) {
 	ordered, trunkIdx := orderTrunkFirst(desired, p.SourceHeadTarget)
 	switch {
@@ -1248,6 +1274,12 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 	}
 
 	if trunkIdx < 0 {
+		// A replicate run that follows an interrupted bootstrap lands here: the
+		// trunk is on the target already, so it is not in the desired set.
+		if haves := targetHaves(p.TargetRefs); len(haves) > 0 {
+			p.log("bootstrap batch planning against refs already on target", "have_count", len(haves))
+			return nil, &deferredBranches{refs: ordered, haves: haves}, nil
+		}
 		out := make([]plannedBatch, 0, len(ordered))
 		for _, ref := range ordered {
 			checkpoints, chain, _, err := planCheckpointsFromChain(ctx, p, ref, nil, nil)
@@ -1305,6 +1337,30 @@ func subsumedBatch(ref planner.DesiredRef) plannedBatch {
 		},
 		subsumed: true,
 	}
+}
+
+// targetHaves returns the distinct hashes the target's refs point at, sorted
+// so the request is the same on every run. Resume markers are left out: a
+// marker's commit has to stay inside its branch's planned chain, or the resume
+// reads the marker as stale and starts the branch over.
+func targetHaves(targetRefs map[plumbing.ReferenceName]plumbing.Hash) []plumbing.Hash {
+	seen := make(map[plumbing.Hash]struct{}, len(targetRefs))
+	haves := make([]plumbing.Hash, 0, len(targetRefs))
+	for name, hash := range targetRefs {
+		if hash.IsZero() {
+			continue
+		}
+		if _, marker := planner.BootstrapTempRefTarget(name); marker {
+			continue
+		}
+		if _, dup := seen[hash]; dup {
+			continue
+		}
+		seen[hash] = struct{}{}
+		haves = append(haves, hash)
+	}
+	slices.SortFunc(haves, func(a, b plumbing.Hash) int { return a.Compare(b.Bytes()) })
+	return haves
 }
 
 // orderTrunkFirst returns desired reordered so the branch matching
@@ -1942,6 +1998,13 @@ func isTargetPushDeadlineError(err error) bool {
 // deadline (408 / 504).
 func isBatchableTargetPushError(err error) bool {
 	return isTargetBodyLimitError(err) || isTargetPushDeadlineError(err)
+}
+
+// IsBatchableTargetPushError reports whether err is a push the target refused
+// for its size or did not finish receiving in time, which batched bootstrap
+// can retry in smaller pushes.
+func IsBatchableTargetPushError(err error) bool {
+	return isBatchableTargetPushError(err)
 }
 
 // actionableTargetPushError augments a one-shot push failure with guidance

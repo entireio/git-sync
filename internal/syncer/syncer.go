@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1023,7 +1024,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 				SourceHEAD: s.sourceService.HeadTarget,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason)
+		return bootstrapWithInputs(ctx, s, desiredRefs, targetRefMap, reason, nil)
 	}
 
 	// Normal sync: allocate in-memory repo. The source closure is fetched
@@ -1162,7 +1163,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				SourceHEAD:         s.sourceService.HeadTarget,
 			}, nil
 		}
-		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, bootstrapReason)
+		return bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, bootstrapReason, nil)
 	}
 
 	plans, err := planner.BuildReplicationPlans(desiredRefs, s.target.refMap, managedTargets, planConfig(s.cfg))
@@ -1195,13 +1196,27 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 				return result, fmt.Errorf("replicate requires relay-capable target: %s; use sync instead", reason)
 			}
 		}
-		repResult, err := s.executeReplicate(ctx, desiredRefs, pushPlans)
-		if err != nil {
+		repResult, err := s.executeReplicate(ctx, desiredRefs, s.target.refMap, pushPlans)
+		switch {
+		case err == nil:
+			result.Relay = repResult.Relay
+			result.RelayMode = repResult.RelayMode
+			result.RelayReason = repResult.RelayReason
+		case s.canBatchRejectedReplicate(pushPlans, err):
+			batched, err := s.replicateBatchedAfterRejection(ctx, desiredRefs, pushPlans, err)
+			result.Relay = batched.Relay
+			result.RelayMode = batched.RelayMode
+			result.RelayReason = batched.RelayReason
+			result.Batching = batched.Batching
+			result.BatchCount = batched.BatchCount
+			result.PlannedBatchCount = batched.PlannedBatchCount
+			result.TempRefs = batched.TempRefs
+			if err != nil {
+				return result, fmt.Errorf("replicate relay failed: %w", err)
+			}
+		default:
 			return result, fmt.Errorf("replicate relay failed: %w", err)
 		}
-		result.Relay = repResult.Relay
-		result.RelayMode = repResult.RelayMode
-		result.RelayReason = repResult.RelayReason
 	}
 
 	s.finalizeCounts(pushPlans, &result)
@@ -1210,6 +1225,82 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 	}
 	result.Stats = s.stats.snapshot()
 	result.Measurement = s.measurementDone()
+	return result, nil
+}
+
+// canBatchRejectedReplicate reports whether a failed replicate push can be
+// retried as batched bootstrap: the target refused the pack for its size or
+// took too long to receive it, the source can serve batched bootstrap, and the
+// run creates refs that batching can split across pushes.
+func (s *syncSession) canBatchRejectedReplicate(pushPlans []BranchPlan, err error) bool {
+	if !bstrap.IsBatchableTargetPushError(err) || !s.sourceService.SupportsBootstrapBatch() {
+		return false
+	}
+	return slices.ContainsFunc(pushPlans, func(plan BranchPlan) bool { return plan.Action == ActionCreate })
+}
+
+// replicateBatchedAfterRejection finishes a replicate run whose single pack
+// the target refused. Replicate routes to bootstrap only when every desired
+// ref is missing, so a bootstrap cut short after the trunk landed leaves the
+// next run here, sending the rest of the repository in one pack the target
+// refuses on every retry. Batched bootstrap creates the missing refs instead,
+// planned against the refs the target already has. Updates and deletes then
+// go out as a replicate push of their own.
+func (s *syncSession) replicateBatchedAfterRejection(
+	ctx context.Context,
+	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	pushPlans []BranchPlan,
+	pushErr error,
+) (Result, error) {
+	// A push that ran into a deadline may have applied refs before the target
+	// gave up, so plan the retry from what the target holds now.
+	targetRefs, err := s.targetRefsNow(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("re-read target refs after rejected push: %w (push: %w)", err, pushErr)
+	}
+	creates := make(map[plumbing.ReferenceName]planner.DesiredRef)
+	rest := make([]BranchPlan, 0, len(pushPlans))
+	for _, plan := range pushPlans {
+		current := targetRefs[plan.TargetRef]
+		switch {
+		case plan.Action == ActionCreate:
+			if current.IsZero() {
+				creates[plan.TargetRef] = desiredRefs[plan.TargetRef]
+			}
+		case plan.Action == ActionUpdate && current == plan.SourceHash,
+			plan.Action == ActionDelete && current.IsZero():
+			// Applied before the push failed.
+		default:
+			rest = append(rest, plan)
+		}
+	}
+	s.notice(fmt.Sprintf("target refused the replicate pack — creating %d missing refs with batched bootstrap", len(creates)))
+
+	result := Result{Relay: true, RelayMode: modeReplicate, RelayReason: planner.ReasonReplicatePackRejected}
+	if len(creates) > 0 {
+		bResult, err := bootstrapWithInputs(ctx, s, creates, targetRefs, planner.ReasonReplicatePackRejected, pushErr)
+		result.RelayMode = bResult.RelayMode
+		result.Batching = bResult.Batching
+		result.BatchCount = bResult.BatchCount
+		result.PlannedBatchCount = bResult.PlannedBatchCount
+		result.TempRefs = bResult.TempRefs
+		if err != nil {
+			return result, err
+		}
+	}
+	if len(rest) > 0 {
+		// Offer the refs bootstrap just created as haves too. A branch it
+		// created can hold the commits an update moves to, and without them
+		// the update pack re-sends that history.
+		if len(creates) > 0 {
+			if targetRefs, err = s.targetRefsNow(ctx); err != nil {
+				return result, fmt.Errorf("re-read target refs after batched creates: %w", err)
+			}
+		}
+		if _, err := s.executeReplicate(ctx, desiredRefs, targetRefs, rest); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -1383,7 +1474,7 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	_, reason := planner.CanBootstrapRelay(cfg.ForceAny(), cfg.Prune, desiredRefs, s.target.refMap)
-	result, err := bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, reason)
+	result, err := bootstrapWithInputs(ctx, s, desiredRefs, s.target.refMap, reason, nil)
 	result.Measurement = s.measurementDone()
 	return result, err
 }
@@ -1455,6 +1546,7 @@ func bootstrapWithInputs(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	relayReason string,
+	rejectedPush error,
 ) (Result, error) {
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
@@ -1472,6 +1564,7 @@ func bootstrapWithInputs(
 		// reports nothing — the strategy asks the target which refs it has
 		// rather than guessing from the wording of a rejection.
 		TargetRefsNow: s.targetRefsNow,
+		RejectedPush:  rejectedPush,
 	}, relayReason)
 	if err != nil {
 		// Carry the strategy facts out with the error. Execute populates these
@@ -1545,11 +1638,12 @@ func (s *syncSession) executeMaterialized(
 func (s *syncSession) executeReplicate(
 	ctx context.Context,
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
+	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
 	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
-		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
+		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 	})
 	if repErr != nil {

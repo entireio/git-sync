@@ -20,7 +20,7 @@ run = "go test -race ./..."
 
 [tasks."test:git-http-backend"]
 description = "Run optional git-http-backend integration tests"
-run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackendSync' -v"
+run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackend|TestReplicate_GitHTTPBackend' -v"
 
 [tasks."test:ssh-docker"]
 description = "Run optional Docker-based SSH integration test"
