@@ -1,0 +1,8 @@
+❯  gh pr create --base main --head soph/replicate-batched-after-rejection --title "replicate: create missing refs in batches when the target refuses the pack" --body-file /private/tmp/claude-501/-Users-soph--herdr-worktrees-git-sync-worktree-brave-meadow-88a8/96cd20fb-09c1-476b-963c-3df41141a4e5/scratchpad/pr_body.md
+open /private/tmp/claude-501/-Users-soph--herdr-worktrees-git-sync-worktree-brave-meadow-88a8/96cd20fb-09c1-476b-963c-3df41141a4e5/scratchpad/pr_body.md: no such file or directory
+
+can you just do it?
+
+---
+
+can you look at the pr comments
