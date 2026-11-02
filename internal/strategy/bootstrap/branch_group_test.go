@@ -322,7 +322,7 @@ func TestPlanAfterTrunkSizesGroupsWithCurrentBudget(t *testing.T) {
 	h := newGroupHarness(t, 4)
 
 	countGroups := func(budget int64) int {
-		batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), budget)
+		batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), budget, &PlanningStats{})
 		if err != nil {
 			t.Fatalf("planAfterTrunk: %v", err)
 		}
@@ -372,7 +372,7 @@ func TestPushBranchGroupsLearnsTargetLimit(t *testing.T) {
 		return gitproto.RefOutcomeApplied, ""
 	}
 
-	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack, &PlanningStats{})
 	if err != nil {
 		t.Fatalf("planAfterTrunk: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestPushBranchGroupsDoesNotRetryAppliedRefs(t *testing.T) {
 		return gitproto.RefOutcomeApplied, ""
 	}
 
-	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack, &PlanningStats{})
 	if err != nil {
 		t.Fatalf("planAfterTrunk: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestPushBranchGroupsSplitsOnSourceFetchLimit(t *testing.T) {
 		return gitproto.RefOutcomeUnknown, ""
 	}
 
-	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack, &PlanningStats{})
 	if err != nil {
 		t.Fatalf("planAfterTrunk: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestPushBranchGroupsReturnsOversizedBranchBeforePendingGroups(t *testing.T)
 		return 1
 	}
 
-	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack)
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack, &PlanningStats{})
 	if err != nil {
 		t.Fatalf("planAfterTrunk: %v", err)
 	}

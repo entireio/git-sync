@@ -18,6 +18,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 
+	"entire.io/entire/git-sync/internal/syncer"
 	"entire.io/entire/git-sync/internal/syncertest"
 )
 
@@ -37,6 +38,35 @@ func TestBootstrapLoggerReachesSyncConfiguration(t *testing.T) {
 	}
 	if cfg.BootstrapLogger != logger || cfg.Verbose || cfg.BootstrapFallbackMaxPackBytes != 1<<30 {
 		t.Fatal("bootstrap diagnostics must propagate independently of verbose logging")
+	}
+}
+
+func TestOnProgressReachesSyncConfiguration(t *testing.T) {
+	var got []ProgressEvent
+	cfg, err := New(Options{OnProgress: func(e ProgressEvent) { got = append(got, e) }}).buildSyncConfig(context.Background(), SyncRequest{
+		Source: Endpoint{URL: "https://example.com/source.git"},
+		Target: Endpoint{URL: "https://example.com/target.git"},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OnProgress == nil {
+		t.Fatal("Options.OnProgress did not reach the sync configuration")
+	}
+	cfg.OnProgress(syncer.ProgressEvent{Kind: syncer.ProgressRefCreated, Ref: "refs/heads/main"})
+	if len(got) != 1 || got[0].Kind != ProgressRefCreated || got[0].Ref != "refs/heads/main" || got[0].Hash != "" {
+		t.Fatalf("events = %+v, want the one ref-created event", got)
+	}
+
+	cfg, err = New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
+		Source: Endpoint{URL: "https://example.com/source.git"},
+		Target: Endpoint{URL: "https://example.com/target.git"},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OnProgress != nil {
+		t.Fatal("a nil Options.OnProgress must stay nil")
 	}
 }
 

@@ -242,6 +242,13 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 		slog.Int64("threshold_kb", githubLargeRepoThresholdKB),
 		slog.String("mode", mode),
 	}
+	// The ref count beside the size: a repository can be small in bytes and
+	// still carry tens of thousands of branches, and that is the shape whose
+	// planning outlasts an attempt. Logged before any planning starts, so it
+	// is there even for an attempt that never gets further.
+	if p.SourceRefCount > 0 {
+		attrs = append(attrs, slog.Int("ref_count", p.SourceRefCount))
+	}
 	// Transport errors carry server- or proxy-authored text too (a
 	// certificate's names, a CONNECT status line), so every error is cleaned,
 	// not only GitHub's message.
