@@ -2058,7 +2058,7 @@ func singleGP(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) m
 // log writes a planning line to the -v log and to PushLogger. Planning can
 // run for many minutes before the first push on a large or branch-heavy
 // repo; without these lines in PushLogger an embedder sees nothing between
-// the size lookup and a timeout (INC-133).
+// the size lookup and a timeout.
 func (p Params) log(msg string, args ...any) {
 	p.verboseLog(msg, args...)
 	if p.PushLogger != nil && p.PushLogger != p.Logger {

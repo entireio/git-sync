@@ -183,7 +183,7 @@ func uploadDiagnostic(t *testing.T, out *bytes.Buffer) map[string]any {
 
 // Planning runs before the first push and can take many minutes on a large
 // repo. Its lines must reach PushLogger without -v, or an embedder sees only
-// the size lookup and then a timeout (INC-133).
+// the size lookup and then a timeout.
 func TestPlanningLinesReachPushLoggerWithoutVerboseLogging(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer

@@ -14,7 +14,7 @@ import (
 // An embedder's BootstrapLogger, not -v, is how a production bootstrap is
 // observed. The planning lines must reach it with the embedder's attributes,
 // or a run that stalls before its first push leaves nothing between the size
-// lookup and a timeout (INC-133).
+// lookup and a timeout.
 func TestBootstrapPlanningLinesReachBootstrapLoggerWithoutVerbose(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeLargeCommits(t, sourceRepo, sourceFS, 3, 200_000)
@@ -28,7 +28,7 @@ func TestBootstrapPlanningLinesReachBootstrapLoggerWithoutVerbose(t *testing.T) 
 	defer targetServer.Close()
 
 	var out bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&out, nil)).With(slog.String("target_ulid", "01TARGET"))
+	logger := slog.New(slog.NewJSONHandler(&out, nil)).With(slog.String("sync_id", "sync-1"))
 	result, err := Bootstrap(context.Background(), Config{
 		Source:             Endpoint{URL: sourceServer.RepoURL()},
 		Target:             Endpoint{URL: targetServer.RepoURL()},
@@ -50,7 +50,7 @@ func TestBootstrapPlanningLinesReachBootstrapLoggerWithoutVerbose(t *testing.T) 
 		if err := dec.Decode(&record); err != nil {
 			t.Fatalf("decode log record: %v", err)
 		}
-		if record["target_ulid"] != "01TARGET" {
+		if record["sync_id"] != "sync-1" {
 			t.Fatalf("record %v lost the embedder's attributes: %v", record["msg"], record)
 		}
 		seen[record["msg"]] = true
