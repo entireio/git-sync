@@ -221,7 +221,7 @@ func TestPlanningLineWritesEachLoggerOnce(t *testing.T) {
 		Logger:     slog.New(slog.NewJSONHandler(&verbose, nil)),
 		PushLogger: slog.New(slog.NewJSONHandler(&push, nil)),
 	}
-	p.log("bootstrap batch planning checkpoints", "branch_ref_count", 3)
+	p.log(context.Background(), "bootstrap batch planning checkpoints", "branch_ref_count", 3)
 	for name, out := range map[string]*bytes.Buffer{"verbose": &verbose, "push": &push} {
 		records := logRecords(t, out)
 		if len(records) != 1 || records[0]["branch_ref_count"] != float64(3) {
@@ -231,8 +231,46 @@ func TestPlanningLineWritesEachLoggerOnce(t *testing.T) {
 
 	var shared bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&shared, nil))
-	Params{Logger: logger, PushLogger: logger}.log("bootstrap batch planning checkpoints")
+	Params{Logger: logger, PushLogger: logger}.log(context.Background(), "bootstrap batch planning checkpoints")
 	if records := logRecords(t, &shared); len(records) != 1 {
 		t.Fatalf("shared logger got %d records, want 1", len(records))
+	}
+}
+
+type ctxKey struct{}
+
+// ctxHandler records the ctxKey value of every record's context, as a handler
+// that reads trace IDs from the context would.
+type ctxHandler struct {
+	slog.Handler
+
+	seen *[]any
+}
+
+func (ctxHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h ctxHandler) Handle(ctx context.Context, _ slog.Record) error {
+	*h.seen = append(*h.seen, ctx.Value(ctxKey{}))
+	return nil
+}
+
+// An embedder's handler that reads trace IDs from the context must get the
+// caller's context on planning lines, as it does on the upload diagnostic.
+func TestPlanningLinesCarryCallerContext(t *testing.T) {
+	t.Parallel()
+	var seen []any
+	p := bottomOutParams(t, 64, 0, drainAbort)
+	p.PushLogger = slog.New(ctxHandler{Handler: slog.DiscardHandler, seen: &seen})
+	ctx := context.WithValue(context.Background(), ctxKey{}, "trace-1")
+	if _, err := Execute(ctx, p, "bootstrap-resume-marker"); err == nil {
+		t.Fatal("expected the bottomed-out upload to fail")
+	}
+	if len(seen) < 2 {
+		t.Fatalf("PushLogger got %d records, want planning lines and the upload diagnostic", len(seen))
+	}
+	for i, v := range seen {
+		if v != "trace-1" {
+			t.Fatalf("record %d lost the caller's context: got %v", i, v)
+		}
 	}
 }

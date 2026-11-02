@@ -20,6 +20,7 @@ import (
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/sanitize"
 )
 
 const (
@@ -58,6 +59,9 @@ type Params struct {
 	// diagnostics, the GitHub size lookup and every planning line, verbose or
 	// not, so a run that stalls before its first push still leaves a trail.
 	PushLogger *slog.Logger
+	// diag is Logger and PushLogger behind one handler, built once by
+	// Execute. See diagnostics.
+	diag *slog.Logger
 	// Strategy selects the chain ordering for batched bootstrap. Empty
 	// or "first-parent" walks the first-parent backbone (default,
 	// matches historical behaviour). "topo" includes every reachable
@@ -234,6 +238,7 @@ type plannedBatch struct {
 
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
+	p.diag = newDiagnostics(p.Logger, p.PushLogger)
 	if p.TargetPusher == nil {
 		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason}, errors.New("bootstrap strategy requires TargetPusher")
 	}
@@ -243,7 +248,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		p.TargetMaxPack = batchLimit
 	}
 
-	if p.RejectedPush != nil && p.TargetMaxPack <= 0 && !batchAfterPushError(&p, p.RejectedPush) {
+	if p.RejectedPush != nil && p.TargetMaxPack <= 0 && !batchAfterPushError(ctx, &p, p.RejectedPush) {
 		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason},
 			fmt.Errorf("push target refs: %w", actionableTargetPushError(p, p.RejectedPush))
 	}
@@ -266,7 +271,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 
 	// One-shot bootstrap
-	p.log("bootstrap fetching refs from source", "ref_count", len(plans))
+	p.log(ctx, "bootstrap fetching refs from source", "ref_count", len(plans))
 	gpDesired := convert.DesiredRefs(p.DesiredRefs)
 	// Target refs ride along as fetch haves. On the designed path — a truly
 	// empty target — the map is empty and this changes nothing; when the
@@ -293,7 +298,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 	packReader = gitproto.CloseOnce(packReader)
 
-	p.log("bootstrap pushing refs to target", "ref_count", len(plans))
+	p.log(ctx, "bootstrap pushing refs to target", "ref_count", len(plans))
 	if p.OnPhase != nil {
 		p.OnPhase("pushing pack")
 	}
@@ -301,7 +306,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
-		if !batchAfterPushError(&p, pushErr) {
+		if !batchAfterPushError(ctx, &p, pushErr) {
 			return result, fmt.Errorf("push target refs: %w", actionableTargetPushError(p, pushErr))
 		}
 		return executeBatched(ctx, p, plans, result)
@@ -314,7 +319,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 // batchAfterPushError switches p to batched mode after the target refused a
 // single-pack push with err. It reports false when err is not one batching can
 // fix, or the source cannot serve batched bootstrap.
-func batchAfterPushError(p *Params, err error) bool {
+func batchAfterPushError(ctx context.Context, p *Params, err error) bool {
 	autoBatch, ok := autoTargetMaxPackBytes(*p, err)
 	if !ok {
 		return false
@@ -323,7 +328,7 @@ func batchAfterPushError(p *Params, err error) bool {
 	if isTargetPushDeadlineError(err) {
 		reason = "target push timed out"
 	}
-	p.log("bootstrap retrying with batched mode after batchable push failure",
+	p.warn(ctx, "bootstrap retrying with batched mode after batchable push failure",
 		"target_max_pack_bytes", autoBatch, "reason", reason)
 	p.notice(fmt.Sprintf("%s — switching to batched mode (limit %s)",
 		reason, gitproto.HumanBytes(autoBatch)))
@@ -440,7 +445,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		deferred *deferredBranches
 	)
 	if len(planRefs) > 0 {
-		p.log("bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
+		p.log(ctx, "bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
 		var err error
 		batches, deferred, err = planBatches(ctx, p, planRefs)
 		if err != nil {
@@ -537,7 +542,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// trip, and under-reporting work this run cannot confirm is the
 			// same direction as everything else here.
 			if confirmed, doubt := p.createConfirmed(batch.Plan.TargetRef); !confirmed {
-				p.log("bootstrap batch subsumed branch create unconfirmed; not counted",
+				p.warn(ctx, "bootstrap batch subsumed branch create unconfirmed; not counted",
 					"branch", batch.Plan.TargetRef.String(),
 					"source_hash", planner.ShortHash(batch.Plan.SourceHash),
 					"reason", doubt)
@@ -545,14 +550,14 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			}
 			completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 			result.BatchCount++
-			p.log("bootstrap batch subsumed branch finalized",
+			p.debug(ctx, "bootstrap batch subsumed branch finalized",
 				"branch", batch.Plan.TargetRef.String(),
 				"source_hash", planner.ShortHash(batch.Plan.SourceHash))
 			continue
 		}
 		result.PlannedBatchCount += len(batch.Checkpoints)
 		result.TempRefs = append(result.TempRefs, batch.TempRef.String())
-		p.log("bootstrap batch branch plan",
+		p.log(ctx, "bootstrap batch branch plan",
 			"branch", batch.Plan.TargetRef.String(),
 			"temp_ref", batch.TempRef.String(),
 			"planned_batches", len(batch.Checkpoints),
@@ -577,7 +582,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				if len(remaining) > 0 {
 					numBatches := estimateBatchCount(int64(len(remaining)), p.TargetMaxPack)
 					batch.Checkpoints = evenCheckpoints(remaining, numBatches)
-					p.log("bootstrap batch resuming from stale temp ref",
+					p.log(ctx, "bootstrap batch resuming from stale temp ref",
 						"branch", batch.Plan.TargetRef.String(),
 						"resume_hash", planner.ShortHash(batch.ResumeHash),
 						"remaining_commits", len(remaining),
@@ -589,7 +594,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		}
 		if err != nil && !batch.ResumeHash.IsZero() {
 			// Temp ref hash not in the chain at all — truly stale. Delete and start fresh.
-			p.log("bootstrap batch clearing stale temp ref",
+			p.log(ctx, "bootstrap batch clearing stale temp ref",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"stale_hash", planner.ShortHash(batch.ResumeHash))
@@ -640,7 +645,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if p.OnPhase != nil {
 				p.OnPhase(fmt.Sprintf("pack %d/%d", idx+1, len(batch.Checkpoints)))
 			}
-			p.log("bootstrap batch push checkpoint",
+			p.log(ctx, "bootstrap batch push checkpoint",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
 				"batch_total", len(batch.Checkpoints),
@@ -700,7 +705,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 						oldRemaining := len(batch.Checkpoints[idx:])
 						newCount := len(expanded)
 						perPack := estimated / int64(newCount)
-						p.log("bootstrap batch subdividing before push (pack header estimate)",
+						p.log(ctx, "bootstrap batch subdividing before push (pack header estimate)",
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", oldRemaining,
 							"new_remaining", newCount,
@@ -724,7 +729,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					continue // retry at same idx with new (smaller) checkpoint
 				}
 			}
-			p.log("bootstrap batch push attempting",
+			p.log(ctx, "bootstrap batch push attempting",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
 				"batch_total", len(batch.Checkpoints),
@@ -756,7 +761,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				indivisible
 			if atAnnounced {
 				budget = p.AnnouncedTargetLimit
-				p.log("bootstrap batch pushing indivisible checkpoint at announced target limit",
+				p.log(ctx, "bootstrap batch pushing indivisible checkpoint at announced target limit",
 					"branch", batch.Plan.TargetRef.String(),
 					"batch", idx+1,
 					"self_imposed_budget", selfImposedBudget,
@@ -819,7 +824,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				// of time receiving it (408/504 deadline). All three are fixed
 				// the same way: subdivide so each push is smaller and faster.
 				subdivide := abortedEarly || isBatchableTargetPushError(pushErr)
-				p.warn("bootstrap batch push failed",
+				p.warn(ctx, "bootstrap batch push failed",
 					"branch", batch.Plan.TargetRef.String(),
 					"batch", idx+1,
 					"batch_total", len(batch.Checkpoints),
@@ -831,7 +836,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					"total_objects_in_pack", totalObjects,
 					"aborted_early", abortedEarly,
 					"will_subdivide", subdivide && len(batch.chain) > 0,
-					"error", pushErr.Error())
+					"error", sanitize.Line(pushErr.Error()))
 				if subdivide && len(batch.chain) > 0 {
 					parsedLimit := targetBodyLimit(pushErr)
 					// Keep the announced figure even when the run never made a
@@ -876,7 +881,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 						calibrationDenom = effObjectsSent
 					}
 					if updated := calibrateBytesPerObject(sentBytes, calibrationDenom, calibratedBytesPerObject); updated > 0 {
-						p.log("bootstrap batch calibrated bytes-per-object",
+						p.log(ctx, "bootstrap batch calibrated bytes-per-object",
 							"branch", batch.Plan.TargetRef.String(),
 							"previous_bytes_per_object", calibratedBytesPerObject,
 							"observed_bytes_per_object", updated,
@@ -922,7 +927,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						oldRemaining := len(batch.Checkpoints[idx:])
 						newCount := len(expanded)
-						p.log("bootstrap batch subdividing after target size rejection",
+						p.warn(ctx, "bootstrap batch subdividing after target size rejection",
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", oldRemaining,
 							"new_remaining", newCount,
@@ -931,7 +936,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 							"limit_bytes", limit,
 							"factor", factor,
 							"aborted_early", abortedEarly,
-							"error", pushErr.Error())
+							"error", sanitize.Line(pushErr.Error()))
 						limitText := ""
 						if limit > 0 {
 							limitText = fmt.Sprintf(" (target limit %s)", gitproto.HumanBytes(limit))
@@ -985,7 +990,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				return result, fmt.Errorf("push bootstrap batch for %s: target refused %s: %s",
 					batch.Plan.TargetRef, batch.TempRef, reason)
 			}
-			p.log("bootstrap batch checkpoint complete",
+			p.log(ctx, "bootstrap batch checkpoint complete",
 				"branch", batch.Plan.TargetRef.String(),
 				"batch", idx+1,
 				"batch_total", len(batch.Checkpoints))
@@ -1005,7 +1010,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			if dropCount := recombineDropCount(sentBytes, p.TargetMaxPack, len(batch.Checkpoints)-idx-2); dropCount > 0 {
 				dropped := batch.Checkpoints[idx+1]
 				batch.Checkpoints = append(batch.Checkpoints[:idx+1], batch.Checkpoints[idx+1+dropCount:]...)
-				p.log("bootstrap batch recombining after small push",
+				p.log(ctx, "bootstrap batch recombining after small push",
 					"branch", batch.Plan.TargetRef.String(),
 					"sent_bytes", sentBytes,
 					"target_limit_bytes", p.TargetMaxPack,
@@ -1061,7 +1066,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				resumeHash: current, createHash: batch.Plan.SourceHash, doubt: doubt,
 			})
 			completedRefs[batch.TempRef] = current
-			p.log("bootstrap batch branch create unconfirmed; deferring marker cleanup",
+			p.warn(ctx, "bootstrap batch branch create unconfirmed; deferring marker cleanup",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"resume_hash", planner.ShortHash(current),
@@ -1078,7 +1083,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// Not fatal — the branch is there, which is what the operator
 			// asked for — but the scaffolding outlived it, and on the
 			// bootstrap route prune is not available to reap it.
-			p.warn("bootstrap temp ref delete refused; marker left on target",
+			p.warn(ctx, "bootstrap temp ref delete refused; marker left on target",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"reason", reason)
@@ -1087,7 +1092,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		}
 		completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 		completedRefs[batch.TempRef] = batch.Plan.SourceHash
-		p.log("bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
+		p.log(ctx, "bootstrap batch branch finalized", "branch", batch.Plan.TargetRef.String())
 	}
 
 	// Settled here rather than after the tail phase: the last create has
@@ -1098,7 +1103,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 
 	// Tail phase: tags and other-kind refs (issue #1)
 	if len(tailPlans) > 0 {
-		p.log("bootstrap batch pushing tail refs after branch batches", "tail_count", len(tailPlans))
+		p.log(ctx, "bootstrap batch pushing tail refs after branch batches", "tail_count", len(tailPlans))
 		if p.OnPhase != nil {
 			p.OnPhase(tailPhaseLabel(tailPlans))
 		}
@@ -1150,14 +1155,14 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 	}
 	if p.TargetRefsNow == nil {
 		for _, marker := range pending {
-			keepMarker(p, marker, "no way to list the target's refs")
+			keepMarker(ctx, p, marker, "no way to list the target's refs")
 		}
 		return
 	}
 	refsNow, err := p.TargetRefsNow(ctx)
 	if err != nil {
 		for _, marker := range pending {
-			keepMarker(p, marker, fmt.Sprintf("could not list the target's refs: %v", err))
+			keepMarker(ctx, p, marker, fmt.Sprintf("could not list the target's refs: %v", err))
 		}
 		return
 	}
@@ -1167,15 +1172,15 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 	for _, marker := range pending {
 		switch onTarget := refsNow[marker.branch]; {
 		case onTarget.IsZero():
-			keepMarker(p, marker, fmt.Sprintf("%s is not on the target", marker.branch))
+			keepMarker(ctx, p, marker, fmt.Sprintf("%s is not on the target", marker.branch))
 		case onTarget != marker.createHash:
 			// Someone else's branch, at their commit. Everything between it
 			// and this import's tip is reachable from the marker and nothing
 			// else, so the marker is still the only thing holding it.
-			keepMarker(p, marker, fmt.Sprintf("%s is on the target at %s, not the %s this run pushed",
+			keepMarker(ctx, p, marker, fmt.Sprintf("%s is on the target at %s, not the %s this run pushed",
 				marker.branch, planner.ShortHash(onTarget), planner.ShortHash(marker.createHash)))
 		default:
-			p.log("bootstrap deleting resume marker; branch present at pushed hash",
+			p.log(ctx, "bootstrap deleting resume marker; branch present at pushed hash",
 				"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
 				"target_hash", planner.ShortHash(onTarget), "doubt", marker.doubt)
 			cmds = append(cmds, gitproto.PushCommand{Name: marker.tempRef, Old: marker.resumeHash, Delete: true})
@@ -1186,8 +1191,8 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 		return
 	}
 	if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
-		p.warn("bootstrap resume marker cleanup failed; markers left on target",
-			"marker_count", len(cmds), "error", err.Error())
+		p.warn(ctx, "bootstrap resume marker cleanup failed; markers left on target",
+			"marker_count", len(cmds), "error", sanitize.Line(err.Error()))
 		p.notice(fmt.Sprintf("could not delete %d stale resume marker(s) — remove them by hand or let a --prune run reap them", len(cmds)))
 		return
 	}
@@ -1196,7 +1201,7 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 	// longer matches because a concurrent run moved the marker, returns nil.
 	for _, marker := range deleted {
 		if reason, refused := p.refRefused(marker.tempRef); refused {
-			p.warn("bootstrap temp ref delete refused; marker left on target",
+			p.warn(ctx, "bootstrap temp ref delete refused; marker left on target",
 				"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
 				"reason", reason)
 			p.notice(fmt.Sprintf("target refused to delete %s (%s) — remove it by hand or let a --prune run reap it",
@@ -1215,11 +1220,11 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 // deliberately, in that order of harm: a marker is inert scaffolding — the
 // resume route requires the branch to be absent, so a stale one cannot
 // misroute anything — while a marker deleted in error costs a full re-import.
-func keepMarker(p Params, marker pendingMarker, why string) {
-	p.log("bootstrap keeping resume marker",
+func keepMarker(ctx context.Context, p Params, marker pendingMarker, why string) {
+	p.warn(ctx, "bootstrap keeping resume marker",
 		"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
 		"resume_hash", planner.ShortHash(marker.resumeHash),
-		"doubt", marker.doubt, "reason", why)
+		"doubt", marker.doubt, "reason", sanitize.Line(why))
 	p.notice(fmt.Sprintf("%s (%s) — keeping %s at %s so the next run resumes instead of re-importing",
 		why, marker.doubt, marker.tempRef, planner.ShortHash(marker.resumeHash)))
 }
@@ -1268,13 +1273,13 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 	ordered, trunkIdx := orderTrunkFirst(desired, p.SourceHeadTarget)
 	switch {
 	case p.SourceHeadTarget == "":
-		p.log("bootstrap batch trunk unset", "reason", "source did not advertise a HEAD symref")
+		p.log(ctx, "bootstrap batch trunk unset", "reason", "source did not advertise a HEAD symref")
 	case trunkIdx < 0:
-		p.log("bootstrap batch trunk unset",
+		p.log(ctx, "bootstrap batch trunk unset",
 			"reason", "HEAD ref not in desired set (filtered by --branch or --map)",
 			"source_head_target", p.SourceHeadTarget.String())
 	default:
-		p.log("bootstrap batch trunk selected",
+		p.log(ctx, "bootstrap batch trunk selected",
 			"source_head_target", p.SourceHeadTarget.String(),
 			"trunk_target_ref", ordered[trunkIdx].TargetRef.String())
 	}
@@ -1283,7 +1288,7 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 		// A replicate run that follows an interrupted bootstrap lands here: the
 		// trunk is on the target already, so it is not in the desired set.
 		if haves := targetHaves(p.TargetRefs); len(haves) > 0 {
-			p.log("bootstrap batch planning against refs already on target", "have_count", len(haves))
+			p.log(ctx, "bootstrap batch planning against refs already on target", "have_count", len(haves))
 			return nil, &deferredBranches{refs: ordered, haves: haves}, nil
 		}
 		out := make([]plannedBatch, 0, len(ordered))
@@ -1413,7 +1418,7 @@ func planCheckpointsFromChain(
 	trunkHaves []plumbing.Hash,
 	trunkStopAt map[plumbing.Hash]struct{},
 ) ([]plumbing.Hash, []plumbing.Hash, map[plumbing.Hash]struct{}, error) {
-	p.log("bootstrap batch fetching commit graph",
+	p.log(ctx, "bootstrap batch fetching commit graph",
 		"branch", ref.TargetRef.String(),
 		"have_count", len(trunkHaves),
 		"stop_at_count", len(trunkStopAt))
@@ -1430,7 +1435,7 @@ func planCheckpointsFromChain(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("fetch bootstrap commit parents for %s: %w", ref.TargetRef, err)
 	}
-	checkpoints, chain, err := checkpointsFromParents(p, ref, parentsMap, trunkStopAt)
+	checkpoints, chain, err := checkpointsFromParents(ctx, p, ref, parentsMap, trunkStopAt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1448,6 +1453,7 @@ func planCheckpointsFromChain(
 // commit-parents map that is already fetched, so several branches can share
 // one commit-graph fetch. The walk stops at stopAt.
 func checkpointsFromParents(
+	ctx context.Context,
 	p Params,
 	ref planner.DesiredRef,
 	parentsMap map[plumbing.Hash][]plumbing.Hash,
@@ -1481,7 +1487,7 @@ func checkpointsFromParents(
 	numBatches := estimateBatchCount(int64(len(chain)), p.TargetMaxPack)
 	checkpoints := evenCheckpoints(chain, numBatches)
 
-	p.log("bootstrap batch planned checkpoints",
+	p.log(ctx, "bootstrap batch planned checkpoints",
 		"branch", ref.TargetRef.String(),
 		"chain_len", len(chain),
 		"estimated_batches", len(checkpoints))
@@ -2055,30 +2061,51 @@ func singleGP(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) m
 	}
 }
 
-// log writes a planning line to the -v log and to PushLogger. Planning can
-// run for many minutes before the first push on a large or branch-heavy
+// newDiagnostics puts the -v log and PushLogger behind one handler, so each
+// planning line reaches each sink once, at one level, with the caller's
+// context (and any trace IDs an embedder's handler reads from it). Planning
+// can run for many minutes before the first push on a large or branch-heavy
 // repo; without these lines in PushLogger an embedder sees nothing between
-// the size lookup and a timeout.
-func (p Params) log(msg string, args ...any) {
-	p.verboseLog(msg, args...)
-	if p.PushLogger != nil && p.PushLogger != p.Logger {
-		p.PushLogger.Info(msg, args...)
+// the size lookup and a timeout. Nil when neither logger is set.
+func newDiagnostics(verbose, push *slog.Logger) *slog.Logger {
+	switch {
+	case push == nil || push == verbose:
+		return verbose
+	case verbose == nil:
+		return push
+	}
+	return slog.New(slog.NewMultiHandler(verbose.Handler(), push.Handler()))
+}
+
+// diagnostics returns the logger built by Execute, or builds one for Params
+// that did not come through it.
+func (p Params) diagnostics() *slog.Logger {
+	if p.diag != nil {
+		return p.diag
+	}
+	return newDiagnostics(p.Logger, p.PushLogger)
+}
+
+func (p Params) logAt(ctx context.Context, level slog.Level, msg string, args ...any) {
+	if l := p.diagnostics(); l != nil {
+		l.Log(ctx, level, msg, args...)
 	}
 }
 
-// warn is log for a failure line: PushLogger gets it at Warn so a monitor on
-// warnings sees it; the -v log keeps Info.
-func (p Params) warn(msg string, args ...any) {
-	p.verboseLog(msg, args...)
-	if p.PushLogger != nil && p.PushLogger != p.Logger {
-		p.PushLogger.Warn(msg, args...)
-	}
+// log writes a planning or progress line.
+func (p Params) log(ctx context.Context, msg string, args ...any) {
+	p.logAt(ctx, slog.LevelInfo, msg, args...)
 }
 
-// verboseLog writes to the -v log only, for a record PushLogger receives
-// through its own call.
-func (p Params) verboseLog(msg string, args ...any) {
-	if p.Logger != nil {
-		p.Logger.Info(msg, args...)
-	}
+// warn writes a line a monitor should see: a rejected push, or scaffolding
+// left on the target.
+func (p Params) warn(ctx context.Context, msg string, args ...any) {
+	p.logAt(ctx, slog.LevelWarn, msg, args...)
+}
+
+// debug writes a per-branch line. On a repository with thousands of branches
+// these would be thousands of records per attempt; the counts reach Info
+// through "bootstrap batch planned remaining branches".
+func (p Params) debug(ctx context.Context, msg string, args ...any) {
+	p.logAt(ctx, slog.LevelDebug, msg, args...)
 }

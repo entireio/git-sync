@@ -18,7 +18,9 @@ type Options struct {
 	// BootstrapLogger receives one structured diagnostic per checkpoint upload,
 	// including failures, one per GitHub repository-size lookup (warning
 	// level when the size could not be read), and the bootstrap planning and
-	// progress lines (info level), independently of verbose protocol logging.
+	// progress lines (Info for progress, Warn for rejected pushes and
+	// leftover resume markers, Debug for per-branch detail), independently of
+	// verbose protocol logging. Records carry the caller's context.
 	// Nil disables these diagnostics. Bytes read are not proof of bytes
 	// accepted by the target.
 	BootstrapLogger *slog.Logger
