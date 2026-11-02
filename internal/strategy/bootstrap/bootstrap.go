@@ -819,7 +819,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				// of time receiving it (408/504 deadline). All three are fixed
 				// the same way: subdivide so each push is smaller and faster.
 				subdivide := abortedEarly || isBatchableTargetPushError(pushErr)
-				p.log("bootstrap batch push failed",
+				p.warn("bootstrap batch push failed",
 					"branch", batch.Plan.TargetRef.String(),
 					"batch", idx+1,
 					"batch_total", len(batch.Checkpoints),
@@ -1078,7 +1078,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// Not fatal — the branch is there, which is what the operator
 			// asked for — but the scaffolding outlived it, and on the
 			// bootstrap route prune is not available to reap it.
-			p.log("bootstrap temp ref delete refused; marker left on target",
+			p.warn("bootstrap temp ref delete refused; marker left on target",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"reason", reason)
@@ -1186,7 +1186,7 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 		return
 	}
 	if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
-		p.log("bootstrap resume marker cleanup failed; markers left on target",
+		p.warn("bootstrap resume marker cleanup failed; markers left on target",
 			"marker_count", len(cmds), "error", err.Error())
 		p.notice(fmt.Sprintf("could not delete %d stale resume marker(s) — remove them by hand or let a --prune run reap them", len(cmds)))
 		return
@@ -1196,7 +1196,7 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 	// longer matches because a concurrent run moved the marker, returns nil.
 	for _, marker := range deleted {
 		if reason, refused := p.refRefused(marker.tempRef); refused {
-			p.log("bootstrap temp ref delete refused; marker left on target",
+			p.warn("bootstrap temp ref delete refused; marker left on target",
 				"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
 				"reason", reason)
 			p.notice(fmt.Sprintf("target refused to delete %s (%s) — remove it by hand or let a --prune run reap it",
@@ -2063,6 +2063,15 @@ func (p Params) log(msg string, args ...any) {
 	p.verboseLog(msg, args...)
 	if p.PushLogger != nil && p.PushLogger != p.Logger {
 		p.PushLogger.Info(msg, args...)
+	}
+}
+
+// warn is log for a failure line: PushLogger gets it at Warn so a monitor on
+// warnings sees it; the -v log keeps Info.
+func (p Params) warn(msg string, args ...any) {
+	p.verboseLog(msg, args...)
+	if p.PushLogger != nil && p.PushLogger != p.Logger {
+		p.PushLogger.Warn(msg, args...)
 	}
 }
 

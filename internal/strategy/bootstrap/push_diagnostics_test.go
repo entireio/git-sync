@@ -195,12 +195,16 @@ func TestPlanningLinesReachPushLoggerWithoutVerboseLogging(t *testing.T) {
 	seen := map[any]bool{}
 	for _, record := range logRecords(t, &out) {
 		seen[record["msg"]] = true
+		if record["msg"] == "bootstrap batch push failed" && record["level"] != "WARN" {
+			t.Errorf("push failure logged at %v, want WARN", record["level"])
+		}
 	}
 	for _, msg := range []string{
 		"bootstrap batch planning checkpoints",
 		"bootstrap batch fetching commit graph",
 		"bootstrap batch planned checkpoints",
 		"bootstrap batch push attempting",
+		"bootstrap batch push failed",
 	} {
 		if !seen[msg] {
 			t.Errorf("PushLogger missing planning line %q; output=%s", msg, &out)
