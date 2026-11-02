@@ -7,6 +7,9 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
+// pushDiagnosticMsg names the per-checkpoint upload record in PushLogger.
+const pushDiagnosticMsg = "Bootstrap checkpoint upload diagnostic"
+
 // logPush runs once after PushPack returns, never on each stream Read. For a
 // local abort, counters are the exact inputs that triggered the decision; for
 // other outcomes they are the observer's latest counters. Neither proves target
@@ -48,7 +51,7 @@ func (p Params) logPush(ctx context.Context, batch plannedBatch, current plumbin
 			abortReason = "bytes_read"
 		}
 	}
-	p.PushLogger.InfoContext(ctx, "Bootstrap checkpoint upload diagnostic",
+	p.PushLogger.InfoContext(ctx, pushDiagnosticMsg,
 		slog.String("branch", batch.Plan.TargetRef.String()),
 		slog.String("checkpoint_hash", batch.Checkpoints[idx].String()),
 		slog.String("previous_checkpoint_hash", current.String()),

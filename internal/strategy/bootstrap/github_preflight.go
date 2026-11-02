@@ -258,7 +258,8 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 		if limit > 0 {
 			attrs = append(attrs, slog.Int64("target_max_pack_bytes", limit))
 		}
-		p.log(githubPreflightMsg, attrs...)
+		// PushLogger gets this record below, at its own level.
+		p.verboseLog(githubPreflightMsg, attrs...)
 	} else {
 		level = slog.LevelWarn
 		errText := sanitize.Line(lookup.err.Error())

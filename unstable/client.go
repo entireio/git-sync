@@ -27,8 +27,8 @@ type (
 type Options struct {
 	HTTPClient *http.Client
 	Auth       gitsync.AuthProvider
-	// BootstrapLogger receives structured checkpoint and GitHub size-lookup
-	// diagnostics. Nil disables them.
+	// BootstrapLogger receives structured checkpoint, GitHub size-lookup and
+	// bootstrap planning diagnostics. Nil disables them.
 	BootstrapLogger *slog.Logger
 }
 

@@ -16,10 +16,11 @@ type Options struct {
 	HTTPClient *http.Client
 	Auth       AuthProvider
 	// BootstrapLogger receives one structured diagnostic per checkpoint upload,
-	// including failures, and one per GitHub repository-size lookup (warning
-	// level when the size could not be read), independently of verbose
-	// protocol logging. Nil disables these diagnostics. Bytes read are not
-	// proof of bytes accepted by the target.
+	// including failures, one per GitHub repository-size lookup (warning
+	// level when the size could not be read), and the bootstrap planning and
+	// progress lines (info level), independently of verbose protocol logging.
+	// Nil disables these diagnostics. Bytes read are not proof of bytes
+	// accepted by the target.
 	BootstrapLogger *slog.Logger
 	// BootstrapFallbackMaxPackBytes bounds indivisible checkpoint uploads when
 	// the target has not announced a limit. Positive values disable projection

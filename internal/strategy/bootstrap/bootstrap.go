@@ -50,8 +50,14 @@ type Params struct {
 	MaxPackBytes     int64
 	TargetMaxPack    int64
 	Verbose          bool
-	Logger           *slog.Logger
-	PushLogger       *slog.Logger
+	// Logger is the -v log: the CLI's human-readable stderr stream. Nil when
+	// verbose is off.
+	Logger *slog.Logger
+	// PushLogger is the caller's structured diagnostics sink (a library
+	// embedder's BootstrapLogger). It receives the per-checkpoint upload
+	// diagnostics, the GitHub size lookup and every planning line, verbose or
+	// not, so a run that stalls before its first push still leaves a trail.
+	PushLogger *slog.Logger
 	// Strategy selects the chain ordering for batched bootstrap. Empty
 	// or "first-parent" walks the first-parent backbone (default,
 	// matches historical behaviour). "topo" includes every reachable
@@ -2049,9 +2055,21 @@ func singleGP(sourceRef, targetRef plumbing.ReferenceName, hash plumbing.Hash) m
 	}
 }
 
+// log writes a planning line to the -v log and to PushLogger. Planning can
+// run for many minutes before the first push on a large or branch-heavy
+// repo; without these lines in PushLogger an embedder sees nothing between
+// the size lookup and a timeout (INC-133).
 func (p Params) log(msg string, args ...any) {
-	if p.Logger == nil {
-		return
+	p.verboseLog(msg, args...)
+	if p.PushLogger != nil && p.PushLogger != p.Logger {
+		p.PushLogger.Info(msg, args...)
 	}
-	p.Logger.Info(msg, args...)
+}
+
+// verboseLog writes to the -v log only, for a record PushLogger receives
+// through its own call.
+func (p Params) verboseLog(msg string, args ...any) {
+	if p.Logger != nil {
+		p.Logger.Info(msg, args...)
+	}
 }
