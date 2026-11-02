@@ -328,7 +328,7 @@ func batchAfterPushError(ctx context.Context, p *Params, err error) bool {
 	if isTargetPushDeadlineError(err) {
 		reason = "target push timed out"
 	}
-	p.warn(ctx, "bootstrap retrying with batched mode after batchable push failure",
+	p.log(ctx, "bootstrap retrying with batched mode after batchable push failure",
 		"target_max_pack_bytes", autoBatch, "reason", reason)
 	p.notice(fmt.Sprintf("%s — switching to batched mode (limit %s)",
 		reason, gitproto.HumanBytes(autoBatch)))
@@ -542,7 +542,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// trip, and under-reporting work this run cannot confirm is the
 			// same direction as everything else here.
 			if confirmed, doubt := p.createConfirmed(batch.Plan.TargetRef); !confirmed {
-				p.warn(ctx, "bootstrap batch subsumed branch create unconfirmed; not counted",
+				p.log(ctx, "bootstrap batch subsumed branch create unconfirmed; not counted",
 					"branch", batch.Plan.TargetRef.String(),
 					"source_hash", planner.ShortHash(batch.Plan.SourceHash),
 					"reason", doubt)
@@ -824,7 +824,11 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				// of time receiving it (408/504 deadline). All three are fixed
 				// the same way: subdivide so each push is smaller and faster.
 				subdivide := abortedEarly || isBatchableTargetPushError(pushErr)
-				p.warn(ctx, "bootstrap batch push failed",
+				level, msg := pushSetbackLevel(pushErr, subdivide && len(batch.chain) > 0), "bootstrap batch push failed"
+				if level == slog.LevelInfo {
+					msg = "bootstrap batch push stopped at byte budget"
+				}
+				p.logAt(ctx, level, msg,
 					"branch", batch.Plan.TargetRef.String(),
 					"batch", idx+1,
 					"batch_total", len(batch.Checkpoints),
@@ -927,7 +931,11 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					if len(expanded) > len(batch.Checkpoints[idx:]) {
 						oldRemaining := len(batch.Checkpoints[idx:])
 						newCount := len(expanded)
-						p.warn(ctx, "bootstrap batch subdividing after target size rejection",
+						msg := "bootstrap batch subdividing after target size rejection"
+						if !isBatchableTargetPushError(pushErr) {
+							msg = "bootstrap batch subdividing after stopping at byte budget"
+						}
+						p.logAt(ctx, pushSetbackLevel(pushErr, true), msg,
 							"branch", batch.Plan.TargetRef.String(),
 							"old_remaining", oldRemaining,
 							"new_remaining", newCount,
@@ -1066,7 +1074,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				resumeHash: current, createHash: batch.Plan.SourceHash, doubt: doubt,
 			})
 			completedRefs[batch.TempRef] = current
-			p.warn(ctx, "bootstrap batch branch create unconfirmed; deferring marker cleanup",
+			p.log(ctx, "bootstrap batch branch create unconfirmed; deferring marker cleanup",
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"resume_hash", planner.ShortHash(current),
@@ -2097,10 +2105,22 @@ func (p Params) log(ctx context.Context, msg string, args ...any) {
 	p.logAt(ctx, slog.LevelInfo, msg, args...)
 }
 
-// warn writes a line a monitor should see: a rejected push, or scaffolding
-// left on the target.
+// warn writes a line a monitor should see: a push the target refused or
+// timed out, or scaffolding left on the target.
 func (p Params) warn(ctx context.Context, msg string, args ...any) {
 	p.logAt(ctx, slog.LevelWarn, msg, args...)
+}
+
+// pushSetbackLevel is the level for a push that did not land. Info when the
+// run recovers by splitting and the target refused nothing: git-sync stopped
+// its own upload at the byte budget, which is how a large bootstrap normally
+// finds its pack size. Warn when the target refused or timed out the push, or
+// when splitting cannot help.
+func pushSetbackLevel(pushErr error, recoverable bool) slog.Level {
+	if recoverable && !isBatchableTargetPushError(pushErr) {
+		return slog.LevelInfo
+	}
+	return slog.LevelWarn
 }
 
 // debug writes a per-branch line. On a repository with thousands of branches

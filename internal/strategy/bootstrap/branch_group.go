@@ -298,7 +298,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 				return nil, 0, fmt.Errorf("push bootstrap branch group: %w", pushErr)
 			}
 			pending := dropAppliedMembers(p, members, st)
-			p.warn(ctx, "bootstrap batch group push too big or too slow; splitting",
+			p.logAt(ctx, pushSetbackLevel(pushErr, true), "bootstrap batch group push too big or too slow; splitting",
 				"branch_count", len(plans),
 				"pending", len(pending),
 				"sent_bytes", observer.Bytes(),
@@ -317,7 +317,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 	confirmed := 0
 	for _, member := range members {
 		if ok, doubt := p.createConfirmed(member.Plan.TargetRef); !ok {
-			p.warn(ctx, "bootstrap batch group branch create unconfirmed; not counted",
+			p.log(ctx, "bootstrap batch group branch create unconfirmed; not counted",
 				"branch", member.Plan.TargetRef.String(),
 				"source_hash", planner.ShortHash(member.Plan.SourceHash),
 				"reason", doubt)

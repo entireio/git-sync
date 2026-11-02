@@ -195,19 +195,52 @@ func TestPlanningLinesReachPushLoggerWithoutVerboseLogging(t *testing.T) {
 	seen := map[any]bool{}
 	for _, record := range logRecords(t, &out) {
 		seen[record["msg"]] = true
-		if record["msg"] == "bootstrap batch push failed" && record["level"] != "WARN" {
-			t.Errorf("push failure logged at %v, want WARN", record["level"])
-		}
 	}
 	for _, msg := range []string{
 		"bootstrap batch planning checkpoints",
 		"bootstrap batch fetching commit graph",
 		"bootstrap batch planned checkpoints",
 		"bootstrap batch push attempting",
-		"bootstrap batch push failed",
+		"bootstrap batch push stopped at byte budget",
 	} {
 		if !seen[msg] {
 			t.Errorf("PushLogger missing planning line %q; output=%s", msg, &out)
+		}
+	}
+}
+
+// A push git-sync stops itself at its byte budget is how a large bootstrap
+// finds its pack size: Info. A push the target refuses is a warning.
+func TestPushSetbackLevelFollowsTheCause(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		budget int64
+		push   func(int, io.ReadCloser) error
+		msg    string
+		level  string
+	}{
+		"stopped at budget": {64, drainAbort, "bootstrap batch push stopped at byte budget", "INFO"},
+		"target refused": {1 << 30, func(int, io.ReadCloser) error {
+			return errors.New("http 413: body exceeded size limit 1000")
+		}, "bootstrap batch push failed", "WARN"},
+	} {
+		var out bytes.Buffer
+		p := bottomOutParams(t, tc.budget, 0, tc.push)
+		p.PushLogger = slog.New(slog.NewJSONHandler(&out, nil))
+		if _, err := Execute(context.Background(), p, "empty target"); err == nil {
+			t.Fatalf("%s: expected the push to fail", name)
+		}
+		found := false
+		for _, record := range logRecords(t, &out) {
+			if record["msg"] == tc.msg {
+				found = true
+				if record["level"] != tc.level {
+					t.Errorf("%s: %q logged at %v, want %s", name, tc.msg, record["level"], tc.level)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no %q record; output=%s", name, tc.msg, &out)
 		}
 	}
 }

@@ -53,6 +53,11 @@ func TestBootstrapPlanningLinesReachBootstrapLoggerWithoutVerbose(t *testing.T) 
 		if record["sync_id"] != "sync-1" {
 			t.Fatalf("record %v lost the embedder's attributes: %v", record["msg"], record)
 		}
+		// The run splits its pack at the byte budget and succeeds: nothing
+		// here should page a monitor on warnings.
+		if record["level"] == "WARN" {
+			t.Errorf("successful bootstrap logged a warning: %v", record)
+		}
 		seen[record["msg"]] = true
 	}
 	for _, msg := range []string{
