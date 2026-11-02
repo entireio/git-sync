@@ -129,6 +129,13 @@ type Config struct {
 	// AllowEmptySource. See emptyScopePrunes.
 	AllowEmptyScope bool
 
+	// OnProgress, when non-nil, is passed to bootstrap as
+	// bootstrap.Params.OnProgress: it is called each time a bootstrap landed
+	// something on the target. Bootstrap only — the syncer never calls it
+	// itself, and incremental, materialized and replicate pushes do not
+	// report through it.
+	OnProgress func(ProgressEvent)
+
 	// progressOut overrides the writer used by the live progress ticker.
 	// Defaults to os.Stderr when nil. Exposed for tests.
 	progressOut io.Writer
@@ -140,6 +147,41 @@ type (
 	Action     = planner.Action
 	BranchPlan = planner.BranchPlan
 )
+
+// Re-export the bootstrap progress types, so Config.OnProgress reaches the
+// strategy without a conversion per event.
+type (
+	ProgressKind  = bstrap.ProgressKind
+	ProgressEvent = bstrap.ProgressEvent
+)
+
+const (
+	ProgressTempRefAdvanced = bstrap.ProgressTempRefAdvanced
+	ProgressRefCreated      = bstrap.ProgressRefCreated
+)
+
+// PlanningStats reports what bootstrap checkpoint planning did. It is
+// bootstrap.PlanningStats with the duration in nanoseconds, like
+// Stats.ElapsedNanos, and is carried on the error path too, so a run its
+// deadline stopped still reports how far planning got. All zero for a run
+// that did not bootstrap.
+type PlanningStats struct {
+	SourceRefs       int   `json:"sourceRefs"`
+	BranchesTotal    int   `json:"branchesTotal"`
+	BranchesPlanned  int   `json:"branchesPlanned"`
+	BranchesSubsumed int   `json:"branchesSubsumed"`
+	PlanningNanos    int64 `json:"planningNanos"`
+}
+
+func planningStats(stats bstrap.PlanningStats) PlanningStats {
+	return PlanningStats{
+		SourceRefs:       stats.SourceRefs,
+		BranchesTotal:    stats.BranchesTotal,
+		BranchesPlanned:  stats.BranchesPlanned,
+		BranchesSubsumed: stats.BranchesSubsumed,
+		PlanningNanos:    stats.PlanningDuration.Nanoseconds(),
+	}
+}
 
 const (
 	RefKindBranch = planner.RefKindBranch
@@ -187,6 +229,7 @@ type Result struct {
 	BatchCount         int                    `json:"batchCount"`
 	PlannedBatchCount  int                    `json:"plannedBatchCount"`
 	TempRefs           []string               `json:"tempRefs"`
+	Planning           PlanningStats          `json:"planning"`
 	BootstrapSuggested bool                   `json:"bootstrapSuggested"`
 	SourceHEAD         plumbing.ReferenceName `json:"sourceHead,omitempty"`
 	Stats              Stats                  `json:"stats"`
@@ -230,6 +273,13 @@ func (r Result) Lines() []string {
 	}
 	if r.Batching && len(r.TempRefs) > 0 {
 		lines = append(lines, "batching: temp-refs="+strings.Join(r.TempRefs, ","))
+	}
+	// Batched only: one-shot plans no checkpoints, so its planning figures
+	// would read as a planning phase that did nothing.
+	if r.Batching {
+		lines = append(lines, fmt.Sprintf("planning: source-refs=%d branches=%d planned=%d subsumed=%d duration=%s",
+			r.Planning.SourceRefs, r.Planning.BranchesTotal, r.Planning.BranchesPlanned,
+			r.Planning.BranchesSubsumed, time.Duration(r.Planning.PlanningNanos)))
 	}
 	if r.SourceHEAD != "" {
 		lines = append(lines, "source-head: "+r.SourceHEAD.String())
@@ -1211,6 +1261,7 @@ func (s *syncSession) runReplicate(ctx context.Context) (Result, error) {
 			result.BatchCount = batched.BatchCount
 			result.PlannedBatchCount = batched.PlannedBatchCount
 			result.TempRefs = batched.TempRefs
+			result.Planning = batched.Planning
 			if err != nil {
 				return result, fmt.Errorf("replicate relay failed: %w", err)
 			}
@@ -1284,6 +1335,7 @@ func (s *syncSession) replicateBatchedAfterRejection(
 		result.BatchCount = bResult.BatchCount
 		result.PlannedBatchCount = bResult.PlannedBatchCount
 		result.TempRefs = bResult.TempRefs
+		result.Planning = bResult.Planning
 		if err != nil {
 			return result, err
 		}
@@ -1565,6 +1617,10 @@ func bootstrapWithInputs(
 		// rather than guessing from the wording of a rejection.
 		TargetRefsNow: s.targetRefsNow,
 		RejectedPush:  rejectedPush,
+		// Every hash-valued name the source listed, before the desired-set
+		// filters: the repository's ref load, not this run's share of it.
+		SourceRefCount: len(s.sourceRefMap),
+		OnProgress:     s.cfg.OnProgress,
 	}, relayReason)
 	if err != nil {
 		// Carry the strategy facts out with the error. Execute populates these
@@ -1580,7 +1636,10 @@ func bootstrapWithInputs(
 			Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 			Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 			PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
-			Stats: s.stats.snapshot(), Measurement: s.measurementDone(),
+			// The partial planning figures are what a timed-out attempt has
+			// to show for itself; see bootstrap.PlanningStats.
+			Planning: planningStats(bResult.Planning),
+			Stats:    s.stats.snapshot(), Measurement: s.measurementDone(),
 			Protocol: s.sourceService.Protocol, SourceHEAD: s.sourceService.HeadTarget,
 		}, fmt.Errorf("bootstrap execute: %w", err)
 	}
@@ -1592,7 +1651,8 @@ func bootstrapWithInputs(
 		Relay: bResult.Relay, RelayMode: bResult.RelayMode, RelayReason: bResult.RelayReason,
 		Batching: bResult.Batching, BatchCount: bResult.BatchCount,
 		PlannedBatchCount: bResult.PlannedBatchCount, TempRefs: bResult.TempRefs,
-		Stats: s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
+		Planning: planningStats(bResult.Planning),
+		Stats:    s.stats.snapshot(), Measurement: s.measurementDone(), Protocol: s.sourceService.Protocol,
 		SourceHEAD: s.sourceService.HeadTarget,
 	}, nil
 }

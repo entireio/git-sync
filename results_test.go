@@ -1,6 +1,8 @@
 package gitsync
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -77,6 +79,9 @@ func TestFromSyncResultShapesStableSummary(t *testing.T) {
 		TempRefs:           []string{"refs/gitsync/bootstrap/heads/main/1"},
 		BootstrapSuggested: true,
 		Protocol:           "v2",
+		Planning: syncer.PlanningStats{
+			SourceRefs: 7, BranchesTotal: 5, BranchesPlanned: 3, BranchesSubsumed: 1, PlanningNanos: 42,
+		},
 	})
 
 	if len(got.Refs) != 1 || got.Refs[0].Branch != "main" {
@@ -93,5 +98,40 @@ func TestFromSyncResultShapesStableSummary(t *testing.T) {
 	}
 	if !got.Execution.BootstrapSuggested {
 		t.Fatalf("expected bootstrap suggestion in execution summary")
+	}
+	if want := (PlanningSummary{SourceRefs: 7, BranchesTotal: 5, BranchesPlanned: 3, BranchesSubsumed: 1, PlanningNanos: 42}); got.Execution.Planning != want {
+		t.Fatalf("planning summary = %+v, want %+v", got.Execution.Planning, want)
+	}
+}
+
+// The planning summary's JSON keys are API: a caller's monitor reads them.
+func TestPlanningSummaryJSONKeys(t *testing.T) {
+	data, err := json.Marshal(ExecutionSummary{Planning: PlanningSummary{
+		SourceRefs: 7, BranchesTotal: 5, BranchesPlanned: 3, BranchesSubsumed: 1, PlanningNanos: 42,
+	}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	const want = `"planning":{"sourceRefs":7,"branchesTotal":5,"branchesPlanned":3,"branchesSubsumed":1,"planningNanos":42}`
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("ExecutionSummary JSON = %s, want it to contain %s", data, want)
+	}
+}
+
+func TestSyncerProgressAdaptsEvents(t *testing.T) {
+	if syncerProgress(nil) != nil {
+		t.Fatal("a nil OnProgress must stay nil, so the strategy skips the event work")
+	}
+	var got []ProgressEvent
+	fn := syncerProgress(func(e ProgressEvent) { got = append(got, e) })
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	fn(syncer.ProgressEvent{Kind: syncer.ProgressTempRefAdvanced, Ref: "refs/gitsync/bootstrap/heads/main", Hash: hash})
+	fn(syncer.ProgressEvent{Kind: syncer.ProgressRefCreated, Ref: "refs/heads/main", Hash: hash})
+	want := []ProgressEvent{
+		{Kind: ProgressTempRefAdvanced, Ref: "refs/gitsync/bootstrap/heads/main", Hash: hash.String()},
+		{Kind: ProgressRefCreated, Ref: "refs/heads/main", Hash: hash.String()},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("events = %+v, want %+v", got, want)
 	}
 }
