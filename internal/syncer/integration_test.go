@@ -2669,12 +2669,18 @@ func TestRun_IntegrationReplicateBatchesMissingRefsAfterTargetBodyLimit(t *testi
 	defer sourceServer.Close()
 	defer targetServer.Close()
 
+	created := map[plumbing.ReferenceName]plumbing.Hash{}
 	result, err := Run(context.Background(), Config{
 		Source:       Endpoint{URL: sourceServer.RepoURL()},
 		Target:       Endpoint{URL: targetServer.RepoURL()},
 		Mode:         modeReplicate,
 		Prune:        true,
 		ProtocolMode: protocolModeAuto,
+		OnProgress: func(e ProgressEvent) {
+			if e.Kind == ProgressRefCreated {
+				created[e.Ref] = e.Hash
+			}
+		},
 	})
 	if err != nil {
 		t.Fatalf("replicate after target body limit failed: %v", err)
@@ -2687,6 +2693,25 @@ func TestRun_IntegrationReplicateBatchesMissingRefsAfterTargetBodyLimit(t *testi
 	}
 	for _, ref := range append(branchRefs, trunkRef) {
 		assertHeadsMatch(t, sourceRepo, targetRepo, ref.Short())
+	}
+	// The fallback into batched bootstrap reports like any other bootstrap:
+	// its planning figures and a progress event for every branch it created.
+	planned := result.Planning
+	if planned.SourceRefs < branches+1 || planned.BranchesTotal != branches ||
+		planned.BranchesPlanned+planned.BranchesSubsumed != branches || planned.PlanningNanos <= 0 {
+		t.Errorf("Planning = %+v, want all %d missing branches planned", planned, branches)
+	}
+	for _, ref := range branchRefs {
+		want, err := sourceRepo.Reference(ref, true)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", ref, err)
+		}
+		if created[ref] != want.Hash() {
+			t.Errorf("progress for %s = %s, want created at %s", ref, created[ref], want.Hash())
+		}
+	}
+	if _, ok := created[trunkRef]; ok {
+		t.Errorf("progress reported %s created, but it was already on the target", trunkRef)
 	}
 }
 

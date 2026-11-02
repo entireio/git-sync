@@ -732,3 +732,37 @@ func TestExecuteBatchesPrivateGitHubRepoFromAuthenticatedPreflight(t *testing.T)
 		t.Fatalf("Execute() error = %v, want the batched path", err)
 	}
 }
+
+// The advertised ref count rides on the size record whatever the lookup
+// answered: a repository small in bytes can still be heavy in branches, and a
+// failed lookup is exactly when the other figure is missing.
+func TestGitHubPreflightLogsRefCount(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		auth     gitproto.AuthMethod
+		refCount int
+		level    string
+	}{
+		{name: "lookup succeeded", auth: installationAuth(), refCount: 31337, level: "INFO"},
+		{name: "lookup failed", refCount: 31337, level: "WARN"},
+		{name: "count unknown", auth: installationAuth(), level: "INFO"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := privateRepoAPI(t, largeRepoKB)
+			var out bytes.Buffer
+			p := preflightParams(t, client, tc.auth, &out)
+			p.SourceRefCount = tc.refCount
+
+			githubBatchLimit(context.Background(), p)
+			event := preflightEvent(t, &out)
+			assertFields(t, event, map[string]any{"level": tc.level})
+			got, present := event["ref_count"]
+			switch {
+			case tc.refCount == 0 && present:
+				t.Errorf("ref_count = %v, want it omitted when the count is unknown", got)
+			case tc.refCount > 0 && got != float64(tc.refCount):
+				t.Errorf("ref_count = %v, want %d", got, tc.refCount)
+			}
+		})
+	}
+}

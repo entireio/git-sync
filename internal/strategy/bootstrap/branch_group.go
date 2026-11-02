@@ -31,7 +31,11 @@ const maxGroupRefs = 1000
 //
 // budget is the run's current byte budget, which the trunk's pushes may
 // already have lowered below TargetMaxPack.
-func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget int64) ([]plannedBatch, error) {
+//
+// stats counts each branch as it is classified: subsumed ones before the
+// commit-graph fetch, the rest as their checkpoints are derived. An error
+// leaves the counts where the failure found them.
+func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget int64, stats *PlanningStats) ([]plannedBatch, error) {
 	if budget <= 0 {
 		budget = p.TargetMaxPack
 	}
@@ -43,6 +47,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 				"branch", ref.TargetRef.String(),
 				"source_hash", planner.ShortHash(ref.SourceHash))
 			out = append(out, subsumedBatch(ref))
+			stats.BranchesSubsumed++
 			continue
 		}
 		divergent = append(divergent, ref)
@@ -93,12 +98,14 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 				"source_hash", planner.ShortHash(ref.SourceHash))
 			out = append(out, subsumedBatch(ref))
 			onTarget++
+			stats.BranchesSubsumed++
 			continue
 		}
 		checkpoints, chain, err := checkpointsFromParents(ctx, p, slog.LevelDebug, ref, parents, stopAt)
 		if err != nil {
 			return nil, err
 		}
+		stats.BranchesPlanned++
 		batch := newPlannedBatch(p, ref, checkpoints, chain)
 		estimated := int64(len(chain)) * estimatedBytesPerCommit
 		if !batch.ResumeHash.IsZero() || estimated > budget {
@@ -326,6 +333,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 		}
 		st.completedRefs[member.Plan.TargetRef] = member.Plan.SourceHash
 		confirmed++
+		p.progress(ProgressRefCreated, member.Plan.TargetRef, member.Plan.SourceHash)
 	}
 	result.BatchCount++
 	p.log(ctx, "bootstrap batch group pushed",
@@ -343,6 +351,9 @@ func dropAppliedMembers(p Params, members []plannedBatch, st groupPushState) []p
 	for _, member := range members {
 		if outcome, _ := p.refOutcome(member.Plan.TargetRef); outcome == gitproto.RefOutcomeApplied {
 			st.completedRefs[member.Plan.TargetRef] = member.Plan.SourceHash
+			// It landed although the push as a whole failed, and it is not
+			// retried, so this is the only place it is reported.
+			p.progress(ProgressRefCreated, member.Plan.TargetRef, member.Plan.SourceHash)
 			continue
 		}
 		pending = append(pending, member)
