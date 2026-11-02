@@ -1246,6 +1246,13 @@ func (s *syncSession) canBatchRejectedReplicate(pushPlans []BranchPlan, err erro
 // refuses on every retry. Batched bootstrap creates the missing refs instead,
 // planned against the refs the target already has. Updates and deletes then
 // go out as a replicate push of their own.
+//
+// A create may find its ref already on the target: another sync of the same
+// target can deliver it while this push is being refused. A ref at the
+// source's commit is done. A ref at any other commit, typically an older sync
+// installing what it saw, is pushed as an update from that commit, since
+// replicate overwrites the target and treating any existing ref as created
+// would leave the target behind the source while the run reports success.
 func (s *syncSession) replicateBatchedAfterRejection(
 	ctx context.Context,
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
@@ -1263,13 +1270,23 @@ func (s *syncSession) replicateBatchedAfterRejection(
 	for _, plan := range pushPlans {
 		current := targetRefs[plan.TargetRef]
 		switch {
-		case plan.Action == ActionCreate:
-			if current.IsZero() {
-				creates[plan.TargetRef] = desiredRefs[plan.TargetRef]
-			}
-		case plan.Action == ActionUpdate && current == plan.SourceHash,
+		case plan.Action == ActionCreate && current.IsZero():
+			creates[plan.TargetRef] = desiredRefs[plan.TargetRef]
+		case plan.Action == ActionCreate && current == plan.SourceHash,
+			plan.Action == ActionUpdate && current == plan.SourceHash,
 			plan.Action == ActionDelete && current.IsZero():
-			// Applied before the push failed.
+			// Applied before the push failed, by this push or another writer.
+		case plan.Action == ActionCreate:
+			// Another writer created the ref at a different commit. Move
+			// it to the source's commit like any replicate overwrite; the
+			// push names current as the old value, so a further move still
+			// fails the push instead of being overwritten.
+			update := plan
+			update.Action = ActionUpdate
+			update.TargetHash = current
+			update.Reason = fmt.Sprintf("%s -> %s (created concurrently; replanned as update)",
+				planner.ShortHash(current), planner.ShortHash(plan.SourceHash))
+			rest = append(rest, update)
 		default:
 			rest = append(rest, plan)
 		}
