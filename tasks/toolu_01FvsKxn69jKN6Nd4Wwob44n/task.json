@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FvsKxn69jKN6Nd4Wwob44n",
+  "agent_id": "a46cd4975ad07e884",
+  "subagent_type": "general-purpose",
+  "task_description": "Fable adversarial review of PR 134",
+  "token_usage": {
+    "input_tokens": 580,
+    "cache_creation_tokens": 147625,
+    "cache_read_tokens": 2167220,
+    "output_tokens": 23306,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-02T15:55:45.180847+01:00",
+  "completed_at": "2026-11-02T16:41:19.285612+01:00"
+}
