@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -94,7 +95,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 			onTarget++
 			continue
 		}
-		checkpoints, chain, err := checkpointsFromParents(ctx, p, ref, parents, stopAt)
+		checkpoints, chain, err := checkpointsFromParents(ctx, p, slog.LevelDebug, ref, parents, stopAt)
 		if err != nil {
 			return nil, err
 		}

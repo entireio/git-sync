@@ -1443,7 +1443,7 @@ func planCheckpointsFromChain(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("fetch bootstrap commit parents for %s: %w", ref.TargetRef, err)
 	}
-	checkpoints, chain, err := checkpointsFromParents(ctx, p, ref, parentsMap, trunkStopAt)
+	checkpoints, chain, err := checkpointsFromParents(ctx, p, slog.LevelInfo, ref, parentsMap, trunkStopAt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1460,9 +1460,13 @@ func planCheckpointsFromChain(
 // checkpointsFromParents derives a branch's chain and checkpoints from a
 // commit-parents map that is already fetched, so several branches can share
 // one commit-graph fetch. The walk stops at stopAt.
+//
+// level is the level of its "planned checkpoints" line: Info for the trunk,
+// Debug for each remaining branch, of which there can be thousands.
 func checkpointsFromParents(
 	ctx context.Context,
 	p Params,
+	level slog.Level,
 	ref planner.DesiredRef,
 	parentsMap map[plumbing.Hash][]plumbing.Hash,
 	stopAt map[plumbing.Hash]struct{},
@@ -1495,7 +1499,7 @@ func checkpointsFromParents(
 	numBatches := estimateBatchCount(int64(len(chain)), p.TargetMaxPack)
 	checkpoints := evenCheckpoints(chain, numBatches)
 
-	p.log(ctx, "bootstrap batch planned checkpoints",
+	p.logAt(ctx, level, "bootstrap batch planned checkpoints",
 		"branch", ref.TargetRef.String(),
 		"chain_len", len(chain),
 		"estimated_batches", len(checkpoints))

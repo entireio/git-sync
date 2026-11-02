@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"testing"
 	"time"
@@ -703,5 +704,31 @@ func TestTargetHavesSkipsResumeMarkers(t *testing.T) {
 	})
 	if want := []plumbing.Hash{a, b}; !slices.Equal(got, want) {
 		t.Fatalf("targetHaves = %v, want %v", got, want)
+	}
+}
+
+// Grouped branches log per branch only at Debug: a repository with thousands
+// of them must not send thousands of Info records per attempt to the
+// embedder's logger. The counts reach Info through "planned remaining
+// branches".
+func TestGroupedBranchesLogNoPerBranchInfo(t *testing.T) {
+	t.Parallel()
+	h := newGroupHarness(t, 20)
+	var out bytes.Buffer
+	h.params.PushLogger = slog.New(slog.NewJSONHandler(&out, nil))
+	if _, err := Execute(context.Background(), h.params, "empty target"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	summary := false
+	for _, record := range logRecords(t, &out) {
+		if record["msg"] == "bootstrap batch planned remaining branches" {
+			summary = true
+		}
+		if branch, ok := record["branch"]; ok && branch != h.trunkRef.String() {
+			t.Errorf("per-branch record at %v: %v", record["level"], record)
+		}
+	}
+	if !summary {
+		t.Errorf("no \"planned remaining branches\" summary; output=%s", &out)
 	}
 }
