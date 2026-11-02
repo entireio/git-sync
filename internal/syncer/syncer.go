@@ -885,7 +885,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	}
 	if cfg.Verbose {
 		s.logger = slog.New(slog.NewTextHandler(&sessionStderr{s: s}, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: slog.LevelDebug, // bootstrap logs per-branch lines at Debug
 		}))
 	}
 

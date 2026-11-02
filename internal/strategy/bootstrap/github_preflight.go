@@ -252,30 +252,29 @@ func (p Params) logGitHubPreflight(ctx context.Context, lookup githubSizeLookup,
 			slog.Int("refused_auth_status", lookup.refused.status),
 			slog.String("refused_auth_error", refusedText))
 	}
-	level := slog.LevelInfo
 	if lookup.err == nil {
 		attrs = append(attrs, slog.Int64("size_kb", lookup.sizeKB))
 		if limit > 0 {
 			attrs = append(attrs, slog.Int64("target_max_pack_bytes", limit))
 		}
-		p.log(githubPreflightMsg, attrs...)
-	} else {
-		level = slog.LevelWarn
-		errText := sanitize.Line(lookup.err.Error())
-		attrs = append(attrs, slog.String("error", errText))
-		// The notice reaches the operator verbose or not, so the verbose log
-		// stays out of it rather than print the failure twice under -v.
-		reason := errText
-		if lookup.refused != nil {
-			reason = fmt.Sprintf("credentials refused: %s; anonymous retry: %s", refusedText, errText)
-		}
-		// "Starting": a target that rejects the pack as too large still
-		// switches the bootstrap to batches later.
-		p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — starting with a single pack; set a target max pack size (--target-max-pack-bytes) to batch from the start",
-			reason))
+		p.log(ctx, githubPreflightMsg, attrs...)
+		return
 	}
+	errText := sanitize.Line(lookup.err.Error())
+	attrs = append(attrs, slog.String("error", errText))
+	// The notice reaches the operator verbose or not, so the verbose log
+	// stays out of it rather than print the failure twice under -v.
+	reason := errText
+	if lookup.refused != nil {
+		reason = fmt.Sprintf("credentials refused: %s; anonymous retry: %s", refusedText, errText)
+	}
+	// "Starting": a target that rejects the pack as too large still
+	// switches the bootstrap to batches later.
+	p.notice(fmt.Sprintf("could not read the GitHub repository size (%s) — starting with a single pack; set a target max pack size (--target-max-pack-bytes) to batch from the start",
+		reason))
+	// PushLogger only: the notice above already tells a -v reader.
 	if p.PushLogger != nil {
-		p.PushLogger.Log(ctx, level, githubPreflightMsg, attrs...)
+		p.PushLogger.WarnContext(ctx, githubPreflightMsg, attrs...)
 	}
 }
 

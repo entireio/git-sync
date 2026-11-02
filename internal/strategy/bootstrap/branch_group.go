@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -12,6 +13,7 @@ import (
 	"entire.io/entire/git-sync/internal/convert"
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/sanitize"
 )
 
 // maxGroupRefs bounds the ref creates in one group push. It keeps a single
@@ -37,7 +39,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 	divergent := make([]planner.DesiredRef, 0, len(d.refs))
 	for _, ref := range d.refs {
 		if _, subsumed := d.stopAt[ref.SourceHash]; subsumed {
-			p.log("bootstrap batch branch subsumed by trunk",
+			p.debug(ctx, "bootstrap batch branch subsumed by trunk",
 				"branch", ref.TargetRef.String(),
 				"source_hash", planner.ShortHash(ref.SourceHash))
 			out = append(out, subsumedBatch(ref))
@@ -46,6 +48,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		divergent = append(divergent, ref)
 	}
 	if len(divergent) == 0 {
+		p.log(ctx, "bootstrap batch planned remaining branches", "subsumed", len(d.refs))
 		return out, nil
 	}
 
@@ -53,7 +56,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 	for i, ref := range divergent {
 		wants[i] = ref.SourceHash
 	}
-	p.log("bootstrap batch fetching commit graph for remaining branches",
+	p.log(ctx, "bootstrap batch fetching commit graph for remaining branches",
 		"branch_count", len(divergent),
 		"have_count", len(d.haves),
 		"stop_at_count", len(d.stopAt))
@@ -85,14 +88,14 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		// The source sends no commit reachable from a have. A tip it left out
 		// is already on the target, with every object it needs.
 		if _, sent := parents[ref.SourceHash]; !sent && len(d.haves) > 0 {
-			p.log("bootstrap batch branch already reachable on target",
+			p.debug(ctx, "bootstrap batch branch already reachable on target",
 				"branch", ref.TargetRef.String(),
 				"source_hash", planner.ShortHash(ref.SourceHash))
 			out = append(out, subsumedBatch(ref))
 			onTarget++
 			continue
 		}
-		checkpoints, chain, err := checkpointsFromParents(p, ref, parents, stopAt)
+		checkpoints, chain, err := checkpointsFromParents(ctx, p, slog.LevelDebug, ref, parents, stopAt)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +113,7 @@ func planAfterTrunk(ctx context.Context, p Params, d deferredBranches, budget in
 		groupBytes += estimated
 	}
 	flush()
-	p.log("bootstrap batch planned remaining branches",
+	p.log(ctx, "bootstrap batch planned remaining branches",
 		"subsumed", len(d.refs)-len(divergent),
 		"already_on_target", onTarget,
 		"grouped_packs", groups,
@@ -175,7 +178,7 @@ func pushBranchGroups(ctx context.Context, p Params, group []plannedBatch, st gr
 		case 0:
 			continue
 		case 1:
-			p.log("bootstrap batch group member too big for a shared pack; pushing on its own checkpoints",
+			p.log(ctx, "bootstrap batch group member too big for a shared pack; pushing on its own checkpoints",
 				"branch", pending[0].Plan.TargetRef.String(),
 				"groups_pending", len(queue))
 			next := make([]plannedBatch, 0, 1+len(queue))
@@ -264,7 +267,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			return nil, 0, fmt.Errorf("check bootstrap branch group pack size: %w", err)
 		}
 		if parts > 0 {
-			p.log("bootstrap batch group pack estimate over budget; splitting",
+			p.log(ctx, "bootstrap batch group pack estimate over budget; splitting",
 				"branch_count", len(plans),
 				"object_count", objectCount,
 				"budget_bytes", budget,
@@ -272,7 +275,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			return members, max(parts, 2), nil
 		}
 
-		p.log("bootstrap batch group push attempting",
+		p.log(ctx, "bootstrap batch group push attempting",
 			"branch_count", len(plans),
 			"object_count", objectCount,
 			"budget_bytes", budget)
@@ -296,7 +299,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 				return nil, 0, fmt.Errorf("push bootstrap branch group: %w", pushErr)
 			}
 			pending := dropAppliedMembers(p, members, st)
-			p.log("bootstrap batch group push too big or too slow; splitting",
+			p.logAt(ctx, pushSetbackLevel(pushErr, true), "bootstrap batch group push too big or too slow; splitting",
 				"branch_count", len(plans),
 				"pending", len(pending),
 				"sent_bytes", observer.Bytes(),
@@ -304,7 +307,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 				"source_limit_hit", watcher.hit,
 				"budget_bytes", *st.budget,
 				"parts", parts,
-				"error", pushErr.Error())
+				"error", sanitize.Line(pushErr.Error()))
 			return pending, parts, nil
 		}
 	}
@@ -315,7 +318,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 	confirmed := 0
 	for _, member := range members {
 		if ok, doubt := p.createConfirmed(member.Plan.TargetRef); !ok {
-			p.log("bootstrap batch group branch create unconfirmed; not counted",
+			p.log(ctx, "bootstrap batch group branch create unconfirmed; not counted",
 				"branch", member.Plan.TargetRef.String(),
 				"source_hash", planner.ShortHash(member.Plan.SourceHash),
 				"reason", doubt)
@@ -325,7 +328,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 		confirmed++
 	}
 	result.BatchCount++
-	p.log("bootstrap batch group pushed",
+	p.log(ctx, "bootstrap batch group pushed",
 		"branch_count", len(plans),
 		"confirmed", confirmed)
 	return nil, 0, nil
