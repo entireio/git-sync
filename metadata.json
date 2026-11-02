@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.12.3-nightly.202611020622.d7012996f.0.20261102121723-e2b69f168abc",
+  "checkpoint_id": "01M6E6MMRPHVB1S9SN7ZH6AKHZ",
+  "strategy": "manual-commit",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 70,
+    "cache_creation_tokens": 110448,
+    "cache_read_tokens": 3928139,
+    "output_tokens": 15498,
+    "api_call_count": 34
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "linked_commits": [
+    {
+      "sha": "8af93726f3d728df2df87759fca78353db27359f",
+      "repo": "gh/entireio/git-sync"
+    }
+  ],
+  "has_review": true
+}
