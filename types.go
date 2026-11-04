@@ -110,6 +110,19 @@ type RefScope struct {
 	// like refs/heads/entire without also excluding its children
 	// (refs/heads/entire/foo). Not applied to explicit Mappings.
 	ExcludeRefs []string `json:"excludeRefs,omitempty"`
+	// IndependentHistoryRefPrefixes names namespaces whose refs each carry
+	// their own history, sharing no commits and next to no objects with any
+	// other ref: one orphan history per ref, like per-session checkpoint refs.
+	// It does not change which refs are synced or pruned. It only shrinks the
+	// haves the relay fetch offers the source: a target ref under one of these
+	// prefixes is offered only when the run updates it, as its own old value,
+	// because an unchanged one cannot shorten a pack the other refs need.
+	// Replicate relays and sync's incremental relay honor it; sync's closure
+	// fetch for fast-forward checks and bootstrap keep every target tip. Every
+	// entry must start with refs/. Naming a namespace whose refs do share
+	// history is never wrong, only costly: the source then resends objects the
+	// target already holds.
+	IndependentHistoryRefPrefixes []string `json:"independentHistoryRefPrefixes,omitempty"`
 }
 
 // SyncPolicy controls high-level sync behavior. BestEffort downgrades per-ref

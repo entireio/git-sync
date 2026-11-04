@@ -22,6 +22,18 @@ func ValidateIncludeRefPrefixes(prefixes []string) error {
 	return nil
 }
 
+// ValidateIndependentHistoryRefPrefixes rejects a prefix no ref name can
+// match. A bad entry would not break a sync, it would quietly keep the full
+// have list the caller asked to shrink, so it fails instead.
+func ValidateIndependentHistoryRefPrefixes(prefixes []string) error {
+	for _, p := range prefixes {
+		if p = strings.TrimSpace(p); !strings.HasPrefix(p, "refs/") {
+			return fmt.Errorf("independent history ref prefix %q must start with refs/", p)
+		}
+	}
+	return nil
+}
+
 const (
 	ProtocolAuto = "auto"
 	ProtocolV1   = "v1"

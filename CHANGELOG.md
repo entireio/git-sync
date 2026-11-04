@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`RefScope.IndependentHistoryRefPrefixes` shrinks the haves of a relay fetch.** A relay fetch offers the source every target tip as a have. For refs that each carry their own history, such as one orphan history per session checkpoint, those tips cannot shorten the pack, and a repository with thousands of them sent thousands of have lines for a run that changed one branch. Under the named prefixes, a target ref is now offered only when the run updates it, as its own old value. Replicate and sync's incremental relay honor it. Sync's closure fetch for fast-forward checks and bootstrap still offer every tip. Which refs are synced or pruned does not change. Every entry must start with `refs/`.
+
 ### Changed
 
 - Bumped `github.com/go-git/go-git/v6` and `github.com/go-git/go-billy/v6` to `v6.0.0-beta.1`, along with `testify` `v1.12.1` and the indirect dependencies (`golang.org/x/net` `v0.62.0`, `golang.org/x/sync` `v0.24.0`, `ProtonMail/go-crypto` `v1.5.2`, `cloudflare/circl` `v1.6.5`, `pjbgf/sha1cd` `v0.7.0`, `Microsoft/go-winio` `v0.6.4`, `spf13/pflag` `v1.0.10`). The Go toolchain stays at `1.27.3`, the current release.

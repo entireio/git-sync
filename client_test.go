@@ -430,6 +430,14 @@ func TestValidateRejectsUnusableScopedEmptyPolicies(t *testing.T) {
 		}
 	}
 
+	for _, bad := range []string{"", "entire/checkpoints/"} {
+		malformed := base
+		malformed.Scope = RefScope{AllRefs: true, IndependentHistoryRefPrefixes: []string{bad}}
+		if err := malformed.Validate(); err == nil {
+			t.Errorf("expected independent history ref prefix %q to be rejected", bad)
+		}
+	}
+
 	noPrune := base
 	noPrune.Scope = scoped
 	noPrune.Policy.AllowEmptyScope = true

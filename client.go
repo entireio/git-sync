@@ -166,6 +166,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		ExcludeRefPrefixes:            append([]string(nil), req.Scope.ExcludeRefPrefixes...),
 		ExcludeRefs:                   append([]string(nil), req.Scope.ExcludeRefs...),
 		IncludeRefPrefixes:            append([]string(nil), req.Scope.IncludeRefPrefixes...),
+		IndependentHistoryRefPrefixes: append([]string(nil), req.Scope.IndependentHistoryRefPrefixes...),
 		IncludeTags:                   req.Policy.IncludeTags,
 		DryRun:                        dryRun,
 		ShowStats:                     req.CollectStats,
@@ -234,6 +235,9 @@ func validateSyncFields(source, target Endpoint, scope RefScope, policy SyncPoli
 	// edge that covers the callers which bypass this one.
 	if err := validation.ValidateIncludeRefPrefixes(scope.IncludeRefPrefixes); err != nil {
 		return fmt.Errorf("validate include ref prefixes: %w", err)
+	}
+	if err := validation.ValidateIndependentHistoryRefPrefixes(scope.IndependentHistoryRefPrefixes); err != nil {
+		return fmt.Errorf("validate independent history ref prefixes: %w", err)
 	}
 	if policy.AllowEmptyScope && len(scope.IncludeRefPrefixes) == 0 {
 		return errors.New("AllowEmptyScope requires Scope.IncludeRefPrefixes; without a scope to be empty the policy has nothing to act on")
