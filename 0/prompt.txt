@@ -1,0 +1,5 @@
+can you update the PR that was created for the trail with a description
+
+---
+
+- Strengthen assertClosureReadable (internal/syncer/independent_history_test.go:357) to traverse subtrees explicitly. The pinned go-git iterator converts a missing subtree lookup into io.EOF, which Files().ForEach treats as success. Add a nested-directory fixture and verify missing objects are detected. Current flat fixtures are checked correctly; this is a nonblocking test weakness.
