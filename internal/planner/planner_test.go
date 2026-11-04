@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -2017,4 +2018,55 @@ func TestPlanRefResolvesIndeterminateAncestry(t *testing.T) {
 	if plan.Action != ActionUpdate {
 		t.Fatalf("settled: expected ActionUpdate, got %s", plan.Action)
 	}
+}
+
+func TestPlanRefResolverEdgeCases(t *testing.T) {
+	t.Parallel()
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	want := DesiredRef{
+		Kind: RefKindBranch, Label: "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	}
+	fail := func(err error) AncestryResolver {
+		return func(DesiredRef, plumbing.Hash) (AncestryResult, error) {
+			return AncestryInvalid, err
+		}
+	}
+
+	t.Run("server text is sanitized", func(t *testing.T) {
+		t.Parallel()
+		plan, err := PlanRef(memory.NewStorage(), want, target, false, fail(errors.New("remote: bad\x1b[2Jthing")))
+		if err != nil {
+			t.Fatalf("PlanRef: %v", err)
+		}
+		if strings.ContainsRune(plan.Reason, 0x1b) || !strings.Contains(plan.Reason, "remote: bad[2Jthing") {
+			t.Fatalf("reason should carry the failure without control bytes, got %q", plan.Reason)
+		}
+	})
+
+	for _, ctxErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(ctxErr.Error()+" stops the run", func(t *testing.T) {
+			t.Parallel()
+			_, err := PlanRef(memory.NewStorage(), want, target, false, fail(fmt.Errorf("fetch: %w", ctxErr)))
+			if !errors.Is(err, ctxErr) {
+				t.Fatalf("expected %v, got %v", ctxErr, err)
+			}
+		})
+	}
+
+	t.Run("force skips the resolver", func(t *testing.T) {
+		t.Parallel()
+		plan, err := PlanRef(memory.NewStorage(), want, target, true, func(DesiredRef, plumbing.Hash) (AncestryResult, error) {
+			t.Error("resolver called under force")
+			return AncestryInvalid, nil
+		})
+		if err != nil {
+			t.Fatalf("PlanRef: %v", err)
+		}
+		if plan.Action != ActionUpdate {
+			t.Fatalf("expected ActionUpdate, got %s (%s)", plan.Action, plan.Reason)
+		}
+	})
 }

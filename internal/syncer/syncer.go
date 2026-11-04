@@ -697,6 +697,11 @@ func (s *syncSession) resolveAncestry(ctx context.Context) planner.AncestryResol
 		parents, err := s.sourceService.FetchCommitParents(ctx, s.sourceConn,
 			[]plumbing.Hash{want.SourceHash}, []plumbing.Hash{targetHash})
 		if err != nil {
+			// A cancelled read can fail with a plain network error. Surface the
+			// cancellation so the planner stops instead of blocking the ref.
+			if ctx.Err() != nil {
+				err = errors.Join(ctx.Err(), err)
+			}
 			return planner.AncestryInvalid, fmt.Errorf("fetch commit graph for %s: %w", want.TargetRef, err)
 		}
 		result := planner.AncestryFromParents(parents, want.SourceHash, targetHash)

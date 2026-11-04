@@ -1,10 +1,12 @@
 package planner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 
+	"entire.io/entire/git-sync/internal/sanitize"
 	"entire.io/entire/git-sync/internal/validation"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -518,11 +520,14 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		}
 		return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, err)
 	}
-	// Ask the source what the pruned store cannot settle
+	// Ask the source what the pruned store cannot settle. Under force the ref
+	// is updated either way, so the fetch would be wasted.
 	var resolveErr error
-	if ancestry == AncestryIndeterminate && resolve != nil {
+	if ancestry == AncestryIndeterminate && resolve != nil && !force {
 		resolved, rerr := resolve(want, targetHash)
 		switch {
+		case errors.Is(rerr, context.Canceled), errors.Is(rerr, context.DeadlineExceeded):
+			return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, rerr)
 		case rerr != nil:
 			resolveErr = rerr
 		case resolved == AncestryReachable, resolved == AncestryUnreachable:
@@ -550,7 +555,8 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		plan.Reason = "cannot verify fast-forward for " + want.TargetRef.String() +
 			" locally (the target already has the relevant commits)"
 		if resolveErr != nil {
-			plan.Reason += "; settling it against the source failed: " + resolveErr.Error()
+			// The error can carry text the source server wrote.
+			plan.Reason += "; settling it against the source failed: " + sanitize.Text(resolveErr.Error())
 		}
 		plan.Reason += "; use --force-with-lease if this is a valid fast-forward"
 		return plan, nil
