@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/storage/memory"
 )
 
 const testCheckpointPrefix = "refs/entire/checkpoints/"
@@ -34,10 +36,8 @@ func writeObject(t *testing.T, repo *git.Repository, obj interface {
 	return h
 }
 
-// commitCheckpoint points ref at a new commit holding one metadata file whose
-// content is unique to the call. With a zero parent it starts a history of
-// its own, the shape of a per-session checkpoint ref.
-func commitCheckpoint(t *testing.T, repo *git.Repository, ref plumbing.ReferenceName, parent plumbing.Hash) {
+// writeBlob stores content as a blob in repo and returns its hash.
+func writeBlob(t *testing.T, repo *git.Repository, content string) plumbing.Hash {
 	t.Helper()
 	blob := repo.Storer.NewEncodedObject()
 	blob.SetType(plumbing.BlobObject)
@@ -45,18 +45,33 @@ func commitCheckpoint(t *testing.T, repo *git.Repository, ref plumbing.Reference
 	if err != nil {
 		t.Fatalf("blob writer: %v", err)
 	}
-	if _, err := fmt.Fprintf(w, `{"ref":%q,"parent":%q}`, ref, parent); err != nil {
+	if _, err := io.WriteString(w, content); err != nil {
 		t.Fatalf("write blob: %v", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("close blob: %v", err)
 	}
-	blobHash, err := repo.Storer.SetEncodedObject(blob)
+	h, err := repo.Storer.SetEncodedObject(blob)
 	if err != nil {
 		t.Fatalf("store blob: %v", err)
 	}
+	return h
+}
+
+// commitCheckpoint points ref at a new commit laid out like a session
+// checkpoint: metadata.json beside a 0/ directory holding the transcript,
+// both with content unique to the call. With a zero parent it starts a
+// history of its own. The nested directory keeps assertClosureReadable
+// honest about subtrees.
+func commitCheckpoint(t *testing.T, repo *git.Repository, ref plumbing.ReferenceName, parent plumbing.Hash) {
+	t.Helper()
+	unique := fmt.Sprintf(`{"ref":%q,"parent":%q}`, ref, parent)
+	sessionTree := writeObject(t, repo, &object.Tree{Entries: []object.TreeEntry{
+		{Name: "full.jsonl", Mode: filemode.Regular, Hash: writeBlob(t, repo, "transcript "+unique)},
+	}})
 	treeHash := writeObject(t, repo, &object.Tree{Entries: []object.TreeEntry{
-		{Name: "metadata.json", Mode: filemode.Regular, Hash: blobHash},
+		{Name: "0", Mode: filemode.Dir, Hash: sessionTree},
+		{Name: "metadata.json", Mode: filemode.Regular, Hash: writeBlob(t, repo, unique)},
 	}})
 	commit := &object.Commit{
 		Author:    objectSignature,
@@ -338,32 +353,175 @@ func TestRun_IntegrationReplicatePrunesCheckpointWithIndependentPrefix(t *testin
 	assertSameRefs(t, f.source, f.target)
 }
 
-// assertClosureReadable walks every commit reachable from each tip and reads
-// its tree and every blob, so a pack that left out an object the target did
+// assertClosureReadable fails unless every commit, tree and blob reachable
+// from each tip is in repo, so a pack that left out an object the target did
 // not already hold fails here and not only on a later clone.
 func assertClosureReadable(t *testing.T, repo *git.Repository, tips ...plumbing.Hash) {
 	t.Helper()
-	for _, tip := range tips {
-		commit, err := repo.CommitObject(tip)
-		if err != nil {
-			t.Fatalf("read tip %s: %v", tip, err)
+	if err := readClosure(repo, tips...); err != nil {
+		t.Fatalf("closure on target: %v", err)
+	}
+}
+
+// readClosure reads every object reachable from tips and returns the first
+// one it cannot read. It walks parents and tree entries itself, with lookups
+// that report a missing object as an error: go-git's commit and tree
+// iterators are not safe for this, since TreeWalker turns a missing subtree
+// into io.EOF and Files().ForEach then ends early as if it had finished.
+func readClosure(repo *git.Repository, tips ...plumbing.Hash) error {
+	seen := map[plumbing.Hash]struct{}{}
+	var readTree func(h plumbing.Hash, path string) error
+	readTree = func(h plumbing.Hash, path string) error {
+		if _, ok := seen[h]; ok {
+			return nil
 		}
-		iter := object.NewCommitPreorderIter(commit, nil, nil)
-		if err := iter.ForEach(func(c *object.Commit) error {
-			tree, err := c.Tree()
-			if err != nil {
-				return fmt.Errorf("commit %s tree: %w", c.Hash, err)
-			}
-			return tree.Files().ForEach(func(f *object.File) error {
-				if _, err := f.Contents(); err != nil {
-					return fmt.Errorf("commit %s blob %s (%s): %w", c.Hash, f.Hash, f.Name, err)
+		seen[h] = struct{}{}
+		tree, err := repo.TreeObject(h)
+		if err != nil {
+			return fmt.Errorf("tree %s (%s): %w", h, path, err)
+		}
+		for _, entry := range tree.Entries {
+			name := path + "/" + entry.Name
+			switch entry.Mode {
+			case filemode.Dir:
+				if err := readTree(entry.Hash, name); err != nil {
+					return err
 				}
-				return nil
-			})
-		}); err != nil {
-			t.Fatalf("closure of %s on target: %v", tip, err)
+			case filemode.Submodule:
+				// A gitlink names a commit in another repository.
+			case filemode.Empty, filemode.Regular, filemode.Deprecated, filemode.Executable, filemode.Symlink:
+				if _, ok := seen[entry.Hash]; ok {
+					continue
+				}
+				seen[entry.Hash] = struct{}{}
+				blob, err := repo.BlobObject(entry.Hash)
+				if err != nil {
+					return fmt.Errorf("blob %s (%s): %w", entry.Hash, name, err)
+				}
+				r, err := blob.Reader()
+				if err != nil {
+					return fmt.Errorf("open blob %s (%s): %w", entry.Hash, name, err)
+				}
+				_, err = io.Copy(io.Discard, r)
+				_ = r.Close()
+				if err != nil {
+					return fmt.Errorf("read blob %s (%s): %w", entry.Hash, name, err)
+				}
+			default:
+				return fmt.Errorf("tree %s entry %s: unexpected mode %s", h, name, entry.Mode)
+			}
+		}
+		return nil
+	}
+
+	pending := slices.Clone(tips)
+	for len(pending) > 0 {
+		h := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		commit, err := repo.CommitObject(h)
+		if err != nil {
+			return fmt.Errorf("commit %s: %w", h, err)
+		}
+		if err := readTree(commit.TreeHash, ""); err != nil {
+			return fmt.Errorf("commit %s: %w", h, err)
+		}
+		pending = append(pending, commit.ParentHashes...)
+	}
+	return nil
+}
+
+// The closure check is only as good as its traversal. Remove one object of
+// each kind from a nested checkpoint history and require readClosure to name
+// it, where go-git's file iterator would have let a missing subtree pass.
+func TestReadClosureDetectsMissingObjects(t *testing.T) {
+	ref := plumbing.ReferenceName(testCheckpointPrefix + "aa/one")
+	build := func(t *testing.T) (*git.Repository, *memory.Storage, *object.Commit) {
+		t.Helper()
+		store := memory.NewStorage()
+		repo, err := git.Init(store)
+		if err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		commitCheckpoint(t, repo, ref, plumbing.ZeroHash)
+		r, err := repo.Reference(ref, true)
+		if err != nil {
+			t.Fatalf("read %s: %v", ref, err)
+		}
+		commitCheckpoint(t, repo, ref, r.Hash())
+		r, err = repo.Reference(ref, true)
+		if err != nil {
+			t.Fatalf("read %s: %v", ref, err)
+		}
+		tip, err := repo.CommitObject(r.Hash())
+		if err != nil {
+			t.Fatalf("read tip: %v", err)
+		}
+		if err := readClosure(repo, tip.Hash); err != nil {
+			t.Fatalf("complete history reported missing: %v", err)
+		}
+		return repo, store, tip
+	}
+	drop := func(store *memory.Storage, h plumbing.Hash) {
+		for _, m := range []map[plumbing.Hash]plumbing.EncodedObject{store.Objects, store.Commits, store.Trees, store.Blobs} {
+			delete(m, h)
 		}
 	}
+	subtree := func(t *testing.T, repo *git.Repository, c *object.Commit) object.TreeEntry {
+		t.Helper()
+		tree, err := repo.TreeObject(c.TreeHash)
+		if err != nil {
+			t.Fatalf("root tree: %v", err)
+		}
+		for _, e := range tree.Entries {
+			if e.Mode == filemode.Dir {
+				return e
+			}
+		}
+		t.Fatal("fixture has no subdirectory")
+		return object.TreeEntry{}
+	}
+
+	t.Run("subtree", func(t *testing.T) {
+		repo, store, tip := build(t)
+		dir := subtree(t, repo, tip)
+		drop(store, dir.Hash)
+		// The gap this test exists for: go-git's iterator ends early and
+		// reports success.
+		tree, err := repo.TreeObject(tip.TreeHash)
+		if err != nil {
+			t.Fatalf("root tree: %v", err)
+		}
+		if err := tree.Files().ForEach(func(*object.File) error { return nil }); err != nil {
+			t.Logf("go-git now reports the missing subtree (%v); readClosure no longer needs to work around it", err)
+		}
+		if err := readClosure(repo, tip.Hash); err == nil || !strings.Contains(err.Error(), dir.Hash.String()) {
+			t.Fatalf("readClosure with subtree %s removed = %v, want an error naming it", dir.Hash, err)
+		}
+	})
+	t.Run("nested blob", func(t *testing.T) {
+		repo, store, tip := build(t)
+		dir, err := repo.TreeObject(subtree(t, repo, tip).Hash)
+		if err != nil {
+			t.Fatalf("subtree: %v", err)
+		}
+		blob := dir.Entries[0].Hash
+		drop(store, blob)
+		if err := readClosure(repo, tip.Hash); err == nil || !strings.Contains(err.Error(), blob.String()) {
+			t.Fatalf("readClosure with blob %s removed = %v, want an error naming it", blob, err)
+		}
+	})
+	t.Run("parent commit", func(t *testing.T) {
+		repo, store, tip := build(t)
+		parent := tip.ParentHashes[0]
+		drop(store, parent)
+		if err := readClosure(repo, tip.Hash); err == nil || !strings.Contains(err.Error(), parent.String()) {
+			t.Fatalf("readClosure with parent %s removed = %v, want an error naming it", parent, err)
+		}
+	})
 }
 
 // newSharedHistoryFixture is newIndependentHistoryFixture plus a ref under
