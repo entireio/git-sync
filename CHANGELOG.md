@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **`RefScope.IndependentHistoryRefPrefixes` shrinks the haves of a relay fetch.** A relay fetch offers the source every target tip as a have. For refs that each carry their own history, such as one orphan history per session checkpoint, those tips cannot shorten the pack, and a repository with thousands of them sent thousands of have lines for a run that changed one branch. Under the named prefixes, a target ref is now offered only when the run updates it, as its own old value. Replicate and sync's incremental relay honor it. Sync's closure fetch for fast-forward checks and bootstrap still offer every tip. Which refs are synced or pruned does not change. Every entry must start with `refs/`.
+- **`RefScope.IndependentHistoryRefPrefixes` shrinks the haves of a relay fetch.** A relay fetch offers the source every target tip as a have. For refs that each carry their own history, such as one orphan history per session checkpoint, those tips cannot shorten the pack, and a repository with thousands of them sent thousands of have lines for a run that changed one branch. Under the named prefixes, a target ref is now offered only when the run updates it, as its own old value. Replicate and sync's incremental relay honor it. Sync's closure fetch for fast-forward checks and bootstrap still offer every tip. Which refs are synced or pruned does not change. Entries are literal prefixes of target ref names and must start with `refs/`; end a namespace with a slash. Naming refs that do share history keeps the copy complete but resends objects the target already holds, and the larger pack can hit a pack or request size limit.
 
 ### Changed
 

@@ -110,7 +110,8 @@ func sortedHashes(hs ...plumbing.Hash) []plumbing.Hash {
 }
 
 // assertSameRefs fails unless target holds exactly the refs source does
-// (HEAD aside), at the same hashes, with every tip's commit present.
+// (HEAD aside), at the same hashes, with every commit, tree and blob
+// reachable from them readable.
 func assertSameRefs(t *testing.T, source, target *git.Repository) {
 	t.Helper()
 	collect := func(repo *git.Repository) map[plumbing.ReferenceName]plumbing.Hash {
@@ -135,9 +136,7 @@ func assertSameRefs(t *testing.T, source, target *git.Repository) {
 			t.Errorf("target %s = %s, want %s", name, dst[name], h)
 			continue
 		}
-		if _, err := target.CommitObject(h); err != nil {
-			t.Errorf("target %s tip %s not readable: %v", name, h, err)
-		}
+		assertClosureReadable(t, target, h)
 	}
 	for name := range dst {
 		if _, ok := src[name]; !ok {
@@ -336,5 +335,82 @@ func TestRun_IntegrationReplicatePrunesCheckpointWithIndependentPrefix(t *testin
 	if fetches := f.haves.take(); len(fetches) != 0 {
 		t.Fatalf("a prune-only run fetched from the source: %v", fetches)
 	}
+	assertSameRefs(t, f.source, f.target)
+}
+
+// assertClosureReadable walks every commit reachable from each tip and reads
+// its tree and every blob, so a pack that left out an object the target did
+// not already hold fails here and not only on a later clone.
+func assertClosureReadable(t *testing.T, repo *git.Repository, tips ...plumbing.Hash) {
+	t.Helper()
+	for _, tip := range tips {
+		commit, err := repo.CommitObject(tip)
+		if err != nil {
+			t.Fatalf("read tip %s: %v", tip, err)
+		}
+		iter := object.NewCommitPreorderIter(commit, nil, nil)
+		if err := iter.ForEach(func(c *object.Commit) error {
+			tree, err := c.Tree()
+			if err != nil {
+				return fmt.Errorf("commit %s tree: %w", c.Hash, err)
+			}
+			return tree.Files().ForEach(func(f *object.File) error {
+				if _, err := f.Contents(); err != nil {
+					return fmt.Errorf("commit %s blob %s (%s): %w", c.Hash, f.Hash, f.Name, err)
+				}
+				return nil
+			})
+		}); err != nil {
+			t.Fatalf("closure of %s on target: %v", tip, err)
+		}
+	}
+}
+
+// newSharedHistoryFixture is newIndependentHistoryFixture plus a ref under
+// the prefix that builds on the branch, so the prefix is misconfigured: the
+// histories it names are not independent. Already replicated to the target.
+func newSharedHistoryFixture(t *testing.T) (f *independentHistoryFixture, shared plumbing.ReferenceName) {
+	t.Helper()
+	f = newIndependentHistoryFixture(t)
+	shared = testCheckpointPrefix + "shared/base"
+	commitCheckpoint(t, f.source, shared, f.tip(t, plumbing.NewBranchReferenceName(testBranch)))
+	if _, err := f.run(t, modeReplicate, true); err != nil {
+		t.Fatalf("seed shared ref: %v", err)
+	}
+	assertSameRefs(t, f.source, f.target)
+	f.haves.take()
+	return f, shared
+}
+
+// The option is a claim about history. When the claim is false, a new ref
+// under the prefix that builds on an existing one no longer gets that ref's
+// tip as a have, so the source resends objects the target already holds. The
+// result must still be a complete, readable copy.
+func TestRun_IntegrationReplicateSharedHistoryUnderPrefixStaysComplete(t *testing.T) {
+	f, shared := newSharedHistoryFixture(t)
+	base := f.tip(t, shared)
+	next := plumbing.ReferenceName(testCheckpointPrefix + "shared/next")
+	commitCheckpoint(t, f.source, next, base)
+
+	if _, err := f.run(t, modeReplicate, true); err != nil {
+		t.Fatalf("replicate: %v", err)
+	}
+	assertHaves(t, f.haves.take(), f.tip(t, plumbing.NewBranchReferenceName(testBranch)))
+	assertSameRefs(t, f.source, f.target)
+}
+
+// A branch that moves onto a commit the target holds only under the prefix
+// gets the same treatment: that commit is resent, and the branch's whole
+// history is readable on the target.
+func TestRun_IntegrationReplicateBranchOntoPrefixedHistoryStaysComplete(t *testing.T) {
+	f, shared := newSharedHistoryFixture(t)
+	branch := plumbing.NewBranchReferenceName(testBranch)
+	before := f.tip(t, branch)
+	commitCheckpoint(t, f.source, branch, f.tip(t, shared))
+
+	if _, err := f.run(t, modeReplicate, true); err != nil {
+		t.Fatalf("replicate: %v", err)
+	}
+	assertHaves(t, f.haves.take(), before)
 	assertSameRefs(t, f.source, f.target)
 }

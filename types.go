@@ -118,10 +118,19 @@ type RefScope struct {
 	// prefixes is offered only when the run updates it, as its own old value,
 	// because an unchanged one cannot shorten a pack the other refs need.
 	// Replicate relays and sync's incremental relay honor it; sync's closure
-	// fetch for fast-forward checks and bootstrap keep every target tip. Every
-	// entry must start with refs/. Naming a namespace whose refs do share
-	// history is never wrong, only costly: the source then resends objects the
-	// target already holds.
+	// fetch for fast-forward checks and bootstrap keep every target tip.
+	//
+	// Each entry is matched as a literal string prefix, after trimming
+	// surrounding whitespace, against target ref names, which are the names
+	// after Mappings apply. No globs, and no implied path boundary: end a
+	// namespace with a slash, as in refs/entire/checkpoints/, or it also
+	// matches refs/entire/checkpoints-old. Every entry must start with refs/.
+	//
+	// Naming a namespace whose refs do share history keeps the copy correct
+	// and complete, but the source then resends objects the target already
+	// holds. The larger pack can exceed a pack size limit (unstable's
+	// MaxPackBytes) or a server's request or pack limits, so a transfer that
+	// succeeded without the option can fail with it.
 	IndependentHistoryRefPrefixes []string `json:"independentHistoryRefPrefixes,omitempty"`
 }
 

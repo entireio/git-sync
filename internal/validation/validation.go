@@ -22,9 +22,12 @@ func ValidateIncludeRefPrefixes(prefixes []string) error {
 	return nil
 }
 
-// ValidateIndependentHistoryRefPrefixes rejects a prefix no ref name can
-// match. A bad entry would not break a sync, it would quietly keep the full
-// have list the caller asked to shrink, so it fails instead.
+// ValidateIndependentHistoryRefPrefixes requires every entry, after trimming
+// surrounding whitespace, to start with refs/. That catches the common
+// mistakes (a blank entry, a name missing refs/) that would otherwise
+// quietly keep the full have list. It does not prove an entry can match:
+// prefixes are literal, so one like refs/foo* passes and matches only names
+// that contain the asterisk.
 func ValidateIndependentHistoryRefPrefixes(prefixes []string) error {
 	for _, p := range prefixes {
 		if p = strings.TrimSpace(p); !strings.HasPrefix(p, "refs/") {
