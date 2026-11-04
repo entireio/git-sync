@@ -690,6 +690,31 @@ func planConfig(cfg Config) planner.PlanConfig {
 	}
 }
 
+// resolveAncestry settles a fast-forward the pruned planning store cannot:
+// one tree:0 fetch of the tip with only the ref's own target hash as have.
+func (s *syncSession) resolveAncestry(ctx context.Context) planner.AncestryResolver {
+	return func(want planner.DesiredRef, targetHash plumbing.Hash) (planner.AncestryResult, error) {
+		parents, err := s.sourceService.FetchCommitParents(ctx, s.sourceConn,
+			[]plumbing.Hash{want.SourceHash}, []plumbing.Hash{targetHash})
+		if err != nil {
+			// A cancelled read can fail with a plain network error. Surface the
+			// cancellation so the planner stops instead of blocking the ref.
+			if ctx.Err() != nil {
+				err = errors.Join(ctx.Err(), err)
+			}
+			return planner.AncestryInvalid, fmt.Errorf("fetch commit graph for %s: %w", want.TargetRef, err)
+		}
+		result := planner.AncestryFromParents(parents, want.SourceHash, targetHash)
+		if s.logger != nil {
+			s.logger.Debug("settled fast-forward against the source",
+				slog.String("ref", want.TargetRef.String()),
+				slog.Int("commits", len(parents)),
+				slog.Bool("fast_forward", result == planner.AncestryReachable))
+		}
+		return result, nil
+	}
+}
+
 // ForceAny reports whether either force flag is set. Used by call sites that
 // only care about "is this run allowed to do non-fast-forward updates?" rather
 // than the lease-vs-blind distinction.
@@ -1060,7 +1085,9 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		}
 	}
 
-	plans, err := planner.BuildPlans(repo.Storer, desiredRefs, targetRefMap, managedTargets, planConfig(s.cfg))
+	planCfg := planConfig(s.cfg)
+	planCfg.ResolveAncestry = s.resolveAncestry(ctx)
+	plans, err := planner.BuildPlans(repo.Storer, desiredRefs, targetRefMap, managedTargets, planCfg)
 	if err != nil {
 		return Result{}, fmt.Errorf("build plans: %w", err)
 	}

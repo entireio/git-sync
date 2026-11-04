@@ -1,10 +1,12 @@
 package planner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 
+	"entire.io/entire/git-sync/internal/sanitize"
 	"entire.io/entire/git-sync/internal/validation"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -38,6 +40,9 @@ type PlanConfig struct {
 	// pruned. Exclusions apply within them. Explicit Mappings are not subject
 	// to it. Leave empty for the historical behavior, which narrows nothing.
 	IncludeRefPrefixes []string
+	// ResolveAncestry settles a check CheckAncestry left indeterminate.
+	// Nil leaves such refs blocked.
+	ResolveAncestry AncestryResolver
 }
 
 // BuildDesiredRefs constructs the set of desired refs and managed targets from
@@ -199,7 +204,7 @@ func BuildPlans(
 			continue
 		}
 
-		plan, err := PlanRef(store, want, targetHash, cfg.Force)
+		plan, err := PlanRef(store, want, targetHash, cfg.Force, cfg.ResolveAncestry)
 		if err != nil {
 			return nil, err
 		}
@@ -473,7 +478,7 @@ func BuildBootstrapPlans(
 }
 
 // PlanRef determines the action for a single ref that exists on both source and target.
-func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumbing.Hash, force bool) (BranchPlan, error) {
+func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumbing.Hash, force bool, resolve AncestryResolver) (BranchPlan, error) {
 	plan := BranchPlan{
 		Branch:     want.Label,
 		SourceRef:  want.SourceRef,
@@ -505,7 +510,7 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		return plan, nil
 	}
 
-	isFF, err := ReachesCommit(store, want.SourceHash, targetHash)
+	ancestry, err := CheckAncestry(store, want.SourceHash, targetHash)
 	if err != nil {
 		if errors.Is(err, ErrAncestryDepthExceeded) {
 			// Can't prove fast-forward within depth limit — block with explanation.
@@ -515,7 +520,21 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		}
 		return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, err)
 	}
-	if isFF {
+	// Ask the source what the pruned store cannot settle. Under force the ref
+	// is updated either way, so the fetch would be wasted.
+	var resolveErr error
+	if ancestry == AncestryIndeterminate && resolve != nil && !force {
+		resolved, rerr := resolve(want, targetHash)
+		switch {
+		case errors.Is(rerr, context.Canceled), errors.Is(rerr, context.DeadlineExceeded):
+			return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, rerr)
+		case rerr != nil:
+			resolveErr = rerr
+		case resolved == AncestryReachable, resolved == AncestryUnreachable:
+			ancestry = resolved
+		}
+	}
+	if ancestry == AncestryReachable {
 		plan.Action = ActionUpdate
 		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash)
 		return plan, nil
@@ -528,6 +547,20 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 	}
 
 	plan.Action = ActionBlock
+	if ancestry == AncestryIndeterminate {
+		// The target already has the commits where the two histories meet, so
+		// the fetch pruned them from the planning store and a fast-forward
+		// can't be confirmed locally. Don't fail the sync or claim divergence
+		// we haven't proven — block with an actionable message.
+		plan.Reason = "cannot verify fast-forward for " + want.TargetRef.String() +
+			" locally (the target already has the relevant commits)"
+		if resolveErr != nil {
+			// The error can carry text the source server wrote.
+			plan.Reason += "; settling it against the source failed: " + sanitize.Text(resolveErr.Error())
+		}
+		plan.Reason += "; use --force-with-lease if this is a valid fast-forward"
+		return plan, nil
+	}
 	plan.Reason = ShortHash(targetHash) + " is not an ancestor of " + ShortHash(want.SourceHash)
 	return plan, nil
 }
@@ -571,27 +604,66 @@ func PlanReplicationRef(want DesiredRef, targetHash plumbing.Hash, existsOnTarge
 // on real repos — even the Linux kernel has ~1.3M commits.
 const MaxAncestryDepth = 2_000_000
 
-// ErrAncestryDepthExceeded is returned when ReachesCommit exceeds MaxAncestryDepth.
+// ErrAncestryDepthExceeded is returned when the ancestry walk exceeds MaxAncestryDepth.
 var ErrAncestryDepthExceeded = errors.New("ancestry check exceeded depth limit")
 
-// ReachesCommit checks whether the commit at startHash has targetHash as an
+// AncestryResult is the outcome of a fast-forward ancestry check against a
+// store that was populated by a fetch advertising the target's refs as haves.
+type AncestryResult int
+
+const (
+	// AncestryInvalid is the zero value and is returned alongside every error.
+	// Keeping it distinct from AncestryReachable means a caller that ignores
+	// the error (result, _ := CheckAncestry(...)) reads a failure as invalid
+	// rather than mistaking it for a provable fast-forward.
+	AncestryInvalid AncestryResult = iota
+	// AncestryReachable means targetHash is provably an ancestor of startHash:
+	// the update is a fast-forward.
+	AncestryReachable
+	// AncestryUnreachable means startHash's entire ancestry was walked without
+	// reaching targetHash and without hitting any object the target already
+	// has — a genuine non-fast-forward (the two histories have diverged).
+	AncestryUnreachable
+	// AncestryIndeterminate means the walk reached the frontier of objects the
+	// target already has (absent from this store because the fetch pruned
+	// everything reachable from a target ref) before the question was settled.
+	// The deciding commits live beyond that frontier, so a fast-forward can be
+	// neither confirmed nor ruled out from this store alone.
+	AncestryIndeterminate
+)
+
+// CheckAncestry reports whether the commit at startHash has targetHash as an
 // ancestor, bounded to MaxAncestryDepth commits to prevent degenerate walks.
-func ReachesCommit(store storer.EncodedObjectStorer, startHash, targetHash plumbing.Hash) (bool, error) {
+//
+// The store is the one BuildPlans runs against: a fetch populated it using the
+// target's refs as haves, so every object reachable from any target ref is
+// pruned. startHash and the commits between it and the target are normally
+// present (they are the new work being synced), but when another target ref
+// already points into that range the frontier commits are missing. A missing
+// object therefore means "the target already has this" rather than an error —
+// the walk records that it could not cross the frontier and returns
+// AncestryIndeterminate instead of misreporting a non-fast-forward or failing
+// the whole sync on a missing start commit.
+func CheckAncestry(store storer.EncodedObjectStorer, startHash, targetHash plumbing.Hash) (AncestryResult, error) {
 	if startHash == targetHash {
-		return true, nil
+		return AncestryReachable, nil
 	}
 
 	start, err := object.GetCommit(store, startHash)
 	if err != nil {
-		return false, fmt.Errorf("load source commit %s: %w", startHash, err)
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return AncestryIndeterminate, nil
+		}
+		return AncestryInvalid, fmt.Errorf("load source commit %s: %w", startHash, err)
 	}
 
 	seen := map[plumbing.Hash]struct{}{}
 	stack := []*object.Commit{start}
+	hitFrontier := false
 
 	for len(stack) > 0 {
 		if len(seen) >= MaxAncestryDepth {
-			return false, ErrAncestryDepthExceeded
+			return AncestryInvalid, ErrAncestryDepthExceeded
 		}
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -602,7 +674,7 @@ func ReachesCommit(store storer.EncodedObjectStorer, startHash, targetHash plumb
 
 		for _, parentHash := range current.ParentHashes {
 			if parentHash == targetHash {
-				return true, nil
+				return AncestryReachable, nil
 			}
 			if _, ok := seen[parentHash]; ok {
 				continue
@@ -610,14 +682,52 @@ func ReachesCommit(store storer.EncodedObjectStorer, startHash, targetHash plumb
 			parent, err := object.GetCommit(store, parentHash)
 			if err != nil {
 				if errors.Is(err, plumbing.ErrObjectNotFound) {
+					// Pruned ancestor: the target already has it, so the
+					// walk cannot cross this point. The answer may lie beyond.
+					hitFrontier = true
 					continue
 				}
-				return false, fmt.Errorf("load parent commit %s: %w", parentHash, err)
+				return AncestryInvalid, fmt.Errorf("load parent commit %s: %w", parentHash, err)
 			}
 			stack = append(stack, parent)
 		}
 	}
-	return false, nil
+	if hitFrontier {
+		return AncestryIndeterminate, nil
+	}
+	return AncestryUnreachable, nil
+}
+
+// AncestryResolver settles a check CheckAncestry left indeterminate by
+// asking the source; see AncestryFromParents. Nil leaves the ref blocked.
+type AncestryResolver func(want DesiredRef, targetHash plumbing.Hash) (AncestryResult, error)
+
+// AncestryFromParents answers the check on a commit graph fetched with
+// targetHash as the only have, so a commit absent from parents is reachable
+// from targetHash. Reachable when targetHash is startHash or a parent of a
+// commit walked from startHash. Otherwise the histories diverged, or the
+// source sent nothing because startHash is behind targetHash: unreachable.
+func AncestryFromParents(parents map[plumbing.Hash][]plumbing.Hash, startHash, targetHash plumbing.Hash) AncestryResult {
+	if startHash == targetHash {
+		return AncestryReachable
+	}
+	seen := map[plumbing.Hash]struct{}{}
+	stack := []plumbing.Hash{startHash}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := seen[current]; ok {
+			continue
+		}
+		seen[current] = struct{}{}
+		for _, parent := range parents[current] {
+			if parent == targetHash {
+				return AncestryReachable
+			}
+			stack = append(stack, parent)
+		}
+	}
+	return AncestryUnreachable
 }
 
 // ObjectsToPush computes the set of objects that need to be sent to the target.

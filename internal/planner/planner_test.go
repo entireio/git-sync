@@ -1,8 +1,11 @@
 package planner
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +34,7 @@ func TestPlanRefSkip(t *testing.T) {
 		SourceRef:  plumbing.NewBranchReferenceName("main"),
 		TargetRef:  plumbing.NewBranchReferenceName("main"),
 		SourceHash: hash,
-	}, hash, false)
+	}, hash, false, nil)
 	if err != nil {
 		t.Fatalf("PlanRef error: %v", err)
 	}
@@ -54,7 +57,7 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 		SourceRef:  plumbing.NewBranchReferenceName("main"),
 		TargetRef:  plumbing.NewBranchReferenceName("main"),
 		SourceHash: next,
-	}, root, false)
+	}, root, false, nil)
 	if err != nil {
 		t.Fatalf("PlanRef fast-forward: %v", err)
 	}
@@ -67,7 +70,7 @@ func TestPlanRefFastForwardAndBlock(t *testing.T) {
 		SourceRef:  plumbing.NewBranchReferenceName("main"),
 		TargetRef:  plumbing.NewBranchReferenceName("main"),
 		SourceHash: side,
-	}, next, false)
+	}, next, false, nil)
 	if err != nil {
 		t.Fatalf("PlanRef block: %v", err)
 	}
@@ -114,6 +117,103 @@ func TestBuildPlansDoesNotMutateManagedMap(t *testing.T) {
 	}
 	if _, leaked := managed[staleRef]; leaked {
 		t.Fatalf("prune candidate %s leaked into the caller's managed map", staleRef)
+	}
+}
+
+// A fully-populated store must still distinguish a real non-fast-forward
+// (divergence) from the pruned-frontier case below.
+func TestCheckAncestryUnreachableOnDivergence(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	next := seedCommit(t, repo, []plumbing.Hash{root})
+	side := seedCommit(t, repo, []plumbing.Hash{root})
+
+	result, err := CheckAncestry(repo.Storer, side, next)
+	if err != nil {
+		t.Fatalf("CheckAncestry: %v", err)
+	}
+	if result != AncestryUnreachable {
+		t.Fatalf("expected AncestryUnreachable for divergent history, got %v", result)
+	}
+}
+
+// When the source tip itself is absent — it lives behind the have frontier
+// because the target already has it under another ref — the check must report
+// indeterminate, not fail (which previously aborted the whole sync with a
+// "load source commit" error).
+func TestCheckAncestryIndeterminateOnMissingStart(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	missingStart := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	result, err := CheckAncestry(repo.Storer, missingStart, target)
+	if err != nil {
+		t.Fatalf("CheckAncestry should not error on a pruned start commit: %v", err)
+	}
+	if result != AncestryIndeterminate {
+		t.Fatalf("expected AncestryIndeterminate for missing start, got %v", result)
+	}
+}
+
+// When the walk reaches a parent that was pruned (the target already has it),
+// the answer lies beyond the frontier: indeterminate, not a false "diverged".
+func TestCheckAncestryIndeterminateOnPrunedAncestor(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	prunedParent := plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc")
+	tip := seedCommit(t, repo, []plumbing.Hash{prunedParent})
+	target := plumbing.NewHash("dddddddddddddddddddddddddddddddddddddddd")
+
+	result, err := CheckAncestry(repo.Storer, tip, target)
+	if err != nil {
+		t.Fatalf("CheckAncestry: %v", err)
+	}
+	if result != AncestryIndeterminate {
+		t.Fatalf("expected AncestryIndeterminate when an ancestor is pruned, got %v", result)
+	}
+}
+
+// PlanRef must turn the indeterminate case into a clean, actionable block
+// rather than a hard error, and --force must still let it through.
+func TestPlanRefIndeterminateBlocksAndForceOverrides(t *testing.T) {
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	missingSource := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	want := DesiredRef{
+		Kind: RefKindBranch, Label: "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: missingSource,
+	}
+
+	plan, err := PlanRef(repo.Storer, want, target, false, nil)
+	if err != nil {
+		t.Fatalf("PlanRef should not error on indeterminate ancestry: %v", err)
+	}
+	if plan.Action != ActionBlock {
+		t.Fatalf("expected ActionBlock, got %s", plan.Action)
+	}
+	if !strings.Contains(plan.Reason, "cannot verify fast-forward") {
+		t.Fatalf("expected actionable indeterminate reason, got %q", plan.Reason)
+	}
+
+	forced, err := PlanRef(repo.Storer, want, target, true, nil)
+	if err != nil {
+		t.Fatalf("PlanRef (force): %v", err)
+	}
+	if forced.Action != ActionUpdate {
+		t.Fatalf("expected ActionUpdate under force, got %s", forced.Action)
 	}
 }
 
@@ -1826,5 +1926,147 @@ func TestPruneSkipsLiveBootstrapMarkers(t *testing.T) {
 			}
 		}
 		t.Fatalf("expected stale marker %s to be pruned, got %+v", BootstrapTempRef(devRef), plans)
+	})
+}
+
+// A commit graph fetched with the target as the only have settles the check.
+func TestAncestryFromParents(t *testing.T) {
+	h := func(c string) plumbing.Hash { return plumbing.NewHash(strings.Repeat(c, 40)) }
+	target, mid, tip, other := h("1"), h("2"), h("3"), h("4")
+
+	fastForward := map[plumbing.Hash][]plumbing.Hash{tip: {mid}, mid: {target}}
+	if got := AncestryFromParents(fastForward, tip, target); got != AncestryReachable {
+		t.Fatalf("fast-forward: got %v, want reachable", got)
+	}
+	// The source sent nothing: the tip is behind the target.
+	if got := AncestryFromParents(map[plumbing.Hash][]plumbing.Hash{}, tip, target); got != AncestryUnreachable {
+		t.Fatalf("rewind: got %v, want unreachable", got)
+	}
+	diverged := map[plumbing.Hash][]plumbing.Hash{tip: {mid}, mid: {other}}
+	if got := AncestryFromParents(diverged, tip, target); got != AncestryUnreachable {
+		t.Fatalf("divergence: got %v, want unreachable", got)
+	}
+	if got := AncestryFromParents(nil, target, target); got != AncestryReachable {
+		t.Fatalf("same hash: got %v, want reachable", got)
+	}
+}
+
+// An indeterminate check goes to the resolver; its answer decides the plan,
+// and its failure keeps the actionable block.
+func TestPlanRefResolvesIndeterminateAncestry(t *testing.T) {
+	missingSource := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	want := DesiredRef{
+		Kind: RefKindBranch, Label: "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: missingSource,
+	}
+	var asked []plumbing.Hash
+	answer := func(result AncestryResult, err error) AncestryResolver {
+		return func(w DesiredRef, th plumbing.Hash) (AncestryResult, error) {
+			asked = []plumbing.Hash{w.SourceHash, th}
+			return result, err
+		}
+	}
+
+	plan, err := PlanRef(memory.NewStorage(), want, target, false, answer(AncestryReachable, nil))
+	if err != nil {
+		t.Fatalf("PlanRef (resolved reachable): %v", err)
+	}
+	if plan.Action != ActionUpdate {
+		t.Fatalf("resolved reachable: expected ActionUpdate, got %s (%s)", plan.Action, plan.Reason)
+	}
+	if len(asked) != 2 || asked[0] != missingSource || asked[1] != target {
+		t.Fatalf("resolver asked about %v, want [%s %s]", asked, missingSource, target)
+	}
+
+	plan, err = PlanRef(memory.NewStorage(), want, target, false, answer(AncestryUnreachable, nil))
+	if err != nil {
+		t.Fatalf("PlanRef (resolved unreachable): %v", err)
+	}
+	if plan.Action != ActionBlock || !strings.Contains(plan.Reason, "is not an ancestor of") {
+		t.Fatalf("resolved unreachable: expected divergence block, got %s (%s)", plan.Action, plan.Reason)
+	}
+
+	plan, err = PlanRef(memory.NewStorage(), want, target, false, answer(AncestryInvalid, errors.New("source is v1")))
+	if err != nil {
+		t.Fatalf("PlanRef (resolver failed): %v", err)
+	}
+	if plan.Action != ActionBlock {
+		t.Fatalf("resolver failed: expected ActionBlock, got %s", plan.Action)
+	}
+	if !strings.Contains(plan.Reason, "cannot verify fast-forward") || !strings.Contains(plan.Reason, "source is v1") {
+		t.Fatalf("resolver failed: reason should keep the block and name the failure, got %q", plan.Reason)
+	}
+
+	// A check the store settles never reaches the resolver.
+	repo, err := git.Init(memory.NewStorage(), nil)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	root := seedCommit(t, repo, nil)
+	next := seedCommit(t, repo, []plumbing.Hash{root})
+	settled := DesiredRef{Kind: RefKindBranch, Label: "main", SourceRef: want.SourceRef, TargetRef: want.TargetRef, SourceHash: next}
+	plan, err = PlanRef(repo.Storer, settled, root, false, func(DesiredRef, plumbing.Hash) (AncestryResult, error) {
+		t.Fatal("resolver called for a check the store settled")
+		return AncestryInvalid, nil
+	})
+	if err != nil {
+		t.Fatalf("PlanRef (settled): %v", err)
+	}
+	if plan.Action != ActionUpdate {
+		t.Fatalf("settled: expected ActionUpdate, got %s", plan.Action)
+	}
+}
+
+func TestPlanRefResolverEdgeCases(t *testing.T) {
+	t.Parallel()
+	target := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	want := DesiredRef{
+		Kind: RefKindBranch, Label: "main",
+		SourceRef:  plumbing.NewBranchReferenceName("main"),
+		TargetRef:  plumbing.NewBranchReferenceName("main"),
+		SourceHash: plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	}
+	fail := func(err error) AncestryResolver {
+		return func(DesiredRef, plumbing.Hash) (AncestryResult, error) {
+			return AncestryInvalid, err
+		}
+	}
+
+	t.Run("server text is sanitized", func(t *testing.T) {
+		t.Parallel()
+		plan, err := PlanRef(memory.NewStorage(), want, target, false, fail(errors.New("remote: bad\x1b[2Jthing")))
+		if err != nil {
+			t.Fatalf("PlanRef: %v", err)
+		}
+		if strings.ContainsRune(plan.Reason, 0x1b) || !strings.Contains(plan.Reason, "remote: bad[2Jthing") {
+			t.Fatalf("reason should carry the failure without control bytes, got %q", plan.Reason)
+		}
+	})
+
+	for _, ctxErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(ctxErr.Error()+" stops the run", func(t *testing.T) {
+			t.Parallel()
+			_, err := PlanRef(memory.NewStorage(), want, target, false, fail(fmt.Errorf("fetch: %w", ctxErr)))
+			if !errors.Is(err, ctxErr) {
+				t.Fatalf("expected %v, got %v", ctxErr, err)
+			}
+		})
+	}
+
+	t.Run("force skips the resolver", func(t *testing.T) {
+		t.Parallel()
+		plan, err := PlanRef(memory.NewStorage(), want, target, true, func(DesiredRef, plumbing.Hash) (AncestryResult, error) {
+			t.Error("resolver called under force")
+			return AncestryInvalid, nil
+		})
+		if err != nil {
+			t.Fatalf("PlanRef: %v", err)
+		}
+		if plan.Action != ActionUpdate {
+			t.Fatalf("expected ActionUpdate, got %s (%s)", plan.Action, plan.Reason)
+		}
 	})
 }
