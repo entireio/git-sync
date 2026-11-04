@@ -697,13 +697,14 @@ func (s *syncSession) resolveAncestry(ctx context.Context) planner.AncestryResol
 		parents, err := s.sourceService.FetchCommitParents(ctx, s.sourceConn,
 			[]plumbing.Hash{want.SourceHash}, []plumbing.Hash{targetHash})
 		if err != nil {
-			return planner.AncestryInvalid, err
+			return planner.AncestryInvalid, fmt.Errorf("fetch commit graph for %s: %w", want.TargetRef, err)
 		}
 		result := planner.AncestryFromParents(parents, want.SourceHash, targetHash)
 		if s.logger != nil {
 			s.logger.Debug("settled fast-forward against the source",
-				"ref", want.TargetRef.String(), "commits", len(parents),
-				"fast_forward", result == planner.AncestryReachable)
+				slog.String("ref", want.TargetRef.String()),
+				slog.Int("commits", len(parents)),
+				slog.Bool("fast_forward", result == planner.AncestryReachable))
 		}
 		return result, nil
 	}
