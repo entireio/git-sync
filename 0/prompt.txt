@@ -1,0 +1,13 @@
+<pasted_content id="f3fc">
+Fix before merge:
+- Unsanitized error text from the source (internal/planner/planner.go:553): the resolver's error is added to plan.Reason as-is. That error can contain text the source server wrote: an ERR line is wrapped as "remote: ..." at internal/gitproto/fetch.go:340 with no filtering. The codebase already requires that server-written text in Reason go through sanitize.Text (see internal/syncer/syncer.go:965-973). The fix is one wrap.
+
+Worth changing, not blocking:
+- Full history download (syncer.go:697): if the target branch has commits the source never had, upstream upload-pack ignores the unknown have (upload-pack.c:521). The resolver then downloads the tip's entire commit history, which is about a million commits on nixpkgs. It could stop early instead: if the source doesn't acknowledge the target hash, the answer is "not a fast-forward" and no pack is needed.
+- Cancellation reported as blocks (planner.go:524): a cancelled or timed-out context during the resolver fetch shows up as a block on each ref instead of stopping the run.
+- Wasted fetch under --force (planner.go:521): the resolver still runs, even though the ref gets updated either way.
+</pasted_content id="f3fc">
+
+---
+
+go ahead. the early-stop should be created as a Linear issue
