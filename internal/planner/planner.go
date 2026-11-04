@@ -38,6 +38,9 @@ type PlanConfig struct {
 	// pruned. Exclusions apply within them. Explicit Mappings are not subject
 	// to it. Leave empty for the historical behavior, which narrows nothing.
 	IncludeRefPrefixes []string
+	// ResolveAncestry settles a check CheckAncestry left indeterminate.
+	// Nil leaves such refs blocked.
+	ResolveAncestry AncestryResolver
 }
 
 // BuildDesiredRefs constructs the set of desired refs and managed targets from
@@ -199,7 +202,7 @@ func BuildPlans(
 			continue
 		}
 
-		plan, err := PlanRef(store, want, targetHash, cfg.Force)
+		plan, err := PlanRef(store, want, targetHash, cfg.Force, cfg.ResolveAncestry)
 		if err != nil {
 			return nil, err
 		}
@@ -473,7 +476,7 @@ func BuildBootstrapPlans(
 }
 
 // PlanRef determines the action for a single ref that exists on both source and target.
-func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumbing.Hash, force bool) (BranchPlan, error) {
+func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumbing.Hash, force bool, resolve AncestryResolver) (BranchPlan, error) {
 	plan := BranchPlan{
 		Branch:     want.Label,
 		SourceRef:  want.SourceRef,
@@ -515,6 +518,17 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		}
 		return plan, fmt.Errorf("check fast-forward for %s: %w", want.TargetRef, err)
 	}
+	// Ask the source what the pruned store cannot settle
+	var resolveErr error
+	if ancestry == AncestryIndeterminate && resolve != nil {
+		resolved, rerr := resolve(want, targetHash)
+		switch {
+		case rerr != nil:
+			resolveErr = rerr
+		case resolved == AncestryReachable, resolved == AncestryUnreachable:
+			ancestry = resolved
+		}
+	}
 	if ancestry == AncestryReachable {
 		plan.Action = ActionUpdate
 		plan.Reason = ShortHash(targetHash) + " -> " + ShortHash(want.SourceHash)
@@ -534,7 +548,11 @@ func PlanRef(store storer.EncodedObjectStorer, want DesiredRef, targetHash plumb
 		// can't be confirmed locally. Don't fail the sync or claim divergence
 		// we haven't proven — block with an actionable message.
 		plan.Reason = "cannot verify fast-forward for " + want.TargetRef.String() +
-			" locally (the target already has the relevant commits); use --force-with-lease if this is a valid fast-forward"
+			" locally (the target already has the relevant commits)"
+		if resolveErr != nil {
+			plan.Reason += "; settling it against the source failed: " + resolveErr.Error()
+		}
+		plan.Reason += "; use --force-with-lease if this is a valid fast-forward"
 		return plan, nil
 	}
 	plan.Reason = ShortHash(targetHash) + " is not an ancestor of " + ShortHash(want.SourceHash)
@@ -672,6 +690,38 @@ func CheckAncestry(store storer.EncodedObjectStorer, startHash, targetHash plumb
 		return AncestryIndeterminate, nil
 	}
 	return AncestryUnreachable, nil
+}
+
+// AncestryResolver settles a check CheckAncestry left indeterminate by
+// asking the source; see AncestryFromParents. Nil leaves the ref blocked.
+type AncestryResolver func(want DesiredRef, targetHash plumbing.Hash) (AncestryResult, error)
+
+// AncestryFromParents answers the check on a commit graph fetched with
+// targetHash as the only have, so a commit absent from parents is reachable
+// from targetHash. Reachable when targetHash is startHash or a parent of a
+// commit walked from startHash. Otherwise the histories diverged, or the
+// source sent nothing because startHash is behind targetHash: unreachable.
+func AncestryFromParents(parents map[plumbing.Hash][]plumbing.Hash, startHash, targetHash plumbing.Hash) AncestryResult {
+	if startHash == targetHash {
+		return AncestryReachable
+	}
+	seen := map[plumbing.Hash]struct{}{}
+	stack := []plumbing.Hash{startHash}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := seen[current]; ok {
+			continue
+		}
+		seen[current] = struct{}{}
+		for _, parent := range parents[current] {
+			if parent == targetHash {
+				return AncestryReachable
+			}
+			stack = append(stack, parent)
+		}
+	}
+	return AncestryUnreachable
 }
 
 // ObjectsToPush computes the set of objects that need to be sent to the target.

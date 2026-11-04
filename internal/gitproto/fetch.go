@@ -293,6 +293,10 @@ func fetchPackV2(
 func storeV2FetchPack(store storer.Storer, r io.Reader, verbose bool, progressOut io.Writer) error {
 	return consumeV2FetchPack(r, verbose, progressOut, func(packReader io.Reader) error {
 		if err := packfile.UpdateObjectStorage(store, packReader); err != nil {
+			// Every want is a have: nothing to store
+			if errors.Is(err, packfile.ErrEmptyPackfile) {
+				return nil
+			}
 			return fmt.Errorf("update object storage: %w", err)
 		}
 		return nil
@@ -519,6 +523,10 @@ func fetchToStoreV1(
 	}
 	sbReader := buildSidebandReader(caps, buffered, progressSink(verbose, "source: ", conn.ProgressWriter()))
 	if err := packfile.UpdateObjectStorage(store, sbReader); err != nil {
+		// Every want is a have: nothing to store
+		if errors.Is(err, packfile.ErrEmptyPackfile) {
+			return nil
+		}
 		return fmt.Errorf("update object storage: %w", err)
 	}
 	return nil

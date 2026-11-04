@@ -5648,3 +5648,81 @@ func TestBootstrap_IntegrationFailedRunStillReportsItsRoute(t *testing.T) {
 		t.Fatal("expected the failed run to carry its relay reason")
 	}
 }
+
+// TestRun_IntegrationFastForwardsTipTheTargetHolds covers a branch whose new
+// tip the target already holds under another ref, as nixos-unstable trails
+// master in NixOS/nixpkgs. The planning fetch prunes that tip, so the sync
+// settles the fast-forward against the source: a real one updates, a rewind
+// blocks, and neither aborts the run.
+func TestRun_IntegrationFastForwardsTipTheTargetHolds(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	trailingRef := plumbing.NewBranchReferenceName("trailing")
+	old := branchTip(t, sourceRepo, testBranch)
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(trailingRef, old)); err != nil {
+		t.Fatalf("seed trailing: %v", err)
+	}
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	tip, err := sourceRepo.CommitObject(branchTip(t, sourceRepo, testBranch))
+	if err != nil {
+		t.Fatalf("load %s tip: %v", testBranch, err)
+	}
+	// One commit past old; the target holds it under master.
+	next := tip.ParentHashes[0]
+
+	targetRepo, _ := newSourceRepo(t)
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+	cfg := Config{
+		Source: Endpoint{URL: sourceServer.RepoURL()},
+		Target: Endpoint{URL: targetServer.RepoURL()},
+	}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("seed sync: %v", err)
+	}
+
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(trailingRef, next)); err != nil {
+		t.Fatalf("advance trailing: %v", err)
+	}
+	result, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("fast-forward resync: %v (plans %+v)", err, result.Plans)
+	}
+	if result.Blocked != 0 || result.Pushed != 1 {
+		t.Fatalf("expected 1 push and no blocks, got %+v", result)
+	}
+	if got := branchTip(t, targetRepo, "trailing"); got != next {
+		t.Fatalf("target trailing at %s, want %s", got, next)
+	}
+
+	// Rewind trailing behind its target: a block, not an update.
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(trailingRef, old)); err != nil {
+		t.Fatalf("rewind trailing: %v", err)
+	}
+	result, err = Run(context.Background(), cfg)
+	if err == nil || result.Blocked != 1 {
+		t.Fatalf("expected the rewind to block, got err=%v result=%+v", err, result)
+	}
+	for _, plan := range result.Plans {
+		if plan.TargetRef != trailingRef {
+			continue
+		}
+		if plan.Action != ActionBlock || !strings.Contains(plan.Reason, "is not an ancestor of") {
+			t.Fatalf("rewind plan: got %s (%s)", plan.Action, plan.Reason)
+		}
+	}
+	if got := branchTip(t, targetRepo, "trailing"); got != next {
+		t.Fatalf("rewind moved target trailing to %s", got)
+	}
+}
+
+func branchTip(t *testing.T, repo *git.Repository, branch string) plumbing.Hash {
+	t.Helper()
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", branch, err)
+	}
+	return ref.Hash()
+}
