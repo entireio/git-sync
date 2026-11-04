@@ -1,0 +1,85 @@
+can you take a look, we are using git-sync as part of our mirror pipeline: 
+
+The GitHub mirror workers in us-east-2 are at their 20-pod maximum. A handful of very large repos are being synced 2–4× more often than this morning, and the queue is growing faster than 20 workers can clear it. The "large first-time clone" theory from the alert bot (marvin) is wrong: first-time clones are flat at about 15 per hour all day.
+
+What's driving it (repos with the most total sync work, 14:00–15:15Z vs 17:00Z–now)
+
+Each of these syncs re-checks 20–65k refs to change about one. Total incoming jobs barely moved (about 9–10k an hour since 15:00Z); the problem is that more of them are these slow ones. That's why the slowest-5% sync time tripled from 5s to 16s. "Target already being synced, deferred" log lines went from 181 an hour at 10:00Z to 1,351 at 17:00Z, so the same repos keep getting new jobs while a sync of them is still running.
+
+---
+
+ok, mirror-pipeline repo is updated, can you check again if that changes anything
+
+---
+
+are we writing the pull refs to entire?
+
+---
+
+I looked at one of the repos that has more then 50k refs and pulls is not the issue
+
+---
+
+can you explain the git-sync change more, how can the planer know which refs changed?
+
+---
+
+do we do a dedup today on the haves at least?
+
+---
+
+hmm, when we fetch the refs do we also get the tips?
+
+---
+
+but if we get the list from right, the list from left then we could remove all the lines that are equal?
+
+---
+
+yeah so the only issue would be multiple non common ancestor branches
+
+---
+
+ok, so yeah let's build this, can you setup a test case? can we try this with the cli repo maybe?
+
+---
+
+yeah maybe we need more measurement there? can we check mirror-pipeline datadog metrics maybe first? the spike is gone so it was probably not only the ref size but also some throttling / hickup on GitHubs side. but maybe still worth checking metrics, it happened about an hour ago
+
+---
+
+ok, so in our happy path this isn't an issue and we risk making it worth if there are repos with multi branches that don't share any or not much history
+
+---
+
+does ls-ref, which we use for fetching the refs, has options and maybe one that gives us only refs that are maximums of the graph?
+
+---
+
+so in some way figuring out which refs the target server has are included in other refs is what we need to shring the have list significantly, like for example tags on main take up a lot of refs but in theory only the latest tag matters as a have and even that would potentially disappear if main is further ahead, but it would cover the case with refs pointing else where, you end up with only the refs that are tips / maximums.
+
+could we figure this out by doing a have/want against the target first? Like basically send everything in somehoß
+
+---
+
+the issue is also a bit our own refs for checkpoints which are all not sharing a common ancestor
+
+---
+
+but: we could treat checkpoints ref in git-sync better, like we know they are unique, like if the tip is the same on both sides we can take it out of have, maybe that's a fix worth doing?
+
+---
+
+ignore v2/ please, it's dead and never shipped, we should also delete it
+
+---
+
+check the cli remote again, there are much m9ore there
+
+---
+
+yes, build it
+
+---
+
+yes, please open a PR
