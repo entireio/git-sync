@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `github.com/go-git/go-git/v6` and `github.com/go-git/go-billy/v6` to `v6.0.0-beta.1`, along with `testify` `v1.12.1` and the indirect dependencies (`golang.org/x/net` `v0.62.0`, `golang.org/x/sync` `v0.24.0`, `ProtonMail/go-crypto` `v1.5.2`, `cloudflare/circl` `v1.6.5`, `pjbgf/sha1cd` `v0.7.0`, `Microsoft/go-winio` `v0.6.4`, `spf13/pflag` `v1.0.10`). The Go toolchain stays at `1.27.3`, the current release.
+- Refs whose name starts with a dash (`refs/heads/-foo`) are now mirrored instead of skipped. go-git `beta.1` dropped that rule from `ReferenceName.Validate` to match git's `check_refname_format`: git restricts a leading dash only when a branch or tag is created, and `git fetch` and `git clone` replicate such refs. `--map` accepts such names for the same reason. No ref name reaches a command line where a leading dash would be read as an option.
+
 ### Fixed
 
 - **A branch whose new tip the target already holds under another ref now fast-forwards instead of failing the sync.** The planning fetch names every target ref as a have, so the source prunes such a tip from the pack and the ancestry check aborted the run with `load source commit …: object not found`. A mirror of NixOS/nixpkgs hit this whenever `nixos-unstable` advanced to a commit `master` had already delivered. A check the pruned store cannot settle is now resolved with one tree:0 commit-graph fetch of that tip against the ref's own target hash: a real fast-forward updates, and a rewind blocks as `not an ancestor`. A source that cannot serve that fetch (protocol v1, no filter support) leaves the ref blocked with the reason instead of crashing. Builds on [#79](https://github.com/entireio/git-sync/pull/79).
