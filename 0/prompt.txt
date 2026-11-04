@@ -1,0 +1,16 @@
+ssh works now
+
+---
+
+it's pushed, please open a trail
+
+---
+
+<pasted_content id="e44a">
+SHOULD:
+
+- Add shared-history regression coverage. The API promises correctness even when configured refs share history. Current fixtures use independent histories, and assertions check commit tips only. Add a shared-history case and verify parents, trees, and blobs remain readable. independent_history_test.go:138 (internal/syncer/independent_history_test.go:138)
+- Specify prefix matching precisely. Document literal matching against target names after mappings, with a trailing-slash example such as refs/entire/checkpoints/. types.go:113 (types.go:113)
+- Qualify “never wrong, only costly.” Correctness is preserved, but larger packs can exceed configured or server limits and fail a previously successful transfer. types.go:122 (types.go:122)
+- Narrow the validator’s documentation. It enforces a trimmed refs/ prefix, rather than rejecting every unmatchable prefix; refs/foo* still passes. validation.go:25 (internal/validation/validation.go:25)
+</pasted_content id="e44a">
