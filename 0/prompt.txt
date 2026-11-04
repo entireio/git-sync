@@ -1,0 +1,9 @@
+can you switch to the latest go-git beta release, also check if other dependencies or go it self can be updated
+
+---
+
+why did we reject them in the first place?
+
+---
+
+ok, then do as you suggested, can you open a new PR for this

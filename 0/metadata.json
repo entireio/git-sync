@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.3-nightly.202610310614.54b6a5cac",
+  "checkpoint_id": "01M6KBNAJ75SD8YRKR4A5AFSXD",
+  "session_id": "4916bd0e-a7d6-4bdd-bb4d-313534672065",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-04T13:23:34.514664Z",
+  "branch": "soph/go-git-beta1",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "go.mod",
+    "go.sum",
+    "internal/gitproto/refnames.go",
+    "internal/gitproto/refnames_test.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "89a558b85557",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 51105,
+    "cache_read_tokens": 1206103,
+    "output_tokens": 5903,
+    "api_call_count": 18
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 2
+  }
+}
