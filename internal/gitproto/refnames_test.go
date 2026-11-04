@@ -25,6 +25,9 @@ func TestPartitionRefNamesKeepsLegitimateNames(t *testing.T) {
 		"refs/notes/commits",
 		"refs/pull/42/head",
 		"refs/merge-requests/7/head",
+		// git rejects a leading dash only when creating a branch or tag;
+		// fetch and clone replicate such refs, so a mirror must too.
+		"refs/heads/-foo",
 	)
 	valid, skipped := PartitionRefNames(in)
 	if len(skipped) != 0 {
@@ -70,11 +73,6 @@ func TestPartitionRefNamesRejectsDangerousNames(t *testing.T) {
 			name: "escape sequence",
 			ref:  "refs/heads/\x1b[2Kmain",
 			why:  "ANSI escape reaching a terminal",
-		},
-		{
-			name: "leading dash on a branch",
-			ref:  "refs/heads/-oProxyCommand=id",
-			why:  "argument-injection shape",
 		},
 		{
 			name: "lock suffix",

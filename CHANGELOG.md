@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `github.com/go-git/go-git/v6` and `github.com/go-git/go-billy/v6` to `v6.0.0-beta.1`, along with `testify` `v1.12.1` and the indirect dependencies (`golang.org/x/net` `v0.62.0`, `golang.org/x/sync` `v0.24.0`, `ProtonMail/go-crypto` `v1.5.2`, `cloudflare/circl` `v1.6.5`, `pjbgf/sha1cd` `v0.7.0`, `Microsoft/go-winio` `v0.6.4`, `spf13/pflag` `v1.0.10`). The Go toolchain stays at `1.27.3`, the current release.
+- Refs whose name starts with a dash (`refs/heads/-foo`) are now mirrored instead of skipped. go-git `beta.1` dropped that rule from `ReferenceName.Validate` to match git's `check_refname_format`: git restricts a leading dash only when a branch or tag is created, and `git fetch` and `git clone` replicate such refs. `--map` accepts such names for the same reason. No ref name reaches a command line where a leading dash would be read as an option.
+
 ### Fixed
 
 - **`BootstrapLogger` now receives the bootstrap planning and progress lines.** They went only to the `-v` stderr log, so an embedder saw the GitHub size lookup and then nothing until the first checkpoint upload. A bootstrap that stalled while planning logged the size preflight and then nothing until its timeout. Every planning line now also goes to `BootstrapLogger`, with the logger's own attributes and the caller's context. Phase and checkpoint progress goes at Info: planning checkpoints, fetching the commit graph, planned remaining branches with their counts, push attempting, group pushed, branch finalized. A push the target refused or timed out, and resume markers left on the target, go at Warn; a push git-sync stops itself at its byte budget and then splits stays at Info, so a successful bootstrap logs no warnings. Lines logged once per branch (subsumed by trunk, already on target) go at Debug, so a repository with thousands of branches does not emit thousands of Info records per attempt. Error text from the target is sanitized. `-v` shows every line it showed before. ([#134](https://github.com/entireio/git-sync/pull/134))

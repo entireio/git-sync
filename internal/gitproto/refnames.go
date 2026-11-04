@@ -27,7 +27,10 @@ import (
 // Validation is plumbing.ReferenceName.Validate, which implements git's
 // check_refname_format: it rejects "..", NUL, CR, LF and other control
 // characters, DEL, space, "~^:?*[", backslash, "@{", a ".lock" suffix, a
-// leading dot, empty path components, and a leading dash on a branch or tag.
+// leading dot, and empty path components. A leading dash is accepted: git
+// restricts it only when a branch or tag is created, and git fetch and git
+// clone store refs/heads/-foo without complaint. No ref name reaches a command
+// line in a position where a leading dash would be read as an option.
 // Deferring to it rather than hand-rolling a check keeps git-sync's notion of a
 // valid ref identical to git's, so nothing git considers legitimate is skipped.
 //
