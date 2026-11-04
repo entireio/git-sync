@@ -324,7 +324,7 @@ $ git-sync probe --json <source-url> | jq .sourceHead
 "refs/heads/main"
 ```
 
-**Bootstrap pushes the source HEAD's branch first.** When initializating a new 
+**Bootstrap pushes the source HEAD's branch first.** When initializing a new 
 repository, the default branch is based on the first push to a fresh repo (GitHub, GitLab,
 others), this makes the mirror's default branch match the source
 without any manual step. No flag needed — the ordering is always applied.
