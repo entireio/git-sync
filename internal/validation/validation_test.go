@@ -219,3 +219,18 @@ func TestValidateIncludeRefPrefixes(t *testing.T) {
 		}
 	}
 }
+
+// A bad independent-history prefix never fails a sync, it quietly keeps the
+// full have list, so the shape is rejected up front.
+func TestValidateIndependentHistoryRefPrefixes(t *testing.T) {
+	for _, ok := range [][]string{nil, {}, {"refs/entire/checkpoints/"}, {"refs/notes/", "refs/entire/"}, {" refs/entire/ "}} {
+		if err := ValidateIndependentHistoryRefPrefixes(ok); err != nil {
+			t.Errorf("ValidateIndependentHistoryRefPrefixes(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range [][]string{{""}, {"  "}, {"entire/checkpoints/"}, {"refs/heads/", "heads/"}} {
+		if err := ValidateIndependentHistoryRefPrefixes(bad); err == nil {
+			t.Errorf("ValidateIndependentHistoryRefPrefixes(%q) = nil, want an error", bad)
+		}
+	}
+}

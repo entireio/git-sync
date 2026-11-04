@@ -22,6 +22,21 @@ func ValidateIncludeRefPrefixes(prefixes []string) error {
 	return nil
 }
 
+// ValidateIndependentHistoryRefPrefixes requires every entry, after trimming
+// surrounding whitespace, to start with refs/. That catches the common
+// mistakes (a blank entry, a name missing refs/) that would otherwise
+// quietly keep the full have list. It does not prove an entry can match:
+// prefixes are literal, so one like refs/foo* passes and matches only names
+// that contain the asterisk.
+func ValidateIndependentHistoryRefPrefixes(prefixes []string) error {
+	for _, p := range prefixes {
+		if p = strings.TrimSpace(p); !strings.HasPrefix(p, "refs/") {
+			return fmt.Errorf("independent history ref prefix %q must start with refs/", p)
+		}
+	}
+	return nil
+}
+
 const (
 	ProtocolAuto = "auto"
 	ProtocolV1   = "v1"

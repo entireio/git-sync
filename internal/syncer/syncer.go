@@ -79,6 +79,10 @@ type Config struct {
 	ExcludeRefPrefixes            []string
 	ExcludeRefs                   []string
 	IncludeRefPrefixes            []string
+	// IndependentHistoryRefPrefixes names namespaces whose refs share no
+	// history with any other ref. Relay fetches leave their unchanged tips out
+	// of the haves (planner.FetchHaves); it changes nothing else.
+	IndependentHistoryRefPrefixes []string
 	IncludeTags                   bool
 	DryRun                        bool
 	Verbose                       bool
@@ -859,6 +863,9 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	if err := validation.ValidateIncludeRefPrefixes(cfg.IncludeRefPrefixes); err != nil {
 		return nil, fmt.Errorf("validate include ref prefixes: %w", err)
 	}
+	if err := validation.ValidateIndependentHistoryRefPrefixes(cfg.IndependentHistoryRefPrefixes); err != nil {
+		return nil, fmt.Errorf("validate independent history ref prefixes: %w", err)
+	}
 	if err := validateEmptySourcePolicy(cfg); err != nil {
 		return nil, err
 	}
@@ -1629,9 +1636,10 @@ func (s *syncSession) executeIncremental(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	pushPlans []planner.BranchPlan,
 ) (incremental.Result, error) {
+	haves := planner.FetchHaves(s.target.refMap, pushPlans, s.cfg.IndependentHistoryRefPrefixes)
 	incResult, incErr := incremental.Execute(ctx, incremental.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
-		DesiredRefs: desiredRefs, TargetRefs: s.target.refMap,
+		DesiredRefs: desiredRefs, TargetRefs: haves,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 		ForceBlind: s.cfg.ForceBlind,
 		CanRelay: func(force, prune, dryRun bool, plans []planner.BranchPlan) (bool, string) {
@@ -1668,9 +1676,10 @@ func (s *syncSession) executeReplicate(
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
+	haves := planner.FetchHaves(targetRefs, pushPlans, s.cfg.IndependentHistoryRefPrefixes)
 	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
-		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
+		DesiredRefs: desiredRefs, TargetRefs: haves,
 		PushPlans: pushPlans, MaxPackBytes: s.cfg.MaxPackBytes,
 	})
 	if repErr != nil {
