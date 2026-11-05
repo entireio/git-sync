@@ -382,9 +382,6 @@ func TestFetchToStoreUnsupportedProtocol(t *testing.T) {
 	}
 }
 
-// A no-op fetch under a canceled context must report the cancellation, not
-// the NoErrAlreadyUpToDate sentinel: every caller treats the sentinel as
-// success, and errors.Is would find it inside a join.
 func TestFetchToStoreCanceledNoWantsReportsCancel(t *testing.T) {
 	for _, proto := range []string{"v1", "v2"} {
 		t.Run(proto, func(t *testing.T) {
