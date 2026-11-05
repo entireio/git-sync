@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.3-nightly.202610310614.54b6a5cac",
+  "checkpoint_id": "01M6PJ8GHA0FMQZK8FXWB8CG84",
+  "strategy": "manual-commit",
+  "branch": "soph/fetch-cancel-masks-uptodate",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "internal/gitproto/fetch.go",
+    "internal/gitproto/fetch_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 47333,
+    "cache_read_tokens": 962085,
+    "output_tokens": 6700,
+    "api_call_count": 15
+  },
+  "redaction": {
+    "replacements": 9,
+    "layers": {
+      "betterleaks": 9,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
