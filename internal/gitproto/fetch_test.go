@@ -382,6 +382,38 @@ func TestFetchToStoreUnsupportedProtocol(t *testing.T) {
 	}
 }
 
+// A no-op fetch under a canceled context must report the cancellation, not
+// the NoErrAlreadyUpToDate sentinel: every caller treats the sentinel as
+// success, and errors.Is would find it inside a join.
+func TestFetchToStoreCanceledNoWantsReportsCancel(t *testing.T) {
+	for _, proto := range []string{"v1", "v2"} {
+		t.Run(proto, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			rs := &RefService{Protocol: proto}
+			err := rs.FetchToStore(ctx, memory.NewStorage(), nil, nil, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context.Canceled, got %v", err)
+			}
+			if errors.Is(err, git.NoErrAlreadyUpToDate) {
+				t.Fatalf("cancellation must not match NoErrAlreadyUpToDate: %v", err)
+			}
+		})
+	}
+}
+
+func TestFetchToStoreNoWantsUpToDate(t *testing.T) {
+	for _, proto := range []string{"v1", "v2"} {
+		t.Run(proto, func(t *testing.T) {
+			rs := &RefService{Protocol: proto}
+			err := rs.FetchToStore(t.Context(), memory.NewStorage(), nil, nil, nil)
+			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+				t.Fatalf("expected NoErrAlreadyUpToDate, got %v", err)
+			}
+		})
+	}
+}
+
 func TestFetchPackUnsupportedProtocol(t *testing.T) {
 	rs := &RefService{Protocol: "v99"}
 	_, err := rs.FetchPack(t.Context(), nil, nil, nil)
