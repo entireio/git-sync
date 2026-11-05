@@ -2735,6 +2735,187 @@ func TestRun_IntegrationReplicateRejectedPackUpdateUsesCreatedRefs(t *testing.T)
 	assertHeadsMatch(t, sourceRepo, targetRepo, "feature")
 }
 
+// TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently covers a
+// create that another sync of the same target delivers at a different hash
+// while this run's pack is being refused. Two syncs can overlap when the lease
+// fails open, and the older one may install the ref at the commit it saw. The
+// re-read target then holds the ref, but not at this run's source hash, so the
+// run must move it there as an update rather than report success with the
+// older commit installed.
+func TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently(t *testing.T) {
+	fx := newReplicateConcurrentCreateFixture(t)
+	// The older sync saw the ref at the trunk's commit, which the target
+	// already holds.
+	fx.writer.install = func() {
+		if err := fx.targetRepo.Storer.SetReference(plumbing.NewHashReference(fx.ref, fx.trunk)); err != nil {
+			t.Errorf("install %s concurrently: %v", fx.ref, err)
+		}
+	}
+
+	result := fx.run(t)
+	if result.Pushed != 2 {
+		t.Fatalf("Pushed = %d, want 2 (feature and x, counted from the original plans)", result.Pushed)
+	}
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, fx.ref.Short())
+
+	// The commands the target received are what prove the replan: the
+	// retry must compare-and-swap against the hash the concurrent sync
+	// left, not resend the create the target would refuse as existing.
+	cmds := fx.writer.seen()
+	if len(cmds) != 2 {
+		t.Fatalf("expected the refused create and one update for %s, got %d commands: %+v", fx.ref, len(cmds), cmds)
+	}
+	if update := cmds[1]; update.Old != fx.trunk || update.New != fx.source {
+		t.Fatalf("expected update %s %s -> %s, got %s -> %s", fx.ref, fx.trunk, fx.source, update.Old, update.New)
+	}
+}
+
+// TestRun_IntegrationReplicateRejectedPackCreateAppliedConcurrently covers a
+// create that another sync delivers at exactly this run's source hash while
+// this run's pack is being refused. The target already holds what the run
+// wants, so the ref is done and must not be pushed again.
+func TestRun_IntegrationReplicateRejectedPackCreateAppliedConcurrently(t *testing.T) {
+	fx := newReplicateConcurrentCreateFixture(t)
+	// The other sync delivered the ref together with its history.
+	fx.writer.install = func() {
+		if err := copyRefsAndObjects(fx.sourceRepo.Storer, fx.targetRepo.Storer, []plumbing.ReferenceName{fx.ref}); err != nil {
+			t.Errorf("install %s concurrently: %v", fx.ref, err)
+		}
+	}
+
+	fx.run(t)
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, fx.ref.Short())
+	if cmds := fx.writer.seen(); len(cmds) != 1 {
+		t.Fatalf("expected only the refused create for %s, got %d commands: %+v", fx.ref, len(cmds), cmds)
+	}
+}
+
+// replicateConcurrentCreateFixture is a replicate run whose single pack the
+// target refuses for its size: the trunk is already on the target, and the
+// run creates feature, whose history is over the limit, and x, one small
+// commit past it.
+type replicateConcurrentCreateFixture struct {
+	sourceRepo, targetRepo     *git.Repository
+	sourceServer, targetServer *smartHTTPRepoServer
+	writer                     *concurrentRefWriter
+	ref                        plumbing.ReferenceName
+	trunk, source              plumbing.Hash
+}
+
+func newReplicateConcurrentCreateFixture(t *testing.T) *replicateConcurrentCreateFixture {
+	t.Helper()
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	trunkRef := plumbing.NewBranchReferenceName(testBranch)
+	trunk, err := sourceRepo.Reference(trunkRef, true)
+	if err != nil {
+		t.Fatalf("resolve trunk: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{trunkRef}); err != nil {
+		t.Fatalf("copy trunk to target: %v", err)
+	}
+
+	makeLargeCommits(t, sourceRepo, sourceFS, 4, 100_000)
+	syncertest.SetRefAtBranch(t, sourceRepo, plumbing.NewBranchReferenceName("feature"), testBranch)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	ref := plumbing.NewBranchReferenceName("x")
+	source := syncertest.SetRefAtBranch(t, sourceRepo, ref, testBranch)
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(trunkRef, trunk.Hash())); err != nil {
+		t.Fatalf("reset trunk: %v", err)
+	}
+
+	fx := &replicateConcurrentCreateFixture{
+		sourceRepo: sourceRepo, targetRepo: targetRepo,
+		sourceServer: newSmartHTTPRepoServerV2(t, sourceRepo),
+		targetServer: newSmartHTTPRepoServer(t, targetRepo),
+		writer:       &concurrentRefWriter{ref: ref},
+		ref:          ref, trunk: trunk.Hash(), source: source,
+	}
+	fx.targetServer.receivePackBodyLimit = 300_000
+	fx.targetServer.receivePackRaw = fx.writer.observe
+	t.Cleanup(fx.sourceServer.Close)
+	t.Cleanup(fx.targetServer.Close)
+	return fx
+}
+
+// run replicates the fixture and checks the run took the rejected-pack
+// fallback.
+func (fx *replicateConcurrentCreateFixture) run(t *testing.T) Result {
+	t.Helper()
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: fx.sourceServer.RepoURL()},
+		Target:       Endpoint{URL: fx.targetServer.RepoURL()},
+		Mode:         modeReplicate,
+		Prune:        true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("replicate after target body limit failed: %v", err)
+	}
+	if result.RelayReason != planner.ReasonReplicatePackRejected {
+		t.Fatalf("expected the rejected-pack fallback, got %+v", result)
+	}
+	if got := fx.writer.seen(); len(got) == 0 || !got[0].Old.IsZero() || got[0].New != fx.source {
+		t.Fatalf("expected the refused pack to create %s at %s first, got %+v", fx.ref, fx.source, got)
+	}
+	return result
+}
+
+// concurrentRefWriter stands in for another sync of the same target. It is a
+// receivePackRaw hook that records every command for ref and, while the first
+// request carrying one is being received — the pack the body limit refuses —
+// runs install to write the ref the way the other sync would. It then hands
+// the request on to the server unchanged.
+type concurrentRefWriter struct {
+	ref plumbing.ReferenceName
+	// install runs on the server goroutine before the request is answered,
+	// so the run cannot observe the target between its push and the write.
+	install func()
+
+	mu   sync.Mutex
+	cmds []packp.Command
+}
+
+func (w *concurrentRefWriter) observe(_ http.ResponseWriter, r *http.Request) bool {
+	body, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	req := &packp.UpdateRequests{}
+	if err := req.Decode(bytes.NewReader(body)); err != nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, cmd := range req.Commands {
+		if cmd.Name != w.ref {
+			continue
+		}
+		if len(w.cmds) == 0 && w.install != nil {
+			w.install()
+		}
+		w.cmds = append(w.cmds, *cmd)
+	}
+	return false
+}
+
+// seen returns the commands for ref the target has received, in order.
+func (w *concurrentRefWriter) seen() []packp.Command {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]packp.Command(nil), w.cmds...)
+}
+
 // refCreateDenier is a receive-pack hook that refuses to create one ref while
 // applying every other command in the same request for real.
 //
