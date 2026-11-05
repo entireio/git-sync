@@ -365,9 +365,7 @@ func assertClosureReadable(t *testing.T, repo *git.Repository, tips ...plumbing.
 
 // readClosure reads every object reachable from tips and returns the first
 // one it cannot read. It walks parents and tree entries itself, with lookups
-// that report a missing object as an error: go-git's commit and tree
-// iterators are not safe for this, since TreeWalker turns a missing subtree
-// into io.EOF and Files().ForEach then ends early as if it had finished.
+// that report a missing object as an error, and reads every blob.
 func readClosure(repo *git.Repository, tips ...plumbing.Hash) error {
 	seen := map[plumbing.Hash]struct{}{}
 	var readTree func(h plumbing.Hash, path string) error
@@ -489,15 +487,6 @@ func TestReadClosureDetectsMissingObjects(t *testing.T) {
 		repo, store, tip := build(t)
 		dir := subtree(t, repo, tip)
 		drop(store, dir.Hash)
-		// The gap this test exists for: go-git's iterator ends early and
-		// reports success.
-		tree, err := repo.TreeObject(tip.TreeHash)
-		if err != nil {
-			t.Fatalf("root tree: %v", err)
-		}
-		if err := tree.Files().ForEach(func(*object.File) error { return nil }); err != nil {
-			t.Logf("go-git now reports the missing subtree (%v); readClosure no longer needs to work around it", err)
-		}
 		if err := readClosure(repo, tip.Hash); err == nil || !strings.Contains(err.Error(), dir.Hash.String()) {
 			t.Fatalf("readClosure with subtree %s removed = %v, want an error naming it", dir.Hash, err)
 		}
