@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.3-nightly.202610310614.54b6a5cac",
+  "checkpoint_id": "01M6NERNAZJHATE0T8E9T1KEXJ",
+  "strategy": "manual-commit",
+  "branch": "soph/go-git-main",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "go.mod",
+    "go.sum"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 136,
+    "cache_creation_tokens": 226325,
+    "cache_read_tokens": 13026347,
+    "output_tokens": 31801,
+    "api_call_count": 61
+  },
+  "redaction": {
+    "replacements": 34,
+    "layers": {
+      "betterleaks": 42,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 8,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

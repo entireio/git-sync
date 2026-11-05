@@ -1,0 +1,37 @@
+I opened https://github.com/entireio/git-sync/pull/139 can you check what this would change
+
+---
+
+it's merged now, and I pulled main
+
+---
+
+can you double check that there is no overlap with 123
+
+---
+
+can you rebase onto main and resolve conflicts
+
+---
+
+can we also file a bug for: 
+
+the PR's third commit says go-git's tree walker treats a missing subtree as end-of-iteration. I checked and it's true in v6.0.0-alpha.5: plumbing/object/tree.go:704-706 returns io.EOF, so Files().ForEach reports success on an incomplete tree.
+
+on go-git and assign it to me, show me a draft
+
+---
+
+ok, file it
+
+---
+
+138 is already merged
+
+---
+
+https://github.com/go-git/go-git/issues/2555 is fixed in go-git main, should we move to using it?
+
+---
+
+yeah please try main early to see what it means
