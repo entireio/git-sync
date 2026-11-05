@@ -1,0 +1,5 @@
+should we not just remove the comments? like why keep comments explaining that something was broken but is now fixed?
+
+---
+
+yes, please do
