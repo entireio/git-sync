@@ -5,8 +5,8 @@ go 1.26.0
 toolchain go1.27.3
 
 require (
-	github.com/go-git/go-billy/v6 v6.0.0-beta.1
-	github.com/go-git/go-git/v6 v6.0.0-beta.1
+	github.com/go-git/go-billy/v6 v6.0.0-beta.1.0.20261102114623-3dcdd520bf27
+	github.com/go-git/go-git/v6 v6.0.0-beta.1.0.20261104230907-bbee1d214130
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 )
