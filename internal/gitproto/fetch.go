@@ -72,6 +72,10 @@ func (s *RefService) FetchToStore(
 	// downstream parse/network failure is a side effect of cancellation and
 	// would race with ctx.Err() depending on read timing.
 	if err != nil && ctx.Err() != nil {
+		// errors.Is sees NoErrAlreadyUpToDate through a join, and callers treat it as success.
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("fetch canceled: %w", ctx.Err())
+		}
 		return errors.Join(ctx.Err(), err)
 	}
 	return err
