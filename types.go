@@ -214,6 +214,20 @@ type SyncPolicy struct {
 	// Replicate only, requires RefScope.IncludeRefPrefixes, and mutually
 	// exclusive with AllowEmptySource, whose claim needs the unscoped listing.
 	AllowEmptyScope bool `json:"allowEmptyScope,omitempty"`
+
+	// AssumeTargetMaximal sends the target the entire-maximal ls-refs
+	// argument even when the target does not advertise it. git-sync lists the
+	// target's mirrored refs once per run with that argument, then leaves the
+	// refs the target did not mark out of the haves it offers the source. By
+	// default git-sync sends the argument only to a target that advertises
+	// the feature.
+	//
+	// Set it only for an entiredb target whose every node accepts the
+	// argument. Protocol v2 forbids an argument the server did not advertise,
+	// and a server that rejects it fails the listing. A failed listing is not
+	// fatal: the run offers every target tip as a have, as it would without
+	// the option. Bootstrap and SSH targets do not use the listing.
+	AssumeTargetMaximal bool `json:"assumeTargetMaximal,omitempty"`
 }
 
 // Validate enforces SyncPolicy invariants at the request edge.

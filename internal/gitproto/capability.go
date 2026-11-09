@@ -39,12 +39,15 @@ func (c *V2Capabilities) FetchSupports(feature string) bool {
 }
 
 // LSRefsSupports checks whether a specific feature is listed in the "ls-refs"
-// capability value (space-separated feature list). The only feature defined
-// today is "unborn": a server advertising it will report an unborn HEAD as an
-// explicit "unborn HEAD symref-target:<ref>" line, which is the difference
-// between a repository asserting it has no commits and a response that merely
-// carries no ref lines. Protocol v2 forbids sending a command argument the
-// server did not advertise, so callers MUST gate the request on this.
+// capability value (space-separated feature list). Git defines "unborn": a
+// server advertising it will report an unborn HEAD as an explicit "unborn HEAD
+// symref-target:<ref>" line, which is the difference between a repository
+// asserting it has no commits and a response that merely carries no ref lines.
+// entiredb adds MaximalFeature (see ListMaximalTips). Protocol v2 forbids
+// sending a command argument the server did not advertise, so callers MUST
+// gate the request on this. The one exception is ListMaximalTips with
+// assumeSupported, an explicit caller opt-in for a server known to accept the
+// argument before it advertises it.
 func (c *V2Capabilities) LSRefsSupports(feature string) bool {
 	return c.commandSupports("ls-refs", feature)
 }

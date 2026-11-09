@@ -294,6 +294,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		AllowEmptySource:              req.Policy.AllowEmptySource,
 		AllowEmptyScope:               req.Policy.AllowEmptyScope,
 		SourceAssertedEmpty:           req.Policy.SourceAssertedEmpty,
+		AssumeTargetMaximal:           req.Policy.AssumeTargetMaximal,
 		TargetAssertedEmpty:           req.Policy.TargetAssertedEmpty,
 		MaxPackBytes:                  req.Options.MaxPackBytes,
 		TargetMaxPackBytes:            req.Options.TargetMaxPackBytes,
