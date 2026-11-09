@@ -1,0 +1,45 @@
+can you look at https://entire.com/gh/entirehq/-/trails/23682/changes/entiredb/4746 this was merged and deployed, can we add support in git-sync
+
+---
+
+can we add a flag to enable it without advertising it? then mirror-pipeline could use it?
+
+---
+
+can we do a quick test it would work?
+
+---
+
+wondering now: has this not also a risk when we compare the refs from source to target to figure out which are missing? so do we request refs twice now?
+
+---
+
+<pasted_content id="eadc">
+MUST
+
+- P1 — Isolate the optional read probe from the push connection. maximal.go:59 (internal/syncer/maximal.go:59) reuses the target connection. With FollowInfoRefsRedirect enabled, upload-pack discovery can redirect subsequent pushes to a read host—even when maximal support is absent. Reproductions confirmed a replicate failure with HTTP 405 and writer helper credentials sent to an unrelated host. Separate endpoint/auth state for the probe and add regression coverage.
+
+SHOULD
+
+- Avoid discovery when no fetch needs it. syncer.go:1652 (internal/syncer/syncer.go:1652) probes before checking relay eligibility. A temporary test confirmed that converged syncs list maximal refs despite performing no fetch. Delete-only replication also incurs unnecessary discovery.
+- Fall back on inconsistent maximal metadata. maximal.go:129 (internal/gitproto/maximal.go:129) drops all listed haves when a nonempty listing contains zero marks. Preserve existing haves for this case and contradictory duplicate entries to avoid full-history retransfers and pack-limit failures.
+- Cover the documented boundaries. Extend maximal_test.go:118 (internal/syncer/maximal_test.go:118) with request-count assertions, namespace isolation, target-only maximal tips, and interaction with IndependentHistoryRefPrefixes.
+- Align capability documentation. capability.go:42 (internal/gitproto/capability.go:42) still describes unborn as the only feature and requires advertisement gating without acknowledging the new explicit override.
+</pasted_content id="eadc">
+
+---
+
+<pasted_content id="eadc">
+
+MUST
+
+- P1 — The fresh probe can still leak writer credentials. At maximal.go:105 (internal/syncer/maximal.go:105), a fresh connection authenticates to the writer through the credential helper, then follows a redirect to an unrelated reader advertising maximal support. Its subsequent ls-refs POST includes the writer’s credentials because outgoingAuth (internal/gitproto/smarthttp.go:454) does not enforce origin checks for helper credentials. Reproduced through a complete replication run. Bind helper credentials to their origin on every request and add this authenticated-redirect regression test.
+
+SHOULD
+
+- P2 — Normalize independent-history prefixes consistently. maximal.go:43 (internal/syncer/maximal.go:43) omits strings.TrimSpace, while validation and the planner accept surrounding whitespace. A padded prefix can lose the updated ref’s useful old-value have, unnecessarily enlarging the pack. Reproduced with an integration probe; trim the prefix and cover padded input.
+</pasted_content id="eadc">
+
+---
+
+ok, can you open a trail for it?
