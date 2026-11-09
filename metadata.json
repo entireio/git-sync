@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.2-nightly.202611070613.17108c455",
+  "checkpoint_id": "01M7088R5S8MRVEW3WTTS8HD63",
+  "strategy": "manual-commit",
+  "branch": "soph/entire-maximal-haves",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "client.go",
+    "client_test.go",
+    "cmd/git-sync/syncplan.go",
+    "internal/gitproto/capability.go",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go",
+    "types.go",
+    "unstable/client.go",
+    "unstable/client_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 103056,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3626880,
+    "output_tokens": 9805,
+    "api_call_count": 47,
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 24,
+    "layers": {
+      "betterleaks": 11,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 2,
+      "entropy": 13,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

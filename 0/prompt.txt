@@ -1,0 +1,13 @@
+perform a round of review through different lenses:
+
+ - Principal engineer
+ - Security engineer
+ - Idiomatic Go, stdlib quality docs
+ - Regressions
+ - API design
+
+ Use one ore more sub-agents to deliver high quality reports. Report back "merge" or "do not merge", and a list of MUST and SHOULDs.
+
+---
+
+can you check again
