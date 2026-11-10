@@ -29,13 +29,44 @@ import (
 func (s *syncSession) fetchHaves(
 	ctx context.Context,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
+	desired map[plumbing.ReferenceName]planner.DesiredRef,
 	plans []planner.BranchPlan,
 	fetches bool,
 ) map[plumbing.ReferenceName]plumbing.Hash {
 	if fetches && fetchesPack(plans) {
-		targetRefs = s.maximalTips(ctx).Reduce(targetRefs, s.independentHistoryRef)
+		targetRefs = s.maximalTips(ctx).Reduce(targetRefs, s.keepHave(desired))
 	}
 	return planner.FetchHaves(targetRefs, plans, s.cfg.IndependentHistoryRefPrefixes)
+}
+
+// keepHave reports which target refs the maximal reduction must keep as
+// haves even when the target left them unmarked: independent-history refs
+// (see fetchHaves) and the default branch.
+//
+// The reduction drops an unmarked ref because a marked tip above it implies
+// it. That holds only if the source still holds the marked tip. A marked tip
+// the source lacks (the old tip of a branch force-pushed on the source and
+// since garbage-collected, or a commit only the target has) is ignored, and
+// the history behind it would go out again. A feature branch cut from the
+// default branch's tip leaves that tip unmarked, so without this rule the
+// whole default branch could ride on one such tip. Keeping it costs one have
+// line and bounds the loss to history off the default branch.
+//
+// The default branch is the source's HEAD branch, under the target name the
+// run maps it to, and under its own name in case the run does not map it.
+// Without a HEAD symref from the source, only the independent-history rule
+// applies.
+func (s *syncSession) keepHave(desired map[plumbing.ReferenceName]planner.DesiredRef) func(plumbing.ReferenceName) bool {
+	head := plumbing.ReferenceName("")
+	if s.sourceService != nil {
+		head = s.sourceService.HeadTarget
+	}
+	return func(name plumbing.ReferenceName) bool {
+		if head != "" && (name == head || desired[name].SourceRef == head) {
+			return true
+		}
+		return s.independentHistoryRef(name)
+	}
 }
 
 func (s *syncSession) independentHistoryRef(name plumbing.ReferenceName) bool {

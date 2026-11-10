@@ -1090,7 +1090,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		// Reduced haves never leave an object out that the full set would
 		// send, so the store's "missing means the target has it" reading
 		// (planner.CheckAncestry, planner.ObjectsToPush) still holds.
-		haves := s.maximalTips(ctx).Reduce(targetRefMap, nil)
+		haves := s.maximalTips(ctx).Reduce(targetRefMap, s.keepHave(desiredRefs))
 		if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, haves); err != nil {
 			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 				return fmt.Errorf("fetch to store: %w", err)
@@ -1652,7 +1652,7 @@ func (s *syncSession) executeIncremental(
 	// Execute offers haves only on the incremental relay path; the tag relay
 	// and the materialized fallback do without.
 	relays, _ := planner.CanIncrementalRelay(s.cfg.ForceAny(), s.cfg.Prune, false, pushPlans, s.target.policy)
-	haves := s.fetchHaves(ctx, s.target.refMap, pushPlans, relays)
+	haves := s.fetchHaves(ctx, s.target.refMap, desiredRefs, pushPlans, relays)
 	incResult, incErr := incremental.Execute(ctx, incremental.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: haves,
@@ -1692,7 +1692,7 @@ func (s *syncSession) executeReplicate(
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
-	haves := s.fetchHaves(ctx, targetRefs, pushPlans, true)
+	haves := s.fetchHaves(ctx, targetRefs, desiredRefs, pushPlans, true)
 	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: haves,

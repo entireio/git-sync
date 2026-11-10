@@ -10,6 +10,7 @@ import (
 
 	"entire.io/entire/git-sync/internal/auth"
 	"entire.io/entire/git-sync/internal/gitproto"
+	"entire.io/entire/git-sync/internal/planner"
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -278,19 +279,50 @@ func TestRun_IntegrationMaximalTipsListOnlyMirroredNamespaces(t *testing.T) {
 	}
 }
 
-// The documented cost of a marked target tip the source lacks: it hides the
-// refs behind it, the source ignores it, and the fetch carries history the
-// target already has. The run still completes with every object present.
-func TestRun_IntegrationMaximalTipsTargetOnlyTipCostsBytesOnly(t *testing.T) {
-	f := newMaximalFixture(t, true)
-	targetOnly := plumbing.NewBranchReferenceName("target-only")
-	commitCheckpoint(t, f.target, targetOnly, f.tip(t, plumbing.NewBranchReferenceName(testBranch)))
-	f.advance(t)
-	if _, err := f.run(t, modeSync, ""); err != nil {
-		t.Fatalf("sync: %v", err)
+// A marked target tip the source lacks, here a commit only the target has on
+// top of master, leaves master unmarked. The source ignores the unknown tip,
+// so master's old tip must still go out as a have, or the fetch would resend
+// master's whole history. The older branches stay dropped: master covers them.
+func TestRun_IntegrationMaximalTipsKeepDefaultBranchUnderUnknownTip(t *testing.T) {
+	for _, mode := range []string{modeSync, modeReplicate} {
+		t.Run(mode, func(t *testing.T) {
+			f := newMaximalFixture(t, true)
+			targetOnly := plumbing.NewBranchReferenceName("target-only")
+			commitCheckpoint(t, f.target, targetOnly, f.tip(t, plumbing.NewBranchReferenceName(testBranch)))
+			before := f.advance(t)
+			if _, err := f.run(t, mode, ""); err != nil {
+				t.Fatalf("%s: %v", mode, err)
+			}
+			assertEveryFetchHaves(t, f.haves.take(), f.targetTip(t, targetOnly), before)
+			f.assertMasterMirrored(t)
+		})
 	}
-	assertEveryFetchHaves(t, f.haves.take(), f.targetTip(t, targetOnly))
-	f.assertMasterMirrored(t)
+}
+
+func TestKeepHaveDefaultBranch(t *testing.T) {
+	head := plumbing.NewBranchReferenceName("main")
+	mapped := plumbing.NewBranchReferenceName("upstream-main")
+	other := plumbing.NewBranchReferenceName("feature")
+	checkpoint := plumbing.ReferenceName("refs/entire/checkpoints/a")
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{
+		mapped: {SourceRef: head, TargetRef: mapped},
+		other:  {SourceRef: other, TargetRef: other},
+	}
+	s := &syncSession{
+		cfg:           Config{IndependentHistoryRefPrefixes: []string{"refs/entire/checkpoints/"}},
+		sourceService: &gitproto.RefService{HeadTarget: head},
+	}
+	keep := s.keepHave(desired)
+	for name, want := range map[plumbing.ReferenceName]bool{head: true, mapped: true, other: false, checkpoint: true} {
+		if got := keep(name); got != want {
+			t.Errorf("keep(%s) = %v, want %v", name, got, want)
+		}
+	}
+
+	s.sourceService.HeadTarget = ""
+	if keep := s.keepHave(desired); keep(mapped) || keep(head) {
+		t.Error("without a source HEAD, no ref is kept as the default branch")
+	}
 }
 
 // An updated independent-history ref whose old value another ref in its
