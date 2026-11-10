@@ -350,9 +350,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 		// The pusher splits ref updates across requests, so an earlier
 		// request can land creates before a later one fails. Those are
 		// progress whatever happens next.
-		for _, cmd := range cmds {
-			p.progressApplied(cmd.Name, cmd.New)
-		}
+		p.progressAppliedCreates(cmds)
 		if !batchAfterPushError(ctx, &p, pushErr) {
 			return result, fmt.Errorf("push target refs: %w", actionableTargetPushError(p, pushErr))
 		}
@@ -595,6 +593,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				New:  batch.Plan.SourceHash,
 			}}
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+				p.progressAppliedCreates(cmds)
 				return result, fmt.Errorf("create subsumed branch ref for %s: %w", batch.Plan.TargetRef, err)
 			}
 			// Same rule as the cutover below — only a create the target
@@ -1039,10 +1038,12 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					// against our own smaller budget: a larger budget or a
 					// server config change could still mirror this repo.
 					if indivisible && (isTargetBodyLimitError(pushErr) || (atAnnounced && abortedEarly)) {
+						progressAppliedBranchCreate(p, cmds, batch.TempRef)
 						return result, fmt.Errorf("push bootstrap batch for %s: %w: %w",
 							batch.Plan.TargetRef, ErrCheckpointExceedsTargetLimit, pushErr)
 					}
 				}
+				progressAppliedBranchCreate(p, cmds, batch.TempRef)
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
 			}
 			_ = packReader.Close()
@@ -1102,6 +1103,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		if batch.ResumeHash == batch.Plan.SourceHash && p.TargetRefs[batch.Plan.TargetRef].IsZero() {
 			cmds := []gitproto.PushCommand{{Name: batch.Plan.TargetRef, Old: plumbing.ZeroHash, New: batch.Plan.SourceHash}}
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+				p.progressAppliedCreates(cmds)
 				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
 			}
 			createPushed = true
@@ -1197,6 +1199,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
 				if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+					p.progressAppliedCreates(cmds)
 					return result, fmt.Errorf("create tail refs after bootstrap: %w", err)
 				}
 			} else {
@@ -1207,6 +1210,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			packReader = gitproto.CloseOnce(packReader)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
+				p.progressAppliedCreates(cmds)
 				return result, fmt.Errorf("push bootstrap tail refs: %w", err)
 			}
 			_ = packReader.Close()

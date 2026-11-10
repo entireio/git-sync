@@ -501,3 +501,44 @@ func TestCreatedOnceReportsEachRefCreateOnce(t *testing.T) {
 		t.Fatal("createdOnce(nil) must stay nil")
 	}
 }
+
+func TestExecuteBatchedReportsTailCreatesLandedBeforePushFailed(t *testing.T) {
+	h := newTelemetryHarness(t)
+	tag := plumbing.NewTagReferenceName("v1")
+	other := plumbing.NewTagReferenceName("v2")
+	h.params.DesiredRefs = map[plumbing.ReferenceName]planner.DesiredRef{
+		tag:   {SourceRef: tag, TargetRef: tag, SourceHash: h.trunkTip, Kind: planner.RefKindTag},
+		other: {SourceRef: other, TargetRef: other, SourceHash: h.trunkTip, Kind: planner.RefKindTag},
+	}
+	failingPusher(t, h)
+	h.params.RefOutcome = appliedOnly(tag)
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err == nil {
+		t.Fatal("expected the push error")
+	}
+	want := []ProgressEvent{h.created(tag, h.trunkTip)}
+	if !slices.Equal(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+}
+
+func TestExecuteBatchedReportsBranchCreateLandedBeforeCheckpointPushFailed(t *testing.T) {
+	h := newTelemetryHarness(t)
+	failingPusher(t, h)
+	// The final checkpoint's push carries the temp ref and the branch create.
+	// Only the create is progress; the run does not advance on a failed push.
+	h.params.RefOutcome = func(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+		if name == h.trunkRef || name == planner.BootstrapTempRef(h.trunkRef) {
+			return gitproto.RefOutcomeApplied, ""
+		}
+		return gitproto.RefOutcomeUnknown, ""
+	}
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err == nil {
+		t.Fatal("expected the push error")
+	}
+	want := []ProgressEvent{h.created(h.trunkRef, h.trunkTip)}
+	if !slices.Equal(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+}

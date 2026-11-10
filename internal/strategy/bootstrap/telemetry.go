@@ -102,6 +102,32 @@ func (p Params) progressApplied(ref plumbing.ReferenceName, hash plumbing.Hash) 
 	}
 }
 
+// progressAppliedCreates reports, from a push that failed as a whole, each
+// create in cmds the target applied anyway. Deletes land nothing and are
+// skipped.
+func (p Params) progressAppliedCreates(cmds []gitproto.PushCommand) {
+	for _, cmd := range cmds {
+		if !cmd.Delete {
+			p.progressApplied(cmd.Name, cmd.New)
+		}
+	}
+}
+
+// progressAppliedBranchCreate is progressAppliedCreates for a checkpoint push
+// the run gives up on. Only the final checkpoint's push carries the branch
+// create. The temp ref in the same push is left out: a checkpoint counts as
+// progress only when the run advances on it, which it does not after a failed
+// push.
+func progressAppliedBranchCreate(p Params, cmds []gitproto.PushCommand, tempRef plumbing.ReferenceName) {
+	creates := make([]gitproto.PushCommand, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd.Name != tempRef {
+			creates = append(creates, cmd)
+		}
+	}
+	p.progressAppliedCreates(creates)
+}
+
 // createdOnce wraps fn so each ref's create is reported at most once. A run
 // creates a ref once, but it can see that create more than once: a failed
 // one-shot push that landed some refs before it fell back to batches, or a

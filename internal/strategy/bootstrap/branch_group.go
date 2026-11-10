@@ -249,6 +249,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 	case errors.Is(err, git.NoErrAlreadyUpToDate):
 		// Earlier pushes already delivered every object; only the refs are new.
 		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+			p.progressAppliedCreates(cmds)
 			return nil, 0, fmt.Errorf("create bootstrap branch group refs: %w", err)
 		}
 	case err != nil:
@@ -305,9 +306,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			default:
 				// Not retried, but an earlier request may still have landed
 				// some members.
-				for _, member := range members {
-					p.progressApplied(member.Plan.TargetRef, member.Plan.SourceHash)
-				}
+				p.progressAppliedCreates(cmds)
 				return nil, 0, fmt.Errorf("push bootstrap branch group: %w", pushErr)
 			}
 			pending := dropAppliedMembers(p, members, st)
