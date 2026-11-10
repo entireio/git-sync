@@ -303,6 +303,11 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			case observer.Aborted() || isBatchableTargetPushError(pushErr):
 				parts = learnFromGroupRejection(st, observer, objectCount, budget, pushErr)
 			default:
+				// Not retried, but an earlier request may still have landed
+				// some members.
+				for _, member := range members {
+					p.progressApplied(member.Plan.TargetRef, member.Plan.SourceHash)
+				}
 				return nil, 0, fmt.Errorf("push bootstrap branch group: %w", pushErr)
 			}
 			pending := dropAppliedMembers(p, members, st)

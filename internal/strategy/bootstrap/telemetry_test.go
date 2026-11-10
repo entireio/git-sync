@@ -419,3 +419,85 @@ func TestExecuteBatchedReportsTailCreates(t *testing.T) {
 		t.Errorf("BranchesTotal = %d, want 5: a tag is not a planned branch", result.Planning.BranchesTotal)
 	}
 }
+
+// failingPusher makes every pack push fail with an error batching cannot fix,
+// the way a later ref-update request fails after an earlier one landed.
+func failingPusher(t *testing.T, h *telemetryHarness) {
+	t.Helper()
+	pusher, ok := h.params.TargetPusher.(fakeBootstrapPusher)
+	if !ok {
+		t.Fatalf("TargetPusher is %T, want fakeBootstrapPusher", h.params.TargetPusher)
+	}
+	pusher.pushPack = func(_ context.Context, _ []gitproto.PushCommand, pack io.ReadCloser) error {
+		_ = pack.Close()
+		return errors.New("later ref-update request: connection reset")
+	}
+	h.params.TargetPusher = pusher
+}
+
+// appliedOnly reports ref as applied and says nothing about any other ref.
+func appliedOnly(ref plumbing.ReferenceName) func(plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+	return func(name plumbing.ReferenceName) (gitproto.RefOutcome, string) {
+		if name == ref {
+			return gitproto.RefOutcomeApplied, ""
+		}
+		return gitproto.RefOutcomeUnknown, ""
+	}
+}
+
+func TestExecuteOneShotReportsCreatesLandedBeforePushFailed(t *testing.T) {
+	h := newTelemetryHarness(t)
+	h.params.TargetMaxPack = 0
+	failingPusher(t, h)
+	h.params.RefOutcome = appliedOnly(h.trunkRef)
+
+	if _, err := Execute(context.Background(), h.params, "empty target"); err == nil {
+		t.Fatal("expected the push error")
+	}
+	want := []ProgressEvent{h.created(h.trunkRef, h.trunkTip)}
+	if !slices.Equal(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+}
+
+func TestBranchGroupReportsMembersLandedBeforePushFailed(t *testing.T) {
+	h := newTelemetryHarness(t)
+	failingPusher(t, h)
+	applied := h.forkRefs[0]
+	h.params.RefOutcome = appliedOnly(applied)
+
+	batches, err := planAfterTrunk(context.Background(), h.params, h.deferredForks(), h.params.TargetMaxPack, &PlanningStats{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pushBranchGroups(context.Background(), h.params, batches[0].group, newTestGroupState(h.params.TargetMaxPack), &Result{})
+	if err == nil {
+		t.Fatal("expected the push error")
+	}
+	want := []ProgressEvent{h.created(applied, h.tipOf(applied))}
+	if !slices.Equal(h.events, want) {
+		t.Fatalf("events = %v, want %v", h.events, want)
+	}
+}
+
+func TestCreatedOnceReportsEachRefCreateOnce(t *testing.T) {
+	var got []ProgressEvent
+	report := createdOnce(func(ev ProgressEvent) { got = append(got, ev) })
+	main := plumbing.NewBranchReferenceName("main")
+	temp := plumbing.ReferenceName("refs/gitsync/bootstrap/heads/main")
+	created := ProgressEvent{Kind: ProgressRefCreated, Ref: main, Hash: plumbing.NewHash("01")}
+	advanced := ProgressEvent{Kind: ProgressTempRefAdvanced, Ref: temp, Hash: plumbing.NewHash("02")}
+
+	report(advanced)
+	report(created)
+	report(advanced)
+	report(created)
+
+	want := []ProgressEvent{advanced, created, advanced}
+	if !slices.Equal(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+	if createdOnce(nil) != nil {
+		t.Fatal("createdOnce(nil) must stay nil")
+	}
+}

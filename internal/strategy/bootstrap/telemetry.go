@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+
+	"entire.io/entire/git-sync/internal/gitproto"
 )
 
 // PlanningStats reports what checkpoint planning did for one bootstrap run.
@@ -84,5 +86,38 @@ func (p Params) progressCreated(ref plumbing.ReferenceName, hash plumbing.Hash) 
 	}
 	if confirmed, _ := p.createConfirmed(ref); confirmed {
 		p.progress(ProgressRefCreated, ref, hash)
+	}
+}
+
+// progressApplied reports ref as created when the target applied it in the
+// push that just returned, even if that push failed as a whole. Unlike
+// progressCreated it is meant for failed pushes, where the run does not settle
+// doubt against the target's ref listing: only an explicit "ok" counts.
+func (p Params) progressApplied(ref plumbing.ReferenceName, hash plumbing.Hash) {
+	if p.OnProgress == nil {
+		return
+	}
+	if outcome, _ := p.refOutcome(ref); outcome == gitproto.RefOutcomeApplied {
+		p.progress(ProgressRefCreated, ref, hash)
+	}
+}
+
+// createdOnce wraps fn so each ref's create is reported at most once. A run
+// creates a ref once, but it can see that create more than once: a failed
+// one-shot push that landed some refs before it fell back to batches, or a
+// doubtful create later settled by the target's ref listing. Nil stays nil.
+func createdOnce(fn func(ProgressEvent)) func(ProgressEvent) {
+	if fn == nil {
+		return nil
+	}
+	seen := make(map[plumbing.ReferenceName]struct{})
+	return func(ev ProgressEvent) {
+		if ev.Kind == ProgressRefCreated {
+			if _, dup := seen[ev.Ref]; dup {
+				return
+			}
+			seen[ev.Ref] = struct{}{}
+		}
+		fn(ev)
 	}
 }

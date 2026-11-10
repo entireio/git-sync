@@ -155,8 +155,10 @@ type Params struct {
 	// temp ref. A create is reported only when the target confirmed it, in
 	// the push's per-ref status or, for a branch create that status left in
 	// doubt, in the ref listing that settles it at the end of the branch
-	// phase. Deletes (stale or finished resume markers) are not progress and
-	// are never reported.
+	// phase. A create that landed in a push that failed as a whole is
+	// reported too, and each ref's create is reported at most once per run.
+	// Deletes (stale or finished resume markers) are not progress and are
+	// never reported.
 	//
 	// Called synchronously from the goroutine driving Execute, after the
 	// push returned; implementations must return quickly.
@@ -267,6 +269,7 @@ type plannedBatch struct {
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
 	p.diag = newDiagnostics(p.Logger, p.PushLogger)
+	p.OnProgress = createdOnce(p.OnProgress)
 	// Known before anything can fail, so every return below carries it.
 	planning := PlanningStats{SourceRefs: p.SourceRefCount}
 	if p.TargetPusher == nil {
@@ -344,6 +347,12 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
+		// The pusher splits ref updates across requests, so an earlier
+		// request can land creates before a later one fails. Those are
+		// progress whatever happens next.
+		for _, cmd := range cmds {
+			p.progressApplied(cmd.Name, cmd.New)
+		}
 		if !batchAfterPushError(ctx, &p, pushErr) {
 			return result, fmt.Errorf("push target refs: %w", actionableTargetPushError(p, pushErr))
 		}
