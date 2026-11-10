@@ -1,0 +1,73 @@
+<pasted_content id="eadc">
+Finding (medium, confidence ~0.8) — internal/gitproto/maximal.go, Reduce
+- Trigger: a marked target tip the source no longer holds, sitting on top of an unmarked ref. Examples are a branch deleted on the source and not pruned, or a force-pushed branch whose old tip the source has garbage-collected.
+- Impact: the source ignores that have, and the refs behind it (for example main) were dropped. The pack then resends history back to the nearest marked tip the source does know, which can be the whole repository. Before this change main's tip was a have and the pack was small. In sync mode without prune, this repeats every run and can hit pack size limits.
+- Evidence: the trail's own TestRun_IntegrationMaximalTipsTargetOnlyTipCostsBytesOnly shows the fetch offering only the target-only tip. The changelog documents the cost but not that it is unbounded or recurring. I did not measure it on a large repository.
+- Suggested fix: when a marked tip is not provably on the source (its hash is not in the source listing and it is not the old value of a planned non-force update), keep the unmarked refs whose hash the source advertises, or skip the reduction for that fetch.
+</pasted_content id="eadc">
+
+
+Example:
+
+
+
+<pasted_content id="eadc">
+1. Start: both sides in sync
+
+GitHub (source)                  entiredb (target)
+
+A ── B ── C ── X                 A ── B ── C ── X
+          │    │                           │    │
+        main  feature                    main  feature
+
+2. On GitHub: feature is rebased and force-pushed, main advances, and GitHub later prunes X
+
+GitHub (source)                  entiredb (target, unchanged)
+
+A ── B ── C ── D                 A ── B ── C ── X
+               │╲                          │    │
+             main X'                     main  feature
+                  │
+               feature
+
+(X is gone)
+
+3. git-sync asks entiredb which tips are maximal
+
+entiredb (target)
+
+A ── B ── C ── X
+          │    │
+        main  feature
+     unmarked  MARKED      X reaches C, so main is impli
+
+Reduce drops main. The haves sent to GitHub are:
+
+┌────────────────────┬───────┬───────────────────┐
+│                    │ Haves │ GitHub recognizes │
+├────────────────────┼───────┼───────────────────┤
+│ Before this change │ C, X  │ C                 │
+├────────────────────┼───────┼───────────────────┤
+│ With this change   │ X     │ nothing           │
+└────────────────────┴───────┴───────────────────┘
+
+4. What GitHub sends for wants D and X'
+
+Before this change (have C known):
+
+A ── B ── C ── D ── X'
+               └─────┘
+               pack: D, X'
+
+With this change (no known have):
+
+A ── B ── C ── D ── X'
+└───────────────────┘
+pack: the whole history
+
+The copy is still correct either way; only the pack size changes.
+</pasted_content id="eadc">
+
+---
+
+yes, please do
