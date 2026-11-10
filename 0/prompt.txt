@@ -1,0 +1,45 @@
+but question: the initial reason to do it was to be nicer to the source and reduce the size of the have list, now we do two requests that might be expensive to the source on it's own?
+
+---
+
+so this was a performance thing from the start?
+
+---
+
+but even on large repos, we cost the source more, the idea was to ship this as a "behabe more nicely to the source" thing
+
+---
+
+yes, please drop it
+
+---
+
+hmm, wait
+
+---
+
+hmm, wait sorry I'm confused now. I did not mean the whole maximal thing to drop, we built that to be nicer to the source server, I understood it that the latest fix for force pushes is just a performance fix and we could not do it?
+
+---
+
+yeah that's what I meant
+
+---
+
+also can you explain me the exact case the finding flagged: Like how could it get to the case: "The pack then resends history back to the nearest marked tip the source does know, which can be the whole repository."
+
+---
+
+how would this be different today without the maximal check?
+
+---
+
+ok, then maybe here is the issue and this got lost: The idea is to always send the default branch
+
+---
+
+ok, then maybe here is the issue and this got lost: The idea is to always send the default branch tip as have
+
+---
+
+yes
