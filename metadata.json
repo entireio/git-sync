@@ -1,9 +1,8 @@
 {
-  "cli_version": "0.13.2-nightly.202611070613.17108c455",
+  "cli_version": "0.13.1",
   "checkpoint_id": "01M7088R5S8MRVEW3WTTS8HD63",
   "strategy": "manual-commit",
-  "branch": "soph/entire-maximal-haves",
-  "checkpoints_count": 8,
+  "checkpoints_count": 13,
   "files_touched": [
     "CHANGELOG.md",
     "client.go",
@@ -34,14 +33,21 @@
       "compact_transcript": "/1/transcript.jsonl",
       "content_hash": "/1/content_hash.txt",
       "prompt": "/1/prompt.txt"
+    },
+    {
+      "metadata": "/2/metadata.json",
+      "transcript": "/2/full.jsonl",
+      "compact_transcript": "/2/transcript.jsonl",
+      "content_hash": "/2/content_hash.txt",
+      "prompt": "/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 103056,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 3626880,
-    "output_tokens": 9805,
-    "api_call_count": 47
+    "input_tokens": 103088,
+    "cache_creation_tokens": 236028,
+    "cache_read_tokens": 5431062,
+    "output_tokens": 22879,
+    "api_call_count": 63
   },
   "redaction": {
     "replacements": 63,
@@ -56,5 +62,6 @@
       "provider_token": 0,
       "shell_stdin": 0
     }
-  }
+  },
+  "has_review": true
 }
