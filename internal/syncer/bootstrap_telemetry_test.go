@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/storage/memory"
+
+	"entire.io/entire/git-sync/internal/planner"
 )
 
 // Config.OnProgress reaches the bootstrap strategy, and its planning figures
@@ -125,5 +128,53 @@ func TestBootstrapCarriesPlanningStatsWhenPlanningTimesOut(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Errorf("progress events = %v, want none: nothing landed", events)
+	}
+}
+
+// In strict mode (the default) a refused update fails the push, but the push
+// is not atomic: a branch create the target applied beside a refused temp ref
+// has landed and must still be reported.
+func TestRun_BootstrapStrictReportsCreateBesideRefusedTempRef(t *testing.T) {
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeLargeCommits(t, sourceRepo, sourceFS, 4, 5_000)
+	branchRef := plumbing.NewBranchReferenceName(testBranch)
+	tempRef := planner.BootstrapTempRef(branchRef)
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	sourceServer := newSmartHTTPRepoServerV2(t, sourceRepo)
+	targetServer := newSmartHTTPRepoServer(t, targetRepo)
+	defer sourceServer.Close()
+	defer targetServer.Close()
+
+	// A target that refuses refs/gitsync/* but allows branches.
+	denier := &refCreateDenier{repo: targetRepo, ref: tempRef, reason: "deny refs/gitsync"}
+	targetServer.receivePackHook = denier.hook
+	targetServer.receivePackUnpackForHook = true
+
+	var events []ProgressEvent
+	_, err = Run(context.Background(), Config{
+		Source:             Endpoint{URL: sourceServer.RepoURL()},
+		Target:             Endpoint{URL: targetServer.RepoURL()},
+		Mode:               modeReplicate,
+		ProtocolMode:       protocolModeAuto,
+		TargetMaxPackBytes: 10_000_000, // batched, with the whole branch in one checkpoint
+		OnProgress:         func(e ProgressEvent) { events = append(events, e) },
+	})
+	if err == nil {
+		t.Fatal("expected the refused temp ref to fail the strict run")
+	}
+	if denier.denialCount() == 0 {
+		t.Fatal("test setup: no push carried the temp ref")
+	}
+	tip, err := targetRepo.Reference(branchRef, true)
+	if err != nil {
+		t.Fatalf("test setup: expected %s on the target beside the refused temp ref: %v", branchRef, err)
+	}
+	want := []ProgressEvent{{Kind: ProgressRefCreated, Ref: branchRef, Hash: tip.Hash()}}
+	if !slices.Equal(events, want) {
+		t.Errorf("progress events = %v, want %v", events, want)
 	}
 }
