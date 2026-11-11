@@ -2075,3 +2075,54 @@ func TestCredentialsForURLUserinfo(t *testing.T) {
 		})
 	}
 }
+
+// Helper credentials looked up for the origin must not follow a later
+// /info/refs redirect to an unrelated host: the RPCs that go there directly
+// would otherwise carry the origin's credentials.
+func TestPostRPCWithholdsHelperCredsAfterRedirectToUnrelatedHost(t *testing.T) {
+	helper := &fakeCredentialHelper{user: "writer", pass: "s3cret", ok: true}
+	var replicaAuth []string
+	conn := newTestConn(t, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case testOriginHost:
+			if req.Header.Get("Authorization") == "" {
+				return newUnauthorizedResponse(req), nil
+			}
+			res := &http.Response{
+				StatusCode: http.StatusTemporaryRedirect,
+				Request:    req,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}
+			res.Header.Set("Location", "https://"+testReplicaHost+req.URL.RequestURI())
+			return res, nil
+		case testReplicaHost:
+			replicaAuth = append(replicaAuth, req.Header.Get("Authorization"))
+			if req.Method == http.MethodGet {
+				return newAdvertisementResponse(req), nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK, Request: req, Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader("0000")),
+			}, nil
+		}
+		return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
+	}))
+	conn.CredentialHelper = helper
+	conn.FollowInfoRefsRedirect = true
+
+	if _, err := conn.RequestInfoRefs(t.Context(), "git-upload-pack", ""); err != nil {
+		t.Fatalf("RequestInfoRefs: %v", err)
+	}
+	if _, err := PostRPC(t.Context(), conn, transport.UploadPackService, []byte("0000"), true, "ls-refs"); err != nil {
+		t.Fatalf("PostRPC: %v", err)
+	}
+	if len(replicaAuth) != 2 {
+		t.Fatalf("replica saw %d requests, want the redirected GET and the POST", len(replicaAuth))
+	}
+	for i, got := range replicaAuth {
+		if got != "" {
+			t.Errorf("replica request %d carried Authorization %q, bound to %s", i, got, testOriginHost)
+		}
+	}
+}

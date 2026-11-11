@@ -37,12 +37,10 @@ import (
 //
 // A literal IP address has no subdomains, so those must match exactly.
 //
-// Credentials obtained from the git credential helper are out of scope for
-// redirects: those are looked up keyed on the host actually being challenged,
-// so they are already bound to their destination by construction. A request
-// to another service beside the endpoint (a hosting provider's API) goes
-// through CredentialsFor instead, which applies this rule from the URL each
-// credential was bound to.
+// Credentials obtained from the git credential helper are measured from the
+// URL the helper looked them up for, not the endpoint: outgoingAuth and
+// CredentialsFor both apply this rule from the URL each credential was bound
+// to.
 func sameSite(orig, dest *url.URL) bool {
 	if orig == nil || dest == nil {
 		return false
