@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Bumped the Go toolchain to `1.27.4` (go.mod `toolchain` and the mise pin), clearing GO-2026-6859: an HTTP/1 server crash from a `MaxBytesReader` header race in `net/http`. git-sync reaches the affected package through every Smart HTTP request and response body, so `govulncheck` reported it as called. Released binaries are built from the go.mod toolchain; `govulncheck ./...` goes from 1 called vulnerability to 0. The `go` directive stays at `1.26`, so the minimum Go version for library consumers is unchanged.
+
 ### Added
 
 - **`RefScope.IndependentHistoryRefPrefixes` shrinks the haves of a relay fetch.** A relay fetch offers the source every target tip as a have. For refs that each carry their own history, such as one orphan history per session checkpoint, those tips cannot shorten the pack, and a repository with thousands of them sent thousands of have lines for a run that changed one branch. Under the named prefixes, a target ref is now offered only when the run updates it, as its own old value. Replicate and sync's incremental relay honor it. Sync's closure fetch for fast-forward checks and bootstrap still offer every tip. Which refs are synced or pruned does not change. Entries are literal prefixes of target ref names and must start with `refs/`; end a namespace with a slash. Naming refs that do share history keeps the copy complete but resends objects the target already holds, and the larger pack can hit a pack or request size limit.
