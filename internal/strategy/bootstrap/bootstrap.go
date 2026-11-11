@@ -157,6 +157,8 @@ type Params struct {
 	// doubt, in the ref listing that settles it at the end of the branch
 	// phase. A create that landed in a push that failed as a whole is
 	// reported too, and each ref's create is reported at most once per run.
+	// The ref listing cannot tell which run created a branch, so when two
+	// runs overlap, both may report the same create.
 	// Deletes (stale or finished resume markers) are not progress and are
 	// never reported.
 	//
@@ -1062,6 +1064,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// that silence as a refusal would fail every batched bootstrap
 			// against it.
 			if reason, refused := p.refRefused(batch.TempRef); refused {
+				progressAppliedBranchCreate(p, cmds, batch.TempRef)
 				return result, fmt.Errorf("push bootstrap batch for %s: target refused %s: %s",
 					batch.Plan.TargetRef, batch.TempRef, reason)
 			}

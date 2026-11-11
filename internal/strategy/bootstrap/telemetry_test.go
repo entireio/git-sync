@@ -324,9 +324,10 @@ func TestExecuteBatchedWithoutProgressCallback(t *testing.T) {
 	}
 }
 
-// A create the target refused is not progress; nor is a temp ref it refused.
-// A refused branch create that the closing ref listing then finds on the
-// target, at the hash this run pushed, is.
+// A create the target refused is not progress; nor is a temp ref it refused,
+// though a branch created in the same push still is. A refused branch create
+// that the closing ref listing then finds on the target, at the hash this run
+// pushed, is.
 func TestExecuteBatchedProgressSkipsRefusedUpdates(t *testing.T) {
 	t.Parallel()
 	mainRef := plumbing.NewBranchReferenceName("main")
@@ -377,8 +378,12 @@ func TestExecuteBatchedProgressSkipsRefusedUpdates(t *testing.T) {
 		if _, err := Execute(context.Background(), h.params, "empty target"); err == nil {
 			t.Fatal("Execute succeeded, want the refused temp ref to stop the run")
 		}
-		if len(events) != 0 {
-			t.Errorf("progress events = %v, want none", events)
+		// The trunk's only checkpoint push carries the temp ref and the
+		// branch create. The run stops on the refused temp ref, which is
+		// not progress, but the branch the target created is.
+		want := []ProgressEvent{{Kind: ProgressRefCreated, Ref: mainRef, Hash: h.trunkTip}}
+		if !slices.Equal(events, want) {
+			t.Errorf("progress events = %v, want %v", events, want)
 		}
 	})
 
