@@ -449,11 +449,27 @@ func guardRedirects(client *http.Client) *http.Client {
 // token withheld, the credential helper still gets a chance on the resulting
 // 401, keyed on the host actually being challenged.
 //
-// Helper-resolved credentials pass through unchanged: they were looked up for
-// the host they are being sent to.
+// Helper-resolved credentials are held to the URL they were looked up for
+// (authOrigin), by the rule CredentialsFor applies. They usually travel to that
+// host, but a later /info/refs redirect can move requestURL elsewhere, and
+// sending them on would hand one host's credentials to another. They are
+// withheld silently: the 401 that follows consults the helper for the host
+// actually challenging.
 func (c *HTTPConn) outgoingAuth(target *url.URL) AuthMethod {
-	if c.Auth == nil || !c.authIsExplicit {
-		return c.Auth
+	if c.Auth == nil {
+		return nil
+	}
+	if !c.authIsExplicit {
+		// Auth assigned to the field directly has no recorded origin; it was
+		// meant for the endpoint, like explicit credentials.
+		origin := c.authOrigin
+		if origin == nil {
+			origin = c.EndpointURL
+		}
+		if c.mayCarry(origin, target) {
+			return c.Auth
+		}
+		return nil
 	}
 	if sameSite(c.EndpointURL, target) {
 		return c.Auth
