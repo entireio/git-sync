@@ -38,10 +38,15 @@ type Options struct {
 	// Bootstrap only, including the batched bootstrap a replicate falls back
 	// to when the target refuses its pack; incremental, materialized and
 	// plain replicate pushes do not report through it. A create is reported
-	// only once the target confirmed it, so a refused create, or one from a
-	// target that reports no per-ref status and could not be listed, is never
-	// reported. Deleting bootstrap scaffolding is not progress and is not
-	// reported.
+	// once the target confirmed it: an "ok" in its per-ref status, even when
+	// the push failed as a whole, or, for a branch create that status left in
+	// doubt or refused, the branch at the pushed hash in the target's ref
+	// listing. That listing cannot tell which run created the branch, so two
+	// overlapping runs can both report it. Only branch creates are checked
+	// against the listing: against a target that sends no per-ref status,
+	// other creates (one-shot, branch groups, subsumed branches, tags and
+	// other refs) are never reported. Deleting bootstrap scaffolding is not
+	// progress and is not reported.
 	//
 	// Called synchronously from the goroutine driving the sync, after the
 	// target confirmed the update; implementations must return quickly and
@@ -74,8 +79,21 @@ func syncerProgress(fn func(ProgressEvent)) func(syncer.ProgressEvent) {
 		return nil
 	}
 	return func(e syncer.ProgressEvent) {
-		fn(ProgressEvent{Kind: ProgressKind(e.Kind), Ref: e.Ref.String(), Hash: hashString(e.Hash)})
+		fn(ProgressEvent{Kind: progressKind(e.Kind), Ref: e.Ref.String(), Hash: hashString(e.Hash)})
 	}
+}
+
+// progressKind maps the syncer's progress kind to the public one. A switch
+// rather than a cast, so the exhaustive linter flags a kind added to the
+// strategy without a public counterpart.
+func progressKind(k syncer.ProgressKind) ProgressKind {
+	switch k {
+	case syncer.ProgressTempRefAdvanced:
+		return ProgressTempRefAdvanced
+	case syncer.ProgressRefCreated:
+		return ProgressRefCreated
+	}
+	return ProgressKind(k)
 }
 
 // Probe inspects a source remote and optional target remote.
