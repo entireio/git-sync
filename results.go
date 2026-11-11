@@ -125,6 +125,28 @@ type BatchSummary struct {
 	Done    int  `json:"done"`
 }
 
+// PlanningSummary reports what bootstrap checkpoint planning did. It is
+// returned on the error path too, so a run stopped by its deadline still shows
+// how far planning got. All zero for a run that did not bootstrap.
+type PlanningSummary struct {
+	// SourceRefs is the number of refs the source advertised, before the
+	// request's scope narrowed them to the refs to sync.
+	SourceRefs int `json:"sourceRefs"`
+	// BranchesTotal is the number of branches bootstrap had to create. Tags
+	// and other refs are not planned and are not counted.
+	BranchesTotal int `json:"branchesTotal"`
+	// BranchesPlanned is how many of those had checkpoints planned. Batched
+	// bootstrap only; once planning finishes, BranchesPlanned +
+	// BranchesSubsumed == BranchesTotal.
+	BranchesPlanned int `json:"branchesPlanned"`
+	// BranchesSubsumed is how many needed no pack, their history being on the
+	// target already. Batched bootstrap only.
+	BranchesSubsumed int `json:"branchesSubsumed"`
+	// PlanningNanos is the wall time spent planning, including the time a
+	// planning step that failed had already spent. Batched bootstrap only.
+	PlanningNanos int64 `json:"planningNanos"`
+}
+
 // ExecutionSummary describes how a sync was executed.
 type ExecutionSummary struct {
 	DryRun             bool         `json:"dryRun"`
@@ -136,6 +158,9 @@ type ExecutionSummary struct {
 	BootstrapSuggested bool         `json:"bootstrapSuggested"`
 	SourceHEAD         string       `json:"sourceHead,omitempty"`
 	Batch              BatchSummary `json:"batch"`
+	// Planning reports bootstrap checkpoint planning; zero when the run did
+	// not bootstrap.
+	Planning PlanningSummary `json:"planning"`
 	// Converged reports that this run applied nothing because the source was
 	// confirmed to have no refs and the target had none either — the two
 	// already agree. Only ever set under SyncPolicy.AllowEmptySource, and it
@@ -207,6 +232,13 @@ func fromSyncResult(result syncer.Result) SyncResult {
 				Enabled: result.Batching,
 				Planned: result.PlannedBatchCount,
 				Done:    result.BatchCount,
+			},
+			Planning: PlanningSummary{
+				SourceRefs:       result.Planning.SourceRefs,
+				BranchesTotal:    result.Planning.BranchesTotal,
+				BranchesPlanned:  result.Planning.BranchesPlanned,
+				BranchesSubsumed: result.Planning.BranchesSubsumed,
+				PlanningNanos:    result.Planning.PlanningNanos,
 			},
 		},
 		Stats:       fromStats(result.Stats),
