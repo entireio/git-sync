@@ -42,6 +42,29 @@ type Endpoint struct {
 	FollowInfoRefsRedirect bool `json:"followInfoRefsRedirect,omitempty"`
 }
 
+// ProgressKind names what a ProgressEvent reports landing on the target.
+type ProgressKind string
+
+const (
+	// ProgressTempRefAdvanced reports a checkpoint push that moved a
+	// batched bootstrap's refs/gitsync/bootstrap/... resume marker forward.
+	ProgressTempRefAdvanced ProgressKind = "temp-ref-advanced"
+	// ProgressRefCreated reports a branch, tag or other ref created on the
+	// target.
+	ProgressRefCreated ProgressKind = "ref-created"
+)
+
+// ProgressEvent is one update a bootstrap landed on the target. See
+// Options.OnProgress.
+type ProgressEvent struct {
+	Kind ProgressKind
+	// Ref is the target ref the event is about: the temp ref for
+	// ProgressTempRefAdvanced, the created ref otherwise.
+	Ref string
+	// Hash is the hash Ref now points at.
+	Hash string
+}
+
 // EndpointAuth carries explicit per-request auth and TLS settings.
 // It is resolved through an AuthProvider rather than embedded in Endpoint so
 // endpoint identity does not also become the public auth-precedence boundary.

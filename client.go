@@ -30,6 +30,28 @@ type Options struct {
 	// and the batching margin for these uploads only. Non-positive disables the
 	// fallback. This is local policy, not evidence of the target's capacity.
 	BootstrapFallbackMaxPackBytes int64
+	// OnProgress, when non-nil, is called each time a bootstrap landed
+	// something on the target: a checkpoint advanced a temp ref, or a ref was
+	// created. It is the signal a caller uses to tell a slow bootstrap from a
+	// stuck one, and to extend a time budget while work keeps landing.
+	//
+	// Bootstrap only, including the batched bootstrap a replicate falls back
+	// to when the target refuses its pack; incremental, materialized and
+	// plain replicate pushes do not report through it. A create is reported
+	// once the target confirmed it: an "ok" in its per-ref status, even when
+	// the push failed as a whole, or, for a branch create that status left in
+	// doubt or refused, the branch at the pushed hash in the target's ref
+	// listing. That listing cannot tell which run created the branch, so two
+	// overlapping runs can both report it. Only branch creates are checked
+	// against the listing: against a target that sends no per-ref status,
+	// other creates (one-shot, branch groups, subsumed branches, tags and
+	// other refs) are never reported. Deleting bootstrap scaffolding is not
+	// progress and is not reported.
+	//
+	// Called synchronously from the goroutine driving the sync, after the
+	// target confirmed the update; implementations must return quickly and
+	// must not call back into the Client. Nil disables it.
+	OnProgress func(ProgressEvent)
 }
 
 // Client provides the public orchestration API for git-sync.
@@ -38,11 +60,40 @@ type Client struct {
 	auth                          AuthProvider
 	bootstrapLogger               *slog.Logger
 	bootstrapFallbackMaxPackBytes int64
+	onProgress                    func(ProgressEvent)
 }
 
 // New constructs a new Client.
 func New(opts Options) *Client {
-	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger, bootstrapFallbackMaxPackBytes: opts.BootstrapFallbackMaxPackBytes}
+	return &Client{
+		httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger,
+		bootstrapFallbackMaxPackBytes: opts.BootstrapFallbackMaxPackBytes,
+		onProgress:                    opts.OnProgress,
+	}
+}
+
+// syncerProgress adapts Options.OnProgress to the syncer's event type. Nil
+// stays nil, so the strategy skips the per-event work entirely.
+func syncerProgress(fn func(ProgressEvent)) func(syncer.ProgressEvent) {
+	if fn == nil {
+		return nil
+	}
+	return func(e syncer.ProgressEvent) {
+		fn(ProgressEvent{Kind: progressKind(e.Kind), Ref: e.Ref.String(), Hash: hashString(e.Hash)})
+	}
+}
+
+// progressKind maps the syncer's progress kind to the public one. A switch
+// rather than a cast, so the exhaustive linter flags a kind added to the
+// strategy without a public counterpart.
+func progressKind(k syncer.ProgressKind) ProgressKind {
+	switch k {
+	case syncer.ProgressTempRefAdvanced:
+		return ProgressTempRefAdvanced
+	case syncer.ProgressRefCreated:
+		return ProgressRefCreated
+	}
+	return ProgressKind(k)
 }
 
 // Probe inspects a source remote and optional target remote.
@@ -159,6 +210,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		Target:                        syncerEndpoint(req.Target, targetAuth),
 		BootstrapLogger:               c.bootstrapLogger,
 		BootstrapFallbackMaxPackBytes: c.bootstrapFallbackMaxPackBytes,
+		OnProgress:                    syncerProgress(c.onProgress),
 		HTTPClient:                    c.httpClient,
 		Branches:                      append([]string(nil), req.Scope.Branches...),
 		Mappings:                      validationMappings(req.Scope.Mappings),

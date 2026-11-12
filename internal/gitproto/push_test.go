@@ -1099,6 +1099,35 @@ func TestPusherWithoutOnRejectionKeepsRejectionsFatal(t *testing.T) {
 	}
 }
 
+// A strict push fails on the first "ng", but the push is not atomic: the
+// target still applied the refs it reported "ok", and LastOutcome must say so.
+func TestPusherStrictFailureRecordsAppliedRefs(t *testing.T) {
+	main := plumbing.ReferenceName("refs/heads/main")
+	other := plumbing.ReferenceName("refs/heads/other")
+	var mu sync.Mutex
+	deny := main
+	srv := refReportServer(t, &mu, &deny, "deny creating a protected branch")
+	defer srv.Close()
+
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	if err := pusher.PushCommands(t.Context(), []PushCommand{
+		{Name: main, Old: plumbing.ZeroHash, New: hash},
+		{Name: other, Old: plumbing.ZeroHash, New: hash},
+	}); err == nil {
+		t.Fatal("a per-ref ng must stay fatal when the caller installed no OnRejection")
+	}
+	if outcome, _ := pusher.LastOutcome(other); outcome != RefOutcomeApplied {
+		t.Errorf("LastOutcome(%s) = %v, want applied: the target reported ok", other, outcome)
+	}
+	if outcome, _ := pusher.LastOutcome(main); outcome != RefOutcomeUnknown {
+		t.Errorf("LastOutcome(%s) = %v, want unknown: strict mode does not record refusals", main, outcome)
+	}
+}
+
 func TestPusherOutcomeUnknownWhenReportOmitsRef(t *testing.T) {
 	main := plumbing.ReferenceName("refs/heads/main")
 	other := plumbing.ReferenceName("refs/heads/other")

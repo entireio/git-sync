@@ -49,6 +49,33 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 	}
 }
 
+func TestOnProgressReachesSyncAndBootstrapConfiguration(t *testing.T) {
+	calls := 0
+	client := New(Options{OnProgress: func(ProgressEvent) { calls++ }})
+	syncCfg, err := client.buildSyncConfig(context.Background(), SyncRequest{
+		Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+		Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+	})
+	if err != nil {
+		t.Fatalf("buildSyncConfig: %v", err)
+	}
+	bootstrapCfg, err := client.buildBootstrapConfig(context.Background(), BootstrapRequest{
+		Source: gitsync.Endpoint{URL: "https://source.example/repo.git"},
+		Target: gitsync.Endpoint{URL: "https://target.example/repo.git"},
+	})
+	if err != nil {
+		t.Fatalf("buildBootstrapConfig: %v", err)
+	}
+	if syncCfg.OnProgress == nil || bootstrapCfg.OnProgress == nil {
+		t.Fatal("Options.OnProgress did not reach both configurations")
+	}
+	syncCfg.OnProgress(ProgressEvent{Kind: ProgressRefCreated})
+	bootstrapCfg.OnProgress(ProgressEvent{Kind: ProgressTempRefAdvanced})
+	if calls != 2 {
+		t.Fatalf("OnProgress called %d times, want 2", calls)
+	}
+}
+
 func TestAdvancedOptionsValidate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

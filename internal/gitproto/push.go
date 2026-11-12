@@ -557,6 +557,14 @@ func sendReceivePack(
 		}
 		if statuses.fatalRejections() {
 			if err := report.Error(); err != nil {
+				// git-sync never asks for an atomic push, so a target that
+				// refused one ref still applied the others it reported "ok".
+				// Record those before failing, so a caller can tell what
+				// landed. Refusals stay unrecorded: in strict mode they are
+				// the error. An unpack failure applied nothing.
+				if report.UnpackStatus == "ok" {
+					statuses.record(report)
+				}
 				return fmt.Errorf("report-status: %w", asRefRejectedError(annotateLeaseFailure(err)))
 			}
 			// Nothing was refused and refusals are fatal, so this nil really

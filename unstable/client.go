@@ -22,6 +22,16 @@ type (
 	RefInfo     = syncer.RefInfo
 	Stats       = syncer.Stats
 	Measurement = syncer.Measurement
+	// PlanningStats is Result.Planning.
+	PlanningStats = syncer.PlanningStats
+	// ProgressKind and ProgressEvent are what Options.OnProgress receives.
+	ProgressKind  = syncer.ProgressKind
+	ProgressEvent = syncer.ProgressEvent
+)
+
+const (
+	ProgressTempRefAdvanced = syncer.ProgressTempRefAdvanced
+	ProgressRefCreated      = syncer.ProgressRefCreated
 )
 
 type Options struct {
@@ -30,12 +40,18 @@ type Options struct {
 	// BootstrapLogger receives structured checkpoint, GitHub size-lookup and
 	// bootstrap planning diagnostics. Nil disables them.
 	BootstrapLogger *slog.Logger
+	// OnProgress, when non-nil, is called each time a bootstrap landed
+	// something on the target. Same contract as gitsync.Options.OnProgress:
+	// bootstrap only, synchronous, must return quickly and must not call back
+	// into the Client.
+	OnProgress func(ProgressEvent)
 }
 
 type Client struct {
 	httpClient      *http.Client
 	auth            gitsync.AuthProvider
 	bootstrapLogger *slog.Logger
+	onProgress      func(ProgressEvent)
 }
 
 type AdvancedOptions struct {
@@ -122,7 +138,7 @@ type FetchRequest struct {
 }
 
 func New(opts Options) *Client {
-	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger}
+	return &Client{httpClient: opts.HTTPClient, auth: opts.Auth, bootstrapLogger: opts.BootstrapLogger, onProgress: opts.OnProgress}
 }
 
 func (c *Client) Probe(ctx context.Context, req ProbeRequest) (ProbeResult, error) {
@@ -300,6 +316,7 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest) (syncer.C
 		TargetMaxPackBytes:            req.Options.TargetMaxPackBytes,
 		BootstrapFallbackMaxPackBytes: req.Options.BootstrapFallbackMaxPackBytes,
 		BootstrapLogger:               c.bootstrapLogger,
+		OnProgress:                    c.onProgress,
 		TargetMaxRefUpdates:           req.Options.TargetMaxRefUpdates,
 		MaterializedMaxObjects:        maxObjects,
 		ProtocolMode:                  string(req.Policy.Protocol),
@@ -337,6 +354,7 @@ func (c *Client) buildBootstrapConfig(ctx context.Context, req BootstrapRequest)
 		TargetMaxPackBytes:            req.Options.TargetMaxPackBytes,
 		BootstrapFallbackMaxPackBytes: req.Options.BootstrapFallbackMaxPackBytes,
 		BootstrapLogger:               c.bootstrapLogger,
+		OnProgress:                    c.onProgress,
 		TargetMaxRefUpdates:           req.Options.TargetMaxRefUpdates,
 		ProtocolMode:                  string(req.Protocol),
 		Verbose:                       req.Options.Verbose,

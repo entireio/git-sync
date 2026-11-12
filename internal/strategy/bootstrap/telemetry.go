@@ -1,0 +1,149 @@
+package bootstrap
+
+import (
+	"time"
+
+	"github.com/go-git/go-git/v6/plumbing"
+
+	"entire.io/entire/git-sync/internal/gitproto"
+)
+
+// PlanningStats reports what checkpoint planning did for one bootstrap run.
+//
+// It is populated incrementally, and Execute returns it on every error path,
+// so a run cut off by its deadline still reports how far planning got. That
+// partial number is the point of it: a branch-heavy repository whose attempts
+// all time out looks identical from the outside — size lookup, a long
+// silence, a timeout — unless the attempt says how many branches it planned
+// before it was stopped.
+//
+// Only batched bootstrap plans checkpoints. A one-shot bootstrap sets
+// SourceRefs and BranchesTotal and leaves the rest zero; when its push is
+// refused and the run switches to batches, the batched figures replace them.
+type PlanningStats struct {
+	// SourceRefs is the number of refs in the source advertisement the
+	// caller passed as Params.SourceRefCount (see there for exactly what it
+	// counts). 0 when unknown.
+	SourceRefs int
+	// BranchesTotal is the number of branch refs bootstrap had to create: the
+	// trunk plus every other branch. Tags and other-kind refs ride the tail
+	// phase without planning and are not counted. Set before the first
+	// commit-graph fetch, so a run that fails there still reports it.
+	BranchesTotal int
+	// BranchesPlanned is how many of those have checkpoints so far: the trunk
+	// once its chain is walked, each other branch once its checkpoints are
+	// derived from the shared commit graph. Once planning finishes,
+	// BranchesPlanned + BranchesSubsumed == BranchesTotal. Batched only.
+	BranchesPlanned int
+	// BranchesSubsumed is how many need no pack: their tip is already in the
+	// trunk's history, or already reachable from the refs on the target.
+	// Each becomes a single ref create. Batched only.
+	BranchesSubsumed int
+	// PlanningDuration is the wall time spent planning: the trunk's planning
+	// and the remaining branches' planning, each including its commit-graph
+	// fetch. It is added after each phase returns, whether it failed or not,
+	// so a deadline mid-fetch still shows the time it burnt. Pushes between
+	// the two phases are not included. Batched only.
+	PlanningDuration time.Duration
+}
+
+// ProgressKind names what a ProgressEvent reports landing on the target.
+type ProgressKind string
+
+const (
+	// ProgressTempRefAdvanced reports a checkpoint push that moved a
+	// refs/gitsync/bootstrap/... resume marker forward.
+	ProgressTempRefAdvanced ProgressKind = "temp-ref-advanced"
+	// ProgressRefCreated reports a branch, tag or other ref created on the
+	// target.
+	ProgressRefCreated ProgressKind = "ref-created"
+)
+
+// ProgressEvent is one update the target took. See Params.OnProgress.
+type ProgressEvent struct {
+	Kind ProgressKind
+	// Ref is the target ref the event is about: the temp ref for
+	// ProgressTempRefAdvanced, the created ref otherwise.
+	Ref plumbing.ReferenceName
+	// Hash is the commit Ref now points at.
+	Hash plumbing.Hash
+}
+
+// progress reports one update the target took. Nil-safe.
+func (p Params) progress(kind ProgressKind, ref plumbing.ReferenceName, hash plumbing.Hash) {
+	if p.OnProgress != nil {
+		p.OnProgress(ProgressEvent{Kind: kind, Ref: ref, Hash: hash})
+	}
+}
+
+// progressCreated reports ref as created when the push that just returned
+// confirms it. It is the same rule the run applies before it counts a create
+// as delivered: a refusal, or a target that said nothing about the ref, is not
+// progress.
+func (p Params) progressCreated(ref plumbing.ReferenceName, hash plumbing.Hash) {
+	if p.OnProgress == nil {
+		return
+	}
+	if confirmed, _ := p.createConfirmed(ref); confirmed {
+		p.progress(ProgressRefCreated, ref, hash)
+	}
+}
+
+// progressApplied reports ref as created when the target applied it in the
+// push that just returned, even if that push failed as a whole. Unlike
+// progressCreated it is meant for failed pushes, where the run does not settle
+// doubt against the target's ref listing: only an explicit "ok" counts.
+func (p Params) progressApplied(ref plumbing.ReferenceName, hash plumbing.Hash) {
+	if p.OnProgress == nil {
+		return
+	}
+	if outcome, _ := p.refOutcome(ref); outcome == gitproto.RefOutcomeApplied {
+		p.progress(ProgressRefCreated, ref, hash)
+	}
+}
+
+// progressAppliedCreates reports, from a push that failed as a whole, each
+// create in cmds the target applied anyway. Deletes land nothing and are
+// skipped.
+func (p Params) progressAppliedCreates(cmds []gitproto.PushCommand) {
+	for _, cmd := range cmds {
+		if !cmd.Delete {
+			p.progressApplied(cmd.Name, cmd.New)
+		}
+	}
+}
+
+// progressAppliedBranchCreate is progressAppliedCreates for a checkpoint push
+// the run gives up on. Only the final checkpoint's push carries the branch
+// create. The temp ref in the same push is left out: a checkpoint counts as
+// progress only when the run advances on it, which it does not after a failed
+// push.
+func progressAppliedBranchCreate(p Params, cmds []gitproto.PushCommand, tempRef plumbing.ReferenceName) {
+	creates := make([]gitproto.PushCommand, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd.Name != tempRef {
+			creates = append(creates, cmd)
+		}
+	}
+	p.progressAppliedCreates(creates)
+}
+
+// createdOnce wraps fn so each ref's create is reported at most once. A run
+// creates a ref once, but it can see that create more than once: a failed
+// one-shot push that landed some refs before it fell back to batches, or a
+// doubtful create later settled by the target's ref listing. Nil stays nil.
+func createdOnce(fn func(ProgressEvent)) func(ProgressEvent) {
+	if fn == nil {
+		return nil
+	}
+	seen := make(map[plumbing.ReferenceName]struct{})
+	return func(ev ProgressEvent) {
+		if ev.Kind == ProgressRefCreated {
+			if _, dup := seen[ev.Ref]; dup {
+				return
+			}
+			seen[ev.Ref] = struct{}{}
+		}
+		fn(ev)
+	}
+}

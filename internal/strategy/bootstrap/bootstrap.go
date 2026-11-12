@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -136,6 +137,34 @@ type Params struct {
 	// a push deadline, Execute starts in batched mode instead of sending the
 	// same pack again. Any other error is returned as the push failure.
 	RejectedPush error
+	// SourceRefCount is the number of refs the source advertised: every name
+	// with a hash in the listing the caller requested, under the ref prefixes
+	// it asked for (protocol v2 narrows the listing server-side; v1 always
+	// sends everything), before --branch, --map, exclusions or tag policy
+	// narrow it to the desired set. It is a measure of the repository's ref
+	// load rather than of this run's work, which is why it is reported
+	// alongside the GitHub size lookup and on Result.Planning. Zero when the
+	// caller does not know it, and then omitted.
+	SourceRefCount int
+	// OnProgress, when non-nil, is called each time the target took an
+	// update this run pushed: a checkpoint advanced a temp ref, or a ref was
+	// created. It lets a caller tell a slow bootstrap from a stuck one.
+	//
+	// A temp-ref advance is reported on the rule the run itself advances its
+	// checkpoint on: the push returned nil and the target did not refuse the
+	// temp ref. A create is reported only when the target confirmed it, in
+	// the push's per-ref status or, for a branch create that status left in
+	// doubt, in the ref listing that settles it at the end of the branch
+	// phase. A create that landed in a push that failed as a whole is
+	// reported too, and each ref's create is reported at most once per run.
+	// The ref listing cannot tell which run created a branch, so when two
+	// runs overlap, both may report the same create.
+	// Deletes (stale or finished resume markers) are not progress and are
+	// never reported.
+	//
+	// Called synchronously from the goroutine driving Execute, after the
+	// push returned; implementations must return quickly.
+	OnProgress func(ProgressEvent)
 }
 
 // ErrCheckpointExceedsTargetLimit reports a single commit whose pack the
@@ -219,6 +248,9 @@ type Result struct {
 	BatchCount        int
 	PlannedBatchCount int
 	TempRefs          []string
+	// Planning is populated as planning runs and returned with every error,
+	// so a run its deadline stopped still says how far planning got.
+	Planning PlanningStats
 }
 
 type plannedBatch struct {
@@ -239,8 +271,11 @@ type plannedBatch struct {
 // Execute runs the bootstrap strategy (one-shot or batched).
 func Execute(ctx context.Context, p Params, relayReason string) (Result, error) {
 	p.diag = newDiagnostics(p.Logger, p.PushLogger)
+	p.OnProgress = createdOnce(p.OnProgress)
+	// Known before anything can fail, so every return below carries it.
+	planning := PlanningStats{SourceRefs: p.SourceRefCount}
 	if p.TargetPusher == nil {
-		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason}, errors.New("bootstrap strategy requires TargetPusher")
+		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason, Planning: planning}, errors.New("bootstrap strategy requires TargetPusher")
 	}
 
 	// GitHub large-repo preflight
@@ -249,7 +284,7 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 
 	if p.RejectedPush != nil && p.TargetMaxPack <= 0 && !batchAfterPushError(ctx, &p, p.RejectedPush) {
-		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason},
+		return Result{Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason, Planning: planning},
 			fmt.Errorf("push target refs: %w", actionableTargetPushError(p, p.RejectedPush))
 	}
 
@@ -259,11 +294,19 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	}
 	plans, err := planner.BuildBootstrapPlans(p.DesiredRefs, planTargetRefs)
 	if err != nil {
-		return Result{}, fmt.Errorf("build bootstrap plans: %w", err)
+		return Result{Planning: planning}, fmt.Errorf("build bootstrap plans: %w", err)
+	}
+	// One-shot plans no checkpoints, so it reports only what it was given.
+	// executeBatched recounts BranchesTotal from its own branch set.
+	for _, plan := range plans {
+		if plan.Kind == planner.RefKindBranch {
+			planning.BranchesTotal++
+		}
 	}
 
 	result := Result{
 		Plans: plans, Relay: true, RelayMode: relayModeBootstrap, RelayReason: relayReason,
+		Planning: planning,
 	}
 
 	if p.TargetMaxPack > 0 {
@@ -306,12 +349,21 @@ func Execute(ctx context.Context, p Params, relayReason string) (Result, error) 
 	pushErr := p.TargetPusher.PushPack(ctx, cmds, packReader)
 	_ = packReader.Close()
 	if pushErr != nil {
+		// The pusher splits ref updates across requests, so an earlier
+		// request can land creates before a later one fails. Those are
+		// progress whatever happens next.
+		p.progressAppliedCreates(cmds)
 		if !batchAfterPushError(ctx, &p, pushErr) {
 			return result, fmt.Errorf("push target refs: %w", actionableTargetPushError(p, pushErr))
 		}
 		return executeBatched(ctx, p, plans, result)
 	}
 
+	// One pack carried every create, so each confirmed ref is progress. In
+	// push order, which is the order a caller would see them land.
+	for _, cmd := range cmds {
+		p.progressCreated(cmd.Name, cmd.New)
+	}
 	result.Pushed = len(plans)
 	return result, nil
 }
@@ -444,10 +496,20 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		// leaves the trunk on the target (ENT-3617).
 		deferred *deferredBranches
 	)
+	// Reset rather than kept from the one-shot attempt: these are the
+	// branches this route plans, and a count from before the switch would
+	// mix the two.
+	result.Planning.BranchesTotal = len(planRefs)
+	result.Planning.BranchesPlanned = 0
+	result.Planning.BranchesSubsumed = 0
 	if len(planRefs) > 0 {
 		p.log(ctx, "bootstrap batch planning checkpoints", "branch_ref_count", len(planRefs))
 		var err error
-		batches, deferred, err = planBatches(ctx, p, planRefs)
+		started := time.Now()
+		batches, deferred, err = planBatches(ctx, p, planRefs, &result.Planning)
+		// Before the error check: a deadline inside the commit-graph fetch is
+		// the case this duration exists to show.
+		result.Planning.PlanningDuration += time.Since(started)
 		if err != nil {
 			return result, err
 		}
@@ -495,7 +557,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 
 	for i := 0; ; i++ {
 		if i == len(batches) && deferred != nil {
-			more, err := planAfterTrunk(ctx, p, *deferred, selfImposedBudget)
+			started := time.Now()
+			more, err := planAfterTrunk(ctx, p, *deferred, selfImposedBudget, &result.Planning)
+			result.Planning.PlanningDuration += time.Since(started)
 			deferred = nil
 			if err != nil {
 				return result, err
@@ -531,6 +595,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				New:  batch.Plan.SourceHash,
 			}}
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+				p.progressAppliedCreates(cmds)
 				return result, fmt.Errorf("create subsumed branch ref for %s: %w", batch.Plan.TargetRef, err)
 			}
 			// Same rule as the cutover below — only a create the target
@@ -550,6 +615,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			}
 			completedRefs[batch.Plan.TargetRef] = batch.Plan.SourceHash
 			result.BatchCount++
+			p.progress(ProgressRefCreated, batch.Plan.TargetRef, batch.Plan.SourceHash)
 			p.debug(ctx, "bootstrap batch subsumed branch finalized",
 				"branch", batch.Plan.TargetRef.String(),
 				"source_hash", planner.ShortHash(batch.Plan.SourceHash))
@@ -598,6 +664,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				"branch", batch.Plan.TargetRef.String(),
 				"temp_ref", batch.TempRef.String(),
 				"stale_hash", planner.ShortHash(batch.ResumeHash))
+			// No progress event: a delete lands nothing.
 			delCmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: batch.ResumeHash, Delete: true}}
 			if delErr := p.TargetPusher.PushCommands(ctx, delCmds); delErr != nil {
 				return result, fmt.Errorf("delete stale temp ref %s: %w (original: %w)", batch.TempRef, delErr, err)
@@ -973,10 +1040,12 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 					// against our own smaller budget: a larger budget or a
 					// server config change could still mirror this repo.
 					if indivisible && (isTargetBodyLimitError(pushErr) || (atAnnounced && abortedEarly)) {
+						progressAppliedBranchCreate(p, cmds, batch.TempRef)
 						return result, fmt.Errorf("push bootstrap batch for %s: %w: %w",
 							batch.Plan.TargetRef, ErrCheckpointExceedsTargetLimit, pushErr)
 					}
 				}
+				progressAppliedBranchCreate(p, cmds, batch.TempRef)
 				return result, fmt.Errorf("push bootstrap batch for %s: %w", batch.Plan.TargetRef, pushErr)
 			}
 			_ = packReader.Close()
@@ -995,6 +1064,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			// that silence as a refusal would fail every batched bootstrap
 			// against it.
 			if reason, refused := p.refRefused(batch.TempRef); refused {
+				progressAppliedBranchCreate(p, cmds, batch.TempRef)
 				return result, fmt.Errorf("push bootstrap batch for %s: target refused %s: %s",
 					batch.Plan.TargetRef, batch.TempRef, reason)
 			}
@@ -1005,6 +1075,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			current = checkpoint
 			pushedCheckpoints = append(pushedCheckpoints, checkpoint)
 			result.BatchCount++
+			p.progress(ProgressTempRefAdvanced, batch.TempRef, checkpoint)
 
 			// Recombine: subdivision is a one-way ratchet, so the fine
 			// granularity needed for one heavy commit sticks around for
@@ -1035,6 +1106,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		if batch.ResumeHash == batch.Plan.SourceHash && p.TargetRefs[batch.Plan.TargetRef].IsZero() {
 			cmds := []gitproto.PushCommand{{Name: batch.Plan.TargetRef, Old: plumbing.ZeroHash, New: batch.Plan.SourceHash}}
 			if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+				p.progressAppliedCreates(cmds)
 				return result, fmt.Errorf("resume bootstrap cutover for %s: %w", batch.Plan.TargetRef, err)
 			}
 			createPushed = true
@@ -1062,6 +1134,9 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		confirmed, doubt := true, ""
 		if createPushed {
 			confirmed, doubt = p.createConfirmed(batch.Plan.TargetRef)
+			if confirmed {
+				p.progress(ProgressRefCreated, batch.Plan.TargetRef, batch.Plan.SourceHash)
+			}
 		}
 		if !confirmed {
 			// Held back rather than decided here: whether the branch is on the
@@ -1083,6 +1158,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 			continue
 		}
 
+		// No progress event: deleting scaffolding lands nothing.
 		cmds := []gitproto.PushCommand{{Name: batch.TempRef, Old: current, Delete: true}}
 		if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
 			return result, fmt.Errorf("delete bootstrap temp ref for %s: %w", batch.Plan.TargetRef, err)
@@ -1121,11 +1197,12 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		// ones that were not. Re-deriving from the plans here would claim the
 		// creates the cutover deliberately withheld.
 		tailTargetRefs := planner.CopyRefHashMap(completedRefs)
+		cmds := convert.PlansToPushCommands(tailPlans, false)
 		packReader, err := p.SourceService.FetchPack(ctx, p.SourceConn, tailDesired, tailTargetRefs)
 		if err != nil {
 			if errors.Is(err, git.NoErrAlreadyUpToDate) {
-				cmds := convert.PlansToPushCommands(tailPlans, false)
 				if err := p.TargetPusher.PushCommands(ctx, cmds); err != nil {
+					p.progressAppliedCreates(cmds)
 					return result, fmt.Errorf("create tail refs after bootstrap: %w", err)
 				}
 			} else {
@@ -1134,12 +1211,15 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 		} else {
 			packReader = gitproto.LimitPackReader(packReader, p.MaxPackBytes)
 			packReader = gitproto.CloseOnce(packReader)
-			cmds := convert.PlansToPushCommands(tailPlans, false)
 			if err := p.TargetPusher.PushPack(ctx, cmds, packReader); err != nil {
 				_ = packReader.Close()
+				p.progressAppliedCreates(cmds)
 				return result, fmt.Errorf("push bootstrap tail refs: %w", err)
 			}
 			_ = packReader.Close()
+		}
+		for _, cmd := range cmds {
+			p.progressCreated(cmd.Name, cmd.New)
 		}
 	}
 
@@ -1188,6 +1268,10 @@ func resolvePendingMarkers(ctx context.Context, p Params, pending []pendingMarke
 			keepMarker(ctx, p, marker, fmt.Sprintf("%s is on the target at %s, not the %s this run pushed",
 				marker.branch, planner.ShortHash(onTarget), planner.ShortHash(marker.createHash)))
 		default:
+			// The listing is the confirmation the push's status could not
+			// give, so this is where the create is reported as progress. The
+			// marker delete that follows is not.
+			p.progress(ProgressRefCreated, marker.branch, marker.createHash)
 			p.log(ctx, "bootstrap deleting resume marker; branch present at pushed hash",
 				"branch", marker.branch.String(), "temp_ref", marker.tempRef.String(),
 				"target_hash", planner.ShortHash(onTarget), "doubt", marker.doubt)
@@ -1277,7 +1361,10 @@ type deferredBranches struct {
 // push, the refs already on the target are the shared history, and every
 // branch is deferred to plan against them. With neither there is no shared
 // history to plan against, so each branch is planned in turn.
-func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([]plannedBatch, *deferredBranches, error) {
+//
+// stats.BranchesPlanned counts each branch as its checkpoints are derived, so
+// an error leaves it at the number planned before the failure.
+func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef, stats *PlanningStats) ([]plannedBatch, *deferredBranches, error) {
 	ordered, trunkIdx := orderTrunkFirst(desired, p.SourceHeadTarget)
 	switch {
 	case p.SourceHeadTarget == "":
@@ -1305,6 +1392,7 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 			if err != nil {
 				return nil, nil, err
 			}
+			stats.BranchesPlanned++
 			out = append(out, newPlannedBatch(p, ref, checkpoints, chain))
 		}
 		return out, nil, nil
@@ -1315,6 +1403,7 @@ func planBatches(ctx context.Context, p Params, desired []planner.DesiredRef) ([
 	if err != nil {
 		return nil, nil, err
 	}
+	stats.BranchesPlanned++
 	batches := []plannedBatch{newPlannedBatch(p, trunk, checkpoints, chain)}
 	if len(ordered) == 1 {
 		return batches, nil, nil
