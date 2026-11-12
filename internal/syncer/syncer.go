@@ -133,6 +133,10 @@ type Config struct {
 	// AllowEmptySource. See emptyScopePrunes.
 	AllowEmptyScope bool
 
+	// AssumeTargetMaximal sends the target gitproto.MaximalFeature without
+	// its advertisement. See syncSession.maximalTips.
+	AssumeTargetMaximal bool
+
 	// OnProgress, when non-nil, is passed to bootstrap as
 	// bootstrap.Params.OnProgress: it is called each time a bootstrap landed
 	// something on the target. Bootstrap only — the syncer never calls it
@@ -893,6 +897,11 @@ type targetSession struct {
 	// gitproto.RefService.SkippedRefCount — this struct outlives the pack
 	// transfer and only a boolean is ever read from it.
 	skippedRefCount int
+	// maximal is the target's gitproto.MaximalFeature listing, nil when the
+	// target cannot provide one. maximalListed records that the listing was
+	// attempted, so a run asks once. See syncSession.maximalTips.
+	maximal       *gitproto.MaximalTips
+	maximalListed bool
 }
 
 // newSession performs the shared setup: protocol validation, mapping validation,
@@ -1128,7 +1137,11 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 		if closureFetched {
 			return nil
 		}
-		if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, targetRefMap); err != nil {
+		// Reduced haves never leave an object out that the full set would
+		// send, so the store's "missing means the target has it" reading
+		// (planner.CheckAncestry, planner.ObjectsToPush) still holds.
+		haves := s.maximalTips(ctx).Reduce(targetRefMap, s.keepHave(desiredRefs))
+		if err := sourceService.FetchToStore(ctx, repo.Storer, s.sourceConn, gpDesired, haves); err != nil {
 			if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 				return fmt.Errorf("fetch to store: %w", err)
 			}
@@ -1707,7 +1720,10 @@ func (s *syncSession) executeIncremental(
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
 	pushPlans []planner.BranchPlan,
 ) (incremental.Result, error) {
-	haves := planner.FetchHaves(s.target.refMap, pushPlans, s.cfg.IndependentHistoryRefPrefixes)
+	// Execute offers haves only on the incremental relay path; the tag relay
+	// and the materialized fallback do without.
+	relays, _ := planner.CanIncrementalRelay(s.cfg.ForceAny(), s.cfg.Prune, false, pushPlans, s.target.policy)
+	haves := s.fetchHaves(ctx, s.target.refMap, desiredRefs, pushPlans, relays)
 	incResult, incErr := incremental.Execute(ctx, incremental.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: haves,
@@ -1747,7 +1763,7 @@ func (s *syncSession) executeReplicate(
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	pushPlans []planner.BranchPlan,
 ) (repstrat.Result, error) {
-	haves := planner.FetchHaves(targetRefs, pushPlans, s.cfg.IndependentHistoryRefPrefixes)
+	haves := s.fetchHaves(ctx, targetRefs, desiredRefs, pushPlans, true)
 	repResult, repErr := repstrat.Execute(ctx, repstrat.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
 		DesiredRefs: desiredRefs, TargetRefs: haves,

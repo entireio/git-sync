@@ -5095,6 +5095,27 @@ type smartHTTPRepoServer struct {
 	// lsRefsNoUnborn drops "unborn" from the advertised ls-refs features, for
 	// testing that the client does not send an unadvertised argument.
 	lsRefsNoUnborn bool
+
+	// lsRefsMaximal advertises gitproto.MaximalFeature and answers it by
+	// marking each listed ref that no other listed ref reaches.
+	lsRefsMaximal bool
+	// lsRefsRejectMaximal fails an ls-refs request carrying the argument, as
+	// a server that does not know it does.
+	lsRefsRejectMaximal bool
+	// maximalRequests counts ls-refs requests carrying the argument.
+	maximalRequests int
+
+	// uploadPackRedirect, when set, answers upload-pack discovery with a 307
+	// to the same path on this base URL, as a read/write split does.
+	uploadPackRedirect string
+}
+
+// MaximalRequests returns how many ls-refs requests carried
+// gitproto.MaximalFeature.
+func (s *smartHTTPRepoServer) MaximalRequests() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maximalRequests
 }
 
 // LastLSRefsArgs returns the arguments of the most recent ls-refs request.
@@ -5234,6 +5255,10 @@ func (s *smartHTTPRepoServer) handleInfoRefs(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "missing service", http.StatusBadRequest)
 		return
 	}
+	if service == serviceUploadPack && s.uploadPackRedirect != "" {
+		http.Redirect(w, r, s.uploadPackRedirect+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+		return
+	}
 	if s.v2 && service == serviceUploadPack && strings.Contains(r.Header.Get("Git-Protocol"), "version=2") {
 		s.handleInfoRefsV2(w, r)
 		return
@@ -5308,6 +5333,9 @@ func (s *smartHTTPRepoServer) handleInfoRefsV2(w http.ResponseWriter, _ *http.Re
 	lsRefs := "ls-refs=unborn\n"
 	if s.lsRefsNoUnborn {
 		lsRefs = "ls-refs\n"
+	}
+	if s.lsRefsMaximal {
+		lsRefs = "ls-refs=unborn " + gitproto.MaximalFeature + "\n"
 	}
 	lines := []string{
 		"version 2\n",
@@ -5395,6 +5423,7 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	prefixes := make([]string, 0, len(req.Args))
 	wantSymrefs := false
 	wantUnborn := false
+	wantMaximal := false
 	for _, arg := range req.Args {
 		switch {
 		case strings.HasPrefix(arg, "ref-prefix "):
@@ -5403,6 +5432,8 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 			wantSymrefs = true
 		case arg == "unborn":
 			wantUnborn = true
+		case arg == gitproto.MaximalFeature:
+			wantMaximal = true
 		}
 	}
 
@@ -5410,6 +5441,22 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if wantMaximal {
+		s.mu.Lock()
+		s.maximalRequests++
+		s.mu.Unlock()
+	}
+	if wantMaximal && s.lsRefsRejectMaximal {
+		http.Error(w, "unexpected line: "+gitproto.MaximalFeature, http.StatusBadRequest)
+		return
+	}
+	var marked map[plumbing.ReferenceName]bool
+	if wantMaximal {
+		if marked, err = maximalMarks(s.repo, refs); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	var buf bytes.Buffer
@@ -5424,7 +5471,11 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 		}
 	}
 	for _, ref := range refs {
-		if _, err := pktline.WriteString(&buf, ref.Hash().String()+" "+ref.Name().String()+"\n"); err != nil {
+		line := ref.Hash().String() + " " + ref.Name().String()
+		if marked[ref.Name()] {
+			line += " " + gitproto.MaximalFeature
+		}
+		if _, err := pktline.WriteString(&buf, line+"\n"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -5440,6 +5491,49 @@ func (s *smartHTTPRepoServer) handleUploadPackV2LSRefs(w http.ResponseWriter, re
 	}
 
 	s.recordMetric(serviceUploadPack, metricPack, int64(len(body)), int64(buf.Len()), 0, 0)
+}
+
+// maximalMarks marks each ref whose peeled commit no other listed ref's
+// commit reaches, the rule gitproto.MaximalFeature names. Refs sharing a
+// commit share a mark, and a ref that does not peel to a commit stays marked.
+func maximalMarks(repo *git.Repository, refs []*plumbing.Reference) (map[plumbing.ReferenceName]bool, error) {
+	commits := make(map[plumbing.ReferenceName]*object.Commit, len(refs))
+	marked := make(map[plumbing.ReferenceName]bool, len(refs))
+	for _, ref := range refs {
+		marked[ref.Name()] = true
+		obj, err := repo.Object(plumbing.AnyObject, ref.Hash())
+		if err != nil {
+			return nil, err
+		}
+		for {
+			tag, ok := obj.(*object.Tag)
+			if !ok {
+				break
+			}
+			if obj, err = tag.Object(); err != nil {
+				return nil, err
+			}
+		}
+		if c, ok := obj.(*object.Commit); ok {
+			commits[ref.Name()] = c
+		}
+	}
+	for name, c := range commits {
+		for other, oc := range commits {
+			if other == name || oc.Hash == c.Hash {
+				continue
+			}
+			reached, err := c.IsAncestor(oc)
+			if err != nil {
+				return nil, err
+			}
+			if reached {
+				marked[name] = false
+				break
+			}
+		}
+	}
+	return marked, nil
 }
 
 func (s *smartHTTPRepoServer) handleUploadPackV2Fetch(w http.ResponseWriter, req v2TestCommandRequest, body []byte) {

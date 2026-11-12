@@ -41,6 +41,22 @@ func TestBootstrapLoggerReachesSyncConfiguration(t *testing.T) {
 	}
 }
 
+// mirror-pipeline sets it on the public client, so the public builder must
+// forward it.
+func TestAssumeTargetMaximalReachesSyncConfiguration(t *testing.T) {
+	cfg, err := New(Options{}).buildSyncConfig(context.Background(), SyncRequest{
+		Source: Endpoint{URL: "https://example.com/source.git"},
+		Target: Endpoint{URL: "https://example.com/target.git"},
+		Policy: SyncPolicy{Mode: ModeReplicate, AssumeTargetMaximal: true},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AssumeTargetMaximal {
+		t.Fatal("AssumeTargetMaximal not propagated")
+	}
+}
+
 func TestOnProgressReachesSyncConfiguration(t *testing.T) {
 	var got []ProgressEvent
 	cfg, err := New(Options{OnProgress: func(e ProgressEvent) { got = append(got, e) }}).buildSyncConfig(context.Background(), SyncRequest{
