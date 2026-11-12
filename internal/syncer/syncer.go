@@ -1331,6 +1331,15 @@ func (s *syncSession) canBatchRejectedReplicate(pushPlans []BranchPlan, err erro
 // refuses on every retry. Batched bootstrap creates the missing refs instead,
 // planned against the refs the target already has. Updates and deletes then
 // go out as a replicate push of their own.
+//
+// A create may find its ref already on the target: another sync of the same
+// target can deliver it while this push is being refused. A ref at the
+// source's commit is done. A ref at any other commit stays a create and goes
+// out with the updates and deletes. The run cannot tell whether the other
+// sync saw an older source or a newer one, so it neither keeps that commit
+// nor overwrites it: the target refuses the create as existing, the run fails
+// with ErrTargetRefMoved, and the next run plans from a fresh listing. Updates
+// and deletes are refused the same way when their ref moved.
 func (s *syncSession) replicateBatchedAfterRejection(
 	ctx context.Context,
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
@@ -1348,14 +1357,16 @@ func (s *syncSession) replicateBatchedAfterRejection(
 	for _, plan := range pushPlans {
 		current := targetRefs[plan.TargetRef]
 		switch {
-		case plan.Action == ActionCreate:
-			if current.IsZero() {
-				creates[plan.TargetRef] = desiredRefs[plan.TargetRef]
-			}
-		case plan.Action == ActionUpdate && current == plan.SourceHash,
+		case plan.Action == ActionCreate && current.IsZero():
+			creates[plan.TargetRef] = desiredRefs[plan.TargetRef]
+		case plan.Action == ActionCreate && current == plan.SourceHash,
+			plan.Action == ActionUpdate && current == plan.SourceHash,
 			plan.Action == ActionDelete && current.IsZero():
-			// Applied before the push failed.
+			// Applied before the push failed, by this push or another writer.
 		default:
+			// Includes a create whose ref another writer put at a different
+			// commit: the target refuses it, so the run fails retryably
+			// instead of reporting success over a ref it did not verify.
 			rest = append(rest, plan)
 		}
 	}

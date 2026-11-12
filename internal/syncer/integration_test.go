@@ -2760,6 +2760,218 @@ func TestRun_IntegrationReplicateRejectedPackUpdateUsesCreatedRefs(t *testing.T)
 	assertHeadsMatch(t, sourceRepo, targetRepo, "feature")
 }
 
+// TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently covers a
+// create that another sync of the same target delivers at a different hash
+// while this run's pack is being refused. Two syncs can overlap when the lease
+// fails open, and the run cannot tell whether the other one saw an older
+// source or a newer one. So it must neither treat the ref as done nor
+// overwrite it: it resends the create, the target refuses it as existing, and
+// the run fails with the retryable ErrTargetRefMoved, leaving the ref as the
+// other sync wrote it.
+func TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently(t *testing.T) {
+	fx := newReplicateConcurrentCreateFixture(t)
+	// The other sync installs the ref at the trunk's commit, which the
+	// target already holds. Which commit it is does not matter, only that
+	// it is not this run's source commit.
+	fx.writer.install = func() {
+		if err := fx.targetRepo.Storer.SetReference(plumbing.NewHashReference(fx.ref, fx.trunk)); err != nil {
+			t.Errorf("install %s concurrently: %v", fx.ref, err)
+		}
+	}
+	// Refuse a create whose ref exists the way entire-server does, with
+	// "already exists". go-git's server says "failed to update ref", which
+	// fails the run too but is not classified as a concurrent move.
+	fx.targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		var exists []plumbing.ReferenceName
+		for _, cmd := range req.Commands {
+			if _, err := fx.targetRepo.Reference(cmd.Name, false); err == nil && cmd.Old.IsZero() {
+				exists = append(exists, cmd.Name)
+			}
+		}
+		if len(exists) == 0 {
+			return nil
+		}
+		// The report applies nothing, so it may only cover refused commands.
+		if len(exists) != len(req.Commands) {
+			t.Errorf("request mixes refused creates %v with other commands: %+v", exists, req.Commands)
+		}
+		return syncertest.DenyRefsReport(req, "already exists", exists...)
+	}
+
+	result, err := fx.run(t)
+	if !errors.Is(err, gitproto.ErrTargetRefMoved) {
+		t.Fatalf("expected an error satisfying errors.Is(err, ErrTargetRefMoved), got %v", err)
+	}
+	if result.RelayReason != planner.ReasonReplicatePackRejected {
+		t.Fatalf("expected the rejected-pack fallback, got %+v", result)
+	}
+	// The batched create landed; only x was refused.
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
+	got, err := fx.targetRepo.Reference(fx.ref, false)
+	if err != nil {
+		t.Fatalf("resolve target %s: %v", fx.ref, err)
+	}
+	if got.Hash() != fx.trunk {
+		t.Fatalf("target %s = %s, want %s as the other sync left it", fx.ref, got.Hash(), fx.trunk)
+	}
+
+	// Both commands for x must be creates: the retry may not name the hash
+	// the other sync left as its old value, or it would overwrite it.
+	cmds := fx.writer.seen()
+	if len(cmds) != 2 {
+		t.Fatalf("expected the refused pack's create and one retried create for %s, got %d commands: %+v", fx.ref, len(cmds), cmds)
+	}
+	if retry := cmds[1]; !retry.Old.IsZero() || retry.New != fx.source {
+		t.Fatalf("expected retried create %s 0 -> %s, got %s -> %s", fx.ref, fx.source, retry.Old, retry.New)
+	}
+}
+
+// TestRun_IntegrationReplicateRejectedPackCreateAppliedConcurrently covers a
+// create that another sync delivers at exactly this run's source hash while
+// this run's pack is being refused. The target already holds what the run
+// wants, so the ref is done and must not be pushed again.
+func TestRun_IntegrationReplicateRejectedPackCreateAppliedConcurrently(t *testing.T) {
+	fx := newReplicateConcurrentCreateFixture(t)
+	// The other sync delivered the ref together with its history.
+	fx.writer.install = func() {
+		if err := copyRefsAndObjects(fx.sourceRepo.Storer, fx.targetRepo.Storer, []plumbing.ReferenceName{fx.ref}); err != nil {
+			t.Errorf("install %s concurrently: %v", fx.ref, err)
+		}
+	}
+
+	result, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("replicate after target body limit failed: %v", err)
+	}
+	if result.RelayReason != planner.ReasonReplicatePackRejected {
+		t.Fatalf("expected the rejected-pack fallback, got %+v", result)
+	}
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, fx.ref.Short())
+	if cmds := fx.writer.seen(); len(cmds) != 1 {
+		t.Fatalf("expected only the refused create for %s, got %d commands: %+v", fx.ref, len(cmds), cmds)
+	}
+}
+
+// replicateConcurrentCreateFixture is a replicate run whose single pack the
+// target refuses for its size: the trunk is already on the target, and the
+// run creates feature, whose history is over the limit, and x, one small
+// commit past it.
+type replicateConcurrentCreateFixture struct {
+	sourceRepo, targetRepo     *git.Repository
+	sourceServer, targetServer *smartHTTPRepoServer
+	writer                     *concurrentRefWriter
+	ref                        plumbing.ReferenceName
+	trunk, source              plumbing.Hash
+}
+
+func newReplicateConcurrentCreateFixture(t *testing.T) *replicateConcurrentCreateFixture {
+	t.Helper()
+	sourceRepo, sourceFS := newSourceRepo(t)
+	makeCommits(t, sourceRepo, sourceFS, 2)
+	trunkRef := plumbing.NewBranchReferenceName(testBranch)
+	trunk, err := sourceRepo.Reference(trunkRef, true)
+	if err != nil {
+		t.Fatalf("resolve trunk: %v", err)
+	}
+
+	targetRepo, err := git.Init(memory.NewStorage())
+	if err != nil {
+		t.Fatalf("init target repo: %v", err)
+	}
+	if err := copyRefsAndObjects(sourceRepo.Storer, targetRepo.Storer, []plumbing.ReferenceName{trunkRef}); err != nil {
+		t.Fatalf("copy trunk to target: %v", err)
+	}
+
+	makeLargeCommits(t, sourceRepo, sourceFS, 4, 100_000)
+	syncertest.SetRefAtBranch(t, sourceRepo, plumbing.NewBranchReferenceName("feature"), testBranch)
+	makeCommits(t, sourceRepo, sourceFS, 1)
+	ref := plumbing.NewBranchReferenceName("x")
+	source := syncertest.SetRefAtBranch(t, sourceRepo, ref, testBranch)
+	if err := sourceRepo.Storer.SetReference(plumbing.NewHashReference(trunkRef, trunk.Hash())); err != nil {
+		t.Fatalf("reset trunk: %v", err)
+	}
+
+	fx := &replicateConcurrentCreateFixture{
+		sourceRepo: sourceRepo, targetRepo: targetRepo,
+		sourceServer: newSmartHTTPRepoServerV2(t, sourceRepo),
+		targetServer: newSmartHTTPRepoServer(t, targetRepo),
+		writer:       &concurrentRefWriter{ref: ref},
+		ref:          ref, trunk: trunk.Hash(), source: source,
+	}
+	fx.targetServer.receivePackBodyLimit = 300_000
+	fx.targetServer.receivePackRaw = fx.writer.observe
+	t.Cleanup(fx.sourceServer.Close)
+	t.Cleanup(fx.targetServer.Close)
+	return fx
+}
+
+// run replicates the fixture and checks that the first command for ref was
+// the refused pack's create. The caller checks the run's outcome.
+func (fx *replicateConcurrentCreateFixture) run(t *testing.T) (Result, error) {
+	t.Helper()
+	result, err := Run(context.Background(), Config{
+		Source:       Endpoint{URL: fx.sourceServer.RepoURL()},
+		Target:       Endpoint{URL: fx.targetServer.RepoURL()},
+		Mode:         modeReplicate,
+		Prune:        true,
+		ProtocolMode: protocolModeAuto,
+	})
+	if got := fx.writer.seen(); len(got) == 0 || !got[0].Old.IsZero() || got[0].New != fx.source {
+		t.Fatalf("expected the refused pack to create %s at %s first, got %+v", fx.ref, fx.source, got)
+	}
+	return result, err
+}
+
+// concurrentRefWriter stands in for another sync of the same target. It is a
+// receivePackRaw hook that records every command for ref and, while the first
+// request carrying one is being received — the pack the body limit refuses —
+// runs install to write the ref the way the other sync would. It then hands
+// the request on to the server unchanged.
+type concurrentRefWriter struct {
+	ref plumbing.ReferenceName
+	// install runs on the server goroutine before the request is answered,
+	// so the run cannot observe the target between its push and the write.
+	// It runs while mu is held, so it must not call seen.
+	install func()
+
+	mu   sync.Mutex
+	cmds []packp.Command
+}
+
+func (w *concurrentRefWriter) observe(_ http.ResponseWriter, r *http.Request) bool {
+	body, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	req := &packp.UpdateRequests{}
+	if err := req.Decode(bytes.NewReader(body)); err != nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, cmd := range req.Commands {
+		if cmd.Name != w.ref {
+			continue
+		}
+		if len(w.cmds) == 0 && w.install != nil {
+			w.install()
+		}
+		w.cmds = append(w.cmds, *cmd)
+	}
+	return false
+}
+
+// seen returns the commands for ref the target has received, in order.
+func (w *concurrentRefWriter) seen() []packp.Command {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]packp.Command(nil), w.cmds...)
+}
+
 // refCreateDenier is a receive-pack hook that refuses to create one ref while
 // applying every other command in the same request for real.
 //
