@@ -1,0 +1,93 @@
+Get git-sync PR #135 into a state where the only thing it needs is a human approval. It fixes Linear ticket ENT-3759: "git-sync: batched-bootstrap fallback skips a create without checking the target's hash".
+
+Context: when the target refuses a replicate pack, git-sync falls back to creating the missing refs in batches (`replicateBatchedAfterRejection` in `internal/syncer/syncer.go`, added in git-sync #132). Its create arm dropped a ref that had appeared on the target in the meantime without checking that it pointed at the source hash, so a run could report success while the mirror was behind. The fix replans such a ref as an update with a compare-and-swap. It has been open and unreviewed since 2026-11-02, and `main` has moved since.
+
+What exists:
+- PR: https://github.com/entireio/git-sync/pull/135
+- Trail: https://entire.com/gh/entireio/git-sync/trails/5
+- Branch: `nodo/ent-3759-git-sync-batched-bootstrap-fallback-skips-a-create-without`, one commit, head `962dbbdd`: 29 lines in `internal/syncer/syncer.go`, two integration tests in `internal/syncer/integration_test.go`, one CHANGELOG line.
+- As of today the branch is 31 commits behind `origin/main` and merges without conflicts. CI was green on 2026-11-02 (test, lint, govulncheck, license-check, Cursor Bugbot). "Entire Gates" fails only because nobody has approved.
+
+Where you are: a dedicated git worktree of git-sync at ~/.herdr/worktrees/git-sync-ent-3759, on that branch. Work only here. Do not touch ~/work/entire/git-sync or any other checkout. The remote is `origin` (`entire://…/gh/entireio/git-sync`), which mirrors to GitHub. Follow the repo's contributor docs if it has any.
+
+Steps, in order:
+1. Gather context. Read the ticket and its comment with the Linear MCP (get_issue ENT-3759, list_comments), the PR (`gh pr view 135 --repo entireio/git-sync`, including any review comments) and the trail (`entire trail show`, findings and discussions). Then read what changed on `origin/main` since the branch point in the code this fix touches or depends on. The ones I know of: #136 (bootstrap progress callback, `OnProgress`, and "record applied refs when a strict push fails on a refusal"), #137 (ancestry resolver for a pruned planning store), #138 (independent-history haves), the go-git bump to main (#139, #140), and the Go toolchain bump to 1.27.4.
+2. Decide whether the fix is still right against today's `main`. In particular: did any of those changes already alter `replicateBatchedAfterRejection` or how applied refs are tracked, so that the fix is redundant, wrong, or needs adapting? Say what you checked.
+3. Rebase the branch onto `origin/main`. Resolve conflicts if any (the CHANGELOG is the likely one; keep the entry in the right section and order). Keep it one commit unless a second one is needed to adapt the fix.
+4. Verify locally on the rebased branch: gofmt, build, vet, `go test ./...`, the two new integration tests by name (`TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently`, `TestRun_IntegrationReplicateRejectedPackCreateAppliedConcurrently`) with `-race`, and the repo's linter at the version CI uses. One known unrelated flake: `TestHelperConn_PostRPC_V2_StripsResponseEnd` in `internal/gitproto`; if it fails, rerun it and say so.
+5. Push the rebased branch with `git push --force-with-lease`. Rebasing rewrites the branch, so a plain push will be refused; do not use a bare `--force`.
+6. Watch CI on the PR and the trail gates until they settle. If the trail's review does not start on the new head by itself, start it (`entire trail rerun-review`). Address any finding that is real; for one you reject, reply on it with the reason.
+7. Update the PR body and the trail description only if the rebase or step 2 changed what the PR does.
+
+Done means: the PR is rebased on current `main`, has no conflicts, every check is green, the trail has no open blocking finding, and the only gate left is Approvals.
+
+Constraints:
+- Do not merge. Do not request reviewers; I will pick one.
+- Do not widen the change beyond what ENT-3759 needs. If `main` has made the fix unnecessary, or it needs a redesign, stop and report instead of rewriting it.
+- Do not touch mirror-pipeline. The pin bump that takes this to prod is a separate step.
+- Do not change the Linear ticket's status. You may add one comment to it with the new head and what changed.
+- Do not start other agents.
+
+When you are done or stuck, report with: hc send t62 "<result or blocker, with the PR and trail links and the new head>"
+
+---
+
+<task-notification>
+<task-id>b2r7cty9k</task-id>
+<tool-use-id>toolu_01H3QVbxLzjXkVmySbP8Whft</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-ent-3759/76eeec89-f839-45ab-a2e2-7cec3c443bd1/tasks/b2r7cty9k.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for mirror head then for PR checks to settle" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2762po5h</task-id>
+<tool-use-id>toolu_019HSmEWuGcJBkWGtfzHhuWj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-ent-3759/76eeec89-f839-45ab-a2e2-7cec3c443bd1/tasks/b2762po5h.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR 135 CI checks settling on 12e97708" stream ended</summary>
+<event>head=12e97708765b1eda9ab53622d0d463ba067ba21d
+MERGEABLE
+check-licenses
+/
+license-check=SUCCESS/COMPLETED
+lint=SUCCESS/COMPLETED
+test=SUCCESS/COMPLETED
+govulncheck=SUCCESS/COMPLETED
+Entire
+Gates=FAILURE/COMPLETED
+[exited with code 0]</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+status?
+
+---
+
+can you summarize this change in simple terms?
+
+---
+
+link to pr?
+
+---
+
+<task-notification>
+<task-id>bms3xb9ld</task-id>
+<tool-use-id>toolu_01GNnmC6NYpW7J3tcTYTh6hW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-nodo--herdr-worktrees-git-sync-ent-3759/76eeec89-f839-45ab-a2e2-7cec3c443bd1/tasks/bms3xb9ld.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait up to 10 min for Bugbot on new head" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+https://entireio.slack.com/archives/C0B5KLPADGA/p1794496554415379?thread_ts=1794491469.360779&cid=C0B5KLPADGA
+
+---
+
+sounds good

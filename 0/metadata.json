@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.2",
+  "checkpoint_id": "01M788KESSZ86VRDZ6FZ5QHCWK",
+  "session_id": "76eeec89-f839-45ab-a2e2-7cec3c443bd1",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-12T16:14:12.399934Z",
+  "branch": "nodo/ent-3759-git-sync-batched-bootstrap-fallback-skips-a-create-without",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "CHANGELOG.md",
+    "internal/syncer/integration_test.go",
+    "internal/syncer/syncer.go"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "86111df58423",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 320001,
+    "cache_read_tokens": 10886229,
+    "output_tokens": 33442,
+    "api_call_count": 71
+  },
+  "session_token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 320001,
+    "cache_read_tokens": 10886229,
+    "output_tokens": 33442,
+    "api_call_count": 71
+  },
+  "redaction": {
+    "replacements": 8,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 8,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 7
+  }
+}
