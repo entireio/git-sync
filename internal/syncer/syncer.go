@@ -1334,10 +1334,12 @@ func (s *syncSession) canBatchRejectedReplicate(pushPlans []BranchPlan, err erro
 //
 // A create may find its ref already on the target: another sync of the same
 // target can deliver it while this push is being refused. A ref at the
-// source's commit is done. A ref at any other commit, typically an older sync
-// installing what it saw, is pushed as an update from that commit, since
-// replicate overwrites the target and treating any existing ref as created
-// would leave the target behind the source while the run reports success.
+// source's commit is done. A ref at any other commit stays a create and goes
+// out with the updates and deletes. The run cannot tell whether the other
+// sync saw an older source or a newer one, so it neither keeps that commit
+// nor overwrites it: the target refuses the create as existing, the run fails
+// with ErrTargetRefMoved, and the next run plans from a fresh listing. Updates
+// and deletes are refused the same way when their ref moved.
 func (s *syncSession) replicateBatchedAfterRejection(
 	ctx context.Context,
 	desiredRefs map[plumbing.ReferenceName]planner.DesiredRef,
@@ -1361,18 +1363,10 @@ func (s *syncSession) replicateBatchedAfterRejection(
 			plan.Action == ActionUpdate && current == plan.SourceHash,
 			plan.Action == ActionDelete && current.IsZero():
 			// Applied before the push failed, by this push or another writer.
-		case plan.Action == ActionCreate:
-			// Another writer created the ref at a different commit. Move
-			// it to the source's commit like any replicate overwrite; the
-			// push names current as the old value, so a further move still
-			// fails the push instead of being overwritten.
-			update := plan
-			update.Action = ActionUpdate
-			update.TargetHash = current
-			update.Reason = fmt.Sprintf("%s -> %s (created concurrently; replanned as update)",
-				planner.ShortHash(current), planner.ShortHash(plan.SourceHash))
-			rest = append(rest, update)
 		default:
+			// Includes a create whose ref another writer put at a different
+			// commit: the target refuses it, so the run fails retryably
+			// instead of reporting success over a ref it did not verify.
 			rest = append(rest, plan)
 		}
 	}

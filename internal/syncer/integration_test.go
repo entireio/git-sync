@@ -2763,36 +2763,66 @@ func TestRun_IntegrationReplicateRejectedPackUpdateUsesCreatedRefs(t *testing.T)
 // TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently covers a
 // create that another sync of the same target delivers at a different hash
 // while this run's pack is being refused. Two syncs can overlap when the lease
-// fails open, and the older one may install the ref at the commit it saw. The
-// re-read target then holds the ref, but not at this run's source hash, so the
-// run must move it there as an update rather than report success with the
-// older commit installed.
+// fails open, and the run cannot tell whether the other one saw an older
+// source or a newer one. So it must neither treat the ref as done nor
+// overwrite it: it resends the create, the target refuses it as existing, and
+// the run fails with the retryable ErrTargetRefMoved, leaving the ref as the
+// other sync wrote it.
 func TestRun_IntegrationReplicateRejectedPackCreateMovedConcurrently(t *testing.T) {
 	fx := newReplicateConcurrentCreateFixture(t)
-	// The older sync saw the ref at the trunk's commit, which the target
-	// already holds.
+	// The other sync installs the ref at the trunk's commit, which the
+	// target already holds. Which commit it is does not matter, only that
+	// it is not this run's source commit.
 	fx.writer.install = func() {
 		if err := fx.targetRepo.Storer.SetReference(plumbing.NewHashReference(fx.ref, fx.trunk)); err != nil {
 			t.Errorf("install %s concurrently: %v", fx.ref, err)
 		}
 	}
-
-	result := fx.run(t)
-	if result.Pushed != 2 {
-		t.Fatalf("Pushed = %d, want 2 (feature and x, counted from the original plans)", result.Pushed)
+	// Refuse a create whose ref exists the way entire-server does, with
+	// "already exists". go-git's server says "failed to update ref", which
+	// fails the run too but is not classified as a concurrent move.
+	fx.targetServer.receivePackHook = func(req *packp.UpdateRequests, _ bool) *packp.ReportStatus {
+		var exists []plumbing.ReferenceName
+		for _, cmd := range req.Commands {
+			if _, err := fx.targetRepo.Reference(cmd.Name, false); err == nil && cmd.Old.IsZero() {
+				exists = append(exists, cmd.Name)
+			}
+		}
+		if len(exists) == 0 {
+			return nil
+		}
+		// The report applies nothing, so it may only cover refused commands.
+		if len(exists) != len(req.Commands) {
+			t.Errorf("request mixes refused creates %v with other commands: %+v", exists, req.Commands)
+		}
+		return syncertest.DenyRefsReport(req, "already exists", exists...)
 	}
-	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
-	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, fx.ref.Short())
 
-	// The commands the target received are what prove the replan: the
-	// retry must compare-and-swap against the hash the concurrent sync
-	// left, not resend the create the target would refuse as existing.
+	result, err := fx.run(t)
+	if !errors.Is(err, gitproto.ErrTargetRefMoved) {
+		t.Fatalf("expected an error satisfying errors.Is(err, ErrTargetRefMoved), got %v", err)
+	}
+	if result.RelayReason != planner.ReasonReplicatePackRejected {
+		t.Fatalf("expected the rejected-pack fallback, got %+v", result)
+	}
+	// The batched create landed; only x was refused.
+	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
+	got, err := fx.targetRepo.Reference(fx.ref, false)
+	if err != nil {
+		t.Fatalf("resolve target %s: %v", fx.ref, err)
+	}
+	if got.Hash() != fx.trunk {
+		t.Fatalf("target %s = %s, want %s as the other sync left it", fx.ref, got.Hash(), fx.trunk)
+	}
+
+	// Both commands for x must be creates: the retry may not name the hash
+	// the other sync left as its old value, or it would overwrite it.
 	cmds := fx.writer.seen()
 	if len(cmds) != 2 {
-		t.Fatalf("expected the refused create and one update for %s, got %d commands: %+v", fx.ref, len(cmds), cmds)
+		t.Fatalf("expected the refused pack's create and one retried create for %s, got %d commands: %+v", fx.ref, len(cmds), cmds)
 	}
-	if update := cmds[1]; update.Old != fx.trunk || update.New != fx.source {
-		t.Fatalf("expected update %s %s -> %s, got %s -> %s", fx.ref, fx.trunk, fx.source, update.Old, update.New)
+	if retry := cmds[1]; !retry.Old.IsZero() || retry.New != fx.source {
+		t.Fatalf("expected retried create %s 0 -> %s, got %s -> %s", fx.ref, fx.source, retry.Old, retry.New)
 	}
 }
 
@@ -2809,7 +2839,13 @@ func TestRun_IntegrationReplicateRejectedPackCreateAppliedConcurrently(t *testin
 		}
 	}
 
-	fx.run(t)
+	result, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("replicate after target body limit failed: %v", err)
+	}
+	if result.RelayReason != planner.ReasonReplicatePackRejected {
+		t.Fatalf("expected the rejected-pack fallback, got %+v", result)
+	}
 	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, "feature")
 	assertHeadsMatch(t, fx.sourceRepo, fx.targetRepo, fx.ref.Short())
 	if cmds := fx.writer.seen(); len(cmds) != 1 {
@@ -2870,9 +2906,9 @@ func newReplicateConcurrentCreateFixture(t *testing.T) *replicateConcurrentCreat
 	return fx
 }
 
-// run replicates the fixture and checks the run took the rejected-pack
-// fallback.
-func (fx *replicateConcurrentCreateFixture) run(t *testing.T) Result {
+// run replicates the fixture and checks that the first command for ref was
+// the refused pack's create. The caller checks the run's outcome.
+func (fx *replicateConcurrentCreateFixture) run(t *testing.T) (Result, error) {
 	t.Helper()
 	result, err := Run(context.Background(), Config{
 		Source:       Endpoint{URL: fx.sourceServer.RepoURL()},
@@ -2881,16 +2917,10 @@ func (fx *replicateConcurrentCreateFixture) run(t *testing.T) Result {
 		Prune:        true,
 		ProtocolMode: protocolModeAuto,
 	})
-	if err != nil {
-		t.Fatalf("replicate after target body limit failed: %v", err)
-	}
-	if result.RelayReason != planner.ReasonReplicatePackRejected {
-		t.Fatalf("expected the rejected-pack fallback, got %+v", result)
-	}
 	if got := fx.writer.seen(); len(got) == 0 || !got[0].Old.IsZero() || got[0].New != fx.source {
 		t.Fatalf("expected the refused pack to create %s at %s first, got %+v", fx.ref, fx.source, got)
 	}
-	return result
+	return result, err
 }
 
 // concurrentRefWriter stands in for another sync of the same target. It is a
@@ -2902,6 +2932,7 @@ type concurrentRefWriter struct {
 	ref plumbing.ReferenceName
 	// install runs on the server goroutine before the request is answered,
 	// so the run cannot observe the target between its push and the write.
+	// It runs while mu is held, so it must not call seen.
 	install func()
 
 	mu   sync.Mutex
