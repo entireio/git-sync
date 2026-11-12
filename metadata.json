@@ -2,8 +2,7 @@
   "cli_version": "0.13.2",
   "checkpoint_id": "01M788KESSZ86VRDZ6FZ5QHCWK",
   "strategy": "manual-commit",
-  "branch": "nodo/ent-3759-git-sync-batched-bootstrap-fallback-skips-a-create-without",
-  "checkpoints_count": 7,
+  "checkpoints_count": 8,
   "files_touched": [
     "CHANGELOG.md",
     "internal/syncer/integration_test.go",
@@ -16,14 +15,21 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": "/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 144,
-    "cache_creation_tokens": 320001,
-    "cache_read_tokens": 10886229,
-    "output_tokens": 33442,
-    "api_call_count": 71
+    "input_tokens": 208,
+    "cache_creation_tokens": 507692,
+    "cache_read_tokens": 16010036,
+    "output_tokens": 67505,
+    "api_call_count": 103
   },
   "redaction": {
     "replacements": 8,
@@ -38,5 +44,6 @@
       "provider_token": 0,
       "shell_stdin": 0
     }
-  }
+  },
+  "has_review": true
 }
