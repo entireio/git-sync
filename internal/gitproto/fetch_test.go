@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -442,7 +443,7 @@ func TestFetchPackV1ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := fetchPackV1(ctx, conn, adv, desired, nil, false)
+		_, err := fetchPackV1(ctx, conn, adv, desired, nil, false, false)
 		done <- err
 	}()
 
@@ -494,7 +495,7 @@ func TestFetchPackV2ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := fetchPackV2(ctx, conn, caps, desired, nil, false)
+		_, err := fetchPackV2(ctx, conn, caps, desired, nil, false, false)
 		done <- err
 	}()
 
@@ -687,7 +688,7 @@ func TestFetchPackV1ClosesBodyOnDecodeError(t *testing.T) {
 		},
 	}
 
-	_, err = fetchPackV1(context.Background(), conn, adv, desired, nil, false)
+	_, err = fetchPackV1(context.Background(), conn, adv, desired, nil, false, false)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -722,7 +723,7 @@ func TestFetchPackV1ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		},
 	}
 
-	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false)
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false, false)
 	if err != nil {
 		t.Fatalf("fetchPackV1: %v", err)
 	}
@@ -765,7 +766,7 @@ func TestFetchPackV1ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		},
 	}
 
-	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false)
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false, false)
 	if err != nil {
 		t.Fatalf("fetchPackV1: %v", err)
 	}
@@ -812,7 +813,7 @@ func TestFetchPackV1DrainsSecondNAK(t *testing.T) {
 		},
 	}
 
-	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false)
+	rc, err := fetchPackV1(context.Background(), conn, adv, desired, nil, false, false)
 	if err != nil {
 		t.Fatalf("fetchPackV1 should tolerate double-NAK preamble, got: %v", err)
 	}
@@ -858,7 +859,7 @@ func TestFetchPackV2ClosesBodyOnDecodeError(t *testing.T) {
 		},
 	}
 
-	_, err = fetchPackV2(context.Background(), conn, caps, desired, nil, false)
+	_, err = fetchPackV2(context.Background(), conn, caps, desired, nil, false, false)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -1048,7 +1049,7 @@ func TestFetchPackV2ManyHavesSendsDoneAndReadsPack(t *testing.T) {
 		targetRefs[plumbing.ReferenceName(fmt.Sprintf("refs/haves/%02d", i))] = plumbing.NewHash(fmt.Sprintf("%040x", i+1000))
 	}
 
-	rc, err := fetchPackV2(context.Background(), conn, caps, desired, targetRefs, false)
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, targetRefs, false, false)
 	if err != nil {
 		t.Fatalf("fetchPackV2: %v", err)
 	}
@@ -1104,7 +1105,7 @@ func TestFetchPackV2ReturnedReaderClosesBodyOnInterruption(t *testing.T) {
 		},
 	}
 
-	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil, false)
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil, false, false)
 	if err != nil {
 		t.Fatalf("fetchPackV2: %v", err)
 	}
@@ -1150,7 +1151,7 @@ func TestFetchPackV2ReturnedReaderErrorsOnMalformedMidStreamPacket(t *testing.T)
 		},
 	}
 
-	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil, false)
+	rc, err := fetchPackV2(context.Background(), conn, caps, desired, nil, false, false)
 	if err != nil {
 		t.Fatalf("fetchPackV2: %v", err)
 	}
@@ -1204,7 +1205,7 @@ func TestFetchToStoreV2ClosesBodyOnMalformedMidStreamPacket(t *testing.T) {
 
 func TestBuildV1UploadPackBodyEmptyWantSet(t *testing.T) {
 	adv := &packp.AdvRefs{}
-	_, _, err := buildV1UploadPackBody(adv, nil, nil, false, false)
+	_, _, err := buildV1UploadPackBody(adv, nil, nil, false, false, false)
 	if !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		t.Fatalf("expected NoErrAlreadyUpToDate, got %v", err)
 	}
@@ -1250,4 +1251,110 @@ func containsLine(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// fetchRequestCapture answers every upload-pack request with a truncated v2 pack stream and keeps the request bodies.
+func fetchRequestCapture(t *testing.T) (Conn, *[][]byte) {
+	t.Helper()
+	ep, err := transport.ParseURL("https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	var bodies [][]byte
+	conn := NewHTTPConn(ep, "source", nil, roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		bodies = append(bodies, body)
+		var wire bytes.Buffer
+		if _, err := pktline.WriteString(&wire, "packfile\n"); err != nil {
+			return nil, err
+		}
+		if _, err := pktline.Write(&wire, append([]byte{1}, []byte("PACK")...)); err != nil {
+			return nil, err
+		}
+		if err := pktline.WriteFlush(&wire); err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Request: req, Body: io.NopCloser(bytes.NewReader(wire.Bytes()))}, nil
+	}))
+	return conn, &bodies
+}
+
+func thinFetchDesired() (map[plumbing.ReferenceName]DesiredRef, map[plumbing.ReferenceName]plumbing.Hash) {
+	main := plumbing.NewBranchReferenceName("main")
+	desired := map[plumbing.ReferenceName]DesiredRef{
+		main: {SourceRef: main, TargetRef: main, SourceHash: plumbing.NewHash("2222222222222222222222222222222222222222")},
+	}
+	return desired, map[plumbing.ReferenceName]plumbing.Hash{main: plumbing.NewHash("1111111111111111111111111111111111111111")}
+}
+
+// thinFetchRequest runs fetch against a capturing source and returns the body of the request it sent. The capture's
+// pack is cut short, so fetch may fail after sending; only the request matters.
+func thinFetchRequest(t *testing.T, fetch func(Conn) error) []byte {
+	t.Helper()
+	conn, bodies := fetchRequestCapture(t)
+	if err := fetch(conn); err != nil {
+		t.Logf("fetch after the request (expected with the short pack): %v", err)
+	}
+	if len(*bodies) != 1 {
+		t.Fatalf("%d requests, want 1", len(*bodies))
+	}
+	return (*bodies)[0]
+}
+
+func TestFetchPackAsksForAThinPackOnlyWhenAllowed(t *testing.T) {
+	desired, haves := thinFetchDesired()
+	for _, thin := range []bool{true, false} {
+		rs := &RefService{Protocol: "v2", V2Caps: &V2Capabilities{Caps: map[string]string{"fetch": ""}}, ThinPack: thin}
+		body := thinFetchRequest(t, func(conn Conn) error {
+			rc, err := rs.FetchPack(context.Background(), conn, desired, haves)
+			if err == nil {
+				err = rc.Close()
+			}
+			return err
+		})
+		if lines := readV2FetchRequestLines(t, body); slices.Contains(lines, "thin-pack") != thin {
+			t.Errorf("v2, ThinPack %v: request %q", thin, lines)
+		}
+
+		// v1 asks only when the source also offers it
+		for _, offered := range []bool{true, false} {
+			adv := &packp.AdvRefs{}
+			if offered {
+				adv.Capabilities.Set(capability.ThinPack)
+			}
+			rs := &RefService{Protocol: "v1", V1Adv: adv, ThinPack: thin}
+			body := thinFetchRequest(t, func(conn Conn) error {
+				_, err := rs.FetchPack(context.Background(), conn, desired, haves)
+				return err
+			})
+			if got := bytes.Contains(body, []byte("thin-pack")); got != (thin && offered) {
+				t.Errorf("v1, ThinPack %v, offered %v: request asks for thin-pack: %v", thin, offered, got)
+			}
+		}
+	}
+}
+
+// A pack decoded locally must be self-contained: FetchToStore never asks for a thin pack, even where a relay through
+// the same service would.
+func TestFetchToStoreNeverAsksForAThinPack(t *testing.T) {
+	desired, haves := thinFetchDesired()
+	v2 := &RefService{Protocol: "v2", V2Caps: &V2Capabilities{Caps: map[string]string{"fetch": ""}}, ThinPack: true}
+	body := thinFetchRequest(t, func(conn Conn) error {
+		return v2.FetchToStore(context.Background(), memory.NewStorage(), conn, desired, haves)
+	})
+	if lines := readV2FetchRequestLines(t, body); slices.Contains(lines, "thin-pack") {
+		t.Errorf("v2 store fetch asks for thin-pack: %q", lines)
+	}
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ThinPack)
+	v1 := &RefService{Protocol: "v1", V1Adv: adv, ThinPack: true}
+	body = thinFetchRequest(t, func(conn Conn) error {
+		return v1.FetchToStore(context.Background(), memory.NewStorage(), conn, desired, haves)
+	})
+	if bytes.Contains(body, []byte("thin-pack")) {
+		t.Errorf("v1 store fetch asks for thin-pack: %q", body)
+	}
 }

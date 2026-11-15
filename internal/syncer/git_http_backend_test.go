@@ -744,6 +744,9 @@ type gitHTTPBackendServer struct {
 	// maxPushBody, when set, refuses receive-pack POST bodies over that many
 	// bytes with a 413, as a hosted target's request body limit does.
 	maxPushBody atomic.Int64
+	// lastPack holds the pack of the last push that carried one, per
+	// repository.
+	lastPack map[string][]byte
 }
 
 func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
@@ -763,7 +766,8 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 		},
 	}
 	s := &gitHTTPBackendServer{
-		root: root,
+		root:     root,
+		lastPack: map[string][]byte{},
 	}
 	handler.Stderr = &lockedBuffer{server: s}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -778,6 +782,12 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 			r.TransferEncoding = nil
+			if pack := pushedPack(body); len(pack) > 0 && strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
+				repo, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+				s.mu.Lock()
+				s.lastPack[repo] = pack
+				s.mu.Unlock()
+			}
 		}
 		if limit := s.maxPushBody.Load(); limit > 0 && strings.HasSuffix(r.URL.Path, "/git-receive-pack") && r.ContentLength > limit {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -786,6 +796,18 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 		handler.ServeHTTP(w, r)
 	}))
 	return s
+}
+
+// LastPack is the pack of the last push into repo that carried one.
+func (s *gitHTTPBackendServer) LastPack(t *testing.T, repo string) []byte {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pack, ok := s.lastPack[repo]
+	if !ok {
+		t.Fatalf("no pack pushed into %s", repo)
+	}
+	return pack
 }
 
 func (s *gitHTTPBackendServer) Close() {

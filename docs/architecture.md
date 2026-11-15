@@ -73,8 +73,8 @@ The current product modes are:
   - relay-only execution
   - no materialized fallback
   - works against targets regardless of `no-thin` advertisement: the
-    relayed pack is always self-contained because our upload-pack client
-    does not request the `thin-pack` capability
+    relayed pack is thin only for a target whose receive-pack accepts
+    thin packs, and self-contained otherwise
 
 The current transfer modes are:
 

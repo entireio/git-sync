@@ -2070,3 +2070,19 @@ func TestPlanRefResolverEdgeCases(t *testing.T) {
 		}
 	})
 }
+
+func TestThinPackAllowedOnlyForAKnownTargetWithoutNoThin(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target RelayTargetPolicy
+		want   bool
+	}{
+		{name: "capabilities unknown", target: RelayTargetPolicy{}, want: false},
+		{name: "advertises no-thin", target: RelayTargetPolicy{CapabilitiesKnown: true, NoThin: true}, want: false},
+		{name: "accepts thin packs", target: RelayTargetPolicy{CapabilitiesKnown: true}, want: true},
+	} {
+		if got := ThinPackAllowed(tc.target); got != tc.want {
+			t.Errorf("%s: ThinPackAllowed = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
