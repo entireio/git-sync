@@ -32,6 +32,8 @@ env GOCACHE=/tmp/go-build GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/sync
 
 That test uses a real `git-http-backend` source/target pair and checks that a smaller `--target-max-pack-bytes` planning limit produces at least as many planned checkpoints as a larger one, while still planning to the branch tip.
 
+`TestRun_GitHTTPBackendSyncThinPackWhereAccepted` records the pack pushed to the target: an incremental relay into git's receive-pack, which accepts thin packs, sends a thin one of a few hundred bytes for a one-line change to a large file, and the target ends fsck-clean with the source's refs.
+
 ## Docker SSH End-To-End Test
 
 Optional end-to-end sync against a real `sshd` running in Docker:

@@ -34,6 +34,14 @@ type RefService struct {
 	// objects", "Compressing objects", ...) to stderr and asks the source
 	// upload-pack to emit progress by not sending the no-progress option.
 	Verbose bool
+	// ThinPack lets FetchPack ask for a thin pack: deltas against objects
+	// reachable from its targetRefs (the haves), which the pack leaves out.
+	// Set it only when every pack FetchPack returns goes to a receive-pack
+	// that holds the objects reachable from those haves and accepts thin
+	// packs (planner.ThinPackAllowed);
+	// git's receive-pack completes such a pack from its own objects.
+	// FetchToStore decodes its pack locally and ignores it.
+	ThinPack bool
 	// HeadUnborn is true when the source reported HEAD as unborn — its
 	// symref target does not exist. That is ALL it means. It is emphatically
 	// NOT a statement that the repository is empty: git emits the unborn line
