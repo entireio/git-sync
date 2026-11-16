@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -197,6 +198,58 @@ func TestHelperConn_PostRPC_V2_StripsResponseEnd(t *testing.T) {
 	}
 	if string(got) != fakeFetchResponse {
 		t.Fatalf("response = %q, want %q (the trailing 0002 must be stripped)", got, fakeFetchResponse)
+	}
+}
+
+// gatedBody yields its request, then holds the body copy open until release is
+// closed, so a test can close the stream while the copy goroutine still runs.
+type gatedBody struct {
+	r       io.Reader
+	release chan struct{}
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	if n, err := g.r.Read(p); n > 0 || !errors.Is(err, io.EOF) {
+		return n, err
+	}
+	<-g.release
+	return 0, io.EOF
+}
+
+// The stream's Close closes the helper's stdin to unblock the body copy, which
+// closes stdin as well once its body ends. The second close must not fail the
+// RPC: os/exec's StdinPipe returns the bare *os.File (Go 1.27 does), so a second
+// close of the pipe reports os.ErrClosed.
+func TestHelperConn_PostRPC_CloseBeforeBodyEnds(t *testing.T) {
+	c := fakeHelperConn(t, "")
+	body := &gatedBody{r: strings.NewReader(FormatPktLine("command=fetch\n") + "0000"), release: make(chan struct{})}
+	rc, err := c.PostRPCStreamBody(context.Background(), "git-upload-pack", body, true, "fetch")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	if _, err := io.ReadAll(rc); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	stream, ok := rc.(*helperRPCStream)
+	if !ok {
+		t.Fatalf("stream is %T, want *helperRPCStream", rc)
+	}
+	stdin, ok := stream.proc.stdin.(syscall.Conn)
+	if !ok {
+		t.Fatalf("helper stdin %T is no syscall.Conn", stream.proc.stdin)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- rc.Close() }()
+	for { // wait until Close has closed stdin, then let the body copy finish
+		raw, err := stdin.SyscallConn()
+		if err != nil || raw.Control(func(uintptr) {}) != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(body.release)
+	if err := <-closed; err != nil {
+		t.Fatalf("close: %v", err)
 	}
 }
 
