@@ -136,8 +136,11 @@ func (c *HelperConn) PostRPCStreamBody(ctx context.Context, service string, body
 		_, err := io.Copy(proc.stdin, body)
 		// Closing stdin terminates the request: it bounds the v2
 		// flush-terminated read and, crucially, signals end-of-pack to the
-		// receive-pack handler, which copies the pack until EOF.
-		closeErr := proc.stdin.Close()
+		// receive-pack handler, which copies the pack until EOF. Route the
+		// close through closeStdin so it shares stdinOnce with the stream
+		// teardown path — a bare second Close returns os.ErrClosed on Go
+		// 1.27's *os.File stdin pipe and gets reported as the copy error.
+		closeErr := proc.closeStdin()
 		if err != nil {
 			copyErr <- err
 			return
