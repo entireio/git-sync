@@ -11,16 +11,24 @@ type RelayTargetPolicy struct {
 	NoThin            bool
 }
 
+// ThinPackAllowed reports whether a pack relayed to the target may be thin:
+// the target's receive-pack advertisement is known and lacks "no-thin".
+// A thin pack's deltas may use as bases only objects reachable from the
+// haves of the source fetch, which are refs and checkpoints the target
+// already holds, and git's receive-pack completes it from the target's
+// objects. A target that advertises "no-thin", such as go-git's
+// receive-pack, or whose capabilities are unknown, keeps getting a
+// self-contained pack.
+func ThinPackAllowed(target RelayTargetPolicy) bool {
+	return target.CapabilitiesKnown && !target.NoThin
+}
+
 // SupportsReplicateRelay checks target-side capabilities required by
 // replication mode before looking at planned ref actions.
 //
-// Replicate tolerates targets that advertise "no-thin" because our
-// upload-pack client (gitproto.FetchPack) never requests the "thin-pack"
-// capability, so the source never emits a thin pack. The relayed pack is
-// always self-contained and safe to push to a no-thin receive-pack.
-// If gitproto.FetchPack ever begins requesting thin-pack, this check must
-// gain a matching fallback (omit the request, or explicitly advertise
-// NoThin on the source request) when target.NoThin is set.
+// Replicate tolerates targets that advertise "no-thin": the source fetch
+// asks for a thin pack only where ThinPackAllowed says the target accepts
+// one, so a no-thin receive-pack always gets a self-contained pack.
 func SupportsReplicateRelay(target RelayTargetPolicy) (bool, string) {
 	if !target.CapabilitiesKnown {
 		return false, "replicate-missing-target-capabilities"
@@ -79,10 +87,8 @@ const reasonIncrementalEligible = "fast-forward-branch-or-tag-create"
 //   - New tag create.
 //
 // Incremental tolerates targets that advertise "no-thin" for the same reason
-// as replicate (see SupportsReplicateRelay): gitproto.FetchPack never requests
-// the "thin-pack" capability, so the relayed pack is always self-contained.
-// If gitproto.FetchPack ever begins requesting thin-pack, this function must
-// gain a matching fallback when target.NoThin is set.
+// as replicate (see SupportsReplicateRelay): the source fetch asks for a thin
+// pack only where ThinPackAllowed says the target accepts one.
 func CanIncrementalRelay(force, prune, dryRun bool, plans []BranchPlan, target RelayTargetPolicy) (bool, string) {
 	if force || prune || dryRun {
 		return false, "incremental-disabled-by-force-prune-or-dry-run"

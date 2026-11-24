@@ -1019,6 +1019,7 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 			CapabilitiesKnown: targetFeatures.Known,
 			NoThin:            targetFeatures.NoThin,
 		}
+		s.sourceService.ThinPack = planner.ThinPackAllowed(s.target.policy)
 		s.target.pusher = gitproto.NewPusher(targetConn, targetAdv, cfg.Verbose)
 		s.target.pusher.MaxRefUpdates = cfg.TargetMaxRefUpdates
 		if cfg.BestEffort {

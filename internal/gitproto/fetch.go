@@ -78,7 +78,8 @@ func (s *RefService) FetchToStore(
 }
 
 // FetchPack fetches a packfile from source and returns the pack stream as a reader.
-// Caller must close the returned ReadCloser.
+// Caller must close the returned ReadCloser. With ThinPack set, the pack may
+// be thin (see RefService.ThinPack).
 func (s *RefService) FetchPack(
 	ctx context.Context,
 	conn Conn,
@@ -87,9 +88,9 @@ func (s *RefService) FetchPack(
 ) (io.ReadCloser, error) {
 	switch s.Protocol {
 	case "v2":
-		return fetchPackV2(ctx, conn, s.V2Caps, desired, targetRefs, s.Verbose)
+		return fetchPackV2(ctx, conn, s.V2Caps, desired, targetRefs, s.Verbose, s.ThinPack)
 	case "v1":
-		return fetchPackV1(ctx, conn, s.V1Adv, desired, targetRefs, s.Verbose)
+		return fetchPackV1(ctx, conn, s.V1Adv, desired, targetRefs, s.Verbose, s.ThinPack)
 	default:
 		return nil, fmt.Errorf("unsupported source protocol %q", s.Protocol)
 	}
@@ -193,10 +194,8 @@ func fetchToStoreV2(
 	}
 
 	cmdArgs := make([]string, 0, len(wants)+len(haves)+4)
-	// NOTE: no "thin-pack" argument. The relayed pack must stay
-	// self-contained so callers (e.g. replicate) can forward it to
-	// receive-pack servers that may advertise "no-thin". See
-	// planner.SupportsReplicateRelay for the matching invariant.
+	// NOTE: no "thin-pack" argument. The pack is decoded into store, so it
+	// must be self-contained.
 	cmdArgs = append(cmdArgs, "ofs-delta")
 	if !verbose {
 		cmdArgs = append(cmdArgs, "no-progress")
@@ -246,6 +245,7 @@ func fetchPackV2(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
+	thin bool,
 ) (io.ReadCloser, error) {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
@@ -253,12 +253,13 @@ func fetchPackV2(
 		return nil, git.NoErrAlreadyUpToDate
 	}
 
-	cmdArgs := make([]string, 0, len(wants)+len(haves)+4)
-	// NOTE: no "thin-pack" argument. The relayed pack must stay
-	// self-contained so callers (e.g. replicate) can forward it to
-	// receive-pack servers that may advertise "no-thin". See
-	// planner.SupportsReplicateRelay for the matching invariant.
+	cmdArgs := make([]string, 0, len(wants)+len(haves)+5)
 	cmdArgs = append(cmdArgs, "ofs-delta")
+	// A thin pack only where RefService.ThinPack allows one; otherwise the
+	// pack stays self-contained, as a "no-thin" receive-pack requires.
+	if thin {
+		cmdArgs = append(cmdArgs, "thin-pack")
+	}
 	if !verbose {
 		cmdArgs = append(cmdArgs, "no-progress")
 	}
@@ -450,6 +451,7 @@ func buildV1UploadPackBody(
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	includeTags bool,
 	verbose bool,
+	thin bool,
 ) ([]byte, *capability.List, error) {
 	wants := collectWants(desired)
 	haves := SortedUniqueHashes(refValues(targetRefs))
@@ -472,11 +474,11 @@ func buildV1UploadPackBody(
 	if adv.Capabilities.Supports(capability.OFSDelta) {
 		req.Capabilities.Set(capability.OFSDelta)
 	}
-	// NOTE: we intentionally do not request capability.ThinPack. The relayed
-	// pack must stay self-contained because callers (e.g. replicate) forward
-	// it to receive-pack servers that may advertise "no-thin".
-	// planner.SupportsReplicateRelay depends on this invariant — if you add
-	// thin-pack support here, update that check to gate on target NoThin.
+	// A thin pack only where RefService.ThinPack allows one and the source
+	// offers it; otherwise the pack stays self-contained.
+	if thin && adv.Capabilities.Supports(capability.ThinPack) {
+		req.Capabilities.Set(capability.ThinPack)
+	}
 
 	var buf bytes.Buffer
 	if err := req.Encode(&buf); err != nil {
@@ -498,7 +500,8 @@ func fetchToStoreV1(
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
 ) (err error) {
-	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose)
+	// the pack is decoded into store, so it must be self-contained
+	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose, false)
 	if err != nil {
 		return err
 	}
@@ -531,8 +534,9 @@ func fetchPackV1(
 	desired map[plumbing.ReferenceName]DesiredRef,
 	targetRefs map[plumbing.ReferenceName]plumbing.Hash,
 	verbose bool,
+	thin bool,
 ) (io.ReadCloser, error) {
-	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose)
+	body, caps, err := buildV1UploadPackBody(adv, desired, targetRefs, hasTag(desired), verbose, thin)
 	if err != nil {
 		return nil, err
 	}

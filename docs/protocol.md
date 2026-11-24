@@ -100,7 +100,7 @@ type TargetFeatures struct {
 }
 ```
 
-`git-sync` never requests `thin-pack` on the source side, so the source pack is always self-contained. That makes the relayed pack safe to push to a target regardless of its `no-thin` advertisement. The relay paths still differ on what they do when the target advertises `no-thin`: see "Why `no-thin` matters" under Target Push.
+`git-sync` requests `thin-pack` on the source side only for a pack it relays to a target whose receive-pack advertisement is known and lacks `no-thin` (`planner.ThinPackAllowed`); every other source pack is self-contained. The relayed pack therefore suits the target either way: see "Why `no-thin` matters" under Target Push.
 
 `DeleteRefs` gates `--prune` and explicit deletes. `ReportStatus` is required to learn which ref updates the target accepted. `OFSDelta` affects pack encoding compatibility. `Sideband` / `Sideband64k` allow the target to multiplex its own response.
 
@@ -200,7 +200,7 @@ have <hash>\n
 done\n
 ```
 
-Capabilities are appended to the first `want` line, separated from the hash by a space. `git-sync` requests `agent=...`, the preferred sideband (`side-band-64k` when supported, otherwise `side-band`), `ofs-delta` when supported, and `include-tag` when the request asks for tags. It adds `no-progress` unless `Verbose` is set on the `RefService`. `git-sync` deliberately does *not* request `thin-pack` — see "Why no-thin matters" under Target Push.
+Capabilities are appended to the first `want` line, separated from the hash by a space. `git-sync` requests `agent=...`, the preferred sideband (`side-band-64k` when supported, otherwise `side-band`), `ofs-delta` when supported, and `include-tag` when the request asks for tags. It adds `no-progress` unless `Verbose` is set on the `RefService`. It adds `thin-pack` when the source offers it and the pack is relayed to a target that accepts thin packs — see "Why `no-thin` matters" under Target Push.
 
 Response: a pkt-line stream that begins with NAK / ACK negotiation packets and transitions into pack data on sideband channel `0x01`. Channel `0x02` carries progress text; channel `0x03` is fatal.
 
@@ -218,7 +218,7 @@ done\n
 0000
 ```
 
-The capability section is separated from the command-arg section by a delim packet (`0001`), and the whole body is terminated by a flush packet (`0000`). Filter features like `filter tree:0` go in the command-arg section.
+The capability section is separated from the command-arg section by a delim packet (`0001`), and the whole body is terminated by a flush packet (`0000`). Filter features like `filter tree:0` go in the command-arg section, and so does `thin-pack` when the pack is relayed to a target that accepts thin packs.
 
 Response: pkt-line sections delimited by `0001`. The interesting section is `packfile`, where each subsequent pkt-line carries one byte of channel selector + payload (same sideband-64k encoding as v1).
 
@@ -249,11 +249,10 @@ Once the stream switches to pack mode, subsequent reads bypass pkt-line framing 
 
 A "thin pack" is one that contains delta objects whose base is not in the pack itself. The receiver is expected to resolve those bases against existing target objects. Thin packs are smaller on the wire but require the receiver to reach into the existing object database during indexing. When a `receive-pack` server advertises `no-thin`, it is signalling that it does not support thin packs — the client must send a self-contained pack.
 
-`git-sync` always sends self-contained packs because it never requests the `thin-pack` capability on `upload-pack` (see the comment in `internal/gitproto/fetch.go`). That means the relayed pack is safe for both kinds of target. The relay paths still make different choices given the target's advertisement:
+`git-sync` asks the source for a thin pack only when it relays the pack to a target whose receive-pack advertisement is known and lacks `no-thin` (`planner.ThinPackAllowed`, which the syncer sets as `RefService.ThinPack`). The pack's deltas may then use as bases only objects reachable from the fetch's haves, which are the target's own advertised refs and, in a batched bootstrap, the checkpoints already pushed to it, and git's `receive-pack` completes the pack from the target's objects. A target that advertises `no-thin`, such as go-git's `receive-pack`, or whose capabilities are unknown gets a self-contained pack, as do the fetches that decode a pack locally (`FetchToStore`, `FetchCommitParents`). So the relay paths proceed for both kinds of target:
 
-- **Replicate** explicitly tolerates `no-thin` and proceeds with relay. The comment in `internal/planner/relay.go` documents the reasoning: source never sends thin-pack, so the relayed pack is self-contained and safe.
-- **Incremental relay** inside `sync` is conservative: it skips `no-thin` targets and falls back to the materialized path. This is a safety-margin choice; it could in principle be relaxed using the same argument as replicate.
-- **Bootstrap** does not consult `no-thin` — empty-target relay is allowed regardless.
+- **Replicate** and the **incremental relay** inside `sync` tolerate `no-thin` and relay a self-contained pack to such a target (`SupportsReplicateRelay` and `CanIncrementalRelay` in `internal/planner/relay.go`).
+- **Bootstrap** does not consult `no-thin` for eligibility; its fetches follow the same rule.
 
 ### report-status
 
@@ -359,7 +358,7 @@ Streaming RPC bodies (`PostRPCStreamBody`) bypass these caps because the consume
 
 - **v2 negotiation failed**: source returned a v1 advertisement when `--protocol v2` was forced. `auto` falls back; `v2` errors out. Causes: older server, intermediate proxy stripping the `Git-Protocol` header.
 - **Target rejected push (body too large)**: relay produced a pack larger than the target's request body limit. Solutions: lower `--target-max-pack-bytes` for batched bootstrap, or rerun on a target with a higher limit. Detected by `isTargetBodyLimitError` in `internal/strategy/bootstrap/bootstrap.go`.
-- **Target advertises `no-thin`**: the incremental relay path inside `sync` skips it and falls back to the materialized path. `replicate` proceeds anyway.
+- **Target advertises `no-thin`**: the relay paths proceed with a self-contained source pack, which is larger on the wire than the thin pack a target without `no-thin` gets.
 - **Redirect chain mismatch**: the GET redirects to host X, but a subsequent RPC POST gets a different redirect or a 404 because the server expected sticky sessions. Resolution: set `FollowInfoRefsRedirect=true` so RPC POSTs go directly to the post-redirect host.
 - **Auth 401 / 403**: 401 generally indicates missing or wrong credentials (will retry with credential helper if configured); 403 indicates the credentials were accepted but lack permission for the requested action.
 

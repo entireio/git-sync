@@ -442,9 +442,9 @@ func TestRunSyncLazyFetchOnRelayRejection(t *testing.T) {
 }
 
 // TestRun_IntegrationIncrementalRelayCreatesNewBranchOnNoThinTarget covers the
-// no-thin variant of the above: the relayed pack is always self-contained
-// (gitproto.FetchPack never sets thin-pack), so a no-thin receive-pack
-// accepts it just fine.
+// no-thin variant of the above: the relay asks the source for a thin pack
+// only when the target accepts one (planner.ThinPackAllowed), so a no-thin
+// receive-pack gets a self-contained pack and accepts it just fine.
 func TestRun_IntegrationIncrementalRelayCreatesNewBranchOnNoThinTarget(t *testing.T) {
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 3)
@@ -2325,12 +2325,11 @@ func TestRun_IntegrationSyncPruneTagsPreservesTagCreatedDuringSync(t *testing.T)
 }
 
 func TestRun_IntegrationReplicateAgainstNoThinTarget(t *testing.T) {
-	// Replicate must tolerate targets that advertise no-thin. Source upload-pack
-	// never receives a thin-pack request from us (see gitproto/fetch.go), so
-	// the relayed pack is self-contained and acceptable to a no-thin
-	// receive-pack. This is the main reason the capability was reconsidered:
-	// go-git's own receive-pack advertises no-thin, and so does any server
-	// built on it (e.g. entire-server).
+	// Replicate must tolerate targets that advertise no-thin. For them the
+	// relay never asks the source for a thin pack (planner.ThinPackAllowed),
+	// so the relayed pack is self-contained and acceptable to a no-thin
+	// receive-pack. go-git's own receive-pack advertises no-thin, and so does
+	// any server built on it (e.g. entire-server).
 	sourceRepo, sourceFS := newSourceRepo(t)
 	makeCommits(t, sourceRepo, sourceFS, 2)
 
