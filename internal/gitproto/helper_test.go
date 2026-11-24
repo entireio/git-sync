@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -197,6 +198,96 @@ func TestHelperConn_PostRPC_V2_StripsResponseEnd(t *testing.T) {
 	}
 	if string(got) != fakeFetchResponse {
 		t.Fatalf("response = %q, want %q (the trailing 0002 must be stripped)", got, fakeFetchResponse)
+	}
+}
+
+// gatedBody yields its request, then holds the body copy open until release is
+// closed, so a test can close the stream while the copy goroutine still runs.
+// After release it yields tail, if any, before it ends.
+type gatedBody struct {
+	r       io.Reader
+	release chan struct{}
+	tail    []byte
+}
+
+func (g *gatedBody) Read(p []byte) (int, error) {
+	if n, err := g.r.Read(p); n > 0 || !errors.Is(err, io.EOF) {
+		return n, err
+	}
+	<-g.release
+	if len(g.tail) > 0 {
+		n := copy(p, g.tail)
+		g.tail = g.tail[n:]
+		return n, nil
+	}
+	return 0, io.EOF
+}
+
+// closeWhileBodyCopies reads a v2 fetch response to its end, then closes the
+// stream and releases body only once Close has closed the helper's stdin, so
+// the rest of the body copy always runs into Close's teardown. It returns
+// Close's error.
+func closeWhileBodyCopies(t *testing.T, body *gatedBody) error {
+	t.Helper()
+	c := fakeHelperConn(t, "")
+	rc, err := c.PostRPCStreamBody(context.Background(), "git-upload-pack", body, true, "fetch")
+	if err != nil {
+		t.Fatalf("PostRPCStreamBody: %v", err)
+	}
+	if _, err := io.ReadAll(rc); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	stream, ok := rc.(*helperRPCStream)
+	if !ok {
+		t.Fatalf("stream is %T, want *helperRPCStream", rc)
+	}
+	stdin, ok := stream.proc.stdin.(syscall.Conn)
+	if !ok {
+		t.Fatalf("helper stdin %T is no syscall.Conn", stream.proc.stdin)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- rc.Close() }()
+	deadline := time.After(5 * time.Second)
+	for { // wait until Close has closed stdin, then let the body copy finish
+		raw, err := stdin.SyscallConn()
+		if err != nil || raw.Control(func(uintptr) {}) != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			close(body.release)
+			t.Fatal("Close did not close the helper's stdin within 5s")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	close(body.release)
+	return <-closed
+}
+
+// The stream's Close closes the helper's stdin to unblock the body copy, which
+// closes stdin as well once its body ends. The second close must not fail the
+// RPC: os/exec's StdinPipe returns the bare *os.File as of Go 1.27, so a second
+// close of the pipe reports os.ErrClosed. Before 1.27 StdinPipe wrapped the
+// file to absorb a second close, so this test catches the bug only on 1.27+,
+// which go.mod's toolchain line selects.
+func TestHelperConn_PostRPC_CloseBeforeBodyEnds(t *testing.T) {
+	body := &gatedBody{r: strings.NewReader(FormatPktLine("command=fetch\n") + "0000"), release: make(chan struct{})}
+	if err := closeWhileBodyCopies(t, body); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// When the body still has bytes to send after Close has closed stdin, the
+// copy's write fails with os.ErrClosed. That is Close's own teardown, not a
+// failed RPC, so Close must not report it.
+func TestHelperConn_PostRPC_CloseBeforeBodySendsRest(t *testing.T) {
+	body := &gatedBody{
+		r:       strings.NewReader(FormatPktLine("command=fetch\n") + "0000"),
+		release: make(chan struct{}),
+		tail:    []byte(FormatPktLine("extra\n")),
+	}
+	if err := closeWhileBodyCopies(t, body); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 }
 

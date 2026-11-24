@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // RemoteHelperLookPath resolves the git remote-helper binary for a URL scheme,
@@ -134,10 +135,17 @@ func (c *HelperConn) PostRPCStreamBody(ctx context.Context, service string, body
 	copyErr := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(proc.stdin, body)
+		// This goroutine closes stdin only below, so a write that found stdin
+		// already closed ran into Close's teardown: the consumer is done with
+		// the response, and the unsent rest of the body is not an error.
+		if errors.Is(err, os.ErrClosed) && proc.stdinClosed.Load() {
+			err = nil
+		}
 		// Closing stdin terminates the request: it bounds the v2
 		// flush-terminated read and, crucially, signals end-of-pack to the
-		// receive-pack handler, which copies the pack until EOF.
-		closeErr := proc.stdin.Close()
+		// receive-pack handler, which copies the pack until EOF. Close may have
+		// closed stdin already; closeStdin closes it once.
+		closeErr := proc.closeStdin()
 		if err != nil {
 			copyErr <- err
 			return
@@ -213,7 +221,9 @@ type helperProcess struct {
 	out    *bufio.Reader
 	stderr *sshCommandError
 
-	stdinOnce sync.Once
+	stdinOnce   sync.Once
+	stdinErr    error       // the one close's error, for every closeStdin caller
+	stdinClosed atomic.Bool // set before stdin is closed
 }
 
 // readCapabilities issues the helper's `capabilities` command and returns the
@@ -255,13 +265,16 @@ func (p *helperProcess) readAck() error {
 	}
 }
 
+// closeStdin closes the helper's stdin once. Every caller gets that close's
+// error, so a failed close is not lost to whichever caller came first.
 func (p *helperProcess) closeStdin() error {
-	var err error
-	p.stdinOnce.Do(func() { err = p.stdin.Close() })
-	if err != nil {
-		return fmt.Errorf("close helper stdin: %w", err)
-	}
-	return nil
+	p.stdinOnce.Do(func() {
+		p.stdinClosed.Store(true)
+		if err := p.stdin.Close(); err != nil {
+			p.stdinErr = fmt.Errorf("close helper stdin: %w", err)
+		}
+	})
+	return p.stdinErr
 }
 
 func (p *helperProcess) wait() error {
@@ -395,7 +408,7 @@ func (s *helperRPCStream) Read(p []byte) (int, error) {
 
 func (s *helperRPCStream) Close() error {
 	s.closeOnce.Do(func() {
-		_ = s.proc.closeStdin() //nolint:errcheck // unblocks the body writer; copy/wait errors below are authoritative
+		_ = s.proc.closeStdin() //nolint:errcheck // unblocks the body writer; the copy goroutine reports a failed close through copyErr
 		closeOut := s.proc.stdout.Close()
 		copyErr := <-s.copyErr
 		waitErr := s.proc.wait()
