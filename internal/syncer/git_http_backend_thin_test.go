@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,19 +16,52 @@ import (
 )
 
 // pushedPack returns the pack of a receive-pack request: what follows the
-// flush that ends its commands. A malformed request has none.
+// flush that ends its commands or, when the commands ask for push-options,
+// the flush that ends the options after them. A malformed request has none.
 func pushedPack(body []byte) []byte {
+	lists, first := 1, true
 	for len(body) >= 4 {
 		n, err := strconv.ParseUint(string(body[:4]), 16, 16)
 		switch {
 		case err != nil || (n > 0 && n < 4) || n > uint64(len(body)):
 			return nil
 		case n == 0:
-			return body[4:]
+			body = body[4:]
+			if lists--; lists == 0 {
+				return body
+			}
+			continue
+		}
+		if first {
+			first = false
+			_, caps, _ := bytes.Cut(body[4:n], []byte{0})
+			if slices.Contains(strings.Fields(string(caps)), "push-options") {
+				lists = 2
+			}
 		}
 		body = body[n:]
 	}
 	return nil
+}
+
+func TestPushedPack(t *testing.T) {
+	pkt := func(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+	cmd := strings.Repeat("0", 40) + " " + strings.Repeat("1", 40) + " refs/heads/main"
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"commands only", pkt(cmd+"\x00report-status\n") + "0000PACK", "PACK"},
+		{"push-options", pkt(cmd+"\x00report-status push-options\n") + "0000" + pkt("ci.skip\n") + "0000PACK", "PACK"},
+		{"push-options none sent", pkt(cmd+"\x00push-options\n") + "0000" + "0000PACK", "PACK"},
+		{"no flush", pkt(cmd + "\x00report-status\n"), ""},
+		{"malformed", "zzzz", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(pushedPack([]byte(tc.body))); got != tc.want {
+				t.Fatalf("pushedPack = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 // isThinPack reports whether a pack needs objects it does not carry: git

@@ -771,9 +771,11 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 	}
 	handler.Stderr = &lockedBuffer{server: s}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isPush := strings.HasSuffix(r.URL.Path, "/git-receive-pack")
 		// net/http/cgi refuses chunked request bodies, and git-sync streams
 		// its pushes. Buffer the body so the CGI gets a Content-Length.
-		if len(r.TransferEncoding) > 0 {
+		// Buffer every push, chunked or not, so LastPack sees each one.
+		if len(r.TransferEncoding) > 0 || isPush {
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -782,14 +784,14 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 			r.TransferEncoding = nil
-			if pack := pushedPack(body); len(pack) > 0 && strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
+			if pack := pushedPack(body); len(pack) > 0 && isPush {
 				repo, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 				s.mu.Lock()
 				s.lastPack[repo] = pack
 				s.mu.Unlock()
 			}
 		}
-		if limit := s.maxPushBody.Load(); limit > 0 && strings.HasSuffix(r.URL.Path, "/git-receive-pack") && r.ContentLength > limit {
+		if limit := s.maxPushBody.Load(); limit > 0 && isPush && r.ContentLength > limit {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
