@@ -1086,6 +1086,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if s.translating() {
+		return s.runTranslatedSync(ctx)
+	}
 	if err := s.checkObjectFormats(); err != nil {
 		return Result{}, err
 	}
@@ -1579,6 +1582,9 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if s.translating() {
+		return Result{}, errTranslationMismatch(errors.New("bootstrap cannot translate objects; use sync"))
+	}
 	if err := s.checkObjectFormats(); err != nil {
 		return Result{}, err
 	}

@@ -1,0 +1,556 @@
+package syncer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"slices"
+	"strings"
+	"time"
+
+	git "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
+	"github.com/go-git/go-git/v6/plumbing/storer"
+	"github.com/go-git/go-git/v6/storage/memory"
+
+	"entire.io/entire/git-sync/internal/convert"
+	"entire.io/entire/git-sync/internal/gitproto"
+	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/translate"
+)
+
+const (
+	// sourceOriginNotesRef is where convert-sha256 records, for each commit
+	// it converted, the SHA1 commit it came from.
+	sourceOriginNotesRef = plumbing.ReferenceName("refs/notes/sha1-origin")
+	// targetOriginNotesRef is where a translated sync records, for each
+	// commit it wrote to the SHA1 target, the SHA256 commit it came from.
+	targetOriginNotesRef = plumbing.ReferenceName("refs/notes/sha256-origin")
+	// convertedTagPrefix holds convert-sha256's attestation tags. They sign
+	// the conversion itself and mean nothing on the SHA1 side.
+	convertedTagPrefix = "refs/tags/converted/"
+)
+
+// translating reports whether objects must be translated rather than
+// relayed: the source is SHA256 and the target SHA1. Every other pair of
+// formats is left to checkObjectFormats.
+func (s *syncSession) translating() bool {
+	if s.target == nil {
+		return false
+	}
+	return s.sourceService.ObjectFormat() == formatcfg.SHA256 &&
+		effectiveObjectFormat(gitproto.AdvRefsObjectFormat(s.target.adv)) == formatcfg.SHA1
+}
+
+// effectiveObjectFormat maps a format that was not advertised to SHA1, the
+// protocol's default.
+func effectiveObjectFormat(f formatcfg.ObjectFormat) formatcfg.ObjectFormat {
+	if f == formatcfg.UnsetObjectFormat {
+		return formatcfg.SHA1
+	}
+	return f
+}
+
+// errTranslationMismatch wraps why an operation cannot translate a SHA256
+// source into a SHA1 target, naming both formats as checkObjectFormats does.
+func errTranslationMismatch(reason error) error {
+	return fmt.Errorf("%w: source is %s, target is %s: %w",
+		gitproto.ErrObjectFormatMismatch, formatcfg.SHA256, formatcfg.SHA1, reason)
+}
+
+// validateTranslation rejects what a translated sync does not support.
+func validateTranslation(cfg Config) error {
+	switch {
+	case cfg.Mode == modeReplicate:
+		return errors.New("replicate cannot translate objects; use sync")
+	case cfg.ForceAny():
+		return errors.New("force flags are not supported when translating objects")
+	case cfg.Prune:
+		return errors.New("--prune is not supported when translating objects")
+	case cfg.AllRefs:
+		return errors.New("--all-refs is not supported when translating objects; sync branches and tags")
+	}
+	return nil
+}
+
+// runTranslatedSync syncs a SHA256 source into a SHA1 target.
+//
+// It fetches the full closure of the desired refs, translates it into SHA1
+// objects and pushes what the target lacks. Translation stops at commits
+// whose SHA1 counterpart is already recorded: refs/notes/sha1-origin on the
+// source covers history from before the conversion, and
+// refs/notes/sha256-origin on the target covers commits earlier syncs wrote.
+// The recorded hashes win over translating again: convert-sha256 before
+// this release dropped signatures and rewrote messages, so translating a
+// commit it converted does not reproduce the original SHA1 commit. The push updates
+// refs/notes/sha256-origin with every commit it translated.
+//
+// Tags are immutable: a tag the target already has is left alone whatever it
+// points at.
+func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
+	if err := validateTranslation(s.cfg); err != nil {
+		return Result{}, errTranslationMismatch(err)
+	}
+
+	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(s.cfg))
+	if err != nil {
+		return Result{}, fmt.Errorf("build desired refs: %w", err)
+	}
+	for name := range desiredRefs {
+		if strings.HasPrefix(name.String(), convertedTagPrefix) {
+			delete(desiredRefs, name)
+		}
+	}
+	if len(desiredRefs) == 0 {
+		return Result{}, errors.New("no source refs matched")
+	}
+
+	sourceStore := newBoundedStorer(memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA256)), effectiveMaxObjects(s.cfg))
+	fetch := convert.DesiredRefs(desiredRefs)
+	originNotes, err := s.sourceRefHash(ctx, sourceOriginNotesRef)
+	if err != nil {
+		return Result{}, err
+	}
+	if !originNotes.IsZero() {
+		fetch[sourceOriginNotesRef] = gitproto.DesiredRef{
+			SourceRef: sourceOriginNotesRef, TargetRef: sourceOriginNotesRef, SourceHash: originNotes,
+		}
+	}
+	if err := s.sourceService.FetchToStore(ctx, sourceStore, s.sourceConn, fetch, nil); err != nil &&
+		!errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return Result{}, fmt.Errorf("fetch source objects: %w", err)
+	}
+
+	seed := make(map[plumbing.Hash]plumbing.Hash)
+	if !originNotes.IsZero() {
+		converted, _, err := translate.ReadHashNotes(sourceStore, originNotes)
+		if err != nil {
+			return Result{}, fmt.Errorf("read %s: %w", sourceOriginNotesRef, err)
+		}
+		maps.Copy(seed, converted)
+	}
+	targetNotes := s.target.refMap[targetOriginNotesRef]
+	var targetNoteEntries []translate.NoteEntry
+	var targetNotesParent plumbing.Hash
+	if !targetNotes.IsZero() {
+		synced, entries, parent, err := s.readTargetNotes(ctx, targetNotes)
+		if err != nil {
+			return Result{}, err
+		}
+		for sha1, sha256 := range synced {
+			seed[sha256] = sha1
+		}
+		targetNoteEntries = entries
+		targetNotesParent = parent
+	}
+
+	outStore := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
+	tr := translate.New(sourceStore, outStore, formatcfg.SHA256, formatcfg.SHA1, seed)
+	translated := make(map[plumbing.ReferenceName]plumbing.Hash, len(desiredRefs))
+	for _, name := range sortedRefNames(desiredRefs) {
+		want := desiredRefs[name]
+		if want.Kind == planner.RefKindTag && !s.target.refMap[want.TargetRef].IsZero() {
+			continue
+		}
+		out, err := tr.Translate(want.SourceHash)
+		if err != nil {
+			return Result{}, fmt.Errorf("translate %s: %w", want.SourceRef, err)
+		}
+		translated[name] = out
+	}
+
+	reverse := make(map[plumbing.Hash]plumbing.Hash, len(seed))
+	for sha256, sha1 := range seed {
+		reverse[sha1] = sha256
+	}
+	for _, p := range tr.Commits() {
+		reverse[p.Target] = p.Source
+	}
+
+	plans := make([]BranchPlan, 0, len(desiredRefs))
+	for _, name := range sortedRefNames(desiredRefs) {
+		plans = append(plans, planTranslatedRef(sourceStore, desiredRefs[name], s.target.refMap[desiredRefs[name].TargetRef], translated[name], reverse))
+	}
+
+	result := Result{
+		Plans: plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: s.sourceService.Protocol,
+		RelayReason: "source objects are sha256 and target objects are sha1; translated before push",
+		SourceHEAD:  s.sourceService.HeadTarget,
+	}
+	pushPlans := classifyPlans(plans, s.cfg.DryRun, &result)
+	if !s.cfg.DryRun && result.Blocked > 0 {
+		return result, fmt.Errorf("blocked %d ref update(s): the target has commits that are not translations of the source's", result.Blocked)
+	}
+
+	newCommits := tr.Commits()
+	if !s.cfg.DryRun && (len(pushPlans) > 0 || len(newCommits) > 0) {
+		if err := s.checkTargetHas(ctx, tr.SeedsUsed()); err != nil {
+			return result, err
+		}
+		onTarget := make(map[plumbing.Hash]struct{}, len(seed))
+		for sha256 := range seed {
+			onTarget[sha256] = struct{}{}
+		}
+		for _, h := range s.target.refMap {
+			if sha256, ok := reverse[h]; ok {
+				onTarget[sha256] = struct{}{}
+			}
+		}
+		if err := s.pushTranslated(ctx, sourceStore, outStore, tr, pushPlans, translated, onTarget, targetNotes, targetNotesParent, targetNoteEntries, newCommits); err != nil {
+			return result, err
+		}
+	}
+
+	s.finalizeCounts(pushPlans, &result)
+	result.Stats = s.stats.snapshot()
+	result.Measurement = s.measurementDone()
+	return result, nil
+}
+
+// planTranslatedRef plans one ref. sourceStore holds the source objects,
+// targetHash is the target's current value, translated is the source tip
+// translated into the target's format (zero for a tag left alone), and
+// reverse maps target commits to the source commits they translate.
+func planTranslatedRef(
+	sourceStore storer.EncodedObjectStorer,
+	want planner.DesiredRef,
+	targetHash, translated plumbing.Hash,
+	reverse map[plumbing.Hash]plumbing.Hash,
+) BranchPlan {
+	plan := BranchPlan{
+		Branch: want.Label, SourceRef: want.SourceRef, TargetRef: want.TargetRef,
+		SourceHash: want.SourceHash, TargetHash: targetHash, Kind: want.Kind,
+	}
+	switch {
+	case want.Kind == planner.RefKindTag && !targetHash.IsZero():
+		plan.Action = planner.ActionSkip
+		plan.Reason = "tag already exists on target"
+		return plan
+	case targetHash.IsZero():
+		plan.Action = planner.ActionCreate
+		plan.Reason = "create as " + planner.ShortHash(translated)
+		return plan
+	case translated == targetHash:
+		plan.Action = planner.ActionSkip
+		plan.Reason = planner.ShortHash(targetHash) + " already current"
+		return plan
+	}
+
+	sourceOfTarget, ok := reverse[targetHash]
+	if !ok {
+		plan.Action = planner.ActionBlock
+		plan.Reason = planner.ShortHash(targetHash) + " is not a translation of any source commit; was the target written to directly?"
+		return plan
+	}
+	ancestry, err := planner.CheckAncestry(sourceStore, want.SourceHash, sourceOfTarget)
+	switch {
+	case err != nil:
+		plan.Action = planner.ActionBlock
+		plan.Reason = "cannot verify fast-forward: " + err.Error()
+	case ancestry == planner.AncestryReachable:
+		plan.Action = planner.ActionUpdate
+		plan.Reason = planner.ShortHash(targetHash) + " -> " + planner.ShortHash(translated)
+	default:
+		plan.Action = planner.ActionBlock
+		plan.Reason = planner.ShortHash(targetHash) + " (source " + planner.ShortHash(sourceOfTarget) + ") is not an ancestor of " + planner.ShortHash(want.SourceHash)
+	}
+	return plan
+}
+
+// pushTranslated pushes the translated objects for pushPlans and records
+// newCommits in the target's notes. onTarget holds the source commits whose
+// translations the target already has.
+func (s *syncSession) pushTranslated(
+	ctx context.Context,
+	sourceStore storer.EncodedObjectStorer,
+	outStore storer.Storer,
+	tr *translate.Translator,
+	pushPlans []BranchPlan,
+	translated map[plumbing.ReferenceName]plumbing.Hash,
+	onTarget map[plumbing.Hash]struct{},
+	targetNotes plumbing.Hash,
+	targetNotesParent plumbing.Hash,
+	targetNoteEntries []translate.NoteEntry,
+	newCommits []translate.Pair,
+) error {
+	wants := make([]plumbing.Hash, 0, len(pushPlans))
+	cmds := make([]gitproto.PushCommand, 0, len(pushPlans)+1)
+	for _, p := range pushPlans {
+		wants = append(wants, p.SourceHash)
+		cmds = append(cmds, gitproto.PushCommand{Name: p.TargetRef, Old: p.TargetHash, New: translated[p.TargetRef]})
+	}
+	sourceObjects, err := objectsMissingFromTarget(sourceStore, formatcfg.SHA256, wants, onTarget)
+	if err != nil {
+		return fmt.Errorf("compute objects to push: %w", err)
+	}
+	hashes := make([]plumbing.Hash, 0, len(sourceObjects)+3)
+	for _, h := range sourceObjects {
+		out, ok := tr.Lookup(h)
+		if !ok {
+			return fmt.Errorf("object %s to push was never translated", h)
+		}
+		hashes = append(hashes, out)
+	}
+
+	if len(newCommits) > 0 {
+		sig := object.Signature{Name: "git-sync", Email: "noreply@entire.io", When: time.Now().UTC()}
+		notes, written, err := translate.WriteHashNotes(outStore, targetNotesParent, targetNoteEntries, newCommits, sig,
+			"git-sync: SHA256 origin of translated commits\n")
+		if err != nil {
+			return fmt.Errorf("write %s: %w", targetOriginNotesRef, err)
+		}
+		hashes = append(hashes, written...)
+		cmds = append(cmds, gitproto.PushCommand{Name: targetOriginNotesRef, Old: targetNotes, New: notes})
+	}
+
+	// The refs and the notes recording their origin land together when the
+	// target can promise that. A target that cannot may take a ref without
+	// its notes. The next run then translates those commits again, gets
+	// the same hashes and writes the notes it missed.
+	push := s.target.pusher.PushObjects
+	if s.target.adv.Capabilities.Supports(capability.Atomic) {
+		push = s.target.pusher.PushObjectsAtomic
+	}
+	if err := push(ctx, cmds, outStore, hashes); err != nil {
+		return fmt.Errorf("push translated objects: %w", err)
+	}
+	return nil
+}
+
+// objectsMissingFromTarget lists the objects reachable from wants that the
+// target lacks, given onTarget, the source commits whose translations the
+// target holds. The walk stops at those commits, and leaves out every object
+// in their trees, which is what a commit built on them shares with them.
+func objectsMissingFromTarget(store storer.EncodedObjectStorer, format formatcfg.ObjectFormat, wants []plumbing.Hash, onTarget map[plumbing.Hash]struct{}) ([]plumbing.Hash, error) {
+	var boundary []plumbing.Hash
+	seen := make(map[plumbing.Hash]struct{})
+	var reachable []plumbing.Hash
+	stack := slices.Clone(wants)
+	for len(stack) > 0 {
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		if _, ok := onTarget[h]; ok {
+			boundary = append(boundary, h)
+			continue
+		}
+		children, err := objectChildren(store, format, h)
+		if err != nil {
+			return nil, err
+		}
+		reachable = append(reachable, h)
+		stack = append(stack, children...)
+	}
+
+	shared := make(map[plumbing.Hash]struct{})
+	for _, c := range boundary {
+		commit, err := object.GetCommit(store, c)
+		if err != nil {
+			if errors.Is(err, plumbing.ErrObjectNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("load commit %s: %w", c, err)
+		}
+		if err := collectTree(store, commit.TreeHash, shared); err != nil {
+			return nil, err
+		}
+	}
+	out := reachable[:0]
+	for _, h := range reachable {
+		if _, ok := shared[h]; !ok {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+func objectChildren(store storer.EncodedObjectStorer, format formatcfg.ObjectFormat, h plumbing.Hash) ([]plumbing.Hash, error) {
+	obj, err := store.EncodedObject(plumbing.AnyObject, h)
+	if err != nil {
+		return nil, fmt.Errorf("load object %s: %w", h, err)
+	}
+	switch obj.Type() {
+	case plumbing.CommitObject:
+		c, err := object.DecodeCommit(store, obj)
+		if err != nil {
+			return nil, fmt.Errorf("decode commit %s: %w", h, err)
+		}
+		return append([]plumbing.Hash{c.TreeHash}, c.ParentHashes...), nil
+	case plumbing.TreeObject:
+		t, err := object.DecodeTree(store, obj)
+		if err != nil {
+			return nil, fmt.Errorf("decode tree %s: %w", h, err)
+		}
+		children := make([]plumbing.Hash, 0, len(t.Entries))
+		for _, e := range t.Entries {
+			children = append(children, e.Hash)
+		}
+		return children, nil
+	case plumbing.TagObject:
+		raw, err := readEncoded(obj)
+		if err != nil {
+			return nil, fmt.Errorf("read tag %s: %w", h, err)
+		}
+		target, err := translate.TagObject(raw, format)
+		if err != nil {
+			return nil, fmt.Errorf("tag %s: %w", h, err)
+		}
+		return []plumbing.Hash{target}, nil
+	case plumbing.BlobObject:
+		return nil, nil
+	case plumbing.InvalidObject, plumbing.OFSDeltaObject, plumbing.REFDeltaObject, plumbing.AnyObject:
+		return nil, fmt.Errorf("object %s has unexpected type %s", h, obj.Type())
+	}
+	return nil, fmt.Errorf("object %s has unknown type %s", h, obj.Type())
+}
+
+func readEncoded(obj plumbing.EncodedObject) ([]byte, error) {
+	r, err := obj.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("open reader: %w", err)
+	}
+	raw, err := io.ReadAll(r)
+	if cerr := r.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	return raw, nil
+}
+
+func collectTree(store storer.EncodedObjectStorer, h plumbing.Hash, into map[plumbing.Hash]struct{}) error {
+	if _, ok := into[h]; ok {
+		return nil
+	}
+	into[h] = struct{}{}
+	tree, err := object.GetTree(store, h)
+	if err != nil {
+		return fmt.Errorf("load tree %s: %w", h, err)
+	}
+	for _, e := range tree.Entries {
+		if e.Mode.IsFile() {
+			into[e.Hash] = struct{}{}
+			continue
+		}
+		if err := collectTree(store, e.Hash, into); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sourceRefHash returns the source's value for name, or zero when it has
+// none. A v2 listing is filtered to the requested scope, so a ref outside it
+// takes another ls-refs.
+func (s *syncSession) sourceRefHash(ctx context.Context, name plumbing.ReferenceName) (plumbing.Hash, error) {
+	if h, ok := s.sourceRefMap[name]; ok || s.sourceService.Protocol != "v2" {
+		return h, nil
+	}
+	refs, _, err := gitproto.ListSourceRefs(ctx, s.sourceConn, "v2", []string{name.String()})
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("list source %s: %w", name, err)
+	}
+	return gitproto.RefHashMap(refs)[name], nil
+}
+
+// readTargetNotes fetches the target's refs/notes/sha256-origin and reads it.
+// It also returns the commit new notes build on, as notesParent does.
+func (s *syncSession) readTargetNotes(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]plumbing.Hash, []translate.NoteEntry, plumbing.Hash, error) {
+	_, service, err := gitproto.ListSourceRefs(ctx, s.target.conn, s.cfg.ProtocolMode, []string{targetOriginNotesRef.String()})
+	if err != nil {
+		return nil, nil, plumbing.ZeroHash, fmt.Errorf("list target %s: %w", targetOriginNotesRef, err)
+	}
+	store := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
+	desired := map[plumbing.ReferenceName]gitproto.DesiredRef{
+		targetOriginNotesRef: {SourceRef: targetOriginNotesRef, TargetRef: targetOriginNotesRef, SourceHash: tip},
+	}
+	if err := service.FetchToStore(ctx, store, s.target.conn, desired, nil); err != nil {
+		return nil, nil, plumbing.ZeroHash, fmt.Errorf("fetch target %s: %w", targetOriginNotesRef, err)
+	}
+	values, entries, err := translate.ReadHashNotes(store, tip)
+	if err != nil {
+		return nil, nil, plumbing.ZeroHash, fmt.Errorf("read target %s: %w", targetOriginNotesRef, err)
+	}
+	parent, err := notesParent(store, tip)
+	if err != nil {
+		return nil, nil, plumbing.ZeroHash, fmt.Errorf("read target %s: %w", targetOriginNotesRef, err)
+	}
+	return values, entries, parent, nil
+}
+
+// notesParent returns the commit new notes build on: tip when it is a
+// commit, and none when the notes ref is unset or points straight at a
+// tree. The new notes keep every entry of such a tree.
+func notesParent(store storer.EncodedObjectStorer, tip plumbing.Hash) (plumbing.Hash, error) {
+	if tip.IsZero() {
+		return plumbing.ZeroHash, nil
+	}
+	obj, err := store.EncodedObject(plumbing.AnyObject, tip)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("load notes %s: %w", tip, err)
+	}
+	if obj.Type() != plumbing.CommitObject {
+		return plumbing.ZeroHash, nil
+	}
+	return tip, nil
+}
+
+// checkTargetHas fails unless the target has every seeded commit the
+// translated objects build on. The source's notes name the SHA1 commits
+// convert-sha256 started from, which only the original repository holds.
+// Pushing to another repository would fail on missing objects after the
+// whole pack was sent.
+//
+// It asks the target's upload-pack for those commits while claiming to have
+// them, so a target that holds them sends an empty pack. upload-pack refuses
+// a commit it does not have, or one no ref reaches.
+func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair) error {
+	tips := make(map[plumbing.Hash]struct{}, len(s.target.refMap))
+	for _, h := range s.target.refMap {
+		tips[h] = struct{}{}
+	}
+	desired := make(map[plumbing.ReferenceName]gitproto.DesiredRef)
+	haves := make(map[plumbing.ReferenceName]plumbing.Hash)
+	var example translate.Pair
+	for _, p := range seeds {
+		if _, ok := tips[p.Target]; ok {
+			continue
+		}
+		name := plumbing.ReferenceName("refs/git-sync/check/" + p.Target.String())
+		desired[name] = gitproto.DesiredRef{SourceRef: name, TargetRef: name, SourceHash: p.Target}
+		haves[name] = p.Target
+		example = p
+	}
+	if len(desired) == 0 {
+		return nil
+	}
+	_, service, err := gitproto.ListSourceRefs(ctx, s.target.conn, s.cfg.ProtocolMode, []string{targetOriginNotesRef.String()})
+	if err != nil {
+		return fmt.Errorf("list target refs: %w", err)
+	}
+	store := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
+	if err := service.FetchToStore(ctx, store, s.target.conn, desired, haves); err != nil &&
+		!errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("the target does not have %d SHA1 commit(s) the translated history builds on, such as %s (SHA256 %s). "+
+			"Sync to the repository the source was converted from: %w", len(desired), example.Target, example.Source, err)
+	}
+	return nil
+}
+
+func sortedRefNames(refs map[plumbing.ReferenceName]planner.DesiredRef) []plumbing.ReferenceName {
+	names := make([]plumbing.ReferenceName, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}

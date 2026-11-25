@@ -21,10 +21,13 @@ func newConvertSHA256Cmd() *cobra.Command {
 		Short: "One-off SHA1 → SHA256 conversion of a remote repo into a local bare repo",
 		Long: `convert-sha256 fetches a pack from a SHA1 HTTP source and writes a new
 SHA256 bare repository on disk at <target-dir>. Every reachable object is
-re-hashed under SHA256 and tree/commit/tag references are rewritten.
+re-hashed under SHA256 and tree/commit/tag references are rewritten, as
+git converts objects for extensions.compatObjectFormat: commit gpgsig and
+gpgsig-sha256 headers are kept, mergetag headers are converted, and every
+converted object converts back to its SHA1 original byte for byte.
 
-All branches and tags on the source are always converted — partial scope
-risks stranding cross-branch references in commit messages. Pass
+All branches and tags on the source are always converted, so the opt-in
+--rewrite-messages never strands a cross-branch reference. Pass
 --all-refs to also include refs/notes/* and other custom namespaces;
 pass --exclude-ref-prefix to subtract specific namespaces from --all-refs.
 Exclude prefixes that would drop any branch or tag (e.g. refs/heads/feature/,
@@ -36,10 +39,7 @@ refs/merge-requests/*) are NOT converted even under --all-refs: they hold
 unmerged code foreign to the repository, and mirroring the result onward
 would republish it. Pass --include-pull-refs to convert them anyway.
 
-The conversion is destructive in two ways the caller should be aware of:
-GPG signatures on commits and tags are dropped (they sign over the
-original SHA1 content and would be invalid post-rewrite), and any
-submodule gitlink fails the run — its .gitmodules upstream still
+Any submodule gitlink fails the run — its .gitmodules upstream still
 advertises SHA1 hashes, so a rewritten SHA256 gitlink would point at a
 hash the upstream cannot resolve and break ` + "`git submodule update`" + ` in
 every clone. Exclude refs that reference submodules, or convert the
@@ -95,8 +95,12 @@ submodule repository first and re-point .gitmodules.`,
 		"keep the temporary SHA1 store on disk after conversion (for debugging)")
 	cmd.Flags().StringVar(&req.MappingFile, "write-mapping", "",
 		"write the full SHA1 → SHA256 mapping as a TSV to this path; useful for rewriting external references")
-	cmd.Flags().BoolVar(&req.SkipMessageRewrite, "no-rewrite-messages", false,
-		"do not rewrite SHA1 hash references found in commit and tag messages")
+	cmd.Flags().BoolVar(&req.RewriteMessages, "rewrite-messages", false,
+		"rewrite SHA1 hash references found in commit and tag messages to SHA256; rewritten objects no longer convert back to their SHA1 originals, so their signatures stop verifying")
+	cmd.Flags().Bool("no-rewrite-messages", false, "no effect: messages are no longer rewritten unless --rewrite-messages is passed")
+	if err := cmd.Flags().MarkDeprecated("no-rewrite-messages", "messages are no longer rewritten by default; pass --rewrite-messages to opt in"); err != nil {
+		panic(err)
+	}
 	cmd.Flags().BoolVar(&req.SkipOriginNotes, "no-origin-notes", false,
 		"do not write a refs/notes/sha1-origin ref recording each commit's original SHA1")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "print JSON output")

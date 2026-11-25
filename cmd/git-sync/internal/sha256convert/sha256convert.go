@@ -3,10 +3,10 @@
 // a temporary on-disk SHA1 bare repo, then walks every reachable object and
 // re-emits it under SHA256 into a new bare repo at the user-supplied path.
 //
-// The tool is intentionally scoped: GPG signatures on commits and tags
-// are dropped (they sign over the original SHA1 byte stream and would be
-// invalid post-rewrite), and any submodule gitlink fails the run so the
-// caller chooses which refs to exclude. The linked-to repository's URL
+// Objects are converted by package translate, as git converts them for
+// extensions.compatObjectFormat, so signatures are kept and each converted
+// object converts back to its SHA1 original. Any submodule gitlink fails
+// the run so the caller chooses which refs to exclude. The linked-to repository's URL
 // still points at an upstream SHA1 store, which has no way to resolve a
 // SHA256-rewritten gitlink, so rewriting would produce a tree that
 // fsck-passes but breaks `git submodule update`.
@@ -50,6 +50,7 @@ import (
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
 	"entire.io/entire/git-sync/internal/redact"
+	"entire.io/entire/git-sync/internal/translate"
 )
 
 // Request describes a single SHA1 → SHA256 conversion.
@@ -103,9 +104,12 @@ type Request struct {
 	// rewriting external systems that reference old commit hashes.
 	MappingFile string
 
-	// SkipMessageRewrite disables the inline rewrite of SHA1 hashes found
-	// in commit and tag messages. Off by default (rewriting is on).
-	SkipMessageRewrite bool
+	// RewriteMessages rewrites SHA1 hashes found in commit and tag messages
+	// to the SHA256 hashes of the objects they name. Off by default: git's
+	// own conversion never touches messages, and a rewritten object no
+	// longer converts back to its original SHA1 object, so its signatures
+	// stop verifying.
+	RewriteMessages bool
 
 	// SkipOriginNotes disables the refs/notes/sha1-origin output that
 	// records each translated commit's original SHA1. Off by default
@@ -131,7 +135,6 @@ type Result struct {
 	Protocol             string   `json:"protocol"`
 	RefsConverted        int      `json:"refsConverted"`
 	Counts               Counts   `json:"counts"`
-	SignaturesStripped   int      `json:"signaturesStripped"`
 	MessageRewrites      int      `json:"messageRewrites"`
 	AmbiguousMessageRefs []string `json:"ambiguousMessageRefs,omitempty"`
 	SkippedPullRefs      int      `json:"skippedPullRefs,omitempty"`
@@ -190,12 +193,6 @@ func (r Result) Lines() []string {
 		fmt.Sprintf("converted: %d blobs, %d trees, %d commits, %d tags",
 			r.Counts.Blobs, r.Counts.Trees, r.Counts.Commits, r.Counts.Tags),
 		fmt.Sprintf("refs written: %d", r.RefsConverted),
-	}
-	if r.SignaturesStripped > 0 {
-		// Mixes commit/tag signatures (GPG/SSH/X.509) and embedded
-		// mergetag headers — each counts as one signed artifact whose
-		// signature became invalid post-rewrite.
-		lines = append(lines, fmt.Sprintf("warning: stripped %d signature(s) / mergetag header(s); they no longer match the rewritten object content", r.SignaturesStripped))
 	}
 	if r.MessageRewrites > 0 {
 		lines = append(lines, fmt.Sprintf("rewrote %d SHA1 hash reference(s) in commit/tag messages", r.MessageRewrites))
@@ -396,7 +393,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// retry on ensureEmptyTarget; arm the deferred cleanup now.
 	cleanupTarget = true
 
-	tr, err := newTranslator(ctx, srcRepo.Storer, dstRepo.Storer, !req.SkipMessageRewrite, reachable)
+	tr, err := newTranslator(ctx, srcRepo.Storer, dstRepo.Storer, req.RewriteMessages, reachable)
 	if err != nil {
 		return res, err
 	}
@@ -450,7 +447,6 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	res.Protocol = refService.Protocol
 	res.RefsConverted = refsWritten
 	res.Counts = tr.snapshotCounts()
-	res.SignaturesStripped = tr.signaturesStripped
 	res.MessageRewrites = tr.messageRewrites
 	if len(tr.ambiguousMessageRefs) > 0 {
 		amb := make([]string, 0, len(tr.ambiguousMessageRefs))
@@ -1001,14 +997,13 @@ type translator struct {
 	// Live counts updated atomically so the --progress ticker goroutine
 	// can sample them without racing against translation. Snapshot into
 	// a Counts struct at the end of the run.
-	blobs              atomic.Int64
-	trees              atomic.Int64
-	commitsCount       atomic.Int64
-	tags               atomic.Int64
-	signaturesStripped int
-	messageRewrites    int
-	rewriteMessages    bool
-	lastNotesCommit    plumbing.Hash
+	blobs           atomic.Int64
+	trees           atomic.Int64
+	commitsCount    atomic.Int64
+	tags            atomic.Int64
+	messageRewrites int
+	rewriteMessages bool
+	lastNotesCommit plumbing.Hash
 }
 
 func (t *translator) snapshotCounts() Counts {
@@ -1129,11 +1124,15 @@ func discoverReachable(ctx context.Context, src storer.Storer, roots []plumbing.
 			stack = append(stack, c.TreeHash)
 			stack = append(stack, c.ParentHashes...)
 		case plumbing.TagObject:
-			tag := &object.Tag{}
-			if err := tag.Decode(obj); err != nil {
-				return nil, fmt.Errorf("discover decode tag %s: %w", sha1, err)
+			raw, err := readObject(obj)
+			if err != nil {
+				return nil, fmt.Errorf("discover read tag %s: %w", sha1, err)
 			}
-			stack = append(stack, tag.Target)
+			target, err := translate.TagObject(raw, formatcfg.SHA1)
+			if err != nil {
+				return nil, fmt.Errorf("discover tag %s: %w", sha1, err)
+			}
+			stack = append(stack, target)
 		default:
 			return nil, fmt.Errorf("unexpected object type %v for %s during discovery", obj.Type(), sha1)
 		}
@@ -1198,14 +1197,9 @@ func (t *translator) translate(sha1 plumbing.Hash) (plumbing.Hash, error) {
 }
 
 func (t *translator) translateBlob(sha1 plumbing.Hash, src plumbing.EncodedObject) (plumbing.Hash, error) {
-	r, err := src.Reader()
+	body, err := readObject(src)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("blob reader: %w", err)
-	}
-	defer r.Close()
-	body, err := io.ReadAll(r)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("blob read: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("blob %s: %w", sha1, err)
 	}
 	newHash, err := t.storeBlob(body)
 	if err != nil {
@@ -1216,29 +1210,28 @@ func (t *translator) translateBlob(sha1 plumbing.Hash, src plumbing.EncodedObjec
 	return newHash, nil
 }
 
+// mapOID maps an object ID embedded in an object being translated. Gitlinks
+// never reach it: discoverReachable refuses them before anything is written.
+func (t *translator) mapOID(oid plumbing.Hash, gitlink bool) (plumbing.Hash, error) {
+	if gitlink {
+		return plumbing.ZeroHash, fmt.Errorf("submodule gitlink %s; convert-sha256 refuses to rewrite submodule pointers", oid)
+	}
+	return t.translate(oid)
+}
+
+// translateTree, translateCommit and translateTag convert an object as
+// git's object-file-convert.c does (see package translate), so signatures
+// are kept and the result converts back to the original SHA1 object.
 func (t *translator) translateTree(sha1 plumbing.Hash, src plumbing.EncodedObject) (plumbing.Hash, error) {
-	tree := &object.Tree{}
-	if err := tree.Decode(src); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("decode tree %s: %w", sha1, err)
+	raw, err := readObject(src)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("tree %s: %w", sha1, err)
 	}
-	for i, entry := range tree.Entries {
-		if entry.Mode == filemode.Submodule {
-			// Should not be reachable: discoverReachable refuses any
-			// submodule gitlink up-front. Keep this as a defensive
-			// guard so the rewrite path never silently produces a
-			// SHA256 tree whose gitlink points at a hash the
-			// .gitmodules upstream repo cannot resolve.
-			return plumbing.ZeroHash, fmt.Errorf(
-				"tree %s contains submodule gitlink %q at %s; convert-sha256 refuses to rewrite submodule pointers",
-				sha1, entry.Name, entry.Hash)
-		}
-		newH, err := t.translate(entry.Hash)
-		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("tree %s entry %q: %w", sha1, entry.Name, err)
-		}
-		tree.Entries[i].Hash = newH
+	content, err := translate.ConvertTree(raw, formatcfg.SHA1, formatcfg.SHA256, t.mapOID)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("tree %s: %w", sha1, err)
 	}
-	newHash, err := t.store(tree.Encode)
+	newHash, err := t.storeRaw(plumbing.TreeObject, content)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("store tree %s: %w", sha1, err)
 	}
@@ -1247,66 +1240,19 @@ func (t *translator) translateTree(sha1 plumbing.Hash, src plumbing.EncodedObjec
 	return newHash, nil
 }
 
-// stripSignatures clears a commit's or tag's signature fields, returning
-// true if either was set. Signatures sign over the original SHA1 byte
-// stream and cannot survive the rewrite. A transitional dual-hash object
-// can carry both the SHA1-form "gpgsig" (Signature) and "gpgsig-sha256"
-// (SignatureSHA256) for the same logical signature, so we clear both and
-// the caller counts the artifact once.
-func stripSignatures(sig, sigSHA256 *string) bool {
-	if *sig == "" && *sigSHA256 == "" {
-		return false
-	}
-	*sig = ""
-	*sigSHA256 = ""
-	return true
-}
-
 func (t *translator) translateCommit(sha1 plumbing.Hash, src plumbing.EncodedObject) (plumbing.Hash, error) {
-	c := &object.Commit{}
-	if err := c.Decode(src); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("decode commit %s: %w", sha1, err)
-	}
-	newTree, err := t.translate(c.TreeHash)
+	raw, err := readObject(src)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("commit %s tree: %w", sha1, err)
+		return plumbing.ZeroHash, fmt.Errorf("commit %s: %w", sha1, err)
 	}
-	c.TreeHash = newTree
-	for i, p := range c.ParentHashes {
-		newP, err := t.translate(p)
-		if err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("commit %s parent %s: %w", sha1, p, err)
-		}
-		c.ParentHashes[i] = newP
+	content, err := translate.ConvertCommit(raw, formatcfg.SHA1, formatcfg.SHA256, t.mapOID)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("commit %s: %w", sha1, err)
 	}
-	if t.rewriteMessages {
-		rewritten, n, err := t.rewriteMessageRefs(c.Message, "commit", sha1)
-		if err != nil {
-			return plumbing.ZeroHash, err
-		}
-		if n > 0 {
-			c.Message = rewritten
-			t.messageRewrites += n
-		}
+	if content, err = t.rewriteMessage(content, "commit", sha1); err != nil {
+		return plumbing.ZeroHash, err
 	}
-	if stripSignatures(&c.Signature, &c.SignatureSHA256) {
-		t.signaturesStripped++
-	}
-	// "mergetag" extra headers embed a copy of a signed annotated tag with
-	// its own signature. Drop them too — they reference the pre-rewrite
-	// commit/tag content and cannot be re-signed here.
-	if len(c.ExtraHeaders) > 0 {
-		filtered := c.ExtraHeaders[:0]
-		for _, h := range c.ExtraHeaders {
-			if h.Key == "mergetag" {
-				t.signaturesStripped++
-				continue
-			}
-			filtered = append(filtered, h)
-		}
-		c.ExtraHeaders = filtered
-	}
-	newHash, err := t.store(c.Encode)
+	newHash, err := t.storeRaw(plumbing.CommitObject, content)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("store commit %s: %w", sha1, err)
 	}
@@ -1317,35 +1263,66 @@ func (t *translator) translateCommit(sha1 plumbing.Hash, src plumbing.EncodedObj
 }
 
 func (t *translator) translateTag(sha1 plumbing.Hash, src plumbing.EncodedObject) (plumbing.Hash, error) {
-	tag := &object.Tag{}
-	if err := tag.Decode(src); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("decode tag %s: %w", sha1, err)
-	}
-	newTarget, err := t.translate(tag.Target)
+	raw, err := readObject(src)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("tag %s target: %w", sha1, err)
+		return plumbing.ZeroHash, fmt.Errorf("tag %s: %w", sha1, err)
 	}
-	tag.Target = newTarget
-	if t.rewriteMessages {
-		rewritten, n, err := t.rewriteMessageRefs(tag.Message, "tag", sha1)
-		if err != nil {
-			return plumbing.ZeroHash, err
-		}
-		if n > 0 {
-			tag.Message = rewritten
-			t.messageRewrites += n
-		}
+	content, err := translate.ConvertTag(raw, formatcfg.SHA1, formatcfg.SHA256, t.mapOID)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("tag %s: %w", sha1, err)
 	}
-	if stripSignatures(&tag.Signature, &tag.SignatureSHA256) {
-		t.signaturesStripped++
+	if content, err = t.rewriteMessage(content, "tag", sha1); err != nil {
+		return plumbing.ZeroHash, err
 	}
-	newHash, err := t.store(tag.Encode)
+	newHash, err := t.storeRaw(plumbing.TagObject, content)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("store tag %s: %w", sha1, err)
 	}
 	t.mapping[sha1] = newHash
 	t.tags.Add(1)
 	return newHash, nil
+}
+
+// rewriteMessage applies the opt-in message rewrite to a converted commit
+// or tag. A tag's body signature is left out of the rewrite.
+func (t *translator) rewriteMessage(content []byte, kind string, sha1 plumbing.Hash) ([]byte, error) {
+	if !t.rewriteMessages {
+		return content, nil
+	}
+	eoh := bytes.Index(content, []byte("\n\n"))
+	if eoh < 0 {
+		return content, nil
+	}
+	body := content[eoh+2:]
+	end := len(body)
+	if kind == "tag" {
+		end = translate.SignatureStart(body)
+	}
+	rewritten, n, err := t.rewriteMessageRefs(string(body[:end]), kind, sha1)
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return content, nil
+	}
+	t.messageRewrites += n
+	out := make([]byte, 0, len(content)+len(rewritten)-end)
+	out = append(out, content[:eoh+2]...)
+	out = append(out, rewritten...)
+	return append(out, body[end:]...), nil
+}
+
+func readObject(obj plumbing.EncodedObject) ([]byte, error) {
+	r, err := obj.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("open reader: %w", err)
+	}
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	return b, nil
 }
 
 // store encodes an object into a fresh EncodedObject bound to the target
@@ -1381,19 +1358,24 @@ func (t *translator) store(encode func(plumbing.EncodedObject) error) (plumbing.
 // during conversion (blobs carry no hash references), so the bytes are
 // copied verbatim.
 func (t *translator) storeBlob(content []byte) (plumbing.Hash, error) {
+	return t.storeRaw(plumbing.BlobObject, content)
+}
+
+// storeRaw persists already encoded object content of type typ.
+func (t *translator) storeRaw(typ plumbing.ObjectType, content []byte) (plumbing.Hash, error) {
 	return t.store(func(o plumbing.EncodedObject) error {
-		o.SetType(plumbing.BlobObject)
+		o.SetType(typ)
 		o.SetSize(int64(len(content)))
 		w, err := o.Writer()
 		if err != nil {
-			return fmt.Errorf("blob writer: %w", err)
+			return fmt.Errorf("%s writer: %w", typ, err)
 		}
 		if _, err := w.Write(content); err != nil {
 			_ = w.Close()
-			return fmt.Errorf("write blob content: %w", err)
+			return fmt.Errorf("write %s content: %w", typ, err)
 		}
 		if err := w.Close(); err != nil {
-			return fmt.Errorf("close blob writer: %w", err)
+			return fmt.Errorf("close %s writer: %w", typ, err)
 		}
 		return nil
 	})

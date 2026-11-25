@@ -26,8 +26,10 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	gogitstorer "github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/storage/filesystem"
+	"github.com/go-git/go-git/v6/storage/memory"
 
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/translate"
 )
 
 // TestTranslator builds a small SHA1 source repo with blobs, trees, commits,
@@ -81,7 +83,7 @@ func TestTranslator(t *testing.T) {
 		Message:    "annotated tag\n",
 		TargetType: plumbing.CommitObject,
 		Target:     c2Hash,
-		Signature:  "-----BEGIN PGP SIGNATURE-----\nfake tag sig\n-----END PGP SIGNATURE-----",
+		Signature:  "-----BEGIN PGP SIGNATURE-----\nfake tag sig\n-----END PGP SIGNATURE-----\n",
 	}
 	tagHash := writeObject(t, srcRepo.Storer, tag.Encode)
 
@@ -101,9 +103,6 @@ func TestTranslator(t *testing.T) {
 	wantCounts := Counts{Blobs: 1, Trees: 1, Commits: 2, Tags: 1}
 	if got := tr.snapshotCounts(); got != wantCounts {
 		t.Errorf("counts: got %+v, want %+v", got, wantCounts)
-	}
-	if tr.signaturesStripped != 2 {
-		t.Errorf("signatures stripped: got %d, want 2 (commit + tag)", tr.signaturesStripped)
 	}
 
 	// Idempotency: translating the same hash again must reuse the mapping
@@ -135,9 +134,6 @@ func TestTranslator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read translated tag: %v", err)
 	}
-	if tagObj.Signature != "" {
-		t.Errorf("translated tag still carries a signature: %q", tagObj.Signature)
-	}
 	if tagObj.Target != tr.mapping[c2Hash] {
 		t.Errorf("translated tag target: got %s, want %s", tagObj.Target, tr.mapping[c2Hash])
 	}
@@ -146,14 +142,21 @@ func TestTranslator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read translated commit: %v", err)
 	}
-	if commit.Signature != "" {
-		t.Errorf("translated commit still carries a signature: %q", commit.Signature)
-	}
 	if len(commit.ParentHashes) != 1 || commit.ParentHashes[0] != tr.mapping[c1Hash] {
 		t.Errorf("translated commit parents: got %v, want [%s]", commit.ParentHashes, tr.mapping[c1Hash])
 	}
 	if commit.TreeHash != tr.mapping[treeHash] {
 		t.Errorf("translated commit tree: got %s, want %s", commit.TreeHash, tr.mapping[treeHash])
+	}
+
+	// Signatures survive: converting back to SHA1 the way git does must
+	// reproduce the signed source objects byte for byte.
+	back := translate.New(dstRepo.Storer, memory.NewStorage(), formatcfg.SHA256, formatcfg.SHA1, nil)
+	if got, err := back.Translate(newTagHash); err != nil || got != tagHash {
+		t.Errorf("signed tag round trip: got %s (%v), want %s", got, err, tagHash)
+	}
+	if got, _ := back.Lookup(tr.mapping[c1Hash]); got != c1Hash {
+		t.Errorf("signed commit round trip: got %s, want %s", got, c1Hash)
 	}
 }
 
@@ -763,11 +766,12 @@ func TestRun_GitHTTPBackend(t *testing.T) {
 
 	mappingPath := filepath.Join(root, "mapping.tsv")
 	res, err := Run(context.Background(), Request{
-		SourceURL:   srv.URL + "/source.git",
-		TargetDir:   dstDir,
-		MappingFile: mappingPath,
-		Check:       true,
-		Out:         io.Discard,
+		SourceURL:       srv.URL + "/source.git",
+		TargetDir:       dstDir,
+		MappingFile:     mappingPath,
+		RewriteMessages: true,
+		Check:           true,
+		Out:             io.Discard,
 	})
 	if err != nil {
 		t.Fatalf("convert-sha256 run: %v", err)
@@ -1462,6 +1466,53 @@ func TestCheckSideOutputCollision(t *testing.T) {
 // TestDiscoverReachable_HonorsCtxCancellation confirms discovery
 // returns promptly when its context is canceled before it starts,
 // matching the per-object check translate() already does.
+// TestTranslator_HeaderOnlyTag converts a tag holding nothing but its object
+// line, which git's convert_tag_object accepts.
+func TestTranslator_HeaderOnlyTag(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	srcRepo, err := git.PlainInit(filepath.Join(root, "src.git"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dstRepo, err := git.PlainInit(filepath.Join(root, "dst.git"), true, git.WithObjectFormat(formatcfg.SHA256))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := writeBlob(t, srcRepo.Storer, []byte("x\n"))
+	obj := srcRepo.Storer.NewEncodedObject()
+	obj.SetType(plumbing.TagObject)
+	w, err := obj.Writer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("object " + blob.String() + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tag, err := srcRepo.Storer.SetEncodedObject(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reachable, err := discoverReachable(t.Context(), srcRepo.Storer, []plumbing.Hash{tag}, nil)
+	if err != nil {
+		t.Fatalf("discoverReachable: %v", err)
+	}
+	if reachable[blob] != plumbing.BlobObject {
+		t.Fatalf("tagged blob not discovered: %v", reachable)
+	}
+	tr, err := newTranslator(t.Context(), srcRepo.Storer, dstRepo.Storer, false, reachable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.translate(tag); err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+}
+
 func TestDiscoverReachable_HonorsCtxCancellation(t *testing.T) {
 	root := t.TempDir()
 	srcDir := filepath.Join(root, "src.git")

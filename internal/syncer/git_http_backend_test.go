@@ -1330,6 +1330,9 @@ func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
 				Target: Endpoint{URL: server.RepoURL("target.git")},
 			}
 			// Every operation that would push: sync, plan, replicate, bootstrap.
+			// A SHA256 source syncs into a SHA1 target by translating objects,
+			// so there only replicate and bootstrap must refuse.
+			translates := tc.source == "sha256" && tc.target == "sha1"
 			for name, run := range map[string]func(Config) (Result, error){
 				"sync": func(c Config) (Result, error) { c.Mode = modeSync; return Run(context.Background(), c) },
 				"plan": func(c Config) (Result, error) {
@@ -1340,6 +1343,9 @@ func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
 				"replicate": func(c Config) (Result, error) { c.Mode = modeReplicate; return Run(context.Background(), c) },
 				"bootstrap": func(c Config) (Result, error) { return Bootstrap(context.Background(), c) },
 			} {
+				if translates && (name == "sync" || name == "plan") {
+					continue
+				}
 				_, err := run(base)
 				if !errors.Is(err, gitproto.ErrObjectFormatMismatch) {
 					t.Fatalf("%s: err = %v, want ErrObjectFormatMismatch", name, err)
@@ -1377,6 +1383,13 @@ func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
 			}
 			if out := runGit(t, targetBare, "for-each-ref"); strings.TrimSpace(out) != "" {
 				t.Errorf("target changed: %q", out)
+			}
+			if translates {
+				if _, err := Run(context.Background(), Config{
+					Source: base.Source, Target: base.Target, Mode: modeSync,
+				}); err != nil {
+					t.Fatalf("translated sync: %v", err)
+				}
 			}
 		})
 	}

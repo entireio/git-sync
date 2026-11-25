@@ -785,6 +785,7 @@ func TestAsRefRejectedError_ToleratesPointerCommandStatusErr(t *testing.T) {
 type recordedPush struct {
 	commands int
 	pack     []byte
+	atomic   bool
 }
 
 // pushRecorder is a receive-pack server that records every request, so a test
@@ -814,7 +815,9 @@ func (rec *pushRecorder) server(t *testing.T) *httptest.Server {
 		}
 
 		rec.mu.Lock()
-		rec.pushes = append(rec.pushes, recordedPush{commands: len(req.Commands), pack: rest})
+		rec.pushes = append(rec.pushes, recordedPush{
+			commands: len(req.Commands), pack: rest, atomic: req.Capabilities.Supports(capability.Atomic),
+		})
 		rec.mu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
@@ -1209,5 +1212,34 @@ func TestPusherOutcomeUnknownWhenReportOmitsRef(t *testing.T) {
 	}
 	if outcome, reason := pusher.LastOutcome(other); outcome != RefOutcomeUnknown {
 		t.Errorf("LastOutcome(%s) = (%v, %q), want unknown: the target never mentioned it", other, outcome, reason)
+	}
+}
+
+func TestPushObjectsAtomicSendsOneAtomicRequest(t *testing.T) {
+	t.Parallel()
+
+	rec := &pushRecorder{}
+	srv := rec.server(t)
+	defer srv.Close()
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.Atomic)
+	pusher := NewPusher(connForServer(t, srv), adv, false)
+	pusher.MaxRefUpdates = 1
+
+	if err := pusher.PushObjectsAtomic(t.Context(), makeCreateCommands(3), memory.NewStorage(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.pushes) != 1 || rec.pushes[0].commands != 3 || !rec.pushes[0].atomic {
+		t.Fatalf("pushes = %+v, want one atomic request with all 3 commands", rec.pushes)
+	}
+}
+
+func TestPushObjectsAtomicRequiresCapability(t *testing.T) {
+	t.Parallel()
+
+	pusher := NewPusher(nil, &packp.AdvRefs{}, false)
+	err := pusher.PushObjectsAtomic(t.Context(), makeCreateCommands(1), memory.NewStorage(), nil)
+	if !errors.Is(err, ErrAtomicPushUnsupported) {
+		t.Fatalf("got %v, want ErrAtomicPushUnsupported", err)
 	}
 }
