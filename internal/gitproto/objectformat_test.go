@@ -80,6 +80,9 @@ type advLayout struct {
 	// capPad lengthens the first ref line's capability list by this many
 	// bytes, past any small read buffer.
 	capPad int
+	// noBanner leaves out the smart-HTTP "# service=" announcement, as SSH
+	// and remote-helper transports do, so the first packet is a ref.
+	noBanner bool
 }
 
 var advLayouts = []advLayout{
@@ -88,6 +91,9 @@ var advLayouts = []advLayout{
 	{name: "first line over 4 KiB", capPad: 5000},
 	{name: "first line near the pkt-line limit", capPad: 65000},
 	{name: "version 1 then long first line", versionLine: true, capPad: 5000},
+	{name: "no banner", noBanner: true},
+	{name: "no banner, first line over 4 KiB", noBanner: true, capPad: 5000},
+	{name: "no banner, version 1 then long first line", noBanner: true, versionLine: true, capPad: 5000},
 }
 
 // v1AdvertisementWithFormat is a smart-HTTP v0/v1 advertisement whose ids are
@@ -102,8 +108,10 @@ func v1AdvertisementWithFormat(t *testing.T, service, format string, hexLen int,
 			t.Fatalf("write advertisement: %v", err)
 		}
 	}
-	mustWrite(pktline.Writef(&body, "# service=%s\n", service))
-	mustWrite(0, pktline.WriteFlush(&body))
+	if !layout.noBanner {
+		mustWrite(pktline.Writef(&body, "# service=%s\n", service))
+		mustWrite(0, pktline.WriteFlush(&body))
+	}
 	if layout.versionLine {
 		mustWrite(pktline.WriteString(&body, "version 1\n"))
 	}

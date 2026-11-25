@@ -20,11 +20,13 @@ run = "go test -race ./..."
 
 [tasks."test:git-http-backend"]
 description = "Run optional git-http-backend integration tests"
-run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackend|TestReplicate_GitHTTPBackend' -v"
+run = "GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackend|TestReplicate_GitHTTPBackend' -count=1 -v"
 
 [tasks."test:git-http-backend:sha256"]
+# -count=1 on both backend tasks: only the git subprocess reads GIT_DEFAULT_HASH,
+# so Go's test cache would otherwise replay one format's result for the other.
 description = "Run the git-http-backend integration tests with SHA-256 repositories"
-run = "GIT_DEFAULT_HASH=sha256 GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackend|TestReplicate_GitHTTPBackend' -v"
+run = "GIT_DEFAULT_HASH=sha256 GITSYNC_E2E_GIT_HTTP_BACKEND=1 go test ./internal/syncer -run 'TestRun_GitHTTPBackendSync|TestBootstrap_GitHTTPBackend|TestReplicate_GitHTTPBackend' -count=1 -v"
 
 [tasks."test:ssh-docker"]
 description = "Run optional Docker-based SSH integration test"

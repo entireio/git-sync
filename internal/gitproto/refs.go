@@ -433,11 +433,16 @@ func validateAdvertisedObjectFormat(data []byte) error {
 }
 
 func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {
-	_, prefix, err := pktline.PeekLine(rd)
-	if err != nil {
+	// Peek only the length prefix and the banner's fixed opening. SSH and
+	// remote-helper transports send no banner, so the first packet may be a
+	// ref line of any length up to the pkt-line limit; peeking the whole
+	// packet would overflow the reader's buffer on a long one.
+	const servicePrefix = "# service="
+	head, err := rd.Peek(pktline.LenSize + len(servicePrefix))
+	if len(head) < pktline.LenSize {
 		return false, fmt.Errorf("peek pktline: %w", err)
 	}
-	if !bytes.HasPrefix(prefix, []byte("# service=")) {
+	if !bytes.HasPrefix(head[pktline.LenSize:], []byte(servicePrefix)) {
 		return false, nil
 	}
 
