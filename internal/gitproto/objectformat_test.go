@@ -70,10 +70,30 @@ func TestCheckObjectFormats(t *testing.T) {
 	}
 }
 
+// advLayout varies the parts of a v0/v1 advertisement that sit around the
+// first ref line without changing its meaning.
+type advLayout struct {
+	name string
+	// versionLine announces "version 1" before the refs, as a server does
+	// for a client that asked for protocol v1.
+	versionLine bool
+	// capPad lengthens the first ref line's capability list by this many
+	// bytes, past any small read buffer.
+	capPad int
+}
+
+var advLayouts = []advLayout{
+	{name: "plain"},
+	{name: "version 1 first", versionLine: true},
+	{name: "first line over 4 KiB", capPad: 5000},
+	{name: "first line near the pkt-line limit", capPad: 65000},
+	{name: "version 1 then long first line", versionLine: true, capPad: 5000},
+}
+
 // v1AdvertisementWithFormat is a smart-HTTP v0/v1 advertisement whose ids are
 // hexLen characters wide and whose capabilities declare format, the way a
 // server of that format writes it.
-func v1AdvertisementWithFormat(t *testing.T, service, format string, hexLen int) []byte {
+func v1AdvertisementWithFormat(t *testing.T, service, format string, hexLen int, layout advLayout) []byte {
 	t.Helper()
 	var body strings.Builder
 	mustWrite := func(_ int, err error) {
@@ -84,8 +104,12 @@ func v1AdvertisementWithFormat(t *testing.T, service, format string, hexLen int)
 	}
 	mustWrite(pktline.Writef(&body, "# service=%s\n", service))
 	mustWrite(0, pktline.WriteFlush(&body))
+	if layout.versionLine {
+		mustWrite(pktline.WriteString(&body, "version 1\n"))
+	}
 	id := strings.Repeat("a", hexLen)
-	mustWrite(pktline.Writef(&body, "%s refs/heads/main\x00%s=%s report-status\n", id, capability.ObjectFormat, format))
+	agent := "agent=git/test" + strings.Repeat("x", layout.capPad)
+	mustWrite(pktline.Writef(&body, "%s refs/heads/main\x00%s=%s report-status %s\n", id, capability.ObjectFormat, format, agent))
 	mustWrite(pktline.Writef(&body, "%s refs/heads/other\n", id))
 	mustWrite(0, pktline.WriteFlush(&body))
 	return []byte(body.String())
@@ -93,59 +117,63 @@ func v1AdvertisementWithFormat(t *testing.T, service, format string, hexLen int)
 
 // A v1 remote of an unsupported format writes ids of that format's width,
 // which go-git's ref decoder rejects as "invalid size" before anything reads
-// the capability. The format must be validated from the first line first, on
-// both the source (upload-pack) and the target (receive-pack).
+// the capability. The format must be found in the first ref line first, on
+// both the source (upload-pack) and the target (receive-pack), wherever that
+// line sits and however long it is.
 func TestV1AdvertisementRejectsUnsupportedObjectFormat(t *testing.T) {
 	t.Parallel()
 	const sha512HexLen = 128
 
-	t.Run("source", func(t *testing.T) {
-		t.Parallel()
-		conn := &stubConn{
-			reqInfoRefs: func(_ context.Context, service string, gitProtocol string) ([]byte, error) {
-				if gitProtocol == GitProtocolV2 {
-					return nil, errors.New("v2 not offered")
-				}
-				return v1AdvertisementWithFormat(t, service, "sha512", sha512HexLen), nil
-			},
-		}
-		_, _, err := ListSourceRefs(t.Context(), conn, "v1", nil)
-		if !errors.Is(err, ErrUnsupportedObjectFormat) {
-			t.Fatalf("ListSourceRefs = %v, want ErrUnsupportedObjectFormat", err)
-		}
-	})
-
-	t.Run("target", func(t *testing.T) {
-		t.Parallel()
-		conn := &stubConn{
-			reqInfoRefs: func(_ context.Context, service string, _ string) ([]byte, error) {
-				return v1AdvertisementWithFormat(t, service, "sha512", sha512HexLen), nil
-			},
-		}
-		_, err := AdvertisedRefsV1(t.Context(), conn, transport.ReceivePackService)
-		if !errors.Is(err, ErrUnsupportedObjectFormat) {
-			t.Fatalf("AdvertisedRefsV1 = %v, want ErrUnsupportedObjectFormat", err)
-		}
-	})
-
-	// The pre-check must not get in the way of the formats that decode.
-	for _, tc := range []struct {
-		format string
-		hexLen int
-	}{{"sha1", 40}, {"sha256", 64}} {
-		t.Run("accepts "+tc.format, func(t *testing.T) {
+	for _, layout := range advLayouts {
+		t.Run(layout.name, func(t *testing.T) {
 			t.Parallel()
-			conn := &stubConn{
-				reqInfoRefs: func(_ context.Context, service string, _ string) ([]byte, error) {
-					return v1AdvertisementWithFormat(t, service, tc.format, tc.hexLen), nil
-				},
-			}
-			adv, err := AdvertisedRefsV1(t.Context(), conn, transport.ReceivePackService)
-			if err != nil {
-				t.Fatalf("AdvertisedRefsV1: %v", err)
-			}
-			if got := AdvRefsObjectFormat(adv); string(got) != tc.format {
-				t.Errorf("object format = %q, want %q", got, tc.format)
+			t.Run("source", func(t *testing.T) {
+				t.Parallel()
+				conn := &stubConn{
+					reqInfoRefs: func(_ context.Context, service string, gitProtocol string) ([]byte, error) {
+						if gitProtocol == GitProtocolV2 {
+							return nil, errors.New("v2 not offered")
+						}
+						return v1AdvertisementWithFormat(t, service, "sha512", sha512HexLen, layout), nil
+					},
+				}
+				_, _, err := ListSourceRefs(t.Context(), conn, "v1", nil)
+				if !errors.Is(err, ErrUnsupportedObjectFormat) {
+					t.Fatalf("ListSourceRefs = %v, want ErrUnsupportedObjectFormat", err)
+				}
+			})
+			t.Run("target", func(t *testing.T) {
+				t.Parallel()
+				conn := &stubConn{
+					reqInfoRefs: func(_ context.Context, service string, _ string) ([]byte, error) {
+						return v1AdvertisementWithFormat(t, service, "sha512", sha512HexLen, layout), nil
+					},
+				}
+				_, err := AdvertisedRefsV1(t.Context(), conn, transport.ReceivePackService)
+				if !errors.Is(err, ErrUnsupportedObjectFormat) {
+					t.Fatalf("AdvertisedRefsV1 = %v, want ErrUnsupportedObjectFormat", err)
+				}
+			})
+			// The check must not get in the way of the formats that decode.
+			for _, tc := range []struct {
+				format string
+				hexLen int
+			}{{"sha1", 40}, {"sha256", 64}} {
+				t.Run("accepts "+tc.format, func(t *testing.T) {
+					t.Parallel()
+					conn := &stubConn{
+						reqInfoRefs: func(_ context.Context, service string, _ string) ([]byte, error) {
+							return v1AdvertisementWithFormat(t, service, tc.format, tc.hexLen, layout), nil
+						},
+					}
+					adv, err := AdvertisedRefsV1(t.Context(), conn, transport.ReceivePackService)
+					if err != nil {
+						t.Fatalf("AdvertisedRefsV1: %v", err)
+					}
+					if got := AdvRefsObjectFormat(adv); string(got) != tc.format {
+						t.Errorf("object format = %q, want %q", got, tc.format)
+					}
+				})
 			}
 		})
 	}

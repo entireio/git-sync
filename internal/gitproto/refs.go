@@ -371,8 +371,8 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 
 	// The ids are as wide as the remote's object format, and the decoder
 	// rejects a width it does not know ("invalid size") before anything can
-	// read the format, so check the format on the first line first.
-	if err := validateFirstLineObjectFormat(rd); err != nil {
+	// read the format, so check the format before decoding.
+	if err := validateAdvertisedObjectFormat(data); err != nil {
 		return nil, err
 	}
 	ar := &packp.AdvRefs{}
@@ -382,29 +382,54 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 		}
 		return nil, fmt.Errorf("%w; body-prefix=%q", err, bodyPreview(data))
 	}
+	// Backstop for a layout the pre-check did not recognise but the decoder
+	// did: never hand on a format the ids were not decoded at.
+	if err := ValidateObjectFormat(AdvRefsObjectFormat(ar)); err != nil {
+		return nil, err
+	}
 	return ar, nil
 }
 
-// validateFirstLineObjectFormat peeks at the first line of a v0/v1 ref
-// advertisement, which carries the capabilities after a NUL, and rejects an
-// object-format git-sync cannot decode. It consumes nothing; a line it cannot
-// read is left for the decoder to report.
-func validateFirstLineObjectFormat(rd *bufio.Reader) error {
-	_, line, err := pktline.PeekLine(rd)
-	if err != nil {
-		return nil //nolint:nilerr // the decoder reports a malformed advertisement
-	}
-	_, caps, found := bytes.Cut(line, []byte{0})
-	if !found {
+// validateAdvertisedObjectFormat finds the capabilities on the first ref line
+// of a v0/v1 advertisement and rejects an object-format git-sync cannot
+// decode. It reads data with its own reader, independent of the decoder's
+// buffer, so the first ref line is read in full up to the pkt-line limit. It
+// skips what may precede that line: the smart service announcement and its
+// flush, and a "version N" announcement (git sends "version 1" to a client that
+// asked for protocol v1). Anything it cannot parse, including an empty
+// repository, is left for the decoder to report.
+func validateAdvertisedObjectFormat(data []byte) error {
+	r := bytes.NewReader(data)
+	afterService := false
+	for {
+		l, line, err := pktline.ReadLine(r)
+		if err != nil {
+			return nil //nolint:nilerr // the decoder reports a malformed advertisement
+		}
+		switch {
+		case l == pktline.Flush && afterService:
+			afterService = false
+			continue
+		case l < pktline.LenSize:
+			return nil // a flush with no refs: an empty repository
+		case bytes.HasPrefix(line, []byte("# service=")):
+			afterService = true
+			continue
+		case bytes.HasPrefix(line, []byte("version ")):
+			continue
+		}
+		_, caps, found := bytes.Cut(line, []byte{0})
+		if !found {
+			return nil
+		}
+		prefix := []byte(capability.ObjectFormat + "=")
+		for _, field := range bytes.Fields(caps) {
+			if value, ok := bytes.CutPrefix(field, prefix); ok {
+				return ValidateObjectFormat(formatcfg.ObjectFormat(value))
+			}
+		}
 		return nil
 	}
-	prefix := []byte(capability.ObjectFormat + "=")
-	for _, field := range bytes.Fields(caps) {
-		if value, ok := bytes.CutPrefix(field, prefix); ok {
-			return ValidateObjectFormat(formatcfg.ObjectFormat(value))
-		}
-	}
-	return nil
 }
 
 func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {
