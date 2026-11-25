@@ -61,9 +61,6 @@ type boundedStorer struct {
 	count int
 }
 
-// newBoundedStorer wraps s so that no more than limit objects can be written to
-// it. A limit of zero or less means unlimited, and s is returned unchanged so
-// nothing pays for the wrapper.
 // newSourceStore returns the in-memory store a source's objects are fetched
 // into, in the source's object format: the pack parser checks the trailer and
 // hashes objects with the store's format, so a sha1 store cannot decode a
@@ -76,6 +73,9 @@ func newSourceStore(format formatcfg.ObjectFormat, limit int) storage.Storer {
 	return newBoundedStorer(memory.NewStorage(opts...), limit)
 }
 
+// newBoundedStorer wraps s so that no more than limit objects can be written to
+// it. A limit of zero or less means unlimited, and s is returned unchanged so
+// nothing pays for the wrapper.
 func newBoundedStorer(s storage.Storer, limit int) storage.Storer {
 	if limit <= 0 {
 		return s

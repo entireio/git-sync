@@ -23,6 +23,20 @@ import (
 // is free-form and server-specific.
 var ErrTargetRefMoved = gitproto.ErrTargetRefMoved
 
+// ErrObjectFormatMismatch is returned (wrapped) when the source and target
+// repositories use different object formats, for example a sha1 source and a
+// sha256 target. git-sync relays the source's object ids and packs unchanged
+// and cannot convert between formats, so the run stops once both formats are
+// known, before anything is fetched. The error names both formats. Retrying
+// does not help: the target must be recreated in the source's format. Test for
+// it with errors.Is.
+var ErrObjectFormatMismatch = gitproto.ErrObjectFormatMismatch
+
+// ErrUnsupportedObjectFormat is returned (wrapped) when the source or target
+// advertises an object format other than sha1 or sha256. Test for it with
+// errors.Is.
+var ErrUnsupportedObjectFormat = gitproto.ErrUnsupportedObjectFormat
+
 // RefRejectedError is a single per-ref "ng" status returned by the target's
 // receive-pack report-status, reachable with errors.As. Ref is the rejected ref
 // and Reason is the raw server reason text. Rejections that are concurrent

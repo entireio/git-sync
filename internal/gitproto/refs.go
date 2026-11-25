@@ -96,7 +96,21 @@ func newV1RefService(adv *packp.AdvRefs, skippedRefCount int) *RefService {
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
 // Returns the list of refs and a RefService for subsequent operations.
+//
+// A source advertising an object-format git-sync cannot decode is rejected
+// here, wrapping ErrUnsupportedObjectFormat, before anything is fetched.
 func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
+	refs, svc, err := listSourceRefs(ctx, conn, protocolMode, refPrefixes)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ValidateObjectFormat(svc.ObjectFormat()); err != nil {
+		return nil, nil, fmt.Errorf("source: %w", err)
+	}
+	return refs, svc, nil
+}
+
+func listSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
 		adv, refs, skippedCount, err := listSourceRefsV1(ctx, conn)

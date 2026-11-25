@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -755,6 +756,9 @@ type gitHTTPBackendServer struct {
 	// lastPack holds the pack of the last push that carried one, per
 	// repository.
 	lastPack map[string][]byte
+	// uploadPackFetches counts upload-pack requests that fetch objects, so a
+	// test can tell a run that failed before fetching anything.
+	uploadPackFetches atomic.Int64
 }
 
 func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
@@ -780,6 +784,20 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 	handler.Stderr = &lockedBuffer{server: s}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isPush := strings.HasSuffix(r.URL.Path, "/git-receive-pack")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
+			// A v2 ls-refs is a POST too; count only requests that fetch.
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+			r.TransferEncoding = nil
+			if !bytes.Contains(body, []byte("command=ls-refs")) {
+				s.uploadPackFetches.Add(1)
+			}
+		}
 		// net/http/cgi refuses chunked request bodies, and git-sync streams
 		// its pushes. Buffer the body so the CGI gets a Content-Length.
 		// Buffer every push, chunked or not, so LastPack sees each one.
@@ -1265,6 +1283,67 @@ func TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes(t *testing.T) {
 			}
 			if strings.Contains(diagnostics.String(), "observer_failed=true") {
 				t.Fatalf("a landed checkpoint reported observer_failed=true:\n%s", diagnostics.String())
+			}
+		})
+	}
+}
+
+// TestRun_GitHTTPBackendSyncObjectFormatMismatch syncs between repositories of
+// different object formats. git-sync relays the source's ids and packs
+// unchanged and cannot convert them, so the run must stop once both formats
+// are known, before fetching anything, with an error naming both.
+func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	for _, tc := range []struct{ source, target string }{
+		{source: "sha1", target: "sha256"},
+		{source: "sha256", target: "sha1"},
+	} {
+		t.Run(tc.source+"_to_"+tc.target, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+
+			runGit(t, root, "init", "--bare", "--object-format="+tc.source, sourceBare)
+			runGit(t, root, "init", "--bare", "--object-format="+tc.target, targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", "--object-format="+tc.source, "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
+			runGit(t, worktree, "add", "README.md")
+			runGit(t, worktree, "commit", "-m", "initial")
+			runGit(t, worktree, "push", "-q", sourceBare, "HEAD:refs/heads/"+testBranch)
+
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
+
+			for _, mode := range []string{modeSync, modeReplicate} {
+				_, err := Run(context.Background(), Config{
+					Source: Endpoint{URL: server.RepoURL("source.git")},
+					Target: Endpoint{URL: server.RepoURL("target.git")},
+					Mode:   mode,
+				})
+				if !errors.Is(err, gitproto.ErrObjectFormatMismatch) {
+					t.Fatalf("%s: err = %v, want ErrObjectFormatMismatch", mode, err)
+				}
+				for _, want := range []string{"source is " + tc.source, "target is " + tc.target} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s: error %q does not contain %q", mode, err, want)
+					}
+				}
+			}
+			if n := server.uploadPackFetches.Load(); n != 0 {
+				t.Errorf("fetched from the source %d times before failing, want 0", n)
+			}
+			if out := runGit(t, targetBare, "for-each-ref"); strings.TrimSpace(out) != "" {
+				t.Errorf("target changed: %q", out)
 			}
 		})
 	}

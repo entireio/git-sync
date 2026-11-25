@@ -1000,6 +1000,12 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
+		// Both formats are known now and nothing has been fetched. git-sync
+		// relays the source's ids and packs unchanged, so a target in another
+		// format would only fail at the push, after the whole source fetch.
+		if err := gitproto.CheckObjectFormats(s.sourceService.ObjectFormat(), gitproto.AdvRefsObjectFormat(targetAdv)); err != nil {
+			return nil, fmt.Errorf("object formats: %w", err)
+		}
 		targetRefSlice, skippedTargetRefs, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
 			return nil, fmt.Errorf("decode target refs: %w", err)

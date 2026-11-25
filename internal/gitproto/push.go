@@ -16,6 +16,7 @@ import (
 
 	"entire.io/entire/git-sync/internal/sanitize"
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/hash"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
@@ -278,9 +279,9 @@ func buildUpdateRequest(
 	}
 	// Echo the target's object-format: receive-pack treats a client that
 	// omits it as sha1 and refuses the push on a sha256 repository.
-	format := advertisedObjectFormat(adv)
-	if format != "" {
-		req.Capabilities.Set(capability.ObjectFormat, format)
+	format := AdvRefsObjectFormat(adv)
+	if format != formatcfg.UnsetObjectFormat {
+		req.Capabilities.Set(capability.ObjectFormat, string(format))
 	}
 
 	hasDelete := false
@@ -967,36 +968,27 @@ func buildEmptyPack(algo crypto.Hash) []byte {
 // checksum matches the target's advertised object format: SHA-256 repositories
 // get a 32-byte trailer; everything else uses the 20-byte SHA-1 trailer.
 func emptyPack(adv *packp.AdvRefs) []byte {
-	if advertisedObjectFormat(adv) == objectFormatSHA256 {
+	if AdvRefsObjectFormat(adv) == formatcfg.SHA256 {
 		return emptyPackSHA256
 	}
 	return emptyPackSHA1
 }
-
-const objectFormatSHA256 = "sha256"
 
 // zeroHashSHA256 is the null object id of a sha256 repository. plumbing.ZeroHash
 // is format-unset and encodes as 40 hex zeros, which a sha256 receive-pack
 // rejects as a malformed id.
 var zeroHashSHA256, _ = plumbing.FromHex(strings.Repeat("0", 64))
 
-// advertisedObjectFormat returns the object-format the receive-pack
-// advertisement declares, or "" when it declares none (implicitly sha1).
-func advertisedObjectFormat(adv *packp.AdvRefs) string {
-	if adv == nil {
-		return ""
-	}
-	if vals := adv.Capabilities.Get(capability.ObjectFormat); len(vals) > 0 {
-		return vals[0]
-	}
-	return ""
-}
-
 // wireHash returns h as it must appear in a receive-pack command for a
 // repository of the given object format. Only the null id needs rewriting:
 // a real id already carries its own length.
-func wireHash(h plumbing.Hash, format string) plumbing.Hash {
-	if format == objectFormatSHA256 && h.IsZero() {
+//
+// In go-git v6 an id carries its format, so a sha256 null id is not == to
+// plumbing.ZeroHash, which is format-unset. Test for a null id with IsZero,
+// never == plumbing.ZeroHash: the comparison is silently false for any id
+// read from a sha256 remote.
+func wireHash(h plumbing.Hash, format formatcfg.ObjectFormat) plumbing.Hash {
+	if format == formatcfg.SHA256 && h.IsZero() {
 		return zeroHashSHA256
 	}
 	return h

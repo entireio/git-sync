@@ -173,11 +173,7 @@ func (s *RefService) ObjectFormat() formatcfg.ObjectFormat {
 	case "v2":
 		return s.V2Caps.ObjectFormat()
 	case "v1":
-		if s.V1Adv != nil {
-			if vals := s.V1Adv.Capabilities.Get(capability.ObjectFormat); len(vals) > 0 {
-				return formatcfg.ObjectFormat(vals[0])
-			}
-		}
+		return AdvRefsObjectFormat(s.V1Adv)
 	}
 	return formatcfg.UnsetObjectFormat
 }
@@ -491,6 +487,12 @@ func buildV1UploadPackBody(
 	}
 	if adv.Capabilities.Supports(capability.OFSDelta) {
 		req.Capabilities.Set(capability.OFSDelta)
+	}
+	// Declare the object-format the source advertised, as git's own client
+	// does: a client that omits it is assumed to be sha1. git's upload-pack
+	// does not check this on v0/v1 today, but a stricter server may.
+	if format := AdvRefsObjectFormat(adv); format != formatcfg.UnsetObjectFormat {
+		req.Capabilities.Set(capability.ObjectFormat, string(format))
 	}
 	// A thin pack only where RefService.ThinPack allows one and the source
 	// offers it; otherwise the pack stays self-contained.
