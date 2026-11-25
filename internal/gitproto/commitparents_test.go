@@ -240,7 +240,63 @@ func TestParseCommitParents_CanonicalPositionOnly(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := parseCommitParents([]byte(tc.body))
+			got := parseCommitParents([]byte(tc.body), formatcfg.UnsetObjectFormat)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("parseCommitParents:\n got=%v\nwant=%v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Parent ids are 64 hex characters in a sha256 repository. A parser that
+// only accepts 40 drops them all, the planner sees every commit as a root,
+// and a batched bootstrap cannot split a branch into smaller pushes.
+func TestParseCommitParents_ObjectFormat(t *testing.T) {
+	t.Parallel()
+	var (
+		tree256 = strings.Repeat("a", 64)
+		p256a   = strings.Repeat("1", 64)
+		p256b   = strings.Repeat("2", 64)
+		tree1   = strings.Repeat("a", 40)
+		p1      = strings.Repeat("1", 40)
+	)
+
+	cases := []struct {
+		name   string
+		format formatcfg.ObjectFormat
+		body   string
+		want   []plumbing.Hash
+	}{
+		{
+			name:   "sha256 merge",
+			format: formatcfg.SHA256,
+			body:   "tree " + tree256 + "\nparent " + p256a + "\nparent " + p256b + "\nauthor X <x@e> 0 +0000\n\nmsg\n",
+			want:   []plumbing.Hash{plumbing.NewHash(p256a), plumbing.NewHash(p256b)},
+		},
+		{
+			name:   "sha1-length parent in a sha256 commit is malformed",
+			format: formatcfg.SHA256,
+			body:   "tree " + tree256 + "\nparent " + p1 + "\nauthor X <x@e> 0 +0000\n\nmsg\n",
+			want:   nil,
+		},
+		{
+			name:   "sha256-length parent in a sha1 commit is malformed",
+			format: formatcfg.SHA1,
+			body:   "tree " + tree1 + "\nparent " + p256a + "\nauthor X <x@e> 0 +0000\n\nmsg\n",
+			want:   nil,
+		},
+		{
+			name:   "non-hex sha256 parent stops the run",
+			format: formatcfg.SHA256,
+			body:   "tree " + tree256 + "\nparent " + p256a + "\nparent " + strings.Repeat("g", 64) + "\nauthor X <x@e> 0 +0000\n\nmsg\n",
+			want:   []plumbing.Hash{plumbing.NewHash(p256a)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseCommitParents([]byte(tc.body), tc.format)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("parseCommitParents:\n got=%v\nwant=%v", got, tc.want)
 			}

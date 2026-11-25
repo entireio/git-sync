@@ -1186,3 +1186,67 @@ func TestReplicate_GitHTTPBackendSHA256(t *testing.T) {
 	}
 	runGit(t, targetBare, "fsck", "--connectivity-only")
 }
+
+// TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes covers a trunk too big
+// for one push: the batched bootstrap must walk the trunk's commit parents to
+// cut it into pushes under the target's body limit. The parents come from a
+// tree:0 pack whose commit headers carry 64-hex ids in a sha256 repository,
+// so a parser that only knows 40-hex ids sees a one-commit chain and the
+// single oversized push hits the 413.
+func TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+			format := "--object-format=" + objectFormat
+
+			runGit(t, root, "init", "--bare", format, sourceBare)
+			runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+			runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+			runGit(t, root, "init", "--bare", format, targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", format, "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			runGit(t, worktree, "remote", "add", "origin", sourceBare)
+			for i := range 3 {
+				writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("trunk-%d.bin", i)), int64(150_000+i*13))
+				runGit(t, worktree, "add", ".")
+				runGit(t, worktree, "commit", "-m", fmt.Sprintf("trunk-%d", i))
+			}
+			runGit(t, worktree, "push", "-q", "origin", testBranch)
+			runGit(t, sourceBare, "symbolic-ref", "HEAD", "refs/heads/"+testBranch)
+
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
+			// Room for any one commit, not for the whole trunk.
+			server.maxPushBody.Store(325_000)
+
+			result, err := Run(context.Background(), Config{
+				Source:      Endpoint{URL: server.RepoURL("source.git")},
+				Target:      Endpoint{URL: server.RepoURL("target.git")},
+				Mode:        modeReplicate,
+				Prune:       true,
+				IncludeTags: true,
+			})
+			t.Logf("relay mode %q, reason %q, pushed %d, batches %d", result.RelayMode, result.RelayReason, result.Pushed, result.BatchCount)
+			if err != nil {
+				t.Fatalf("replicate failed: %v", err)
+			}
+			if result.BatchCount < 2 {
+				t.Fatalf("batches = %d, want the trunk split across at least 2 pushes", result.BatchCount)
+			}
+			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+			runGit(t, targetBare, "fsck", "--connectivity-only")
+		})
+	}
+}

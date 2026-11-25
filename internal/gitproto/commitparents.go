@@ -126,6 +126,7 @@ type commitParentsStorer struct {
 	parents map[plumbing.Hash][]plumbing.Hash
 	cache   *deltaCache
 	hasher  *plumbing.ObjectHasher
+	format  formatcfg.ObjectFormat
 }
 
 func newCommitParentsStorer(maxBytes int, format formatcfg.ObjectFormat) *commitParentsStorer {
@@ -133,6 +134,7 @@ func newCommitParentsStorer(maxBytes int, format formatcfg.ObjectFormat) *commit
 		parents: make(map[plumbing.Hash][]plumbing.Hash),
 		cache:   newDeltaCache(maxBytes),
 		hasher:  plumbing.FromObjectFormat(format),
+		format:  format,
 	}
 }
 
@@ -180,7 +182,7 @@ func (w *commitParentsWriter) Close() error {
 		return fmt.Errorf("hash %s object (%d bytes): %w", w.typ, len(content), err)
 	}
 	if w.typ == plumbing.CommitObject {
-		w.s.parents[hash] = parseCommitParents(content)
+		w.s.parents[hash] = parseCommitParents(content, w.s.format)
 	}
 	// Detach the byte slice from the buffer so the buffer can be GC'd
 	// independently. The cache may keep this entry until evicted.
@@ -324,16 +326,20 @@ func (c *deltaCache) get(hash plumbing.Hash) (*deltaCacheEntry, bool) {
 // reachability computation consistent with what a canonical reader
 // will see in the same bytes.
 //
-// Returns nil if the first header isn't "tree <40-hex>", or if a
-// parent line is malformed (wrong length / non-hex hash). In both
-// cases the planner sees an empty parent set and stops walking
+// format is the repository's object format: a parent id is 40 hex
+// characters under sha1 and 64 under sha256, and a line of the other
+// length is malformed.
+//
+// Returns nil if the first header isn't "tree <id>", or if a parent
+// line is malformed (wrong length for the format / non-hex hash). In
+// both cases the planner sees an empty parent set and stops walking
 // rather than guessing.
-func parseCommitParents(content []byte) []plumbing.Hash {
+func parseCommitParents(content []byte, format formatcfg.ObjectFormat) []plumbing.Hash {
 	const (
 		treePrefix   = "tree "
 		parentPrefix = "parent "
-		parentLen    = len(parentPrefix) + 40
 	)
+	parentLen := len(parentPrefix) + format.HexSize()
 
 	line, rest := nextLine(content)
 	if !bytes.HasPrefix(line, []byte(treePrefix)) {
@@ -349,8 +355,8 @@ func parseCommitParents(content []byte) []plumbing.Hash {
 		if len(line) != parentLen {
 			return parents
 		}
-		h := plumbing.NewHash(string(line[len(parentPrefix):]))
-		if h.IsZero() {
+		h, ok := plumbing.FromHex(string(line[len(parentPrefix):]))
+		if !ok || h.IsZero() {
 			return parents
 		}
 		parents = append(parents, h)
