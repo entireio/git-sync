@@ -227,6 +227,8 @@ func (c *Client) buildSyncConfig(ctx context.Context, req SyncRequest, dryRun bo
 		ForceBlind:                    req.Policy.ForceBlind,
 		Prune:                         req.Policy.Prune,
 		BestEffort:                    req.Policy.BestEffort,
+		Atomic:                        req.Policy.Atomic,
+		RetranslateTags:               req.Policy.RetranslateTags,
 		AllowEmptySource:              req.Policy.AllowEmptySource,
 		AllowEmptyScope:               req.Policy.AllowEmptyScope,
 		SourceAssertedEmpty:           req.Policy.SourceAssertedEmpty,

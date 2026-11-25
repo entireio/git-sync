@@ -96,10 +96,11 @@ func readNotesTree(store storer.EncodedObjectStorer, tree *object.Tree, prefix s
 
 // WriteHashNotes writes a notes commit holding existing plus one note per
 // pair in add, keyed by Pair.Target and holding Pair.Source. The tree is
-// flat. parent is the previous notes commit, or zero for the first one. It
-// returns the new commit and every object it wrote, which are the objects a
-// push of the notes ref must send.
-func WriteHashNotes(store storer.EncodedObjectStorer, parent plumbing.Hash, existing []NoteEntry, add []Pair, sig object.Signature, message string) (plumbing.Hash, []plumbing.Hash, error) {
+// flat. The commit has no parent: it replaces the previous notes instead of
+// extending their history, so reading the notes never means fetching every
+// earlier version. It returns the new commit and every object it wrote,
+// which are the objects a push of the notes ref must send.
+func WriteHashNotes(store storer.EncodedObjectStorer, existing []NoteEntry, add []Pair, sig object.Signature, message string) (plumbing.Hash, []plumbing.Hash, error) {
 	if len(add) == 0 {
 		return plumbing.ZeroHash, nil, errors.New("no notes to add")
 	}
@@ -129,9 +130,6 @@ func WriteHashNotes(store storer.EncodedObjectStorer, parent plumbing.Hash, exis
 	written = append(written, treeHash)
 
 	commit := &object.Commit{Author: sig, Committer: sig, Message: message, TreeHash: treeHash}
-	if !parent.IsZero() {
-		commit.ParentHashes = []plumbing.Hash{parent}
-	}
 	commitHash, err := encodeObject(store, commit.Encode)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("store notes commit: %w", err)

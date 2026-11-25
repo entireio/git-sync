@@ -1,6 +1,8 @@
 package syncer
 
 import (
+	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
 
+	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
 )
 
@@ -113,6 +116,8 @@ func TestPlanTranslatedRef(t *testing.T) {
 		action     planner.Action
 	}{
 		{"tag already on target", tag, unknown, plumbing.ZeroHash, planner.ActionSkip},
+		{"retranslated tag matches target", tag, sha1Next, sha1Next, planner.ActionSkip},
+		{"retranslated tag differs from target", tag, unknown, sha1Next, planner.ActionSkip},
 		{"new tag", tag, plumbing.ZeroHash, sha1Next, planner.ActionCreate},
 		{"new branch", branch, plumbing.ZeroHash, sha1Next, planner.ActionCreate},
 		{"already current", branch, sha1Next, sha1Next, planner.ActionSkip},
@@ -144,6 +149,7 @@ func TestValidateTranslation(t *testing.T) {
 		{name: "force", cfg: Config{ForceWithLease: true}, wantErr: "force"},
 		{name: "prune", cfg: Config{Prune: true}, wantErr: "--prune"},
 		{name: "all refs", cfg: Config{AllRefs: true}, wantErr: "--all-refs"},
+		{name: "best effort", cfg: Config{BestEffort: true}, wantErr: "best-effort"},
 	}
 	for _, tt := range tests {
 		err := validateTranslation(tt.cfg)
@@ -205,27 +211,69 @@ func storeCommit(t *testing.T, store *memory.Storage, tree plumbing.Hash, msg st
 	return h
 }
 
-func TestNotesParent(t *testing.T) {
+func TestValidateTranslationFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		atomic       bool
+		translating  bool
+		targetAtomic bool
+		retranslate  bool
+		wantErr      string
+	}{
+		{name: "off", translating: true},
+		{name: "off without translation"},
+		{name: "on", atomic: true, translating: true, targetAtomic: true},
+		{name: "without translation", atomic: true, targetAtomic: true, wantErr: "--atomic"},
+		{name: "target lacks atomic", atomic: true, translating: true, wantErr: "atomic"},
+		{name: "retranslate tags", retranslate: true, translating: true},
+		{name: "retranslate tags without translation", retranslate: true, wantErr: "--retranslate-tags"},
+	}
+	for _, tt := range tests {
+		err := validateTranslationFlags(Config{Atomic: tt.atomic, RetranslateTags: tt.retranslate}, tt.translating, tt.targetAtomic)
+		switch {
+		case tt.wantErr == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tt.name, err)
+		case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+			t.Errorf("%s: got %v, want error mentioning %q", tt.name, err, tt.wantErr)
+		}
+	}
+	if err := validateTranslationFlags(Config{Atomic: true}, true, false); !errors.Is(err, gitproto.ErrAtomicPushUnsupported) {
+		t.Errorf("target lacks atomic: got %v, want ErrAtomicPushUnsupported", err)
+	}
+}
+
+func TestReachableCommits(t *testing.T) {
 	t.Parallel()
 	f := newTranslatedFixture(t)
 
 	tests := []struct {
-		name string
-		tip  plumbing.Hash
-		want plumbing.Hash
+		name  string
+		roots []plumbing.Hash
+		stop  []plumbing.Hash
+		want  []plumbing.Hash
 	}{
-		{"no notes", plumbing.ZeroHash, plumbing.ZeroHash},
-		{"commit", f.base, f.base},
-		{"tree", f.baseTree, plumbing.ZeroHash},
+		{"everything", []plumbing.Hash{f.next}, nil, []plumbing.Hash{f.next, f.base}},
+		{"stops at known commits", []plumbing.Hash{f.next, f.sibling}, []plumbing.Hash{f.base}, []plumbing.Hash{f.next, f.sibling}},
+		{"root already known", []plumbing.Hash{f.base}, []plumbing.Hash{f.base}, nil},
 	}
 	for _, tt := range tests {
-		got, err := notesParent(f.store, tt.tip)
+		stop := make(map[plumbing.Hash]plumbing.Hash)
+		for _, h := range tt.stop {
+			stop[h] = plumbing.ZeroHash
+		}
+		got, err := reachableCommits(f.store, formatcfg.SHA1, tt.roots, stop)
 		if err != nil {
 			t.Errorf("%s: %v", tt.name, err)
 			continue
 		}
-		if got != tt.want {
-			t.Errorf("%s: got %s, want %s", tt.name, got, tt.want)
+		want := make(map[plumbing.Hash]struct{})
+		for _, h := range tt.want {
+			want[h] = struct{}{}
+		}
+		if !maps.Equal(got, want) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, want)
 		}
 	}
 }

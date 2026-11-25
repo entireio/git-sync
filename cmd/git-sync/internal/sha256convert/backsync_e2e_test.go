@@ -117,7 +117,11 @@ func TestBackSync_SHA256ToReadOnlySHA1(t *testing.T) {
 
 	assertOtherSHA1RepoRefused(t, client, req, root, srv.URL)
 
-	res, err := client.Sync(context.Background(), req)
+	// Protocol v1 checks the target holds v1.1's pre-cutover commit, which no
+	// ref points at, through a have rather than a want.
+	first := req
+	first.Policy.Protocol = gitsync.ProtocolV1
+	res, err := client.Sync(context.Background(), first)
 	if err != nil {
 		t.Fatalf("first back-sync: %v", err)
 	}
@@ -142,32 +146,10 @@ func TestBackSync_SHA256ToReadOnlySHA1(t *testing.T) {
 	assertSHA1AndClean(t, origin)
 	assertOriginNote(t, origin, canonical)
 
-	for _, dir := range []string{dev, oracle} {
-		mustWrite(t, filepath.Join(dir, "lib.txt"), "lib\nfollow-up\n")
-		gitAt(t, dir, "1700003000 +0000", "commit", "-am", "follow-up")
-	}
-	gitAt(t, dev, "", "push", "origin", "main")
-
-	res, err = client.Sync(context.Background(), req)
-	if err != nil {
-		t.Fatalf("incremental back-sync: %v", err)
-	}
-	if res.Counts.Applied != 1 || res.Counts.Blocked != 0 {
-		t.Fatalf("incremental back-sync: want exactly main applied, got %+v", res.Refs)
-	}
-	assertMatchesOracle(t, origin, oracle, "refs/heads/main")
-	assertSHA1AndClean(t, origin)
-	assertOriginNote(t, origin, canonical)
-
-	res, err = client.Sync(context.Background(), req)
-	if err != nil {
-		t.Fatalf("no-op back-sync: %v", err)
-	}
-	if res.Counts.Applied != 0 || res.Counts.Blocked != 0 {
-		t.Fatalf("no-op back-sync must apply nothing, got %+v", res.Refs)
-	}
+	assertIncrementalBackSync(t, client, req, origin, canonical, dev, oracle)
 
 	assertNotesRefusalKeepsMain(t, client, req, origin, canonical, dev)
+	assertTagRetryRepairsNotes(t, client, req, origin, canonical, dev)
 
 	signingKey := filepath.Join(root, "signing-key")
 	keygen := exec.CommandContext(t.Context(), "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", signingKey)
@@ -220,15 +202,19 @@ func assertOtherSHA1RepoRefused(t *testing.T, client *gitsync.Client, req gitsyn
 	gitAt(t, root, "", "init", "--bare", "--object-format=sha1", "--initial-branch=main", elsewhere)
 	gitAt(t, elsewhere, "", "config", "http.receivepack", "true")
 	req.Target = gitsync.Endpoint{URL: serverURL + "/elsewhere.git"}
-	if _, err := client.Sync(context.Background(), req); err == nil || !strings.Contains(err.Error(), "does not have") {
-		t.Fatalf("back-sync to a SHA1 repository that is not the original: got %v, want an error naming the missing commits", err)
+	for _, protocol := range []gitsync.ProtocolMode{gitsync.ProtocolV1, gitsync.ProtocolV2} {
+		req.Policy.Protocol = protocol
+		if _, err := client.Sync(context.Background(), req); err == nil || !strings.Contains(err.Error(), "does not have") {
+			t.Fatalf("%s back-sync to a SHA1 repository that is not the original: got %v, want an error naming the missing commits", protocol, err)
+		}
 	}
 }
 
 // assertNotesRefusalKeepsMain has the target refuse the notes ref, and
-// checks that main does not move without them.
+// checks that an atomic sync does not move main without them.
 func assertNotesRefusalKeepsMain(t *testing.T, client *gitsync.Client, req gitsync.SyncRequest, origin, canonical, dev string) {
 	t.Helper()
+	req.Policy.Atomic = true
 	hook := filepath.Join(origin, "hooks", "update")
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntest \"$1\" != refs/notes/sha256-origin\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -249,6 +235,89 @@ func assertNotesRefusalKeepsMain(t *testing.T, client *gitsync.Client, req gitsy
 		t.Fatalf("back-sync after the refusal: err %v, refs %+v", err, res.Refs)
 	}
 	assertOriginNote(t, origin, canonical)
+}
+
+// assertIncrementalBackSync syncs one new commit on main, then syncs again
+// with nothing new.
+func assertIncrementalBackSync(t *testing.T, client *gitsync.Client, req gitsync.SyncRequest, origin, canonical, dev, oracle string) {
+	t.Helper()
+	for _, dir := range []string{dev, oracle} {
+		mustWrite(t, filepath.Join(dir, "lib.txt"), "lib\nfollow-up\n")
+		gitAt(t, dir, "1700003000 +0000", "commit", "-am", "follow-up")
+	}
+	gitAt(t, dev, "", "push", "origin", "main")
+
+	res, err := client.Sync(context.Background(), req)
+	if err != nil {
+		t.Fatalf("incremental back-sync: %v", err)
+	}
+	if res.Counts.Applied != 1 || res.Counts.Blocked != 0 {
+		t.Fatalf("incremental back-sync: want exactly main applied, got %+v", res.Refs)
+	}
+	assertMatchesOracle(t, origin, oracle, "refs/heads/main")
+	assertSHA1AndClean(t, origin)
+	assertOriginNote(t, origin, canonical)
+
+	res, err = client.Sync(context.Background(), req)
+	if err != nil {
+		t.Fatalf("no-op back-sync: %v", err)
+	}
+	if res.Counts.Applied != 0 || res.Counts.Blocked != 0 {
+		t.Fatalf("no-op back-sync must apply nothing, got %+v", res.Refs)
+	}
+}
+
+// assertTagRetryRepairsNotes has the target take a new tag on a commit no
+// branch reaches while refusing its notes. A plain retry leaves the tag
+// alone and writes nothing. One with RetranslateTags writes the missing note
+// and still leaves the tag alone.
+func assertTagRetryRepairsNotes(t *testing.T, client *gitsync.Client, req gitsync.SyncRequest, origin, canonical, dev string) {
+	t.Helper()
+	hook := filepath.Join(origin, "hooks", "update")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntest \"$1\" != refs/notes/sha256-origin\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, dev, "", "checkout", "-q", "--detach")
+	gitAt(t, dev, "1700003300 +0000", "commit", "--allow-empty", "-m", "tagged only")
+	gitAt(t, dev, "", "tag", "v3.0")
+	gitAt(t, dev, "", "push", "origin", "v3.0")
+	gitAt(t, dev, "", "checkout", "-q", "main")
+	if res, err := client.Sync(context.Background(), req); err == nil {
+		t.Fatalf("back-sync with the notes ref refused must fail, got %+v", res.Refs)
+	}
+	tagged := revParse(t, origin, "refs/tags/v3.0")
+	if err := os.Remove(hook); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.Sync(context.Background(), req); err != nil {
+		t.Fatalf("plain retry: %v", err)
+	}
+	if _, ok := originNote(t, origin, tagged); ok {
+		t.Fatalf("a plain retry must leave tags alone, but wrote a note for %s", tagged)
+	}
+
+	req.Policy.RetranslateTags = true
+	res, err := client.Sync(context.Background(), req)
+	if err != nil || res.Counts.Applied != 0 {
+		t.Fatalf("retry with RetranslateTags: err %v, refs %+v", err, res.Refs)
+	}
+	note, ok := originNote(t, origin, tagged)
+	if want := revParse(t, canonical, "refs/tags/v3.0"); !ok || note != want {
+		t.Errorf("sha256-origin note for v3.0: got %q, want %s", note, want)
+	}
+	if got := revParse(t, origin, "refs/tags/v3.0"); got != tagged {
+		t.Errorf("RetranslateTags moved v3.0: got %s, want %s", got, tagged)
+	}
+}
+
+func originNote(t *testing.T, repo, commit string) (string, bool) {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "-C", repo, "notes", "--ref=sha256-origin", "show", commit).Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
 }
 
 // assertSignatureKept checks that the commit ref points at on the SHA1
@@ -279,6 +348,9 @@ func assertOriginNote(t *testing.T, sha1Repo, sha256Repo string) {
 	note := strings.TrimSpace(mustGitOutput(t, sha1Repo, "notes", "--ref=sha256-origin", "show", tip))
 	if want := revParse(t, sha256Repo, ref); note != want {
 		t.Errorf("sha256-origin note for %s: got %q, want %s", ref, note, want)
+	}
+	if n := strings.TrimSpace(mustGitOutput(t, sha1Repo, "rev-list", "--count", "refs/notes/sha256-origin")); n != "1" {
+		t.Errorf("refs/notes/sha256-origin holds %s commits, want a single snapshot", n)
 	}
 }
 

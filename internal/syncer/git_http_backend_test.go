@@ -23,6 +23,7 @@ import (
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
 	bstrap "entire.io/entire/git-sync/internal/strategy/bootstrap"
+	"entire.io/entire/git-sync/internal/translate"
 	"github.com/go-git/go-git/v6/plumbing"
 )
 
@@ -124,6 +125,7 @@ func TestRun_GitHTTPBackendSyncDivergedTarget(t *testing.T) {
 	runGit(t, root, "init", "--bare", sourceBare)
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, sourceWorktree)
 	runGit(t, sourceWorktree, "config", "user.name", "git-sync test")
 	runGit(t, sourceWorktree, "config", "user.email", "git-sync@example.com")
@@ -183,6 +185,7 @@ func TestRun_GitHTTPBackendSyncMultiBranchFastForward(t *testing.T) {
 
 	runGit(t, root, "init", "--bare", sourceBare)
 	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
@@ -256,6 +259,7 @@ func TestRun_GitHTTPBackendSyncMappedBranchFastForward(t *testing.T) {
 	runGit(t, root, "init", "--bare", sourceBare)
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
 	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
@@ -327,6 +331,7 @@ func TestRun_GitHTTPBackendSyncTagCreate(t *testing.T) {
 	runGit(t, root, "init", "--bare", sourceBare)
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
 	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
@@ -388,6 +393,7 @@ func TestBootstrap_GitHTTPBackendSync(t *testing.T) {
 	runGit(t, root, "init", "--bare", sourceBare)
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
 	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
@@ -436,6 +442,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranch(t *testing.T) {
 	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
 	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
 	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
@@ -504,6 +511,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchResume(t *testing.T) {
 	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
 	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
 	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
@@ -615,6 +623,7 @@ func TestBootstrap_GitHTTPBackendBatchedPlanningTracksBatchLimit(t *testing.T) {
 	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
 	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
@@ -704,6 +713,7 @@ func TestBootstrap_GitHTTPBackendBatchedBranchWithTags(t *testing.T) {
 	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
 	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
 	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
@@ -942,6 +952,7 @@ func TestBootstrap_GitHTTPBackendBatchedManyBranches(t *testing.T) {
 	runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
 	runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
 	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, targetBare, "config", "http.receivepack", "true")
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")
@@ -1392,5 +1403,56 @@ func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCheckTargetHas_GitHTTPBackendNotesOnlyTarget covers a target whose only
+// ref is refs/notes/sha256-origin, as after a non-atomic push that landed the
+// notes and had its branch refused. The commits the notes name are on the
+// target, though no ref reaches them.
+func TestCheckTargetHas_GitHTTPBackendNotesOnlyTarget(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+	runGit(t, root, "init", "--bare", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "--bare", filepath.Join(root, "source.git"))
+	runGit(t, root, "init", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "commit", "--allow-empty", "-m", "landed without its branch")
+	commit := plumbing.NewHash(strings.TrimSpace(runGit(t, worktree, "rev-parse", "HEAD")))
+	runGit(t, worktree, "notes", "--ref=sha256-origin", "add", "-m", strings.Repeat("ab", 32), "HEAD")
+	runGit(t, worktree, "push", targetBare, "refs/notes/sha256-origin", "HEAD:refs/heads/"+testBranch)
+	runGit(t, targetBare, "update-ref", "-d", "refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+	targetURL := server.RepoURL("target.git")
+	missing := plumbing.NewHash(strings.Repeat("7", 40))
+
+	for _, protocol := range []string{"v1", "v2"} {
+		s, err := newSession(t.Context(), Config{
+			Source:       Endpoint{URL: server.RepoURL("source.git")},
+			Target:       Endpoint{URL: targetURL},
+			ProtocolMode: protocol,
+		}, true)
+		if err != nil {
+			t.Fatalf("%s: new session: %v", protocol, err)
+		}
+		if err := s.checkTargetHas(t.Context(), []translate.Pair{{Target: commit}}); err != nil {
+			t.Errorf("%s: target holds %s, got %v", protocol, commit, err)
+		}
+		if err := s.checkTargetHas(t.Context(), []translate.Pair{{Target: missing}}); err == nil || !strings.Contains(err.Error(), "does not have") {
+			t.Errorf("%s: target lacks %s, got %v", protocol, missing, err)
+		}
+		s.finish()
 	}
 }

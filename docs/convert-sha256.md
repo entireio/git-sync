@@ -330,30 +330,50 @@ version, or with `--rewrite-messages`, does not. git-sync reads
 SHA1 commit for every converted one, so keep that ref when you push the
 converted repository to its host. Those commits exist only in the original
 repository, so the target must be the repository the SHA256 one was
-converted from. Before pushing, git-sync asks the target for the commits the
-new history builds on, and stops with an error naming one it lacks.
+converted from. Before pushing, git-sync negotiates with the target as a
+fetch would, offering the commits the new history builds on, and stops with
+an error naming one the target does not acknowledge. It offers them rather
+than asking for them, because over SSH upload-pack refuses to send a commit
+that no branch or tag points at.
 
 **git-sync records what it translates.** Each sync updates
 `refs/notes/sha256-origin` on the SHA1 repository with the SHA256 commit
 behind every commit it wrote, and reads it back on the next run, so a
-commit is never translated twice. The branches, tags and notes go in one
-atomic push when the SHA1 server supports it, as git's does, so a branch
-never lands without its notes. Against a server without atomic pushes, a
-branch can land while its notes are refused. The next sync then translates
-those commits again, gets the same hashes and writes the missing notes:
+commit is never translated twice. The ref holds one commit with no parent,
+which each sync replaces, so reading it never means fetching every earlier
+version. Its update is not a fast-forward, so the SHA1 repository must not
+refuse non-fast-forward updates to `refs/notes/*`:
 
 ```bash
 git log --notes=sha256-origin    # in a clone of the SHA1 repository
 ```
 
+**Pass `--atomic` to land refs and notes together.** By default the
+branches, tags and notes go in ordinary pushes, so the server can take a
+branch while refusing its notes. The next sync then translates those commits
+again, gets the same hashes and writes the missing notes. With `--atomic`,
+git-sync sends every update in one atomic push, as `git push --atomic` does,
+and the server applies all of them or none. That push is never split into
+batches, so it ignores `--target-max-ref-updates`: a run that updates more
+refs than the server accepts in one request fails instead of landing part
+of them. `--atomic` fails up front when the server does not support atomic
+pushes, and in any sync that does not translate SHA256 to SHA1.
+
 **Tags are immutable.** A tag the SHA1 repository already has is left alone,
 whatever it points at, so tags that existed before the cutover keep their
-original objects. New tags are translated and created.
+original objects. New tags are translated and created. Without `--atomic`,
+the server can take a new tag while refusing its notes, and the next sync
+skips the tag, so its commits stay without notes. `--retranslate-tags`
+repairs that: it translates the tags the SHA1 repository already has and
+writes the notes their commits lack, leaving the tags as they are. A tag
+whose translation differs from the one the repository holds gets no notes.
+It translates the history of every tag, so use it for a repair run.
 
 **A write to the SHA1 repository blocks the sync.** If a branch on the SHA1
 repository points at a commit that is not a translation of any SHA256
 commit, or one that is not an ancestor of the new tip, the branch is blocked
-and the run fails. Force flags are not supported in this mode.
+and the run fails. Force flags and best-effort runs are not supported in
+this mode.
 
 What translation changes:
 

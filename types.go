@@ -174,7 +174,23 @@ type SyncPolicy struct {
 	ForceBlind     bool          `json:"forceBlind,omitempty"`
 	Prune          bool          `json:"prune"`
 	BestEffort     bool          `json:"bestEffort,omitempty"`
-	Protocol       ProtocolMode  `json:"protocol"`
+	// Atomic applies to a sync that translates a SHA256 source into a SHA1
+	// target. It pushes every ref update, and the notes recording their
+	// origin, in one atomic receive-pack request: the target takes all of
+	// them or none. The request is never split, so it ignores the
+	// per-request ref-update limit (TargetMaxRefUpdates). A target that
+	// does not advertise atomic is refused, and so is a run that does not
+	// translate.
+	Atomic bool `json:"atomic,omitempty"`
+	// RetranslateTags applies to a sync that translates a SHA256 source into
+	// a SHA1 target. It translates the tags the target already has, which
+	// are otherwise skipped, and records the origin notes their commits
+	// lack, as when a push landed a tag but the target refused its notes.
+	// The tags themselves are never changed. A tag whose translation differs
+	// from the target's gets no notes. It translates the history of every
+	// tag on each run, so turn it on to repair notes, not on every run.
+	RetranslateTags bool         `json:"retranslateTags,omitempty"`
+	Protocol        ProtocolMode `json:"protocol"`
 	// SourceAssertedEmpty and TargetAssertedEmpty are your authoritative
 	// statements that the source and target repositories hold no refs at all
 	// — from a repository-state query on each side, not from a ref listing.

@@ -22,7 +22,7 @@ func TestHashNotes_RoundTripAndExtend(t *testing.T) {
 	sha256A := plumbing.NewHash(strings.Repeat("a2", 32))
 	sha256B := plumbing.NewHash(strings.Repeat("b2", 32))
 
-	first, written, err := WriteHashNotes(store, plumbing.ZeroHash, nil, []Pair{{Source: sha256A, Target: sha1A}}, sig, "notes\n")
+	first, written, err := WriteHashNotes(store, nil, []Pair{{Source: sha256A, Target: sha1A}}, sig, "notes\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestHashNotes_RoundTripAndExtend(t *testing.T) {
 		t.Fatalf("first notes: got %v, want %v", values, want)
 	}
 
-	second, _, err := WriteHashNotes(store, first, entries, []Pair{{Source: sha256B, Target: sha1B}}, sig, "notes\n")
+	second, _, err := WriteHashNotes(store, entries, []Pair{{Source: sha256B, Target: sha1B}}, sig, "notes\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +52,8 @@ func TestHashNotes_RoundTripAndExtend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.ParentHashes) != 1 || c.ParentHashes[0] != first {
-		t.Errorf("notes commit parents: got %v, want [%s]", c.ParentHashes, first)
+	if len(c.ParentHashes) != 0 {
+		t.Errorf("notes commit parents: got %v, want none", c.ParentHashes)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestReadHashNotes_TreeTip(t *testing.T) {
 	sig := object.Signature{Name: "git-sync", Email: "git-sync@example.com", When: time.Unix(0, 0).UTC()}
 	sha1A := plumbing.NewHash(strings.Repeat("a1", 20))
 	sha256A := plumbing.NewHash(strings.Repeat("a2", 32))
-	commit, _, err := WriteHashNotes(store, plumbing.ZeroHash, nil, []Pair{{Source: sha256A, Target: sha1A}}, sig, "notes\n")
+	commit, _, err := WriteHashNotes(store, nil, []Pair{{Source: sha256A, Target: sha1A}}, sig, "notes\n")
 	if err != nil {
 		t.Fatal(err)
 	}

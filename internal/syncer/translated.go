@@ -74,6 +74,33 @@ func validateTranslation(cfg Config) error {
 		return errors.New("--prune is not supported when translating objects")
 	case cfg.AllRefs:
 		return errors.New("--all-refs is not supported when translating objects; sync branches and tags")
+	case cfg.BestEffort:
+		// A rejected ref would be reported as a warning, and the result
+		// never mentions a rejected refs/notes/sha256-origin at all.
+		return errors.New("best-effort is not supported when translating objects")
+	}
+	return nil
+}
+
+// checkTranslationFlags rejects the translation-only options this run cannot
+// honour.
+func (s *syncSession) checkTranslationFlags() error {
+	targetAtomic := s.target != nil && s.target.adv.Capabilities.Supports(capability.Atomic)
+	return validateTranslationFlags(s.cfg, s.translating(), targetAtomic)
+}
+
+// validateTranslationFlags rejects --atomic and --retranslate-tags outside a
+// translated sync, and --atomic against a target that does not advertise
+// atomic.
+func validateTranslationFlags(cfg Config, translating, targetAtomic bool) error {
+	const only = " is only supported when syncing a sha256 source into a sha1 target"
+	switch {
+	case cfg.Atomic && !translating:
+		return errors.New("--atomic" + only)
+	case cfg.RetranslateTags && !translating:
+		return errors.New("--retranslate-tags" + only)
+	case cfg.Atomic && !targetAtomic:
+		return fmt.Errorf("--atomic: %w", gitproto.ErrAtomicPushUnsupported)
 	}
 	return nil
 }
@@ -87,11 +114,13 @@ func validateTranslation(cfg Config) error {
 // refs/notes/sha256-origin on the target covers commits earlier syncs wrote.
 // The recorded hashes win over translating again: convert-sha256 before
 // this release dropped signatures and rewrote messages, so translating a
-// commit it converted does not reproduce the original SHA1 commit. The push updates
-// refs/notes/sha256-origin with every commit it translated.
+// commit it converted does not reproduce the original SHA1 commit. The push
+// replaces refs/notes/sha256-origin with notes that add every translated
+// commit the target will hold.
 //
 // Tags are immutable: a tag the target already has is left alone whatever it
-// points at.
+// points at. RetranslateTags still translates it, to note its commits when
+// the target holds its translation.
 func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	if err := validateTranslation(s.cfg); err != nil {
 		return Result{}, errTranslationMismatch(err)
@@ -136,9 +165,8 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	}
 	targetNotes := s.target.refMap[targetOriginNotesRef]
 	var targetNoteEntries []translate.NoteEntry
-	var targetNotesParent plumbing.Hash
 	if !targetNotes.IsZero() {
-		synced, entries, parent, err := s.readTargetNotes(ctx, targetNotes)
+		synced, entries, err := s.readTargetNotes(ctx, targetNotes)
 		if err != nil {
 			return Result{}, err
 		}
@@ -146,7 +174,6 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 			seed[sha256] = sha1
 		}
 		targetNoteEntries = entries
-		targetNotesParent = parent
 	}
 
 	outStore := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
@@ -154,7 +181,7 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	translated := make(map[plumbing.ReferenceName]plumbing.Hash, len(desiredRefs))
 	for _, name := range sortedRefNames(desiredRefs) {
 		want := desiredRefs[name]
-		if want.Kind == planner.RefKindTag && !s.target.refMap[want.TargetRef].IsZero() {
+		if want.Kind == planner.RefKindTag && !s.target.refMap[want.TargetRef].IsZero() && !s.cfg.RetranslateTags {
 			continue
 		}
 		out, err := tr.Translate(want.SourceHash)
@@ -187,7 +214,10 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("blocked %d ref update(s): the target has commits that are not translations of the source's", result.Blocked)
 	}
 
-	newCommits := tr.Commits()
+	newCommits, err := landedCommits(sourceStore, tr.Commits(), plans, translated, seed)
+	if err != nil {
+		return result, err
+	}
 	if !s.cfg.DryRun && (len(pushPlans) > 0 || len(newCommits) > 0) {
 		if err := s.checkTargetHas(ctx, tr.SeedsUsed()); err != nil {
 			return result, err
@@ -201,7 +231,7 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 				onTarget[sha256] = struct{}{}
 			}
 		}
-		if err := s.pushTranslated(ctx, sourceStore, outStore, tr, pushPlans, translated, onTarget, targetNotes, targetNotesParent, targetNoteEntries, newCommits); err != nil {
+		if err := s.pushTranslated(ctx, sourceStore, outStore, tr, pushPlans, translated, onTarget, targetNotes, targetNoteEntries, newCommits); err != nil {
 			return result, err
 		}
 	}
@@ -210,6 +240,89 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	result.Stats = s.stats.snapshot()
 	result.Measurement = s.measurementDone()
 	return result, nil
+}
+
+// landedCommits keeps the commits in translated whose SHA1 counterparts the
+// target will hold once the push lands: those reachable from a ref it
+// creates or updates, or from a ref whose translation it already has. Only
+// those get origin notes. A retranslated tag that differs from the target's
+// leaves out the commits only it reaches. seed holds the commits whose
+// counterparts are already recorded, where the walk stops.
+func landedCommits(
+	sourceStore storer.EncodedObjectStorer,
+	commits []translate.Pair,
+	plans []BranchPlan,
+	translated map[plumbing.ReferenceName]plumbing.Hash,
+	seed map[plumbing.Hash]plumbing.Hash,
+) ([]translate.Pair, error) {
+	var roots []plumbing.Hash
+	for _, p := range plans {
+		out := translated[p.TargetRef]
+		switch {
+		case p.Action == planner.ActionCreate, p.Action == planner.ActionUpdate:
+			roots = append(roots, p.SourceHash)
+		case !out.IsZero() && out == p.TargetHash:
+			roots = append(roots, p.SourceHash)
+		}
+	}
+	reachable, err := reachableCommits(sourceStore, formatcfg.SHA256, roots, seed)
+	if err != nil {
+		return nil, fmt.Errorf("find commits the push lands: %w", err)
+	}
+	landed := make([]translate.Pair, 0, len(commits))
+	for _, c := range commits {
+		if _, ok := reachable[c.Source]; ok {
+			landed = append(landed, c)
+		}
+	}
+	return landed, nil
+}
+
+// reachableCommits returns the commits reachable from roots, peeling tags,
+// without walking past the commits in stop.
+func reachableCommits(store storer.EncodedObjectStorer, format formatcfg.ObjectFormat, roots []plumbing.Hash, stop map[plumbing.Hash]plumbing.Hash) (map[plumbing.Hash]struct{}, error) {
+	out := make(map[plumbing.Hash]struct{})
+	seen := make(map[plumbing.Hash]struct{})
+	stack := slices.Clone(roots)
+	for len(stack) > 0 {
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		if _, ok := stop[h]; ok {
+			continue
+		}
+		obj, err := store.EncodedObject(plumbing.AnyObject, h)
+		if err != nil {
+			return nil, fmt.Errorf("load object %s: %w", h, err)
+		}
+		switch obj.Type() {
+		case plumbing.CommitObject:
+			c, err := object.DecodeCommit(store, obj)
+			if err != nil {
+				return nil, fmt.Errorf("decode commit %s: %w", h, err)
+			}
+			out[h] = struct{}{}
+			stack = append(stack, c.ParentHashes...)
+		case plumbing.TagObject:
+			raw, err := readEncoded(obj)
+			if err != nil {
+				return nil, fmt.Errorf("read tag %s: %w", h, err)
+			}
+			target, err := translate.TagObject(raw, format)
+			if err != nil {
+				return nil, fmt.Errorf("tag %s: %w", h, err)
+			}
+			stack = append(stack, target)
+		case plumbing.TreeObject, plumbing.BlobObject:
+			// A tag of a tree or blob reaches no commit.
+		case plumbing.InvalidObject, plumbing.OFSDeltaObject, plumbing.REFDeltaObject, plumbing.AnyObject:
+			return nil, fmt.Errorf("object %s has unexpected type %s", h, obj.Type())
+		}
+	}
+	return out, nil
 }
 
 // planTranslatedRef plans one ref. sourceStore holds the source objects,
@@ -230,6 +343,9 @@ func planTranslatedRef(
 	case want.Kind == planner.RefKindTag && !targetHash.IsZero():
 		plan.Action = planner.ActionSkip
 		plan.Reason = "tag already exists on target"
+		if !translated.IsZero() && translated != targetHash {
+			plan.Reason += " as " + planner.ShortHash(targetHash) + ", not its translation " + planner.ShortHash(translated)
+		}
 		return plan
 	case targetHash.IsZero():
 		plan.Action = planner.ActionCreate
@@ -274,7 +390,6 @@ func (s *syncSession) pushTranslated(
 	translated map[plumbing.ReferenceName]plumbing.Hash,
 	onTarget map[plumbing.Hash]struct{},
 	targetNotes plumbing.Hash,
-	targetNotesParent plumbing.Hash,
 	targetNoteEntries []translate.NoteEntry,
 	newCommits []translate.Pair,
 ) error {
@@ -299,7 +414,7 @@ func (s *syncSession) pushTranslated(
 
 	if len(newCommits) > 0 {
 		sig := object.Signature{Name: "git-sync", Email: "noreply@entire.io", When: time.Now().UTC()}
-		notes, written, err := translate.WriteHashNotes(outStore, targetNotesParent, targetNoteEntries, newCommits, sig,
+		notes, written, err := translate.WriteHashNotes(outStore, targetNoteEntries, newCommits, sig,
 			"git-sync: SHA256 origin of translated commits\n")
 		if err != nil {
 			return fmt.Errorf("write %s: %w", targetOriginNotesRef, err)
@@ -308,12 +423,12 @@ func (s *syncSession) pushTranslated(
 		cmds = append(cmds, gitproto.PushCommand{Name: targetOriginNotesRef, Old: targetNotes, New: notes})
 	}
 
-	// The refs and the notes recording their origin land together when the
-	// target can promise that. A target that cannot may take a ref without
-	// its notes. The next run then translates those commits again, gets
-	// the same hashes and writes the notes it missed.
+	// With Atomic, the refs and the notes recording their origin land
+	// together or not at all. Without it, the target may take a ref without
+	// its notes. The next run then translates those commits again, gets the
+	// same hashes and writes the notes it missed.
 	push := s.target.pusher.PushObjects
-	if s.target.adv.Capabilities.Supports(capability.Atomic) {
+	if s.cfg.Atomic {
 		push = s.target.pusher.PushObjectsAtomic
 	}
 	if err := push(ctx, cmds, outStore, hashes); err != nil {
@@ -463,45 +578,26 @@ func (s *syncSession) sourceRefHash(ctx context.Context, name plumbing.Reference
 }
 
 // readTargetNotes fetches the target's refs/notes/sha256-origin and reads it.
-// It also returns the commit new notes build on, as notesParent does.
-func (s *syncSession) readTargetNotes(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]plumbing.Hash, []translate.NoteEntry, plumbing.Hash, error) {
+// Each sync replaces the notes with one parentless commit, so the fetch
+// holds the current notes alone. Notes written by an earlier release still
+// carry their history, which the next sync that adds notes drops.
+func (s *syncSession) readTargetNotes(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]plumbing.Hash, []translate.NoteEntry, error) {
 	_, service, err := gitproto.ListSourceRefs(ctx, s.target.conn, s.cfg.ProtocolMode, []string{targetOriginNotesRef.String()})
 	if err != nil {
-		return nil, nil, plumbing.ZeroHash, fmt.Errorf("list target %s: %w", targetOriginNotesRef, err)
+		return nil, nil, fmt.Errorf("list target %s: %w", targetOriginNotesRef, err)
 	}
-	store := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
+	store := newBoundedStorer(memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1)), effectiveMaxObjects(s.cfg))
 	desired := map[plumbing.ReferenceName]gitproto.DesiredRef{
 		targetOriginNotesRef: {SourceRef: targetOriginNotesRef, TargetRef: targetOriginNotesRef, SourceHash: tip},
 	}
 	if err := service.FetchToStore(ctx, store, s.target.conn, desired, nil); err != nil {
-		return nil, nil, plumbing.ZeroHash, fmt.Errorf("fetch target %s: %w", targetOriginNotesRef, err)
+		return nil, nil, fmt.Errorf("fetch target %s: %w", targetOriginNotesRef, err)
 	}
 	values, entries, err := translate.ReadHashNotes(store, tip)
 	if err != nil {
-		return nil, nil, plumbing.ZeroHash, fmt.Errorf("read target %s: %w", targetOriginNotesRef, err)
+		return nil, nil, fmt.Errorf("read target %s: %w", targetOriginNotesRef, err)
 	}
-	parent, err := notesParent(store, tip)
-	if err != nil {
-		return nil, nil, plumbing.ZeroHash, fmt.Errorf("read target %s: %w", targetOriginNotesRef, err)
-	}
-	return values, entries, parent, nil
-}
-
-// notesParent returns the commit new notes build on: tip when it is a
-// commit, and none when the notes ref is unset or points straight at a
-// tree. The new notes keep every entry of such a tree.
-func notesParent(store storer.EncodedObjectStorer, tip plumbing.Hash) (plumbing.Hash, error) {
-	if tip.IsZero() {
-		return plumbing.ZeroHash, nil
-	}
-	obj, err := store.EncodedObject(plumbing.AnyObject, tip)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("load notes %s: %w", tip, err)
-	}
-	if obj.Type() != plumbing.CommitObject {
-		return plumbing.ZeroHash, nil
-	}
-	return tip, nil
+	return values, entries, nil
 }
 
 // checkTargetHas fails unless the target has every seeded commit the
@@ -510,38 +606,48 @@ func notesParent(store storer.EncodedObjectStorer, tip plumbing.Hash) (plumbing.
 // Pushing to another repository would fail on missing objects after the
 // whole pack was sent.
 //
-// It asks the target's upload-pack for those commits while claiming to have
-// them, so a target that holds them sends an empty pack. upload-pack refuses
-// a commit it does not have, or one no ref reaches.
+// It negotiates with the target's upload-pack as a fetch would, offering
+// those commits as haves, and upload-pack acknowledges the ones it holds.
 func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair) error {
 	tips := make(map[plumbing.Hash]struct{}, len(s.target.refMap))
 	for _, h := range s.target.refMap {
 		tips[h] = struct{}{}
 	}
-	desired := make(map[plumbing.ReferenceName]gitproto.DesiredRef)
-	haves := make(map[plumbing.ReferenceName]plumbing.Hash)
-	var example translate.Pair
+	sourceOf := make(map[plumbing.Hash]plumbing.Hash)
 	for _, p := range seeds {
-		if _, ok := tips[p.Target]; ok {
-			continue
+		if _, ok := tips[p.Target]; !ok {
+			sourceOf[p.Target] = p.Source
 		}
-		name := plumbing.ReferenceName("refs/git-sync/check/" + p.Target.String())
-		desired[name] = gitproto.DesiredRef{SourceRef: name, TargetRef: name, SourceHash: p.Target}
-		haves[name] = p.Target
-		example = p
 	}
-	if len(desired) == 0 {
+	if len(sourceOf) == 0 {
 		return nil
 	}
-	_, service, err := gitproto.ListSourceRefs(ctx, s.target.conn, s.cfg.ProtocolMode, []string{targetOriginNotesRef.String()})
+	// Any advertised ref gives the negotiation something to want. The notes
+	// ref counts too: a non-atomic push can land it while refusing every
+	// branch and tag.
+	prefixes := []string{"refs/heads/", "refs/tags/", targetOriginNotesRef.String()}
+	refs, service, err := gitproto.ListSourceRefs(ctx, s.target.conn, s.cfg.ProtocolMode, prefixes)
 	if err != nil {
 		return fmt.Errorf("list target refs: %w", err)
 	}
-	store := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
-	if err := service.FetchToStore(ctx, store, s.target.conn, desired, haves); err != nil &&
-		!errors.Is(err, git.NoErrAlreadyUpToDate) {
+	advertised := make([]plumbing.Hash, 0, len(refs))
+	for _, r := range refs {
+		advertised = append(advertised, r.Hash())
+	}
+	commits := slices.SortedFunc(maps.Keys(sourceOf), func(a, b plumbing.Hash) int { return a.Compare(b.Bytes()) })
+	held, err := service.HasCommits(ctx, s.target.conn, advertised, commits)
+	if err != nil {
+		return fmt.Errorf("check the target has the %d SHA1 commit(s) the translated history builds on: %w", len(commits), err)
+	}
+	var missing []plumbing.Hash
+	for _, h := range commits {
+		if _, ok := held[h]; !ok {
+			missing = append(missing, h)
+		}
+	}
+	if len(missing) > 0 {
 		return fmt.Errorf("the target does not have %d SHA1 commit(s) the translated history builds on, such as %s (SHA256 %s). "+
-			"Sync to the repository the source was converted from: %w", len(desired), example.Target, example.Source, err)
+			"Sync to the repository the source was converted from", len(missing), missing[0], sourceOf[missing[0]])
 	}
 	return nil
 }
