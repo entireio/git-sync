@@ -1,0 +1,46 @@
+Git sync currently supports a one-off transition from SHA-1 to SHA-256. I'd like to enable the following use case:
+- Transition from SHA-1 to SHA-256.
+- Make the original repository a "read-only" reference repo.
+- Changes to main for the new SHA-256 repo, as well as new tags, are sync'd back to the original SHA-1 repo via git-sync
+
+Assess the current support, identify gaps. Then create an E2E test to represent the end state.
+
+---
+
+Go ahead with the implementation.
+
+5: OK
+7: Treat same name tag name as already synced
+
+---
+
+Ensure that:
+- gpgsig and gpgsig-sha256 are always kept during the transitions.
+- the conversion in both directions align with https://github.com/git/git/blob/master/object-file-convert.c
+- the generated commits should pass tests such as https://github.com/git/git/blob/master/t/t1016-compatObjectFormat.sh
+
+---
+
+use a background codex agent to review the changes, focusing on git conformance
+
+---
+
+<task-notification>
+<task-id>b7fr00t8c</task-id>
+<tool-use-id>toolu_019cSQUje7TthWNQCkiFnyXp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/tasks/b7fr00t8c.output</output-file>
+<status>completed</status>
+<summary>Background command "SP=/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/scratchpad; cd ~/git/entireio/git-sync &amp;&amp; codex exec -s read-only -C ~/git/entireio/git-sync -o $SP/codex-review.md - &lt; $SP/codex-review-prompt.md &gt; $SP/codex-review.log 2&gt;&amp;1" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+let's fix them all. but fix rebase the current branch with origin/main
+
+---
+
+go ahead
+
+---
+
+go ahead
