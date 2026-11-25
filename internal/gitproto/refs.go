@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
@@ -97,20 +98,10 @@ func newV1RefService(adv *packp.AdvRefs, skippedRefCount int) *RefService {
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
 // Returns the list of refs and a RefService for subsequent operations.
 //
-// A source advertising an object-format git-sync cannot decode is rejected
-// here, wrapping ErrUnsupportedObjectFormat, before anything is fetched.
+// A source advertising an object-format git-sync cannot decode is rejected,
+// wrapping ErrUnsupportedObjectFormat, as soon as its advertisement is read:
+// before any of its ids are decoded, and before anything is fetched.
 func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
-	refs, svc, err := listSourceRefs(ctx, conn, protocolMode, refPrefixes)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := ValidateObjectFormat(svc.ObjectFormat()); err != nil {
-		return nil, nil, fmt.Errorf("source: %w", err)
-	}
-	return refs, svc, nil
-}
-
-func listSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
 		adv, refs, skippedCount, err := listSourceRefsV1(ctx, conn)
@@ -134,6 +125,9 @@ func listSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 		if caps, err := DecodeV2Capabilities(bytes.NewReader(data)); err == nil {
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
+			}
+			if err := ValidateObjectFormat(caps.ObjectFormat()); err != nil {
+				return nil, nil, err
 			}
 			refs, headTarget, unborn, skippedCount, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
@@ -375,6 +369,12 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 		}
 	}
 
+	// The ids are as wide as the remote's object format, and the decoder
+	// rejects a width it does not know ("invalid size") before anything can
+	// read the format, so check the format on the first line first.
+	if err := validateFirstLineObjectFormat(rd); err != nil {
+		return nil, err
+	}
 	ar := &packp.AdvRefs{}
 	if err := ar.Decode(rd); err != nil {
 		if errors.Is(err, packp.ErrEmptyAdvRefs) {
@@ -383,6 +383,28 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 		return nil, fmt.Errorf("%w; body-prefix=%q", err, bodyPreview(data))
 	}
 	return ar, nil
+}
+
+// validateFirstLineObjectFormat peeks at the first line of a v0/v1 ref
+// advertisement, which carries the capabilities after a NUL, and rejects an
+// object-format git-sync cannot decode. It consumes nothing; a line it cannot
+// read is left for the decoder to report.
+func validateFirstLineObjectFormat(rd *bufio.Reader) error {
+	_, line, err := pktline.PeekLine(rd)
+	if err != nil {
+		return nil //nolint:nilerr // the decoder reports a malformed advertisement
+	}
+	_, caps, found := bytes.Cut(line, []byte{0})
+	if !found {
+		return nil
+	}
+	prefix := []byte(capability.ObjectFormat + "=")
+	for _, field := range bytes.Fields(caps) {
+		if value, ok := bytes.CutPrefix(field, prefix); ok {
+			return ValidateObjectFormat(formatcfg.ObjectFormat(value))
+		}
+	}
+	return nil
 }
 
 func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {

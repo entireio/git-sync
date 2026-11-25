@@ -1000,12 +1000,6 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 		if err != nil {
 			return nil, fmt.Errorf("list target refs: %w", err)
 		}
-		// Both formats are known now and nothing has been fetched. git-sync
-		// relays the source's ids and packs unchanged, so a target in another
-		// format would only fail at the push, after the whole source fetch.
-		if err := gitproto.CheckObjectFormats(s.sourceService.ObjectFormat(), gitproto.AdvRefsObjectFormat(targetAdv)); err != nil {
-			return nil, fmt.Errorf("object formats: %w", err)
-		}
 		targetRefSlice, skippedTargetRefs, err := gitproto.AdvRefsToSlice(targetAdv)
 		if err != nil {
 			return nil, fmt.Errorf("decode target refs: %w", err)
@@ -1068,6 +1062,21 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	return s, nil
 }
 
+// checkObjectFormats fails a session that would sync between repositories of
+// different object formats. git-sync relays the source's ids and packs
+// unchanged, so such a run would only fail at the push, after the whole source
+// fetch. Sync, plan, replicate and bootstrap call it before fetching anything;
+// Probe does not, so it can still show what each endpoint advertised.
+func (s *syncSession) checkObjectFormats() error {
+	if s.target == nil {
+		return nil
+	}
+	if err := gitproto.CheckObjectFormats(s.sourceService.ObjectFormat(), gitproto.AdvRefsObjectFormat(s.target.adv)); err != nil {
+		return fmt.Errorf("object formats: %w", err)
+	}
+	return nil
+}
+
 // --- Public API ---
 
 // Run executes a sync or plan operation.
@@ -1077,6 +1086,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if err := s.checkObjectFormats(); err != nil {
+		return Result{}, err
+	}
 	if s.cfg.Mode == modeReplicate {
 		return s.runReplicate(ctx)
 	}
@@ -1567,6 +1579,9 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if err := s.checkObjectFormats(); err != nil {
+		return Result{}, err
+	}
 
 	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
 	if err != nil {

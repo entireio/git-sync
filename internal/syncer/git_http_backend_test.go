@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1324,23 +1325,55 @@ func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
 			server := newGitHTTPBackendServer(t, root)
 			defer server.Close()
 
-			for _, mode := range []string{modeSync, modeReplicate} {
-				_, err := Run(context.Background(), Config{
-					Source: Endpoint{URL: server.RepoURL("source.git")},
-					Target: Endpoint{URL: server.RepoURL("target.git")},
-					Mode:   mode,
-				})
+			base := Config{
+				Source: Endpoint{URL: server.RepoURL("source.git")},
+				Target: Endpoint{URL: server.RepoURL("target.git")},
+			}
+			// Every operation that would push: sync, plan, replicate, bootstrap.
+			for name, run := range map[string]func(Config) (Result, error){
+				"sync": func(c Config) (Result, error) { c.Mode = modeSync; return Run(context.Background(), c) },
+				"plan": func(c Config) (Result, error) {
+					c.Mode = modeSync
+					c.DryRun = true
+					return Run(context.Background(), c)
+				},
+				"replicate": func(c Config) (Result, error) { c.Mode = modeReplicate; return Run(context.Background(), c) },
+				"bootstrap": func(c Config) (Result, error) { return Bootstrap(context.Background(), c) },
+			} {
+				_, err := run(base)
 				if !errors.Is(err, gitproto.ErrObjectFormatMismatch) {
-					t.Fatalf("%s: err = %v, want ErrObjectFormatMismatch", mode, err)
+					t.Fatalf("%s: err = %v, want ErrObjectFormatMismatch", name, err)
 				}
 				for _, want := range []string{"source is " + tc.source, "target is " + tc.target} {
 					if !strings.Contains(err.Error(), want) {
-						t.Errorf("%s: error %q does not contain %q", mode, err, want)
+						t.Errorf("%s: error %q does not contain %q", name, err, want)
 					}
 				}
 			}
 			if n := server.uploadPackFetches.Load(); n != 0 {
 				t.Errorf("fetched from the source %d times before failing, want 0", n)
+			}
+
+			// Probe is diagnostic: it must still show what each endpoint
+			// advertised, the formats included, rather than fail.
+			probe, err := Probe(context.Background(), Config{
+				Source: Endpoint{URL: server.RepoURL("source.git")},
+				Target: Endpoint{URL: server.RepoURL("target.git")},
+			})
+			if err != nil {
+				t.Fatalf("probe: %v", err)
+			}
+			if len(probe.Refs) == 0 {
+				t.Errorf("probe returned no source refs")
+			}
+			for side, caps := range map[string][]string{"source": probe.Capabilities, "target": probe.TargetCaps} {
+				format := tc.source
+				if side == "target" {
+					format = tc.target
+				}
+				if !slices.Contains(caps, "object-format="+format) {
+					t.Errorf("probe %s capabilities %q lack object-format=%s", side, caps, format)
+				}
 			}
 			if out := runGit(t, targetBare, "for-each-ref"); strings.TrimSpace(out) != "" {
 				t.Errorf("target changed: %q", out)

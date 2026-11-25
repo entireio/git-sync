@@ -70,32 +70,110 @@ func TestCheckObjectFormats(t *testing.T) {
 	}
 }
 
-// A source advertising a format git-sync cannot decode fails at ref listing,
-// before any fetch, instead of with a checksum error mid-pack.
-func TestListSourceRefsRejectsUnsupportedObjectFormat(t *testing.T) {
+// v1AdvertisementWithFormat is a smart-HTTP v0/v1 advertisement whose ids are
+// hexLen characters wide and whose capabilities declare format, the way a
+// server of that format writes it.
+func v1AdvertisementWithFormat(t *testing.T, service, format string, hexLen int) []byte {
+	t.Helper()
+	var body strings.Builder
+	mustWrite := func(_ int, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("write advertisement: %v", err)
+		}
+	}
+	mustWrite(pktline.Writef(&body, "# service=%s\n", service))
+	mustWrite(0, pktline.WriteFlush(&body))
+	id := strings.Repeat("a", hexLen)
+	mustWrite(pktline.Writef(&body, "%s refs/heads/main\x00%s=%s report-status\n", id, capability.ObjectFormat, format))
+	mustWrite(pktline.Writef(&body, "%s refs/heads/other\n", id))
+	mustWrite(0, pktline.WriteFlush(&body))
+	return []byte(body.String())
+}
+
+// A v1 remote of an unsupported format writes ids of that format's width,
+// which go-git's ref decoder rejects as "invalid size" before anything reads
+// the capability. The format must be validated from the first line first, on
+// both the source (upload-pack) and the target (receive-pack).
+func TestV1AdvertisementRejectsUnsupportedObjectFormat(t *testing.T) {
+	t.Parallel()
+	const sha512HexLen = 128
+
+	t.Run("source", func(t *testing.T) {
+		t.Parallel()
+		conn := &stubConn{
+			reqInfoRefs: func(_ context.Context, service string, gitProtocol string) ([]byte, error) {
+				if gitProtocol == GitProtocolV2 {
+					return nil, errors.New("v2 not offered")
+				}
+				return v1AdvertisementWithFormat(t, service, "sha512", sha512HexLen), nil
+			},
+		}
+		_, _, err := ListSourceRefs(t.Context(), conn, "v1", nil)
+		if !errors.Is(err, ErrUnsupportedObjectFormat) {
+			t.Fatalf("ListSourceRefs = %v, want ErrUnsupportedObjectFormat", err)
+		}
+	})
+
+	t.Run("target", func(t *testing.T) {
+		t.Parallel()
+		conn := &stubConn{
+			reqInfoRefs: func(_ context.Context, service string, _ string) ([]byte, error) {
+				return v1AdvertisementWithFormat(t, service, "sha512", sha512HexLen), nil
+			},
+		}
+		_, err := AdvertisedRefsV1(t.Context(), conn, transport.ReceivePackService)
+		if !errors.Is(err, ErrUnsupportedObjectFormat) {
+			t.Fatalf("AdvertisedRefsV1 = %v, want ErrUnsupportedObjectFormat", err)
+		}
+	})
+
+	// The pre-check must not get in the way of the formats that decode.
+	for _, tc := range []struct {
+		format string
+		hexLen int
+	}{{"sha1", 40}, {"sha256", 64}} {
+		t.Run("accepts "+tc.format, func(t *testing.T) {
+			t.Parallel()
+			conn := &stubConn{
+				reqInfoRefs: func(_ context.Context, service string, _ string) ([]byte, error) {
+					return v1AdvertisementWithFormat(t, service, tc.format, tc.hexLen), nil
+				},
+			}
+			adv, err := AdvertisedRefsV1(t.Context(), conn, transport.ReceivePackService)
+			if err != nil {
+				t.Fatalf("AdvertisedRefsV1: %v", err)
+			}
+			if got := AdvRefsObjectFormat(adv); string(got) != tc.format {
+				t.Errorf("object format = %q, want %q", got, tc.format)
+			}
+		})
+	}
+}
+
+// A v2 source's format is known from its capability advertisement; reject an
+// unsupported one there, before ls-refs reads ids at the wrong width.
+func TestListSourceRefsV2RejectsUnsupportedObjectFormatBeforeLsRefs(t *testing.T) {
 	t.Parallel()
 	conn := &stubConn{
 		reqInfoRefs: func(_ context.Context, _ string, gitProtocol string) ([]byte, error) {
-			if gitProtocol == GitProtocolV2 {
-				return nil, errors.New("v2 not offered")
+			if gitProtocol != GitProtocolV2 {
+				return nil, errors.New("only v2 offered")
 			}
 			var body strings.Builder
-			mustWrite := func(err error) {
-				if err != nil {
-					t.Fatalf("write advertisement: %v", err)
+			for _, line := range []string{"version 2\n", "ls-refs=unborn\n", "fetch=shallow\n", "object-format=sha512\n"} {
+				if _, err := pktline.WriteString(&body, line); err != nil {
+					t.Fatalf("write capabilities: %v", err)
 				}
 			}
-			_, err := pktline.Writef(&body, "# service=%s\n", transport.UploadPackService)
-			mustWrite(err)
-			mustWrite(pktline.WriteFlush(&body))
-			_, err = pktline.Writef(&body, "%s refs/heads/main\x00%s=sha512\n", strings.Repeat("a", 40), capability.ObjectFormat)
-			mustWrite(err)
-			mustWrite(pktline.WriteFlush(&body))
+			if err := pktline.WriteFlush(&body); err != nil {
+				t.Fatalf("write flush: %v", err)
+			}
 			return []byte(body.String()), nil
 		},
 	}
-
-	_, _, err := ListSourceRefs(t.Context(), conn, "auto", nil)
+	// stubConn fails any POST, so reaching ls-refs would surface a different error.
+	_, _, err := ListSourceRefs(t.Context(), conn, "v2", nil)
 	if !errors.Is(err, ErrUnsupportedObjectFormat) {
 		t.Fatalf("ListSourceRefs = %v, want ErrUnsupportedObjectFormat", err)
 	}
