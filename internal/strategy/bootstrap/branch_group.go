@@ -287,7 +287,7 @@ func pushBranchGroup(ctx context.Context, p Params, members []plannedBatch, st g
 			"branch_count", len(plans),
 			"object_count", objectCount,
 			"budget_bytes", budget)
-		observer := newPackStreamObserver(packReader)
+		observer := newPackStreamObserver(packReader, p.SourceObjectFormat)
 		observer.SetAborter(func(bytesSent, objectsSent, totalObjects int64, atEOF bool) bool {
 			return shouldAbortPush(bytesSent, objectsSent, totalObjects, budget, atEOF)
 		})

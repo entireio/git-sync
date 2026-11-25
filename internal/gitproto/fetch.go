@@ -11,6 +11,7 @@ import (
 
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
@@ -151,7 +152,7 @@ func (s *RefService) FetchCommitParents(
 
 	parents = map[plumbing.Hash][]plumbing.Hash{}
 	consumeErr := consumeV2FetchPack(reader, false, nil, func(packReader io.Reader) error {
-		got, perr := ExtractCommitParents(packReader, s.V2Caps.ObjectFormat())
+		got, perr := ExtractCommitParents(packReader, s.ObjectFormat())
 		if perr != nil {
 			return perr
 		}
@@ -162,6 +163,23 @@ func (s *RefService) FetchCommitParents(
 		return nil, consumeErr
 	}
 	return parents, nil
+}
+
+// ObjectFormat returns the object format the source advertised, or
+// UnsetObjectFormat when it advertised none (implicitly sha1). Anything that
+// decodes the source's packs or object ids must use it.
+func (s *RefService) ObjectFormat() formatcfg.ObjectFormat {
+	switch s.Protocol {
+	case "v2":
+		return s.V2Caps.ObjectFormat()
+	case "v1":
+		if s.V1Adv != nil {
+			if vals := s.V1Adv.Capabilities.Get(capability.ObjectFormat); len(vals) > 0 {
+				return formatcfg.ObjectFormat(vals[0])
+			}
+		}
+	}
+	return formatcfg.UnsetObjectFormat
 }
 
 // Capabilities returns the sorted capability list for display.

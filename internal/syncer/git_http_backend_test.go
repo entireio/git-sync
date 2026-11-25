@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/cgi"
@@ -34,66 +35,73 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 		t.Skipf("git not available: %v", err)
 	}
 
-	root := t.TempDir()
-	sourceBare := filepath.Join(root, "source.git")
-	targetBare := filepath.Join(root, "target.git")
-	worktree := filepath.Join(root, "work")
+	// Default sync mode plans in an in-memory store; a store left at sha1
+	// cannot decode a sha256 source's pack, so both formats run.
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+			format := "--object-format=" + objectFormat
 
-	runGit(t, root, "init", "--bare", sourceBare)
-	runGit(t, root, "init", "--bare", targetBare)
-	runGit(t, targetBare, "config", "http.receivepack", "true")
-	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			runGit(t, root, "init", "--bare", format, sourceBare)
+			runGit(t, root, "init", "--bare", format, targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", format, "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
 
-	writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
-	runGit(t, worktree, "add", "README.md")
-	runGit(t, worktree, "commit", "-m", "initial")
-	runGit(t, worktree, "remote", "add", "origin", sourceBare)
-	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+			writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
+			runGit(t, worktree, "add", "README.md")
+			runGit(t, worktree, "commit", "-m", "initial")
+			runGit(t, worktree, "remote", "add", "origin", sourceBare)
+			runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
 
-	server := newGitHTTPBackendServer(t, root)
-	defer server.Close()
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
 
-	sourceURL := server.RepoURL("source.git")
-	targetURL := server.RepoURL("target.git")
+			sourceURL := server.RepoURL("source.git")
+			targetURL := server.RepoURL("target.git")
 
-	result, err := Run(context.Background(), Config{
-		Source: Endpoint{URL: sourceURL},
-		Target: Endpoint{URL: targetURL},
-	})
-	if err != nil {
-		t.Fatalf("initial sync failed: %v", err)
+			result, err := Run(context.Background(), Config{
+				Source: Endpoint{URL: sourceURL},
+				Target: Endpoint{URL: targetURL},
+			})
+			if err != nil {
+				t.Fatalf("initial sync failed: %v", err)
+			}
+			if result.Pushed != 1 || result.Blocked != 0 {
+				t.Fatalf("unexpected initial result: %+v", result)
+			}
+			if !result.Relay || result.RelayMode != relayModeBootstrap {
+				t.Fatalf("expected initial empty-target sync to use bootstrap relay, got %+v", result)
+			}
+
+			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+
+			writeFile(t, filepath.Join(worktree, "README.md"), "one\ntwo\n")
+			runGit(t, worktree, "add", "README.md")
+			runGit(t, worktree, "commit", "-m", "second")
+			runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+			result, err = Run(context.Background(), Config{
+				Source: Endpoint{URL: sourceURL},
+				Target: Endpoint{URL: targetURL},
+			})
+			if err != nil {
+				t.Fatalf("incremental sync failed: %v", err)
+			}
+			if result.Pushed != 1 || result.Blocked != 0 {
+				t.Fatalf("unexpected incremental result: %+v", result)
+			}
+			if !result.Relay || result.RelayMode != relayModeIncremental {
+				t.Fatalf("expected incremental sync to use incremental relay, got %+v", result)
+			}
+
+			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+		})
 	}
-	if result.Pushed != 1 || result.Blocked != 0 {
-		t.Fatalf("unexpected initial result: %+v", result)
-	}
-	if !result.Relay || result.RelayMode != relayModeBootstrap {
-		t.Fatalf("expected initial empty-target sync to use bootstrap relay, got %+v", result)
-	}
-
-	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
-
-	writeFile(t, filepath.Join(worktree, "README.md"), "one\ntwo\n")
-	runGit(t, worktree, "add", "README.md")
-	runGit(t, worktree, "commit", "-m", "second")
-	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
-
-	result, err = Run(context.Background(), Config{
-		Source: Endpoint{URL: sourceURL},
-		Target: Endpoint{URL: targetURL},
-	})
-	if err != nil {
-		t.Fatalf("incremental sync failed: %v", err)
-	}
-	if result.Pushed != 1 || result.Blocked != 0 {
-		t.Fatalf("unexpected incremental result: %+v", result)
-	}
-	if !result.Relay || result.RelayMode != relayModeIncremental {
-		t.Fatalf("expected incremental sync to use incremental relay, got %+v", result)
-	}
-
-	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 }
 
 func TestRun_GitHTTPBackendSyncDivergedTarget(t *testing.T) {
@@ -1231,12 +1239,17 @@ func TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes(t *testing.T) {
 			// Room for any one commit, not for the whole trunk.
 			server.maxPushBody.Store(325_000)
 
+			// Each checkpoint's upload diagnostics; the pack observer scans in
+			// the source's format, so a landed checkpoint must not report an
+			// observer failure.
+			var diagnostics bytes.Buffer
 			result, err := Run(context.Background(), Config{
-				Source:      Endpoint{URL: server.RepoURL("source.git")},
-				Target:      Endpoint{URL: server.RepoURL("target.git")},
-				Mode:        modeReplicate,
-				Prune:       true,
-				IncludeTags: true,
+				Source:          Endpoint{URL: server.RepoURL("source.git")},
+				Target:          Endpoint{URL: server.RepoURL("target.git")},
+				Mode:            modeReplicate,
+				Prune:           true,
+				IncludeTags:     true,
+				BootstrapLogger: slog.New(slog.NewTextHandler(&diagnostics, nil)),
 			})
 			t.Logf("relay mode %q, reason %q, pushed %d, batches %d", result.RelayMode, result.RelayReason, result.Pushed, result.BatchCount)
 			if err != nil {
@@ -1247,6 +1260,12 @@ func TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes(t *testing.T) {
 			}
 			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 			runGit(t, targetBare, "fsck", "--connectivity-only")
+			if !strings.Contains(diagnostics.String(), "observer_failed=false") {
+				t.Fatalf("no checkpoint upload diagnostics logged:\n%s", diagnostics.String())
+			}
+			if strings.Contains(diagnostics.String(), "observer_failed=true") {
+				t.Fatalf("a landed checkpoint reported observer_failed=true:\n%s", diagnostics.String())
+			}
 		})
 	}
 }
