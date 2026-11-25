@@ -151,7 +151,7 @@ func (s *RefService) FetchCommitParents(
 
 	parents = map[plumbing.Hash][]plumbing.Hash{}
 	consumeErr := consumeV2FetchPack(reader, false, nil, func(packReader io.Reader) error {
-		got, perr := ExtractCommitParents(packReader)
+		got, perr := ExtractCommitParents(packReader, s.V2Caps.ObjectFormat())
 		if perr != nil {
 			return perr
 		}

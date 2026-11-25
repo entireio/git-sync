@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
@@ -121,7 +122,7 @@ func writeBlob(t *testing.T, store *memory.Storage, content string) plumbing.Has
 func TestExtractCommitParents_LinearChain(t *testing.T) {
 	t.Parallel()
 	pack, want := buildSyntheticCommitChain(t, 5, false)
-	got, err := ExtractCommitParents(io.NopCloser(bytes.NewReader(pack)))
+	got, err := ExtractCommitParents(io.NopCloser(bytes.NewReader(pack)), formatcfg.UnsetObjectFormat)
 	if err != nil {
 		t.Fatalf("ExtractCommitParents: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestExtractCommitParents_LinearChain(t *testing.T) {
 func TestExtractCommitParents_Branching(t *testing.T) {
 	t.Parallel()
 	pack, want := buildSyntheticCommitChain(t, 5, true)
-	got, err := ExtractCommitParents(io.NopCloser(bytes.NewReader(pack)))
+	got, err := ExtractCommitParents(io.NopCloser(bytes.NewReader(pack)), formatcfg.UnsetObjectFormat)
 	if err != nil {
 		t.Fatalf("ExtractCommitParents: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestExtractCommitParents_Branching(t *testing.T) {
 func TestExtractCommitParents_WithDeltas(t *testing.T) {
 	t.Parallel()
 	pack, want := buildSyntheticCommitChain(t, 50, false)
-	got, err := ExtractCommitParentsWithCache(io.NopCloser(bytes.NewReader(pack)), 1024*1024)
+	got, err := ExtractCommitParentsWithCache(io.NopCloser(bytes.NewReader(pack)), 1024*1024, formatcfg.UnsetObjectFormat)
 	if err != nil {
 		t.Fatalf("ExtractCommitParents: %v", err)
 	}
@@ -250,7 +251,7 @@ func TestParseCommitParents_CanonicalPositionOnly(t *testing.T) {
 func TestExtractCommitParents_NonSeekableSpillsToDisk(t *testing.T) {
 	t.Parallel()
 	pack, want := buildSyntheticCommitChain(t, 30, true)
-	got, err := ExtractCommitParents(readOnlyReader{r: bytes.NewReader(pack)})
+	got, err := ExtractCommitParents(readOnlyReader{r: bytes.NewReader(pack)}, formatcfg.UnsetObjectFormat)
 	if err != nil {
 		t.Fatalf("ExtractCommitParents: %v", err)
 	}
@@ -330,7 +331,7 @@ func TestExtractCommitParentsRejectsOversizedDeclaredObject(t *testing.T) {
 		if len(pack) > 64 {
 			t.Fatalf("expected a tiny pack, got %d bytes", len(pack))
 		}
-		_, err := ExtractCommitParents(bytes.NewReader(pack))
+		_, err := ExtractCommitParents(bytes.NewReader(pack), formatcfg.UnsetObjectFormat)
 		if err == nil {
 			t.Fatalf("declared size %d: expected an error, got nil", declared)
 		}
@@ -343,7 +344,7 @@ func TestExtractCommitParentsRejectsOversizedDeclaredObject(t *testing.T) {
 // A legitimate object under the ceiling must still parse, so the bound cannot
 // be satisfied by rejecting everything.
 func TestExtractCommitParentsAcceptsNormalObjectSizes(t *testing.T) {
-	storer := newCommitParentsStorer(DefaultCommitParentsCacheBytes)
+	storer := newCommitParentsStorer(DefaultCommitParentsCacheBytes, formatcfg.UnsetObjectFormat)
 	for _, sz := range []int64{0, 1, maxObjectPrealloc, maxObjectPrealloc + 1, maxDeclaredObjectSize} {
 		w, err := storer.RawObjectWriter(plumbing.CommitObject, sz)
 		if err != nil {

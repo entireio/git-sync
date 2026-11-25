@@ -276,13 +276,19 @@ func buildUpdateRequest(
 	if adv.Capabilities.Supports(capability.ReportStatus) {
 		req.Capabilities.Set(capability.ReportStatus)
 	}
+	// Echo the target's object-format: receive-pack treats a client that
+	// omits it as sha1 and refuses the push on a sha256 repository.
+	format := advertisedObjectFormat(adv)
+	if format != "" {
+		req.Capabilities.Set(capability.ObjectFormat, format)
+	}
 
 	hasDelete := false
 	hasUpdates := false
 	for _, cmd := range commands {
-		c := &packp.Command{Name: cmd.Name, Old: cmd.Old}
+		c := &packp.Command{Name: cmd.Name, Old: wireHash(cmd.Old, format)}
 		if cmd.Delete {
-			c.New = plumbing.ZeroHash
+			c.New = wireHash(plumbing.ZeroHash, format)
 			hasDelete = true
 		} else {
 			c.New = cmd.New
@@ -961,10 +967,39 @@ func buildEmptyPack(algo crypto.Hash) []byte {
 // checksum matches the target's advertised object format: SHA-256 repositories
 // get a 32-byte trailer; everything else uses the 20-byte SHA-1 trailer.
 func emptyPack(adv *packp.AdvRefs) []byte {
-	if vals := adv.Capabilities.Get(capability.ObjectFormat); len(vals) > 0 && vals[0] == "sha256" {
+	if advertisedObjectFormat(adv) == objectFormatSHA256 {
 		return emptyPackSHA256
 	}
 	return emptyPackSHA1
+}
+
+const objectFormatSHA256 = "sha256"
+
+// zeroHashSHA256 is the null object id of a sha256 repository. plumbing.ZeroHash
+// is format-unset and encodes as 40 hex zeros, which a sha256 receive-pack
+// rejects as a malformed id.
+var zeroHashSHA256, _ = plumbing.FromHex(strings.Repeat("0", 64))
+
+// advertisedObjectFormat returns the object-format the receive-pack
+// advertisement declares, or "" when it declares none (implicitly sha1).
+func advertisedObjectFormat(adv *packp.AdvRefs) string {
+	if adv == nil {
+		return ""
+	}
+	if vals := adv.Capabilities.Get(capability.ObjectFormat); len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
+}
+
+// wireHash returns h as it must appear in a receive-pack command for a
+// repository of the given object format. Only the null id needs rewriting:
+// a real id already carries its own length.
+func wireHash(h plumbing.Hash, format string) plumbing.Hash {
+	if format == objectFormatSHA256 && h.IsZero() {
+		return zeroHashSHA256
+	}
+	return h
 }
 
 // progressSink returns a line-prefixing io.Writer suitable for

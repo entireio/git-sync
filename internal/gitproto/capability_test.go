@@ -1,9 +1,11 @@
 package gitproto
 
 import (
+	"slices"
 	"testing"
 
 	"entire.io/entire/git-sync/internal/useragent"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
@@ -216,5 +218,31 @@ func TestRequestCapabilities(t *testing.T) {
 	got = capsNoAgent.RequestCapabilities()
 	if len(got) != 0 {
 		t.Errorf("RequestCapabilities() without agent returned %d items, want 0", len(got))
+	}
+}
+
+// A sha256 server rejects any v2 command whose request omits object-format,
+// so the advertised value must be echoed back; a server that advertises none
+// must not be sent one.
+func TestRequestCapabilitiesEchoesObjectFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		caps   map[string]string
+		want   []string
+		format formatcfg.ObjectFormat
+	}{
+		{name: "sha256", caps: map[string]string{"object-format": "sha256"}, want: []string{"object-format=sha256"}, format: formatcfg.SHA256},
+		{name: "sha1", caps: map[string]string{"object-format": "sha1"}, want: []string{"object-format=sha1"}, format: formatcfg.SHA1},
+		{name: "not advertised", caps: map[string]string{"ls-refs": ""}, want: nil, format: formatcfg.UnsetObjectFormat},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caps := &V2Capabilities{Caps: tc.caps}
+			if got := caps.RequestCapabilities(); !slices.Equal(got, tc.want) {
+				t.Errorf("RequestCapabilities() = %q, want %q", got, tc.want)
+			}
+			if got := caps.ObjectFormat(); got != tc.format {
+				t.Errorf("ObjectFormat() = %q, want %q", got, tc.format)
+			}
+		})
 	}
 }

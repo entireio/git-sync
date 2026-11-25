@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 )
@@ -54,15 +55,19 @@ const maxSpilledPackBytes = 4 << 30
 // Intended for tree:0-filtered packs where the only object kinds are
 // commits and (occasionally) annotated tags. Input is the raw packfile
 // stream (e.g. demuxed sideband from a v2 fetch response).
-func ExtractCommitParents(r io.Reader) (map[plumbing.Hash][]plumbing.Hash, error) {
-	return ExtractCommitParentsWithCache(r, DefaultCommitParentsCacheBytes)
+//
+// format is the source repository's object format; it decides both the pack
+// trailer checksum and the object ids, so a sha256 pack parsed as sha1 fails
+// the trailer check. UnsetObjectFormat means sha1.
+func ExtractCommitParents(r io.Reader, format formatcfg.ObjectFormat) (map[plumbing.Hash][]plumbing.Hash, error) {
+	return ExtractCommitParentsWithCache(r, DefaultCommitParentsCacheBytes, format)
 }
 
 // ExtractCommitParentsWithCache is like ExtractCommitParents but lets
 // the caller cap the delta-resolution cache size. On cache miss the
 // underlying pack parser returns ErrObjectNotFound; raise the limit
 // and retry, or fall back to the in-memory store path.
-func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int) (map[plumbing.Hash][]plumbing.Hash, error) {
+func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int, format formatcfg.ObjectFormat) (map[plumbing.Hash][]plumbing.Hash, error) {
 	if maxCacheBytes <= 0 {
 		maxCacheBytes = DefaultCommitParentsCacheBytes
 	}
@@ -97,8 +102,12 @@ func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int) (map[plumbing
 		seekable = tmp
 	}
 
-	store := newCommitParentsStorer(maxCacheBytes)
-	p := packfile.NewParser(seekable, packfile.WithStorage(store))
+	store := newCommitParentsStorer(maxCacheBytes, format)
+	opts := []packfile.ParserOption{packfile.WithStorage(store)}
+	if format == formatcfg.SHA256 {
+		opts = append(opts, packfile.WithObjectFormat(format))
+	}
+	p := packfile.NewParser(seekable, opts...)
 	if _, err := p.Parse(); err != nil {
 		return nil, fmt.Errorf("parse packfile: %w", err)
 	}
@@ -119,11 +128,11 @@ type commitParentsStorer struct {
 	hasher  *plumbing.ObjectHasher
 }
 
-func newCommitParentsStorer(maxBytes int) *commitParentsStorer {
+func newCommitParentsStorer(maxBytes int, format formatcfg.ObjectFormat) *commitParentsStorer {
 	return &commitParentsStorer{
 		parents: make(map[plumbing.Hash][]plumbing.Hash),
 		cache:   newDeltaCache(maxBytes),
-		hasher:  plumbing.FromObjectFormat(""),
+		hasher:  plumbing.FromObjectFormat(format),
 	}
 }
 

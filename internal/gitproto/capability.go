@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"entire.io/entire/git-sync/internal/useragent"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 )
 
@@ -81,12 +82,26 @@ func (c *V2Capabilities) SortedKeys() []string {
 }
 
 // RequestCapabilities builds the capability arguments for a v2 command request.
+//
+// The server's object-format is echoed back verbatim: protocol v2 treats a
+// client that omits it as sha1, so a sha256 server rejects every ls-refs and
+// fetch from a silent client ("mismatched object format"). Echoing what the
+// server advertised never declares a format the server lacks.
 func (c *V2Capabilities) RequestCapabilities() []string {
 	var caps []string
 	if agent := c.Value("agent"); agent != "" {
 		caps = append(caps, "agent="+useragent.GoGit())
 	}
+	if format := c.ObjectFormat(); format != formatcfg.UnsetObjectFormat {
+		caps = append(caps, capability.ObjectFormat+"="+string(format))
+	}
 	return caps
+}
+
+// ObjectFormat returns the object format the server advertised, or
+// UnsetObjectFormat when it advertised none (implicitly sha1).
+func (c *V2Capabilities) ObjectFormat() formatcfg.ObjectFormat {
+	return formatcfg.ObjectFormat(c.Value(capability.ObjectFormat))
 }
 
 // DecodeV2Capabilities parses a protocol v2 capability advertisement from an
