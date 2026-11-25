@@ -3,8 +3,10 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"net/http/cgi"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,66 +37,73 @@ func TestRun_GitHTTPBackendSync(t *testing.T) {
 		t.Skipf("git not available: %v", err)
 	}
 
-	root := t.TempDir()
-	sourceBare := filepath.Join(root, "source.git")
-	targetBare := filepath.Join(root, "target.git")
-	worktree := filepath.Join(root, "work")
+	// Default sync mode plans in an in-memory store; a store left at sha1
+	// cannot decode a sha256 source's pack, so both formats run.
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+			format := "--object-format=" + objectFormat
 
-	runGit(t, root, "init", "--bare", sourceBare)
-	runGit(t, root, "init", "--bare", targetBare)
-	runGit(t, targetBare, "config", "http.receivepack", "true")
-	runGit(t, root, "init", "-b", testBranch, worktree)
-	runGit(t, worktree, "config", "user.name", "git-sync test")
-	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			runGit(t, root, "init", "--bare", format, sourceBare)
+			runGit(t, root, "init", "--bare", format, targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", format, "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
 
-	writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
-	runGit(t, worktree, "add", "README.md")
-	runGit(t, worktree, "commit", "-m", "initial")
-	runGit(t, worktree, "remote", "add", "origin", sourceBare)
-	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+			writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
+			runGit(t, worktree, "add", "README.md")
+			runGit(t, worktree, "commit", "-m", "initial")
+			runGit(t, worktree, "remote", "add", "origin", sourceBare)
+			runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
 
-	server := newGitHTTPBackendServer(t, root)
-	defer server.Close()
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
 
-	sourceURL := server.RepoURL("source.git")
-	targetURL := server.RepoURL("target.git")
+			sourceURL := server.RepoURL("source.git")
+			targetURL := server.RepoURL("target.git")
 
-	result, err := Run(context.Background(), Config{
-		Source: Endpoint{URL: sourceURL},
-		Target: Endpoint{URL: targetURL},
-	})
-	if err != nil {
-		t.Fatalf("initial sync failed: %v", err)
+			result, err := Run(context.Background(), Config{
+				Source: Endpoint{URL: sourceURL},
+				Target: Endpoint{URL: targetURL},
+			})
+			if err != nil {
+				t.Fatalf("initial sync failed: %v", err)
+			}
+			if result.Pushed != 1 || result.Blocked != 0 {
+				t.Fatalf("unexpected initial result: %+v", result)
+			}
+			if !result.Relay || result.RelayMode != relayModeBootstrap {
+				t.Fatalf("expected initial empty-target sync to use bootstrap relay, got %+v", result)
+			}
+
+			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+
+			writeFile(t, filepath.Join(worktree, "README.md"), "one\ntwo\n")
+			runGit(t, worktree, "add", "README.md")
+			runGit(t, worktree, "commit", "-m", "second")
+			runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
+
+			result, err = Run(context.Background(), Config{
+				Source: Endpoint{URL: sourceURL},
+				Target: Endpoint{URL: targetURL},
+			})
+			if err != nil {
+				t.Fatalf("incremental sync failed: %v", err)
+			}
+			if result.Pushed != 1 || result.Blocked != 0 {
+				t.Fatalf("unexpected incremental result: %+v", result)
+			}
+			if !result.Relay || result.RelayMode != relayModeIncremental {
+				t.Fatalf("expected incremental sync to use incremental relay, got %+v", result)
+			}
+
+			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+		})
 	}
-	if result.Pushed != 1 || result.Blocked != 0 {
-		t.Fatalf("unexpected initial result: %+v", result)
-	}
-	if !result.Relay || result.RelayMode != relayModeBootstrap {
-		t.Fatalf("expected initial empty-target sync to use bootstrap relay, got %+v", result)
-	}
-
-	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
-
-	writeFile(t, filepath.Join(worktree, "README.md"), "one\ntwo\n")
-	runGit(t, worktree, "add", "README.md")
-	runGit(t, worktree, "commit", "-m", "second")
-	runGit(t, worktree, "push", "origin", "HEAD:refs/heads/"+testBranch)
-
-	result, err = Run(context.Background(), Config{
-		Source: Endpoint{URL: sourceURL},
-		Target: Endpoint{URL: targetURL},
-	})
-	if err != nil {
-		t.Fatalf("incremental sync failed: %v", err)
-	}
-	if result.Pushed != 1 || result.Blocked != 0 {
-		t.Fatalf("unexpected incremental result: %+v", result)
-	}
-	if !result.Relay || result.RelayMode != relayModeIncremental {
-		t.Fatalf("expected incremental sync to use incremental relay, got %+v", result)
-	}
-
-	assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
 }
 
 func TestRun_GitHTTPBackendSyncDivergedTarget(t *testing.T) {
@@ -747,6 +757,9 @@ type gitHTTPBackendServer struct {
 	// lastPack holds the pack of the last push that carried one, per
 	// repository.
 	lastPack map[string][]byte
+	// uploadPackFetches counts upload-pack requests that fetch objects, so a
+	// test can tell a run that failed before fetching anything.
+	uploadPackFetches atomic.Int64
 }
 
 func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
@@ -772,6 +785,20 @@ func newGitHTTPBackendServer(t *testing.T, root string) *gitHTTPBackendServer {
 	handler.Stderr = &lockedBuffer{server: s}
 	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isPush := strings.HasSuffix(r.URL.Path, "/git-receive-pack")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
+			// A v2 ls-refs is a POST too; count only requests that fetch.
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+			r.TransferEncoding = nil
+			if !bytes.Contains(body, []byte("command=ls-refs")) {
+				s.uploadPackFetches.Add(1)
+			}
+		}
 		// net/http/cgi refuses chunked request bodies, and git-sync streams
 		// its pushes. Buffer the body so the CGI gets a Content-Length.
 		// Buffer every push, chunked or not, so LastPack sees each one.
@@ -1011,8 +1038,13 @@ func TestReplicate_GitHTTPBackendResumeAfterTrunkLanded(t *testing.T) {
 		// seedTrunk is the trunk revision already on the target, if any.
 		seedTrunk  string
 		wantReason string
+		// objectFormat initializes every repository with this format; ""
+		// keeps git's default (sha1).
+		objectFormat string
 	}{
 		{name: "empty target", wantReason: planner.ReasonEmptyTargetManagedRefs},
+		{name: "empty sha256 target", wantReason: planner.ReasonEmptyTargetManagedRefs, objectFormat: "sha256"},
+		{name: "sha256 trunk already on target", seedTrunk: testBranch, wantReason: planner.ReasonReplicatePackRejected, objectFormat: "sha256"},
 		{name: "trunk already on target", seedTrunk: testBranch, wantReason: planner.ReasonReplicatePackRejected},
 		// The trunk moved on since: one update rides along with the creates.
 		{name: "trunk behind on target", seedTrunk: testBranch + "~1", wantReason: planner.ReasonReplicatePackRejected},
@@ -1023,12 +1055,16 @@ func TestReplicate_GitHTTPBackendResumeAfterTrunkLanded(t *testing.T) {
 			targetBare := filepath.Join(root, "target.git")
 			worktree := filepath.Join(root, "work")
 
-			runGit(t, root, "init", "--bare", sourceBare)
+			var formatArgs []string
+			if tc.objectFormat != "" {
+				formatArgs = []string{"--object-format=" + tc.objectFormat}
+			}
+			runGit(t, root, append([]string{"init", "--bare", sourceBare}, formatArgs...)...)
 			runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
 			runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
-			runGit(t, root, "init", "--bare", targetBare)
+			runGit(t, root, append([]string{"init", "--bare", targetBare}, formatArgs...)...)
 			runGit(t, targetBare, "config", "http.receivepack", "true")
-			runGit(t, root, "init", "-b", testBranch, worktree)
+			runGit(t, root, append([]string{"init", "-b", testBranch, worktree}, formatArgs...)...)
 			runGit(t, worktree, "config", "user.name", "git-sync test")
 			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
 			runGit(t, worktree, "remote", "add", "origin", sourceBare)
@@ -1081,6 +1117,267 @@ func TestReplicate_GitHTTPBackendResumeAfterTrunkLanded(t *testing.T) {
 				assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(name))
 			}
 			runGit(t, targetBare, "fsck", "--connectivity-only")
+		})
+	}
+}
+
+// TestReplicate_GitHTTPBackendSHA256 replicates a sha256 repository the way
+// the mirror-pipeline native worker does: an empty-target bootstrap, then an
+// incremental sync after a new push. Protocol v2 requires the client to echo
+// the server's object-format on every command; a client that stays silent is
+// treated as sha1 and rejected by a sha256 server.
+func TestReplicate_GitHTTPBackendSHA256(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+
+	runGit(t, root, "init", "--bare", "--object-format=sha256", sourceBare)
+	runGit(t, root, "init", "--bare", "--object-format=sha256", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "--object-format=sha256", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "remote", "add", "origin", sourceBare)
+
+	writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
+	runGit(t, worktree, "add", "README.md")
+	runGit(t, worktree, "commit", "-m", "initial")
+	runGit(t, worktree, "tag", "-a", "v1", "-m", "v1")
+	runGit(t, worktree, "switch", "-q", "-c", "feature")
+	writeFile(t, filepath.Join(worktree, "FEATURE.md"), "feature\n")
+	runGit(t, worktree, "add", "FEATURE.md")
+	runGit(t, worktree, "commit", "-m", "feature")
+	runGit(t, worktree, "switch", "-q", testBranch)
+	runGit(t, worktree, "push", "-q", "origin", "--all")
+	runGit(t, worktree, "push", "-q", "origin", "--tags")
+	runGit(t, sourceBare, "symbolic-ref", "HEAD", "refs/heads/"+testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+
+	run := func() {
+		t.Helper()
+		result, err := Run(context.Background(), Config{
+			Source:      Endpoint{URL: server.RepoURL("source.git")},
+			Target:      Endpoint{URL: server.RepoURL("target.git")},
+			Mode:        modeReplicate,
+			Prune:       true,
+			IncludeTags: true,
+		})
+		if err != nil {
+			t.Fatalf("replicate failed: %v", err)
+		}
+		t.Logf("relay mode %q, reason %q, pushed %d", result.RelayMode, result.RelayReason, result.Pushed)
+	}
+	assertAll := func() {
+		t.Helper()
+		for _, ref := range []plumbing.ReferenceName{
+			plumbing.NewBranchReferenceName(testBranch),
+			plumbing.NewBranchReferenceName("feature"),
+			plumbing.NewTagReferenceName("v1"),
+		} {
+			assertGitRefEqual(t, sourceBare, targetBare, ref)
+		}
+		runGit(t, targetBare, "fsck", "--connectivity-only")
+	}
+
+	run()
+	assertAll()
+
+	// Incremental: a fast-forward, a new branch and a deleted branch.
+	writeFile(t, filepath.Join(worktree, "README.md"), "one\ntwo\n")
+	runGit(t, worktree, "add", "README.md")
+	runGit(t, worktree, "commit", "-m", "second")
+	runGit(t, worktree, "switch", "-q", "-c", "other")
+	runGit(t, worktree, "switch", "-q", testBranch)
+	runGit(t, worktree, "push", "-q", "origin", testBranch, "other", ":feature")
+
+	run()
+	for _, ref := range []plumbing.ReferenceName{
+		plumbing.NewBranchReferenceName(testBranch),
+		plumbing.NewBranchReferenceName("other"),
+		plumbing.NewTagReferenceName("v1"),
+	} {
+		assertGitRefEqual(t, sourceBare, targetBare, ref)
+	}
+	if out := runGit(t, targetBare, "for-each-ref", "refs/heads/feature"); strings.TrimSpace(out) != "" {
+		t.Fatalf("feature not pruned on target: %q", out)
+	}
+	runGit(t, targetBare, "fsck", "--connectivity-only")
+}
+
+// TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes covers a trunk too big
+// for one push: the batched bootstrap must walk the trunk's commit parents to
+// cut it into pushes under the target's body limit. The parents come from a
+// tree:0 pack whose commit headers carry 64-hex ids in a sha256 repository,
+// so a parser that only knows 40-hex ids sees a one-commit chain and the
+// single oversized push hits the 413.
+func TestReplicate_GitHTTPBackendSplitsTrunkAcrossPushes(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+			format := "--object-format=" + objectFormat
+
+			runGit(t, root, "init", "--bare", format, sourceBare)
+			runGit(t, sourceBare, "config", "uploadpack.allowFilter", "true")
+			runGit(t, sourceBare, "config", "uploadpack.allowReachableSHA1InWant", "true")
+			runGit(t, root, "init", "--bare", format, targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", format, "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			runGit(t, worktree, "remote", "add", "origin", sourceBare)
+			for i := range 3 {
+				writePseudoRandomFile(t, filepath.Join(worktree, fmt.Sprintf("trunk-%d.bin", i)), int64(150_000+i*13))
+				runGit(t, worktree, "add", ".")
+				runGit(t, worktree, "commit", "-m", fmt.Sprintf("trunk-%d", i))
+			}
+			runGit(t, worktree, "push", "-q", "origin", testBranch)
+			runGit(t, sourceBare, "symbolic-ref", "HEAD", "refs/heads/"+testBranch)
+
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
+			// Room for any one commit, not for the whole trunk.
+			server.maxPushBody.Store(325_000)
+
+			// Each checkpoint's upload diagnostics; the pack observer scans in
+			// the source's format, so a landed checkpoint must not report an
+			// observer failure.
+			var diagnostics bytes.Buffer
+			result, err := Run(context.Background(), Config{
+				Source:          Endpoint{URL: server.RepoURL("source.git")},
+				Target:          Endpoint{URL: server.RepoURL("target.git")},
+				Mode:            modeReplicate,
+				Prune:           true,
+				IncludeTags:     true,
+				BootstrapLogger: slog.New(slog.NewTextHandler(&diagnostics, nil)),
+			})
+			t.Logf("relay mode %q, reason %q, pushed %d, batches %d", result.RelayMode, result.RelayReason, result.Pushed, result.BatchCount)
+			if err != nil {
+				t.Fatalf("replicate failed: %v", err)
+			}
+			if result.BatchCount < 2 {
+				t.Fatalf("batches = %d, want the trunk split across at least 2 pushes", result.BatchCount)
+			}
+			assertGitRefEqual(t, sourceBare, targetBare, plumbing.NewBranchReferenceName(testBranch))
+			runGit(t, targetBare, "fsck", "--connectivity-only")
+			if !strings.Contains(diagnostics.String(), "observer_failed=false") {
+				t.Fatalf("no checkpoint upload diagnostics logged:\n%s", diagnostics.String())
+			}
+			if strings.Contains(diagnostics.String(), "observer_failed=true") {
+				t.Fatalf("a landed checkpoint reported observer_failed=true:\n%s", diagnostics.String())
+			}
+		})
+	}
+}
+
+// TestRun_GitHTTPBackendSyncObjectFormatMismatch syncs between repositories of
+// different object formats. git-sync relays the source's ids and packs
+// unchanged and cannot convert them, so the run must stop once both formats
+// are known, before fetching anything, with an error naming both.
+func TestRun_GitHTTPBackendSyncObjectFormatMismatch(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	for _, tc := range []struct{ source, target string }{
+		{source: "sha1", target: "sha256"},
+		{source: "sha256", target: "sha1"},
+	} {
+		t.Run(tc.source+"_to_"+tc.target, func(t *testing.T) {
+			root := t.TempDir()
+			sourceBare := filepath.Join(root, "source.git")
+			targetBare := filepath.Join(root, "target.git")
+			worktree := filepath.Join(root, "work")
+
+			runGit(t, root, "init", "--bare", "--object-format="+tc.source, sourceBare)
+			runGit(t, root, "init", "--bare", "--object-format="+tc.target, targetBare)
+			runGit(t, targetBare, "config", "http.receivepack", "true")
+			runGit(t, root, "init", "--object-format="+tc.source, "-b", testBranch, worktree)
+			runGit(t, worktree, "config", "user.name", "git-sync test")
+			runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+			writeFile(t, filepath.Join(worktree, "README.md"), "one\n")
+			runGit(t, worktree, "add", "README.md")
+			runGit(t, worktree, "commit", "-m", "initial")
+			runGit(t, worktree, "push", "-q", sourceBare, "HEAD:refs/heads/"+testBranch)
+
+			server := newGitHTTPBackendServer(t, root)
+			defer server.Close()
+
+			base := Config{
+				Source: Endpoint{URL: server.RepoURL("source.git")},
+				Target: Endpoint{URL: server.RepoURL("target.git")},
+			}
+			// Every operation that would push: sync, plan, replicate, bootstrap.
+			for name, run := range map[string]func(Config) (Result, error){
+				"sync": func(c Config) (Result, error) { c.Mode = modeSync; return Run(context.Background(), c) },
+				"plan": func(c Config) (Result, error) {
+					c.Mode = modeSync
+					c.DryRun = true
+					return Run(context.Background(), c)
+				},
+				"replicate": func(c Config) (Result, error) { c.Mode = modeReplicate; return Run(context.Background(), c) },
+				"bootstrap": func(c Config) (Result, error) { return Bootstrap(context.Background(), c) },
+			} {
+				_, err := run(base)
+				if !errors.Is(err, gitproto.ErrObjectFormatMismatch) {
+					t.Fatalf("%s: err = %v, want ErrObjectFormatMismatch", name, err)
+				}
+				for _, want := range []string{"source is " + tc.source, "target is " + tc.target} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s: error %q does not contain %q", name, err, want)
+					}
+				}
+			}
+			if n := server.uploadPackFetches.Load(); n != 0 {
+				t.Errorf("fetched from the source %d times before failing, want 0", n)
+			}
+
+			// Probe is diagnostic: it must still show what each endpoint
+			// advertised, the formats included, rather than fail.
+			probe, err := Probe(context.Background(), Config{
+				Source: Endpoint{URL: server.RepoURL("source.git")},
+				Target: Endpoint{URL: server.RepoURL("target.git")},
+			})
+			if err != nil {
+				t.Fatalf("probe: %v", err)
+			}
+			if len(probe.Refs) == 0 {
+				t.Errorf("probe returned no source refs")
+			}
+			for side, caps := range map[string][]string{"source": probe.Capabilities, "target": probe.TargetCaps} {
+				format := tc.source
+				if side == "target" {
+					format = tc.target
+				}
+				if !slices.Contains(caps, "object-format="+format) {
+					t.Errorf("probe %s capabilities %q lack object-format=%s", side, caps, format)
+				}
+			}
+			if out := runGit(t, targetBare, "for-each-ref"); strings.TrimSpace(out) != "" {
+				t.Errorf("target changed: %q", out)
+			}
 		})
 	}
 }

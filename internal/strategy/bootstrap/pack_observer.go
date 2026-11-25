@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"errors"
 	"fmt"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,7 @@ var errObservationInterrupted = errors.New("pack observation interrupted")
 // objects don't record their compressed size.
 type packStreamObserver struct {
 	src       io.ReadCloser
+	format    formatcfg.ObjectFormat
 	tee       io.Reader
 	pw        *io.PipeWriter
 	closeOnce sync.Once
@@ -85,10 +87,14 @@ type packCounters struct {
 // further bytes.
 type aborterFunc func(bytesSent, objectsSent, totalObjects int64, atEOF bool) bool
 
-func newPackStreamObserver(src io.ReadCloser) *packStreamObserver {
+// format is the pack's object format; the scanner verifies the trailer and
+// reads object ids at its size, so a sha256 pack scanned as sha1 records a
+// scanner error even though the upload succeeds. UnsetObjectFormat means sha1.
+func newPackStreamObserver(src io.ReadCloser, format formatcfg.ObjectFormat) *packStreamObserver {
 	pr, pw := io.Pipe()
 	obs := &packStreamObserver{
 		src:         src,
+		format:      format,
 		pw:          pw,
 		headerReady: make(chan struct{}),
 		done:        make(chan struct{}),
@@ -229,7 +235,11 @@ func (o *packStreamObserver) consume(pr *io.PipeReader) {
 	defer close(o.done)
 	defer pr.Close()
 
-	s := packfile.NewScanner(pr)
+	var opts []packfile.ScannerOption
+	if o.format == formatcfg.SHA256 {
+		opts = append(opts, packfile.WithSHA256())
+	}
+	s := packfile.NewScanner(pr, opts...)
 	for s.Scan() {
 		d := s.Data()
 		switch d.Section {

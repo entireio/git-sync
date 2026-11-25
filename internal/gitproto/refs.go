@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/pktline"
 	"github.com/go-git/go-git/v6/plumbing/protocol/capability"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
@@ -96,6 +97,10 @@ func newV1RefService(adv *packp.AdvRefs, skippedRefCount int) *RefService {
 
 // ListSourceRefs discovers refs from the source using the configured protocol mode.
 // Returns the list of refs and a RefService for subsequent operations.
+//
+// A source advertising an object-format git-sync cannot decode is rejected,
+// wrapping ErrUnsupportedObjectFormat, as soon as its advertisement is read:
+// before any of its ids are decoded, and before anything is fetched.
 func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPrefixes []string) ([]*plumbing.Reference, *RefService, error) {
 	switch protocolMode {
 	case "v1":
@@ -120,6 +125,9 @@ func ListSourceRefs(ctx context.Context, conn Conn, protocolMode string, refPref
 		if caps, err := DecodeV2Capabilities(bytes.NewReader(data)); err == nil {
 			if !caps.Supports("ls-refs") || !caps.Supports("fetch") {
 				return nil, nil, errors.New("source does not advertise required protocol v2 commands")
+			}
+			if err := ValidateObjectFormat(caps.ObjectFormat()); err != nil {
+				return nil, nil, err
 			}
 			refs, headTarget, unborn, skippedCount, err := listSourceRefsV2(ctx, conn, caps, refPrefixes)
 			if err != nil {
@@ -361,6 +369,12 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 		}
 	}
 
+	// The ids are as wide as the remote's object format, and the decoder
+	// rejects a width it does not know ("invalid size") before anything can
+	// read the format, so check the format before decoding.
+	if err := validateAdvertisedObjectFormat(data); err != nil {
+		return nil, err
+	}
 	ar := &packp.AdvRefs{}
 	if err := ar.Decode(rd); err != nil {
 		if errors.Is(err, packp.ErrEmptyAdvRefs) {
@@ -368,15 +382,67 @@ func decodeV1AdvRefs(data []byte) (*packp.AdvRefs, error) {
 		}
 		return nil, fmt.Errorf("%w; body-prefix=%q", err, bodyPreview(data))
 	}
+	// Backstop for a layout the pre-check did not recognise but the decoder
+	// did: never hand on a format the ids were not decoded at.
+	if err := ValidateObjectFormat(AdvRefsObjectFormat(ar)); err != nil {
+		return nil, err
+	}
 	return ar, nil
 }
 
+// validateAdvertisedObjectFormat finds the capabilities on the first ref line
+// of a v0/v1 advertisement and rejects an object-format git-sync cannot
+// decode. It reads data with its own reader, independent of the decoder's
+// buffer, so the first ref line is read in full up to the pkt-line limit. It
+// skips what may precede that line: the smart service announcement and its
+// flush, and a "version N" announcement (git sends "version 1" to a client that
+// asked for protocol v1). Anything it cannot parse, including an empty
+// repository, is left for the decoder to report.
+func validateAdvertisedObjectFormat(data []byte) error {
+	r := bytes.NewReader(data)
+	afterService := false
+	for {
+		l, line, err := pktline.ReadLine(r)
+		if err != nil {
+			return nil //nolint:nilerr // the decoder reports a malformed advertisement
+		}
+		switch {
+		case l == pktline.Flush && afterService:
+			afterService = false
+			continue
+		case l < pktline.LenSize:
+			return nil // a flush with no refs: an empty repository
+		case bytes.HasPrefix(line, []byte("# service=")):
+			afterService = true
+			continue
+		case bytes.HasPrefix(line, []byte("version ")):
+			continue
+		}
+		_, caps, found := bytes.Cut(line, []byte{0})
+		if !found {
+			return nil
+		}
+		prefix := []byte(capability.ObjectFormat + "=")
+		for _, field := range bytes.Fields(caps) {
+			if value, ok := bytes.CutPrefix(field, prefix); ok {
+				return ValidateObjectFormat(formatcfg.ObjectFormat(value))
+			}
+		}
+		return nil
+	}
+}
+
 func consumeSmartInfoRefsHeader(rd *bufio.Reader) (bool, error) {
-	_, prefix, err := pktline.PeekLine(rd)
-	if err != nil {
+	// Peek only the length prefix and the banner's fixed opening. SSH and
+	// remote-helper transports send no banner, so the first packet may be a
+	// ref line of any length up to the pkt-line limit; peeking the whole
+	// packet would overflow the reader's buffer on a long one.
+	const servicePrefix = "# service="
+	head, err := rd.Peek(pktline.LenSize + len(servicePrefix))
+	if len(head) < pktline.LenSize {
 		return false, fmt.Errorf("peek pktline: %w", err)
 	}
-	if !bytes.HasPrefix(prefix, []byte("# service=")) {
+	if !bytes.HasPrefix(head[pktline.LenSize:], []byte(servicePrefix)) {
 		return false, nil
 	}
 

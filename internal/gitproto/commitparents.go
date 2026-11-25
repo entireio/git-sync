@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 )
@@ -54,15 +55,19 @@ const maxSpilledPackBytes = 4 << 30
 // Intended for tree:0-filtered packs where the only object kinds are
 // commits and (occasionally) annotated tags. Input is the raw packfile
 // stream (e.g. demuxed sideband from a v2 fetch response).
-func ExtractCommitParents(r io.Reader) (map[plumbing.Hash][]plumbing.Hash, error) {
-	return ExtractCommitParentsWithCache(r, DefaultCommitParentsCacheBytes)
+//
+// format is the source repository's object format; it decides both the pack
+// trailer checksum and the object ids, so a sha256 pack parsed as sha1 fails
+// the trailer check. UnsetObjectFormat means sha1.
+func ExtractCommitParents(r io.Reader, format formatcfg.ObjectFormat) (map[plumbing.Hash][]plumbing.Hash, error) {
+	return ExtractCommitParentsWithCache(r, DefaultCommitParentsCacheBytes, format)
 }
 
 // ExtractCommitParentsWithCache is like ExtractCommitParents but lets
 // the caller cap the delta-resolution cache size. On cache miss the
 // underlying pack parser returns ErrObjectNotFound; raise the limit
 // and retry, or fall back to the in-memory store path.
-func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int) (map[plumbing.Hash][]plumbing.Hash, error) {
+func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int, format formatcfg.ObjectFormat) (map[plumbing.Hash][]plumbing.Hash, error) {
 	if maxCacheBytes <= 0 {
 		maxCacheBytes = DefaultCommitParentsCacheBytes
 	}
@@ -97,8 +102,12 @@ func ExtractCommitParentsWithCache(r io.Reader, maxCacheBytes int) (map[plumbing
 		seekable = tmp
 	}
 
-	store := newCommitParentsStorer(maxCacheBytes)
-	p := packfile.NewParser(seekable, packfile.WithStorage(store))
+	store := newCommitParentsStorer(maxCacheBytes, format)
+	opts := []packfile.ParserOption{packfile.WithStorage(store)}
+	if format == formatcfg.SHA256 {
+		opts = append(opts, packfile.WithObjectFormat(format))
+	}
+	p := packfile.NewParser(seekable, opts...)
 	if _, err := p.Parse(); err != nil {
 		return nil, fmt.Errorf("parse packfile: %w", err)
 	}
@@ -117,13 +126,15 @@ type commitParentsStorer struct {
 	parents map[plumbing.Hash][]plumbing.Hash
 	cache   *deltaCache
 	hasher  *plumbing.ObjectHasher
+	format  formatcfg.ObjectFormat
 }
 
-func newCommitParentsStorer(maxBytes int) *commitParentsStorer {
+func newCommitParentsStorer(maxBytes int, format formatcfg.ObjectFormat) *commitParentsStorer {
 	return &commitParentsStorer{
 		parents: make(map[plumbing.Hash][]plumbing.Hash),
 		cache:   newDeltaCache(maxBytes),
-		hasher:  plumbing.FromObjectFormat(""),
+		hasher:  plumbing.FromObjectFormat(format),
+		format:  format,
 	}
 }
 
@@ -171,7 +182,7 @@ func (w *commitParentsWriter) Close() error {
 		return fmt.Errorf("hash %s object (%d bytes): %w", w.typ, len(content), err)
 	}
 	if w.typ == plumbing.CommitObject {
-		w.s.parents[hash] = parseCommitParents(content)
+		w.s.parents[hash] = parseCommitParents(content, w.s.format)
 	}
 	// Detach the byte slice from the buffer so the buffer can be GC'd
 	// independently. The cache may keep this entry until evicted.
@@ -315,16 +326,20 @@ func (c *deltaCache) get(hash plumbing.Hash) (*deltaCacheEntry, bool) {
 // reachability computation consistent with what a canonical reader
 // will see in the same bytes.
 //
-// Returns nil if the first header isn't "tree <40-hex>", or if a
-// parent line is malformed (wrong length / non-hex hash). In both
-// cases the planner sees an empty parent set and stops walking
+// format is the repository's object format: a parent id is 40 hex
+// characters under sha1 and 64 under sha256, and a line of the other
+// length is malformed.
+//
+// Returns nil if the first header isn't "tree <id>", or if a parent
+// line is malformed (wrong length for the format / non-hex hash). In
+// both cases the planner sees an empty parent set and stops walking
 // rather than guessing.
-func parseCommitParents(content []byte) []plumbing.Hash {
+func parseCommitParents(content []byte, format formatcfg.ObjectFormat) []plumbing.Hash {
 	const (
 		treePrefix   = "tree "
 		parentPrefix = "parent "
-		parentLen    = len(parentPrefix) + 40
 	)
+	parentLen := len(parentPrefix) + format.HexSize()
 
 	line, rest := nextLine(content)
 	if !bytes.HasPrefix(line, []byte(treePrefix)) {
@@ -340,8 +355,8 @@ func parseCommitParents(content []byte) []plumbing.Hash {
 		if len(line) != parentLen {
 			return parents
 		}
-		h := plumbing.NewHash(string(line[len(parentPrefix):]))
-		if h.IsZero() {
+		h, ok := plumbing.FromHex(string(line[len(parentPrefix):]))
+		if !ok || h.IsZero() {
 			return parents
 		}
 		parents = append(parents, h)

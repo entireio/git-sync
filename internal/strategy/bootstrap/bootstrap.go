@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"io"
 	"log/slog"
 	"regexp"
@@ -43,8 +44,11 @@ type Params struct {
 		PushPack(ctx context.Context, cmds []gitproto.PushCommand, pack io.ReadCloser) error
 		PushCommands(ctx context.Context, cmds []gitproto.PushCommand) error
 	}
-	DesiredRefs map[plumbing.ReferenceName]planner.DesiredRef
-	TargetRefs  map[plumbing.ReferenceName]plumbing.Hash
+	// SourceObjectFormat is the source's object format, which every pack
+	// fetched from it and pushed on is in. UnsetObjectFormat means sha1.
+	SourceObjectFormat formatcfg.ObjectFormat
+	DesiredRefs        map[plumbing.ReferenceName]planner.DesiredRef
+	TargetRefs         map[plumbing.ReferenceName]plumbing.Hash
 	// SourceHeadTarget is the source ref that HEAD points to, when advertised.
 	// Empty if unknown. When set, batched bootstrap plans this branch first and
 	// uses its commit-graph reachability as a cutoff for subsequent branches.
@@ -806,7 +810,7 @@ func executeBatched( //nolint:maintidx // complex batch logic is inherently bran
 				"calibrated_bytes_per_object", calibratedBytesPerObject)
 
 			cmds := convert.PlansToPushCommands(stagePlans, false)
-			observer := newPackStreamObserver(packReader)
+			observer := newPackStreamObserver(packReader, p.SourceObjectFormat)
 			// The abort budget for a span we cannot split is the target's
 			// number, not ours. TargetMaxPack exists so a doomed push wastes
 			// little and the temp ref advances often — both of which need a

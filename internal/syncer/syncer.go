@@ -23,7 +23,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
-	"github.com/go-git/go-git/v6/storage/memory"
 
 	"entire.io/entire/git-sync/internal/auth"
 	"entire.io/entire/git-sync/internal/convert"
@@ -1063,6 +1062,21 @@ func newSession(ctx context.Context, cfg Config, needTarget bool) (*syncSession,
 	return s, nil
 }
 
+// checkObjectFormats fails a session that would sync between repositories of
+// different object formats. git-sync relays the source's ids and packs
+// unchanged, so such a run would only fail at the push, after the whole source
+// fetch. Sync, plan, replicate and bootstrap call it before fetching anything;
+// Probe does not, so it can still show what each endpoint advertised.
+func (s *syncSession) checkObjectFormats() error {
+	if s.target == nil {
+		return nil
+	}
+	if err := gitproto.CheckObjectFormats(s.sourceService.ObjectFormat(), gitproto.AdvRefsObjectFormat(s.target.adv)); err != nil {
+		return fmt.Errorf("object formats: %w", err)
+	}
+	return nil
+}
+
 // --- Public API ---
 
 // Run executes a sync or plan operation.
@@ -1072,6 +1086,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if err := s.checkObjectFormats(); err != nil {
+		return Result{}, err
+	}
 	if s.cfg.Mode == modeReplicate {
 		return s.runReplicate(ctx)
 	}
@@ -1119,7 +1136,7 @@ func (s *syncSession) runSync(ctx context.Context) (Result, error) {
 	// Bound the store before anything is fetched into it: the object limit used
 	// to be checked on the closure afterwards, which cannot prevent the memory
 	// growth it exists to prevent.
-	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), effectiveMaxObjects(s.cfg)), nil)
+	repo, err := git.Init(newSourceStore(sourceService.ObjectFormat(), effectiveMaxObjects(s.cfg)), nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
@@ -1562,6 +1579,9 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if err := s.checkObjectFormats(); err != nil {
+		return Result{}, err
+	}
 
 	desiredRefs, _, err := planner.BuildDesiredRefs(s.sourceRefMap, planConfig(cfg))
 	if err != nil {
@@ -1609,7 +1629,7 @@ func Fetch(ctx context.Context, cfg Config, haveRefs []string, haveHashes []plum
 	// previously working operation at the limit. The sync path's fetch is
 	// have-bounded by the target's refs, so there the cap tracks the diff being
 	// pushed, which is what the limit is for.
-	repo, err := git.Init(newBoundedStorer(memory.NewStorage(), cfg.MaterializedMaxObjects), nil)
+	repo, err := git.Init(newSourceStore(s.sourceService.ObjectFormat(), cfg.MaterializedMaxObjects), nil)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("init in-memory repository: %w", err)
 	}
@@ -1648,7 +1668,8 @@ func bootstrapWithInputs(
 ) (Result, error) {
 	bResult, err := bstrap.Execute(ctx, bstrap.Params{
 		SourceConn: s.sourceConn, SourceService: s.sourceService, TargetPusher: s.target.pusher,
-		DesiredRefs: desiredRefs, TargetRefs: targetRefs,
+		SourceObjectFormat: s.sourceService.ObjectFormat(),
+		DesiredRefs:        desiredRefs, TargetRefs: targetRefs,
 		SourceHeadTarget: s.sourceService.HeadTarget,
 		MaxPackBytes:     s.cfg.MaxPackBytes, TargetMaxPack: s.cfg.TargetMaxPackBytes,
 		Verbose: s.cfg.Verbose, Logger: s.logger,

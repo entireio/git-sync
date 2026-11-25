@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1025,7 +1026,7 @@ func TestRecombineDropCount(t *testing.T) {
 func TestPackStreamObserverTracksBytes(t *testing.T) {
 	t.Parallel()
 	body := []byte("a packfile worth of bytes")
-	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(body)))
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(body)), formatcfg.UnsetObjectFormat)
 	out, err := io.ReadAll(o)
 	if err != nil {
 		t.Fatalf("read: %v", err)

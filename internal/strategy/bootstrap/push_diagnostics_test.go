@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"io"
 	"log/slog"
 	"testing"
@@ -81,7 +82,7 @@ func TestConfiguredFallbackDiagnostic(t *testing.T) {
 func TestCutUploadDiagnosticDoesNotReportObserverFailure(t *testing.T) {
 	t.Parallel()
 	data, _ := buildSyntheticPack(t, 10)
-	observer := newPackStreamObserver(io.NopCloser(bytes.NewReader(data)))
+	observer := newPackStreamObserver(io.NopCloser(bytes.NewReader(data)), formatcfg.UnsetObjectFormat)
 	observer.SetAborter(func(n, _, _ int64, _ bool) bool { return n >= 64 })
 	if _, err := observer.Read(make([]byte, 64)); !errors.Is(err, ErrPackUploadAborted) {
 		t.Fatalf("expected abort, got %v", err)
@@ -103,7 +104,7 @@ func TestCutUploadDiagnosticDoesNotReportObserverFailure(t *testing.T) {
 func TestSourceTruncationDiagnosticReportsFailure(t *testing.T) {
 	t.Parallel()
 	data, _ := buildSyntheticPack(t, 10)
-	observer := newPackStreamObserver(io.NopCloser(&sourceFailureReader{data: data[:64], failure: io.ErrUnexpectedEOF}))
+	observer := newPackStreamObserver(io.NopCloser(&sourceFailureReader{data: data[:64], failure: io.ErrUnexpectedEOF}), formatcfg.UnsetObjectFormat)
 	_, pushErr := io.Copy(io.Discard, observer)
 	if !errors.Is(pushErr, io.ErrUnexpectedEOF) {
 		t.Fatalf("expected source truncation: %v", pushErr)

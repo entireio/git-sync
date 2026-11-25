@@ -6,7 +6,9 @@ import (
 	"io"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/storage"
+	"github.com/go-git/go-git/v6/storage/memory"
 )
 
 // ErrObjectLimit is reported when a fetch into the in-memory store exceeds the
@@ -57,6 +59,18 @@ type boundedStorer struct {
 
 	limit int
 	count int
+}
+
+// newSourceStore returns the in-memory store a source's objects are fetched
+// into, in the source's object format: the pack parser checks the trailer and
+// hashes objects with the store's format, so a sha1 store cannot decode a
+// sha256 source's pack. limit bounds it as newBoundedStorer does.
+func newSourceStore(format formatcfg.ObjectFormat, limit int) storage.Storer {
+	var opts []memory.StorageOption
+	if format == formatcfg.SHA256 {
+		opts = append(opts, memory.WithObjectFormat(format))
+	}
+	return newBoundedStorer(memory.NewStorage(opts...), limit)
 }
 
 // newBoundedStorer wraps s so that no more than limit objects can be written to

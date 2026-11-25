@@ -474,6 +474,47 @@ func TestBuildUpdateRequest(t *testing.T) {
 	}
 }
 
+// A sha256 receive-pack refuses a push that omits object-format, and parses a
+// null id as 64 hex zeros; plumbing.ZeroHash encodes as 40.
+func TestBuildUpdateRequestSHA256Target(t *testing.T) {
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+	adv.Capabilities.Set(capability.DeleteRefs)
+	adv.Capabilities.Set(capability.ObjectFormat, "sha256")
+
+	newHash := plumbing.NewHash(strings.Repeat("a", 64))
+	oldHash := plumbing.NewHash(strings.Repeat("b", 64))
+	req, _, _, err := buildUpdateRequest(adv, []PushCommand{
+		{Name: "refs/heads/main", Old: plumbing.ZeroHash, New: newHash},
+		{Name: "refs/heads/old", Old: oldHash, Delete: true},
+	}, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"sha256"}, req.Capabilities.Get(capability.ObjectFormat))
+
+	var buf bytes.Buffer
+	require.NoError(t, req.Encode(&buf))
+	zero := strings.Repeat("0", 64)
+	require.Contains(t, buf.String(), zero+" "+newHash.String()+" refs/heads/main")
+	require.Contains(t, buf.String(), oldHash.String()+" "+zero+" refs/heads/old")
+}
+
+// A sha1 target keeps the 40-hex null id and gets no object-format unless it
+// advertised one.
+func TestBuildUpdateRequestSHA1TargetUnchanged(t *testing.T) {
+	adv := &packp.AdvRefs{}
+	adv.Capabilities.Set(capability.ReportStatus)
+
+	req, _, _, err := buildUpdateRequest(adv, []PushCommand{
+		{Name: "refs/heads/main", New: plumbing.NewHash(strings.Repeat("a", 40))},
+	}, false)
+	require.NoError(t, err)
+	require.False(t, req.Capabilities.Supports(capability.ObjectFormat))
+
+	var buf bytes.Buffer
+	require.NoError(t, req.Encode(&buf))
+	require.Contains(t, buf.String(), strings.Repeat("0", 40)+" "+strings.Repeat("a", 40)+" refs/heads/main")
+}
+
 func TestBuildUpdateRequestDeleteWithoutCapability(t *testing.T) {
 	adv := &packp.AdvRefs{}
 	// No delete-refs capability.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
@@ -21,7 +22,17 @@ import (
 // PACK + zlib stream rather than relying on a fixed fixture.
 func buildSyntheticPack(t *testing.T, blobCount int) ([]byte, int) {
 	t.Helper()
-	store := memory.NewStorage()
+	return buildSyntheticPackFormat(t, blobCount, formatcfg.UnsetObjectFormat)
+}
+
+// buildSyntheticPackFormat is buildSyntheticPack in the given object format.
+func buildSyntheticPackFormat(t *testing.T, blobCount int, format formatcfg.ObjectFormat) ([]byte, int) {
+	t.Helper()
+	var opts []memory.StorageOption
+	if format != formatcfg.UnsetObjectFormat {
+		opts = append(opts, memory.WithObjectFormat(format))
+	}
+	store := memory.NewStorage(opts...)
 
 	hashes := make([]plumbing.Hash, 0, blobCount+2)
 
@@ -92,7 +103,7 @@ func TestPackStreamObserverCountsObjects(t *testing.T) {
 	const blobCount = 20
 	pack, total := buildSyntheticPack(t, blobCount)
 
-	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)))
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)), formatcfg.UnsetObjectFormat)
 	out, err := io.ReadAll(o)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -117,6 +128,28 @@ func TestPackStreamObserverCountsObjects(t *testing.T) {
 	}
 }
 
+// A sha256 pack has 32-byte ids and trailer. Scanned as sha1, the trailer
+// check fails and every successful sha256 checkpoint reported
+// observer_failed=true.
+func TestPackStreamObserverScansSHA256Pack(t *testing.T) {
+	t.Parallel()
+	pack, total := buildSyntheticPackFormat(t, 20, formatcfg.SHA256)
+
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)), formatcfg.SHA256)
+	if _, err := io.ReadAll(o); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if scanErr := o.ScannerError(); scanErr != nil {
+		t.Fatalf("unexpected scanner error: %v", scanErr)
+	}
+	if got := o.ObjectsSent(); got != int64(total) {
+		t.Errorf("ObjectsSent() = %d, want %d", got, total)
+	}
+}
+
 // A Scanner error mid-stream must not abort the upload: every byte handed in
 // must still come back out of Read (the documented "non-fatal for the upload"
 // contract), with the error recorded only for debugging. Previously the
@@ -128,7 +161,7 @@ func TestPackStreamObserverScannerErrorDoesNotAbortUpload(t *testing.T) {
 	// immediately and closes its pipe reader while bytes are still flowing.
 	payload := bytes.Repeat([]byte("definitely-not-a-packfile\n"), 2048)
 
-	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(payload)))
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(payload)), formatcfg.UnsetObjectFormat)
 	out, err := io.ReadAll(o)
 	if err != nil {
 		t.Fatalf("upload Read aborted by a non-fatal observer error: %v", err)
@@ -151,7 +184,7 @@ func TestPackStreamObserverHeaderReadyEarly(t *testing.T) {
 	t.Parallel()
 	pack, total := buildSyntheticPack(t, 50)
 
-	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)))
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)), formatcfg.UnsetObjectFormat)
 	defer func() { _ = o.Close() }()
 
 	// Read just enough bytes for the 12-byte header (a few extra to give
@@ -187,7 +220,7 @@ func TestPackStreamObserverAbortStopsRead(t *testing.T) {
 	t.Parallel()
 	pack, _ := buildSyntheticPack(t, 80)
 
-	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)))
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)), formatcfg.UnsetObjectFormat)
 	defer func() { _ = o.Close() }()
 
 	// Trigger after the first 32 bytes pass through.
@@ -217,7 +250,7 @@ func TestPackStreamObserverCloseBeforeFullRead(t *testing.T) {
 	t.Parallel()
 	pack, _ := buildSyntheticPack(t, 30)
 
-	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)))
+	o := newPackStreamObserver(io.NopCloser(bytes.NewReader(pack)), formatcfg.UnsetObjectFormat)
 	// Read a small prefix, then close.
 	if _, err := io.CopyN(io.Discard, o, 32); err != nil {
 		t.Fatalf("partial read: %v", err)
@@ -241,7 +274,7 @@ func (r *finalBytesReader) Read(p []byte) (int, error) {
 }
 func TestPackStreamObserverChecksFinalBytesWithEOF(t *testing.T) {
 	t.Parallel()
-	o := newPackStreamObserver(io.NopCloser(&finalBytesReader{data: []byte("over limit")}))
+	o := newPackStreamObserver(io.NopCloser(&finalBytesReader{data: []byte("over limit")}), formatcfg.UnsetObjectFormat)
 	defer o.Close()
 	o.SetAborter(func(n, _, _ int64, _ bool) bool { return n > 4 })
 	_, err := io.Copy(io.Discard, o)
@@ -266,7 +299,7 @@ func TestPackObservationDistinguishesInterruptedUploads(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			o := newPackStreamObserver(io.NopCloser(bytes.NewReader(tc.data)))
+			o := newPackStreamObserver(io.NopCloser(bytes.NewReader(tc.data)), formatcfg.UnsetObjectFormat)
 			if tc.abort {
 				o.SetAborter(func(n, _, _ int64, _ bool) bool { return n >= 64 })
 			}
@@ -301,7 +334,7 @@ func TestPackStreamObserverEOFUsesActualBytesDespiteScannerLag(t *testing.T) {
 				// Freeze a lagging scanner state independently of goroutine scheduling.
 				// Its projection is 800 MiB, but the final stream size is 8 MiB.
 				var reader io.Reader = &finalBytesReader{data: bytes.Repeat([]byte("x"), size)}
-				o := newPackStreamObserver(io.NopCloser(reader))
+				o := newPackStreamObserver(io.NopCloser(reader), formatcfg.UnsetObjectFormat)
 				// Bypass only the scanner tee to freeze its scheduling state. Retain
 				// the real constructor and shutdown lifecycle.
 				o.tee = reader
@@ -358,7 +391,7 @@ func TestPackObservationPreservesSourceReadFailure(t *testing.T) {
 		for _, separate := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%v/separate=%v", failure, separate), func(t *testing.T) {
 				t.Parallel()
-				o := newPackStreamObserver(io.NopCloser(&sourceFailureReader{data: valid[:64], failure: failure, separate: separate}))
+				o := newPackStreamObserver(io.NopCloser(&sourceFailureReader{data: valid[:64], failure: failure, separate: separate}), formatcfg.UnsetObjectFormat)
 				_, err := io.Copy(io.Discard, o)
 				if !errors.Is(err, failure) {
 					t.Fatalf("source error lost during upload: %v", err)
@@ -381,7 +414,7 @@ func TestPackEOFMarginBandAndHardCeiling(t *testing.T) {
 		for _, separate := range []bool{false, true} {
 			t.Run(fmt.Sprintf("size=%d/separate=%v", size, separate), func(t *testing.T) {
 				t.Parallel()
-				o := newPackStreamObserver(io.NopCloser(&finalBytesReader{data: bytes.Repeat([]byte("x"), size)}))
+				o := newPackStreamObserver(io.NopCloser(&finalBytesReader{data: bytes.Repeat([]byte("x"), size)}), formatcfg.UnsetObjectFormat)
 				defer o.Close()
 				if separate {
 					// Final EOF after previously delivered bytes, with no scheduling race.
