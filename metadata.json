@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.13.5-nightly.202611250617.c5f58fc0a.0.20261125200220-e362dd9f946a",
+  "checkpoint_id": "01M8BQQ61VAC44WBQV8RJWNS21",
+  "strategy": "manual-commit",
+  "branch": "hash-agility-partial-sync",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CHANGELOG.md",
+    "cmd/git-sync/internal/sha256convert/backsync_recovery_e2e_test.go",
+    "docs/convert-sha256.md",
+    "internal/syncer/git_http_backend_test.go",
+    "internal/syncer/translated.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 6,
+    "cache_read_tokens": 231562,
+    "output_tokens": 736,
+    "api_call_count": 1
+  },
+  "redaction": {
+    "replacements": 43,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 2,
+      "credentialed_uri": 0,
+      "entropy": 47,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
