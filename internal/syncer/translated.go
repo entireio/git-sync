@@ -167,21 +167,13 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	}
 	targetNotes := s.target.refMap[targetOriginNotesRef]
 	var targetNoteEntries []translate.NoteEntry
-	// fromTargetNotes holds the seeds only the target's notes record. They
-	// name commits an earlier sync translated, which translating again
-	// reproduces.
-	fromTargetNotes := make(map[plumbing.Hash]struct{})
+	var fromTargetNotes map[plumbing.Hash]struct{}
 	if !targetNotes.IsZero() {
 		synced, entries, err := s.readTargetNotes(ctx, targetNotes)
 		if err != nil {
 			return Result{}, err
 		}
-		for sha1, sha256 := range synced {
-			if _, converted := seed[sha256]; !converted {
-				fromTargetNotes[sha256] = struct{}{}
-			}
-			seed[sha256] = sha1
-		}
+		fromTargetNotes = addTargetNoteSeeds(seed, synced)
 		targetNoteEntries = entries
 	}
 
@@ -724,6 +716,23 @@ func (s *syncSession) sourceRefHash(ctx context.Context, name plumbing.Reference
 		return plumbing.ZeroHash, fmt.Errorf("list source %s: %w", name, err)
 	}
 	return gitproto.RefHashMap(refs)[name], nil
+}
+
+// addTargetNoteSeeds adds to seed the SHA256 to SHA1 pairs the target's
+// notes record, mapped SHA1 to SHA256 in synced. The source's notes record
+// the original SHA1 commits, so a commit they map keeps that mapping. The
+// returned seeds are those only the target's notes record. They name
+// commits an earlier sync translated, which translating again reproduces.
+func addTargetNoteSeeds(seed, synced map[plumbing.Hash]plumbing.Hash) map[plumbing.Hash]struct{} {
+	fromTarget := make(map[plumbing.Hash]struct{})
+	for sha1, sha256 := range synced {
+		if _, converted := seed[sha256]; converted {
+			continue
+		}
+		seed[sha256] = sha1
+		fromTarget[sha256] = struct{}{}
+	}
+	return fromTarget
 }
 
 // readTargetNotes fetches the target's refs/notes/sha256-origin and reads it.

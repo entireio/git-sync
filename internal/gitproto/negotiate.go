@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -28,16 +29,20 @@ import (
 // such as SSH, where upload-pack refuses a want no ref points at. It also
 // could not tell a refusal from a missing commit.
 //
-// upload-pack stops acknowledging haves once it has found enough common
-// commits to send a pack, so a have read after the first common one may go
-// unacknowledged although the server holds it. HasCommits offers every
-// commit the first round left unacknowledged again, on its own.
+// upload-pack v2 leaves out a have when it read that commit's child earlier
+// in the same request. So HasCommits offers the commits left unacknowledged
+// again, together, until a request acknowledges none of them. The first
+// held commit of each request is always acknowledged, so the commits left
+// then are missing.
 //
 // A v2 server that does not advertise wait-for-done would send a pack once
 // the haves cover the want. There HasCommits falls back to wanting the
 // commits while claiming to have them, which v2 allows for any commit a ref
 // reaches. That fallback cannot tell which commit is missing, so it returns
 // an error instead.
+//
+// A target without refs gets no request. v2 would accept haves without a
+// want, but a commit no ref reaches is not one a sync can build on.
 func (s *RefService) HasCommits(ctx context.Context, conn Conn, tips, commits []plumbing.Hash) (map[plumbing.Hash]struct{}, error) {
 	commits = SortedUniqueHashes(commits)
 	tips = slices.DeleteFunc(SortedUniqueHashes(tips), plumbing.Hash.IsZero)
@@ -46,23 +51,28 @@ func (s *RefService) HasCommits(ctx context.Context, conn Conn, tips, commits []
 		// holds no commits a client can name.
 		return map[plumbing.Hash]struct{}{}, nil
 	}
-	held, err := s.offerHaves(ctx, conn, tips[0], commits)
-	if err != nil {
-		return nil, err
-	}
-	for _, h := range commits {
-		if _, ok := held[h]; ok {
-			continue
-		}
-		one, err := s.offerHaves(ctx, conn, tips[0], []plumbing.Hash{h})
+	held := make(map[plumbing.Hash]struct{}, len(commits))
+	for len(commits) > 0 {
+		acked, err := s.offerHaves(ctx, conn, tips[0], commits)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := one[h]; ok {
-			held[h] = struct{}{}
+		if len(acked) == 0 {
+			break
 		}
+		maps.Copy(held, acked)
+		commits = slices.DeleteFunc(commits, func(h plumbing.Hash) bool {
+			_, ok := acked[h]
+			return ok
+		})
 	}
 	return held, nil
+}
+
+// remoteError reports the text of an ERR packet. A server controls that
+// text, so it is kept to one line without control characters.
+func remoteError(msg string) error {
+	return errors.New("remote: " + sanitize.Line(msg))
 }
 
 func (s *RefService) offerHaves(ctx context.Context, conn Conn, tip plumbing.Hash, commits []plumbing.Hash) (map[plumbing.Hash]struct{}, error) {
@@ -118,7 +128,7 @@ func parseCommonAcksV1(r *PacketReader) (map[plumbing.Hash]struct{}, error) {
 		case line == "NAK":
 			return common, nil
 		case strings.HasPrefix(line, "ERR "):
-			return nil, errors.New("remote: " + sanitize.Text(strings.TrimSuffix(line[4:], "\n")))
+			return nil, remoteError(line[4:])
 		case strings.HasPrefix(line, "ACK "):
 			fields := strings.Fields(line)
 			if len(fields) == 3 && fields[2] == "common" {
@@ -180,7 +190,7 @@ func parseCommonAcksV2(r *PacketReader) (map[plumbing.Hash]struct{}, error) {
 		line := strings.TrimSuffix(string(payload), "\n")
 		switch {
 		case strings.HasPrefix(line, "ERR "):
-			return nil, errors.New("remote: " + sanitize.Text(strings.TrimSuffix(line[4:], "\n")))
+			return nil, remoteError(line[4:])
 		case !inSection && line == "acknowledgments":
 			inSection = true
 		case inSection && line == "NAK":

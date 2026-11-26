@@ -334,7 +334,9 @@ converted from. Before pushing, and in a dry run or plan, git-sync
 negotiates with the target as a fetch would, offering the commits the new history builds on, and stops with
 an error naming one the target does not acknowledge. It offers them rather
 than asking for them, because over SSH upload-pack refuses to send a commit
-that no branch or tag points at.
+that no branch or tag points at. Protocol v2 does not acknowledge a commit
+whose child it read earlier in the same request, so git-sync offers the
+unacknowledged ones again until a request acknowledges none.
 
 Earlier versions of `convert-sha256` also re-encoded trees, which
 normalized modes such as `100011` to `100644`, so a converted tree may not

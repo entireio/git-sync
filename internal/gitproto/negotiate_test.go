@@ -2,14 +2,18 @@ package gitproto
 
 import (
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -66,17 +70,30 @@ func TestParseCommonAcksV2(t *testing.T) {
 	}
 }
 
-func TestParseCommonAcks_SanitizesRemoteError(t *testing.T) {
+func TestRemoteErrorKeptToOneSafeLine(t *testing.T) {
 	t.Parallel()
-	resp := pkt("ERR \x1b[2Jnot \x07our ref\n")
-	parsers := map[string]func(*PacketReader) (map[plumbing.Hash]struct{}, error){
-		"v1": parseCommonAcksV1,
-		"v2": parseCommonAcksV2,
+	resp := pkt("ERR \x1b[2Jnot \x07our ref\nfetch ok \u009b31m\n")
+	parsers := map[string]func(string) error{
+		"acks v1": func(r string) error {
+			_, err := parseCommonAcksV1(NewPacketReader(strings.NewReader(r)))
+			return err
+		},
+		"acks v2": func(r string) error {
+			_, err := parseCommonAcksV2(NewPacketReader(strings.NewReader(r)))
+			return err
+		},
+		"fetch pack": func(r string) error {
+			return consumeV2FetchPack(strings.NewReader(r), false, io.Discard, func(io.Reader) error { return nil })
+		},
+		"pack stream": func(r string) error {
+			_, err := openV2PackStream(io.NopCloser(strings.NewReader(r)), false, io.Discard)
+			return err
+		},
 	}
 	for name, parse := range parsers {
-		_, err := parse(NewPacketReader(strings.NewReader(resp)))
-		if err == nil || err.Error() != "remote: [2Jnot our ref" {
-			t.Errorf("%s: got %q, want the remote text without control characters", name, err)
+		err := parse(resp)
+		if err == nil || err.Error() != "remote: [2Jnot our ref fetch ok 31m" {
+			t.Errorf("%s: got %q, want the remote text on one line without control characters", name, err)
 		}
 	}
 }
@@ -150,6 +167,59 @@ func TestHasCommits_LocalGit(t *testing.T) {
 			got, err := service.HasCommits(t.Context(), conn, tips, []plumbing.Hash{old, mid, missing})
 			checkAcks(t, name, got, err, map[plumbing.Hash]struct{}{old: {}, mid: {}}, "")
 		}
+	}
+}
+
+// TestHasCommits_ChainRequests offers every commit of a chain. Protocol v2
+// leaves out a have whose child it read earlier in the same request, so the
+// first request misses about half of them.
+func TestHasCommits_ChainRequests(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git binary not available: %v", err)
+	}
+	t.Setenv("GIT_AUTHOR_DATE", "1700000000 +0000")
+	t.Setenv("GIT_COMMITTER_DATE", "1700000000 +0000")
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	gitIn(t, root, "init", "-q", "-b", "main", repo)
+	want := make(map[plumbing.Hash]struct{})
+	offered := []plumbing.Hash{plumbing.NewHash(strings.Repeat("7", 40))}
+	for i := range 20 {
+		gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", strconv.Itoa(i))
+		h := plumbing.NewHash(strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD")))
+		want[h] = struct{}{}
+		offered = append(offered, h)
+	}
+
+	var posts atomic.Int32
+	backend := &cgi.Handler{
+		Path: gitBin,
+		Args: []string{"http-backend"},
+		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1",
+			"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posts.Add(1)
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL + "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := NewHTTPConnWithClient(u, "target", nil, srv.Client())
+	refs, service, err := ListSourceRefs(t.Context(), conn, "v2", []string{"refs/heads/"})
+	if err != nil {
+		t.Fatalf("list refs: %v", err)
+	}
+	before := posts.Load()
+	got, err := service.HasCommits(t.Context(), conn, []plumbing.Hash{refs[0].Hash()}, offered)
+	checkAcks(t, "chain", got, err, want, "")
+	if n := posts.Load() - before; n > 5 {
+		t.Errorf("HasCommits made %d requests for a chain of %d commits, want at most 5", n, len(want))
 	}
 }
 

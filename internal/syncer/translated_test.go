@@ -353,3 +353,21 @@ func TestReachableCommits(t *testing.T) {
 		}
 	}
 }
+
+func TestAddTargetNoteSeeds(t *testing.T) {
+	t.Parallel()
+	h := func(c string) plumbing.Hash { return plumbing.NewHash(strings.Repeat(c, 40)) }
+	converted, translated := plumbing.NewHash(strings.Repeat("c", 64)), plumbing.NewHash(strings.Repeat("d", 64))
+	seed := map[plumbing.Hash]plumbing.Hash{converted: h("a")}
+	synced := map[plumbing.Hash]plumbing.Hash{h("b"): converted, h("e"): translated}
+
+	fromTarget := addTargetNoteSeeds(seed, synced)
+
+	want := map[plumbing.Hash]plumbing.Hash{converted: h("a"), translated: h("e")}
+	if !maps.Equal(seed, want) {
+		t.Errorf("seed: got %v, want %v", seed, want)
+	}
+	if !maps.Equal(fromTarget, map[plumbing.Hash]struct{}{translated: {}}) {
+		t.Errorf("fromTarget: got %v, want only %s", fromTarget, translated)
+	}
+}
