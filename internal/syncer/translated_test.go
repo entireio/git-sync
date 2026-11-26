@@ -16,6 +16,7 @@ import (
 
 	"entire.io/entire/git-sync/internal/gitproto"
 	"entire.io/entire/git-sync/internal/planner"
+	"entire.io/entire/git-sync/internal/translate"
 )
 
 type translatedFixture struct {
@@ -52,7 +53,7 @@ func TestObjectsMissingFromTarget(t *testing.T) {
 	t.Parallel()
 	f := newTranslatedFixture(t)
 
-	got, err := objectsMissingFromTarget(f.store, formatcfg.SHA1, []plumbing.Hash{f.next}, map[plumbing.Hash]struct{}{f.base: {}})
+	got, err := objectsMissingFromTarget(f.store, formatcfg.SHA1, []plumbing.Hash{f.next}, map[plumbing.Hash]struct{}{f.base: {}}, treeKnown)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +64,64 @@ func TestObjectsMissingFromTarget(t *testing.T) {
 		t.Fatalf("objects to push: got %v, want %v", got, want)
 	}
 }
+
+// TestObjectsMissingFromTarget_TreeNotOnTarget has a boundary commit whose
+// tree may not translate to the tree the target holds, as with a repository
+// an older convert-sha256 converted. The trees next shares with it are
+// pushed. Blobs translate unchanged, so they are not.
+func TestObjectsMissingFromTarget_TreeNotOnTarget(t *testing.T) {
+	t.Parallel()
+	f := newTranslatedFixture(t)
+
+	got, err := objectsMissingFromTarget(f.store, formatcfg.SHA1, []plumbing.Hash{f.next}, map[plumbing.Hash]struct{}{f.base: {}},
+		func(plumbing.Hash) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []plumbing.Hash{f.next, f.nextTree, f.newA, f.shared}
+	slices.SortFunc(got, func(a, b plumbing.Hash) int { return strings.Compare(a.String(), b.String()) })
+	slices.SortFunc(want, func(a, b plumbing.Hash) int { return strings.Compare(a.String(), b.String()) })
+	if !slices.Equal(got, want) {
+		t.Fatalf("objects to push: got %v, want %v", got, want)
+	}
+}
+
+func TestRoundTrips(t *testing.T) {
+	t.Parallel()
+	f := newTranslatedFixture(t)
+	exact, err := translate.New(f.store, memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA256)),
+		formatcfg.SHA1, formatcfg.SHA256, nil).Translate(f.next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := plumbing.NewHash(strings.Repeat("ab", 32))
+
+	tests := []struct {
+		name string
+		seed map[plumbing.Hash]plumbing.Hash
+		want bool
+	}{
+		{name: "exact", seed: map[plumbing.Hash]plumbing.Hash{f.next: exact}, want: true},
+		{name: "normalized elsewhere", seed: map[plumbing.Hash]plumbing.Hash{f.next: other}, want: false},
+		{name: "unknown", want: false},
+	}
+	for _, tt := range tests {
+		tr := translate.New(f.store, memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA256)),
+			formatcfg.SHA1, formatcfg.SHA256, tt.seed)
+		got, err := roundTrips(f.store, formatcfg.SHA1, formatcfg.SHA256, tr, f.next)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+		if used := tr.SeedsUsed(); len(used) != 0 {
+			t.Errorf("%s: checking reported seeds as used: %v", tt.name, used)
+		}
+	}
+}
+
+func treeKnown(plumbing.Hash) (bool, error) { return true, nil }
 
 func TestObjectsMissingFromTarget_HeaderOnlyTag(t *testing.T) {
 	t.Parallel()
@@ -84,7 +143,7 @@ func TestObjectsMissingFromTarget_HeaderOnlyTag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := objectsMissingFromTarget(f.store, formatcfg.SHA1, []plumbing.Hash{tag}, map[plumbing.Hash]struct{}{f.base: {}})
+	got, err := objectsMissingFromTarget(f.store, formatcfg.SHA1, []plumbing.Hash{tag}, map[plumbing.Hash]struct{}{f.base: {}}, treeKnown)
 	if err != nil {
 		t.Fatal(err)
 	}

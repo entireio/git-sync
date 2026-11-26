@@ -399,7 +399,10 @@ func (s *syncSession) pushTranslated(
 		wants = append(wants, p.SourceHash)
 		cmds = append(cmds, gitproto.PushCommand{Name: p.TargetRef, Old: p.TargetHash, New: translated[p.TargetRef]})
 	}
-	sourceObjects, err := objectsMissingFromTarget(sourceStore, formatcfg.SHA256, wants, onTarget)
+	treeOnTarget := func(c plumbing.Hash) (bool, error) {
+		return roundTrips(sourceStore, formatcfg.SHA256, formatcfg.SHA1, tr, c)
+	}
+	sourceObjects, err := objectsMissingFromTarget(sourceStore, formatcfg.SHA256, wants, onTarget, treeOnTarget)
 	if err != nil {
 		return fmt.Errorf("compute objects to push: %w", err)
 	}
@@ -439,9 +442,20 @@ func (s *syncSession) pushTranslated(
 
 // objectsMissingFromTarget lists the objects reachable from wants that the
 // target lacks, given onTarget, the source commits whose translations the
-// target holds. The walk stops at those commits, and leaves out every object
+// target holds. The walk stops at those commits, and leaves out the objects
 // in their trees, which is what a commit built on them shares with them.
-func objectsMissingFromTarget(store storer.EncodedObjectStorer, format formatcfg.ObjectFormat, wants []plumbing.Hash, onTarget map[plumbing.Hash]struct{}) ([]plumbing.Hash, error) {
+//
+// treeOnTarget reports whether the target holds the translation of such a
+// commit's tree. When it does not, only the commit's blobs are left out.
+// Blobs translate unchanged, while the tree the target holds may differ
+// from the translation of the source's.
+func objectsMissingFromTarget(
+	store storer.EncodedObjectStorer,
+	format formatcfg.ObjectFormat,
+	wants []plumbing.Hash,
+	onTarget map[plumbing.Hash]struct{},
+	treeOnTarget func(commit plumbing.Hash) (bool, error),
+) ([]plumbing.Hash, error) {
 	var boundary []plumbing.Hash
 	seen := make(map[plumbing.Hash]struct{})
 	var reachable []plumbing.Hash
@@ -466,6 +480,7 @@ func objectsMissingFromTarget(store storer.EncodedObjectStorer, format formatcfg
 	}
 
 	shared := make(map[plumbing.Hash]struct{})
+	blobsOnly := make(map[plumbing.Hash]struct{})
 	for _, c := range boundary {
 		commit, err := object.GetCommit(store, c)
 		if err != nil {
@@ -474,8 +489,28 @@ func objectsMissingFromTarget(store storer.EncodedObjectStorer, format formatcfg
 			}
 			return nil, fmt.Errorf("load commit %s: %w", c, err)
 		}
-		if err := collectTree(store, commit.TreeHash, shared); err != nil {
+		known, err := treeOnTarget(c)
+		if err != nil {
 			return nil, err
+		}
+		into := shared
+		if !known {
+			into = blobsOnly
+		}
+		if err := collectTree(store, commit.TreeHash, into); err != nil {
+			return nil, err
+		}
+	}
+	for h := range blobsOnly {
+		if _, ok := shared[h]; ok {
+			continue
+		}
+		obj, err := store.EncodedObject(plumbing.AnyObject, h)
+		if err != nil {
+			return nil, fmt.Errorf("load object %s: %w", h, err)
+		}
+		if obj.Type() == plumbing.BlobObject {
+			shared[h] = struct{}{}
 		}
 	}
 	out := reachable[:0]
@@ -485,6 +520,45 @@ func objectsMissingFromTarget(store storer.EncodedObjectStorer, format formatcfg
 		}
 	}
 	return out, nil
+}
+
+// roundTrips reports whether source commit c converts back to the
+// translation tr holds for it, a seeded one included. A commit that does
+// embeds the translation of its tree, so a target holding the commit holds
+// that tree. One converted by a convert-sha256 release that re-encoded
+// trees, or with --rewrite-messages, may not. A commit that cannot be
+// converted, such as one with an unknown gitlink, counts as not round-tripping.
+func roundTrips(store storer.EncodedObjectStorer, from, to formatcfg.ObjectFormat, tr *translate.Translator, c plumbing.Hash) (bool, error) {
+	want, ok := tr.Lookup(c)
+	if !ok {
+		return false, nil
+	}
+	obj, err := store.EncodedObject(plumbing.CommitObject, c)
+	if err != nil {
+		return false, fmt.Errorf("load commit %s: %w", c, err)
+	}
+	raw, err := readEncoded(obj)
+	if err != nil {
+		return false, fmt.Errorf("read commit %s: %w", c, err)
+	}
+	// Lookup first, so the parents' seeds are not reported as used.
+	content, err := translate.ConvertCommit(raw, from, to, func(oid plumbing.Hash, gitlink bool) (plumbing.Hash, error) {
+		if out, ok := tr.Lookup(oid); ok {
+			return out, nil
+		}
+		if gitlink {
+			return plumbing.ZeroHash, translate.ErrGitlink
+		}
+		return tr.Translate(oid)
+	})
+	if err != nil {
+		return false, nil //nolint:nilerr // an object that does not convert does not round-trip
+	}
+	hasher := plumbing.NewHasher(to, plumbing.CommitObject, int64(len(content)))
+	if _, err := hasher.Write(content); err != nil {
+		return false, fmt.Errorf("hash commit %s: %w", c, err)
+	}
+	return hasher.Sum() == want, nil
 }
 
 func objectChildren(store storer.EncodedObjectStorer, format formatcfg.ObjectFormat, h plumbing.Hash) ([]plumbing.Hash, error) {

@@ -336,6 +336,14 @@ an error naming one the target does not acknowledge. It offers them rather
 than asking for them, because over SSH upload-pack refuses to send a commit
 that no branch or tag points at.
 
+Earlier versions of `convert-sha256` also re-encoded trees, which
+normalized modes such as `100011` to `100644`, so a converted tree may not
+convert back to the original. git-sync converts each pre-cutover commit the
+new history builds on back to SHA1 and compares it with the recorded one.
+Where they differ, it pushes the SHA1 translation of every tree the new
+commits share with it, as the target may lack them. Blobs convert unchanged
+and are never sent again.
+
 **git-sync records what it translates.** Each sync updates
 `refs/notes/sha256-origin` on the SHA1 repository with the SHA256 commit
 behind every commit it wrote, and reads it back on the next run, so a
