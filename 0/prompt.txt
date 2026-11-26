@@ -1,0 +1,150 @@
+Git sync currently supports a one-off transition from SHA-1 to SHA-256. I'd like to enable the following use case:
+- Transition from SHA-1 to SHA-256.
+- Make the original repository a "read-only" reference repo.
+- Changes to main for the new SHA-256 repo, as well as new tags, are sync'd back to the original SHA-1 repo via git-sync
+
+Assess the current support, identify gaps. Then create an E2E test to represent the end state.
+
+---
+
+Go ahead with the implementation.
+
+5: OK
+7: Treat same name tag name as already synced
+
+---
+
+Ensure that:
+- gpgsig and gpgsig-sha256 are always kept during the transitions.
+- the conversion in both directions align with https://github.com/git/git/blob/master/object-file-convert.c
+- the generated commits should pass tests such as https://github.com/git/git/blob/master/t/t1016-compatObjectFormat.sh
+
+---
+
+use a background codex agent to review the changes, focusing on git conformance
+
+---
+
+<task-notification>
+<task-id>b7fr00t8c</task-id>
+<tool-use-id>toolu_019cSQUje7TthWNQCkiFnyXp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/tasks/b7fr00t8c.output</output-file>
+<status>completed</status>
+<summary>Background command "SP=/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/scratchpad; cd ~/git/entireio/git-sync &amp;&amp; codex exec -s read-only -C ~/git/entireio/git-sync -o $SP/codex-review.md - &lt; $SP/codex-review-prompt.md &gt; $SP/codex-review.log 2&gt;&amp;1" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+let's fix them all. but fix rebase the current branch with origin/main
+
+---
+
+go ahead
+
+---
+
+go ahead
+
+---
+
+what's the command to run the sync from a SHA256 to a SHA1 repo?
+
+---
+
+Check the findings in the trail using entire mcp.
+
+Here's some directions:
+- Make the atomic an opt-in flag so that it is OK to bypass the limit in place (document that behaviour)
+- Let's deep dive into the note history. Why is multiple instances kept instead of a single view of last known state?
+
+---
+
+option A
+refuse BestEffort in validateTranslation
+for tag retrial, let's add a flag for that specific behaviour (force retrial)
+request the target's advertised branch and tag tips, and offer the commits we need to check as ones we already have
+
+---
+
+draft the commit, then review the changes with codex
+
+---
+
+<task-notification>
+<task-id>bx0dwcxs8</task-id>
+<tool-use-id>toolu_016X6JRBqGA31quX9wpvnAk3</tool-use-id>
+<output-file>/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/tasks/bx0dwcxs8.output</output-file>
+<status>failed</status>
+<summary>Background command "cd ~/git/entireio/git-sync &amp;&amp; codex exec review --uncommitted "Review the uncommitted changes on top of commit 412a480 (SHA256 to SHA1 back-sync). Focus on correctness and conformance with upstream Git behaviour (upload-pack negotiation in protocol v0/v1 multi_ack_detailed and v2 wait-for-done, receive-pack atomic pushes, git notes refs). Changes: opt-in --atomic push, RetranslateTags to repair origin notes for existing tags, refs/notes/sha256-origin written as a single parentless snapshot, BestEffort refused in translated syncs, and a target-possession check that negotiates with haves instead of wanting unadvertised commits. Report concrete defects with file:line, a failure scenario, and severity. Do not modify files." &gt; /tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/scratchpad/codex-review.txt 2&gt;&amp;1" failed with exit code 2</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bj55s960g</task-id>
+<tool-use-id>toolu_01XovKoh8SjqKrrwzV5Czz6X</tool-use-id>
+<output-file>/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/tasks/bj55s960g.output</output-file>
+<status>completed</status>
+<summary>Background command "cd ~/git/entireio/git-sync &amp;&amp; codex exec --sandbox read-only "You are reviewing uncommitted changes in this Go repository (run: git diff HEAD, and read the untracked files internal/gitproto/negotiate.go and internal/gitproto/negotiate_test.go). They sit on top of commit 412a480, which syncs a SHA256 repository back to its SHA1 original by translating objects. Focus on correctness and conformance with upstream Git behaviour: upload-pack negotiation (protocol v0/v1 multi_ack_de
+
+... [555 characters truncated] ...
+
+periments in a temp dir). Report only concrete defects, each with file:line, a failure scenario, and a severity. Do not modify files in the repository." &gt; /tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/scratchpad/codex-review.txt 2&gt;&amp;1" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+go ahead fix with a test.
+
+---
+
+go ahead
+
+---
+
+what would be the impact of completely dropping the notes?
+
+---
+
+Let's keep that for the time being. Now review the feedback below:
+checkTargetHas asks the target's upload-pack for seeded SHA1 commits that are not current ref tips. Default git upload-pack rejects those wants (not our ref) unless uploadpack.allowReachableSHA1InWant or allowAnySHA1InWant is on, even when the commit is reachable. A new tag on pre-cutover history then fails against the original repository. Other git-http-backend tests in this repo turn that config on; the back-sync server does not.
+
+---
+
+go ahead
+
+---
+
+also make sure that running the tests ignore local settings such as gpgsign
+
+---
+
+go ahead
+
+---
+
+<pasted_content id="5385">
+### Medium finding
+
+**Location:** `internal/syncer/translated.go:477-484`
+
+For an earlier conversion that normalized a tree mode (for example, `100011` to `100644`), the origin seed loaded at `internal/syncer/translated.go:159-165` identifies the original commit, but its converted tree does not translate back to the original tree hash. An empty post-cutover commit reusing that converted tree has its tree excluded here even though the SHA1 target lacks the translated tree, causing receive-pack to reject the sync for missing objects. Include boundary-tree translations unless their target identities are known to exist, rather than assuming every seeded commit's trees round-trip.
+</pasted_content id="5385">
+
+---
+
+test it locally to confirm the finding does not apply, use codex to cross-check
+
+---
+
+<task-notification>
+<task-id>be5u9tnz0</task-id>
+<tool-use-id>toolu_01N6FNm7xNPGfAq3oJXRr7AC</tool-use-id>
+<output-file>/tmp/claude-1000/-home-coder-git-entireio-git-sync/8f4322d7-b463-46e0-bc3d-d424d394c5ae/tasks/be5u9tnz0.output</output-file>
+<status>completed</status>
+<summary>Background command "Rerun codex cross-check with stdin closed" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+go ahead
