@@ -223,6 +223,36 @@ func TestHasCommits_ChainRequests(t *testing.T) {
 	}
 }
 
+func TestHasCommits_StrayAcksEndTheCheck(t *testing.T) {
+	t.Parallel()
+	tip := plumbing.NewHash(strings.Repeat("a", 40))
+	offered := plumbing.NewHash(strings.Repeat("b", 40))
+	var fetches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fetches.Add(1) > 3 {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+		if _, err := io.WriteString(w, pkt("acknowledgments\n")+pkt("ACK "+tip.String()+"\n")+"0000"); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL + "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &RefService{Protocol: "v2", V2Caps: &V2Capabilities{Caps: map[string]string{"fetch": "wait-for-done"}}}
+
+	got, err := service.HasCommits(t.Context(), NewHTTPConnWithClient(u, "target", nil, srv.Client()), []plumbing.Hash{tip}, []plumbing.Hash{offered})
+
+	checkAcks(t, "stray acks", got, err, map[plumbing.Hash]struct{}{}, "")
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("got %d requests, want 1", n)
+	}
+}
+
 func checkAcks(t *testing.T, name string, got map[plumbing.Hash]struct{}, err error, want map[plumbing.Hash]struct{}, wantErr string) {
 	t.Helper()
 	switch {

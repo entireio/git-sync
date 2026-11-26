@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 
@@ -57,14 +56,20 @@ func (s *RefService) HasCommits(ctx context.Context, conn Conn, tips, commits []
 		if err != nil {
 			return nil, err
 		}
-		if len(acked) == 0 {
-			break
-		}
-		maps.Copy(held, acked)
-		commits = slices.DeleteFunc(commits, func(h plumbing.Hash) bool {
+		// Only an acknowledgment of an offered commit counts. A server
+		// that acknowledges anything else would otherwise be asked again
+		// forever.
+		left := slices.DeleteFunc(commits, func(h plumbing.Hash) bool {
 			_, ok := acked[h]
+			if ok {
+				held[h] = struct{}{}
+			}
 			return ok
 		})
+		if len(left) == len(commits) {
+			break
+		}
+		commits = left
 	}
 	return held, nil
 }
