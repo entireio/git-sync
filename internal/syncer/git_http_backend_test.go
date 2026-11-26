@@ -1449,11 +1449,17 @@ func TestCheckTargetHas_GitHTTPBackendNotesOnlyTarget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: new session: %v", protocol, err)
 		}
-		if err := s.checkTargetHas(t.Context(), []translate.Pair{{Target: commit}}); err != nil {
+		if _, err := s.checkTargetHas(t.Context(), []translate.Pair{{Target: commit}}, nil); err != nil {
 			t.Errorf("%s: target holds %s, got %v", protocol, commit, err)
 		}
-		if err := s.checkTargetHas(t.Context(), []translate.Pair{{Target: missing}}); err == nil || !strings.Contains(err.Error(), "does not have") {
+		if _, err := s.checkTargetHas(t.Context(), []translate.Pair{{Target: missing}}, nil); err == nil || !strings.Contains(err.Error(), "does not have") {
 			t.Errorf("%s: target lacks %s, got %v", protocol, missing, err)
+		}
+		recorded := plumbing.NewHash(strings.Repeat("8", 64))
+		lost, err := s.checkTargetHas(t.Context(), []translate.Pair{{Source: recorded, Target: missing}},
+			map[plumbing.Hash]struct{}{recorded: {}})
+		if err != nil || !slices.Equal(lost, []plumbing.Hash{recorded}) {
+			t.Errorf("%s: a commit only the target's notes record: got %v, %v, want it returned to translate again", protocol, lost, err)
 		}
 		s.finish()
 	}

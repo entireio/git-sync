@@ -359,7 +359,10 @@ git log --notes=sha256-origin    # in a clone of the SHA1 repository
 **Pass `--atomic` to land refs and notes together.** By default the
 branches, tags and notes go in ordinary pushes, so the server can take a
 branch while refusing its notes. The next sync then translates those commits
-again, gets the same hashes and writes the missing notes. With `--atomic`,
+again, gets the same hashes and writes the missing notes. The server can also
+take the notes while refusing the branch, so a note can outlive the commit it
+records once the server prunes it. The next sync then translates that commit
+again and pushes it. With `--atomic`,
 git-sync sends every update in one atomic push, as `git push --atomic` does,
 and the server applies all of them or none. That push is never split into
 batches, so it ignores `--target-max-ref-updates`: a run that updates more

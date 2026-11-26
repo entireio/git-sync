@@ -165,30 +165,115 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	}
 	targetNotes := s.target.refMap[targetOriginNotesRef]
 	var targetNoteEntries []translate.NoteEntry
+	// fromTargetNotes holds the seeds only the target's notes record. They
+	// name commits an earlier sync translated, which translating again
+	// reproduces.
+	fromTargetNotes := make(map[plumbing.Hash]struct{})
 	if !targetNotes.IsZero() {
 		synced, entries, err := s.readTargetNotes(ctx, targetNotes)
 		if err != nil {
 			return Result{}, err
 		}
 		for sha1, sha256 := range synced {
+			if _, converted := seed[sha256]; !converted {
+				fromTargetNotes[sha256] = struct{}{}
+			}
 			seed[sha256] = sha1
 		}
 		targetNoteEntries = entries
 	}
 
-	outStore := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
-	tr := translate.New(sourceStore, outStore, formatcfg.SHA256, formatcfg.SHA1, seed)
+	// A non-atomic push can land the notes without the commits they record,
+	// which the target then drops. Such a seed is dropped too, and the
+	// commit translated again.
+	var (
+		refs       translatedRefs
+		result     Result
+		pushPlans  []BranchPlan
+		newCommits []translate.Pair
+	)
+	for {
+		refs, err = s.translateRefs(sourceStore, desiredRefs, seed)
+		if err != nil {
+			return Result{}, err
+		}
+		result = Result{
+			Plans: refs.plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: s.sourceService.Protocol,
+			RelayReason: "source objects are sha256 and target objects are sha1; translated before push",
+			SourceHEAD:  s.sourceService.HeadTarget,
+		}
+		pushPlans = classifyPlans(refs.plans, s.cfg.DryRun, &result)
+		if !s.cfg.DryRun && result.Blocked > 0 {
+			return result, fmt.Errorf("blocked %d ref update(s): the target has commits that are not translations of the source's", result.Blocked)
+		}
+		newCommits, err = landedCommits(sourceStore, refs.tr.Commits(), refs.plans, refs.translated, seed)
+		if err != nil {
+			return result, err
+		}
+		if s.cfg.DryRun || (!changesRefs(refs.plans) && len(newCommits) == 0) {
+			break
+		}
+		lost, err := s.checkTargetHas(ctx, refs.tr.SeedsUsed(), fromTargetNotes)
+		if err != nil {
+			return result, err
+		}
+		if len(lost) == 0 {
+			break
+		}
+		for _, h := range lost {
+			delete(seed, h)
+			delete(fromTargetNotes, h)
+		}
+	}
+
+	if !s.cfg.DryRun && (len(pushPlans) > 0 || len(newCommits) > 0) {
+		onTarget := make(map[plumbing.Hash]struct{}, len(seed))
+		for sha256 := range seed {
+			onTarget[sha256] = struct{}{}
+		}
+		for _, h := range s.target.refMap {
+			if sha256, ok := refs.reverse[h]; ok {
+				onTarget[sha256] = struct{}{}
+			}
+		}
+		if err := s.pushTranslated(ctx, sourceStore, refs.out, refs.tr, pushPlans, refs.translated, onTarget, targetNotes, targetNoteEntries, newCommits); err != nil {
+			return result, err
+		}
+	}
+
+	s.finalizeCounts(pushPlans, &result)
+	result.Stats = s.stats.snapshot()
+	result.Measurement = s.measurementDone()
+	return result, nil
+}
+
+// translatedRefs is the translation of the desired refs from one seed.
+type translatedRefs struct {
+	tr  *translate.Translator
+	out storer.Storer
+	// translated maps each desired ref to its translation. An existing tag
+	// is left out unless RetranslateTags is set.
+	translated map[plumbing.ReferenceName]plumbing.Hash
+	// reverse maps each SHA1 commit the seed or the translation produced to
+	// its SHA256 source.
+	reverse map[plumbing.Hash]plumbing.Hash
+	plans   []BranchPlan
+}
+
+func (s *syncSession) translateRefs(sourceStore storer.EncodedObjectStorer, desiredRefs map[plumbing.ReferenceName]planner.DesiredRef, seed map[plumbing.Hash]plumbing.Hash) (translatedRefs, error) {
+	out := memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA1))
+	tr := translate.New(sourceStore, out, formatcfg.SHA256, formatcfg.SHA1, seed)
 	translated := make(map[plumbing.ReferenceName]plumbing.Hash, len(desiredRefs))
 	for _, name := range sortedRefNames(desiredRefs) {
 		want := desiredRefs[name]
 		if want.Kind == planner.RefKindTag && !s.target.refMap[want.TargetRef].IsZero() && !s.cfg.RetranslateTags {
 			continue
 		}
-		out, err := tr.Translate(want.SourceHash)
+		h, err := tr.Translate(want.SourceHash)
 		if err != nil {
-			return Result{}, fmt.Errorf("translate %s: %w", want.SourceRef, err)
+			return translatedRefs{}, fmt.Errorf("translate %s: %w", want.SourceRef, err)
 		}
-		translated[name] = out
+		translated[name] = h
 	}
 
 	reverse := make(map[plumbing.Hash]plumbing.Hash, len(seed))
@@ -201,45 +286,17 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 
 	plans := make([]BranchPlan, 0, len(desiredRefs))
 	for _, name := range sortedRefNames(desiredRefs) {
-		plans = append(plans, planTranslatedRef(sourceStore, desiredRefs[name], s.target.refMap[desiredRefs[name].TargetRef], translated[name], reverse))
+		want := desiredRefs[name]
+		plans = append(plans, planTranslatedRef(sourceStore, want, s.target.refMap[want.TargetRef], translated[name], reverse))
 	}
+	return translatedRefs{tr: tr, out: out, translated: translated, reverse: reverse, plans: plans}, nil
+}
 
-	result := Result{
-		Plans: plans, DryRun: s.cfg.DryRun, OperationMode: modeSync, Protocol: s.sourceService.Protocol,
-		RelayReason: "source objects are sha256 and target objects are sha1; translated before push",
-		SourceHEAD:  s.sourceService.HeadTarget,
-	}
-	pushPlans := classifyPlans(plans, s.cfg.DryRun, &result)
-	if !s.cfg.DryRun && result.Blocked > 0 {
-		return result, fmt.Errorf("blocked %d ref update(s): the target has commits that are not translations of the source's", result.Blocked)
-	}
-
-	newCommits, err := landedCommits(sourceStore, tr.Commits(), plans, translated, seed)
-	if err != nil {
-		return result, err
-	}
-	if !s.cfg.DryRun && (len(pushPlans) > 0 || len(newCommits) > 0) {
-		if err := s.checkTargetHas(ctx, tr.SeedsUsed()); err != nil {
-			return result, err
-		}
-		onTarget := make(map[plumbing.Hash]struct{}, len(seed))
-		for sha256 := range seed {
-			onTarget[sha256] = struct{}{}
-		}
-		for _, h := range s.target.refMap {
-			if sha256, ok := reverse[h]; ok {
-				onTarget[sha256] = struct{}{}
-			}
-		}
-		if err := s.pushTranslated(ctx, sourceStore, outStore, tr, pushPlans, translated, onTarget, targetNotes, targetNoteEntries, newCommits); err != nil {
-			return result, err
-		}
-	}
-
-	s.finalizeCounts(pushPlans, &result)
-	result.Stats = s.stats.snapshot()
-	result.Measurement = s.measurementDone()
-	return result, nil
+// changesRefs reports whether any plan would change a ref on the target.
+func changesRefs(plans []BranchPlan) bool {
+	return slices.ContainsFunc(plans, func(p BranchPlan) bool {
+		return p.Action == ActionCreate || p.Action == ActionUpdate || p.Action == ActionDelete
+	})
 }
 
 // landedCommits keeps the commits in translated whose SHA1 counterparts the
@@ -680,9 +737,13 @@ func (s *syncSession) readTargetNotes(ctx context.Context, tip plumbing.Hash) (m
 // Pushing to another repository would fail on missing objects after the
 // whole pack was sent.
 //
+// A missing commit that only the target's notes record, listed in
+// fromTargetNotes, does not fail the check. Its SHA256 source is returned
+// instead, to be translated again.
+//
 // It negotiates with the target's upload-pack as a fetch would, offering
 // those commits as haves, and upload-pack acknowledges the ones it holds.
-func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair) error {
+func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair, fromTargetNotes map[plumbing.Hash]struct{}) ([]plumbing.Hash, error) {
 	tips := make(map[plumbing.Hash]struct{}, len(s.target.refMap))
 	for _, h := range s.target.refMap {
 		tips[h] = struct{}{}
@@ -694,7 +755,7 @@ func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair
 		}
 	}
 	if len(sourceOf) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Any advertised ref gives the negotiation something to want. The notes
 	// ref counts too: a non-atomic push can land it while refusing every
@@ -702,7 +763,7 @@ func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair
 	prefixes := []string{"refs/heads/", "refs/tags/", targetOriginNotesRef.String()}
 	refs, service, err := gitproto.ListSourceRefs(ctx, s.target.conn, s.cfg.ProtocolMode, prefixes)
 	if err != nil {
-		return fmt.Errorf("list target refs: %w", err)
+		return nil, fmt.Errorf("list target refs: %w", err)
 	}
 	advertised := make([]plumbing.Hash, 0, len(refs))
 	for _, r := range refs {
@@ -711,19 +772,24 @@ func (s *syncSession) checkTargetHas(ctx context.Context, seeds []translate.Pair
 	commits := slices.SortedFunc(maps.Keys(sourceOf), func(a, b plumbing.Hash) int { return a.Compare(b.Bytes()) })
 	held, err := service.HasCommits(ctx, s.target.conn, advertised, commits)
 	if err != nil {
-		return fmt.Errorf("check the target has the %d SHA1 commit(s) the translated history builds on: %w", len(commits), err)
+		return nil, fmt.Errorf("check the target has the %d SHA1 commit(s) the translated history builds on: %w", len(commits), err)
 	}
-	var missing []plumbing.Hash
+	var missing, lost []plumbing.Hash
 	for _, h := range commits {
-		if _, ok := held[h]; !ok {
-			missing = append(missing, h)
+		if _, ok := held[h]; ok {
+			continue
 		}
+		if _, ok := fromTargetNotes[sourceOf[h]]; ok {
+			lost = append(lost, sourceOf[h])
+			continue
+		}
+		missing = append(missing, h)
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("the target does not have %d SHA1 commit(s) the translated history builds on, such as %s (SHA256 %s). "+
+		return nil, fmt.Errorf("the target does not have %d SHA1 commit(s) the translated history builds on, such as %s (SHA256 %s). "+
 			"Sync to the repository the source was converted from", len(missing), missing[0], sourceOf[missing[0]])
 	}
-	return nil
+	return lost, nil
 }
 
 func sortedRefNames(refs map[plumbing.ReferenceName]planner.DesiredRef) []plumbing.ReferenceName {
