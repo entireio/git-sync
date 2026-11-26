@@ -26,25 +26,48 @@ import (
 // such as SSH, where upload-pack refuses a want no ref points at. It also
 // could not tell a refusal from a missing commit.
 //
+// upload-pack stops acknowledging haves once it has found enough common
+// commits to send a pack, so a have read after the first common one may go
+// unacknowledged although the server holds it. HasCommits offers every
+// commit the first round left unacknowledged again, on its own.
+//
 // A v2 server that does not advertise wait-for-done would send a pack once
 // the haves cover the want. There HasCommits falls back to wanting the
 // commits while claiming to have them, which v2 allows for any commit a ref
 // reaches. That fallback cannot tell which commit is missing, so it returns
 // an error instead.
 func (s *RefService) HasCommits(ctx context.Context, conn Conn, tips, commits []plumbing.Hash) (map[plumbing.Hash]struct{}, error) {
-	if len(commits) == 0 {
-		return map[plumbing.Hash]struct{}{}, nil
-	}
+	commits = SortedUniqueHashes(commits)
 	tips = slices.DeleteFunc(SortedUniqueHashes(tips), plumbing.Hash.IsZero)
-	if len(tips) == 0 {
-		// Nothing to want. A repository without refs holds no commits a
-		// client can name.
+	if len(commits) == 0 || len(tips) == 0 {
+		// With no tips there is nothing to want. A repository without refs
+		// holds no commits a client can name.
 		return map[plumbing.Hash]struct{}{}, nil
 	}
-	if s.Protocol == "v2" {
-		return hasCommitsV2(ctx, conn, s.V2Caps, tips[0], commits)
+	held, err := s.offerHaves(ctx, conn, tips[0], commits)
+	if err != nil {
+		return nil, err
 	}
-	return hasCommitsV1(ctx, conn, s.V1Adv, tips[0], commits)
+	for _, h := range commits {
+		if _, ok := held[h]; ok {
+			continue
+		}
+		one, err := s.offerHaves(ctx, conn, tips[0], []plumbing.Hash{h})
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := one[h]; ok {
+			held[h] = struct{}{}
+		}
+	}
+	return held, nil
+}
+
+func (s *RefService) offerHaves(ctx context.Context, conn Conn, tip plumbing.Hash, commits []plumbing.Hash) (map[plumbing.Hash]struct{}, error) {
+	if s.Protocol == "v2" {
+		return hasCommitsV2(ctx, conn, s.V2Caps, tip, commits)
+	}
+	return hasCommitsV1(ctx, conn, s.V1Adv, tip, commits)
 }
 
 func hasCommitsV1(ctx context.Context, conn Conn, adv *packp.AdvRefs, tip plumbing.Hash, commits []plumbing.Hash) (map[plumbing.Hash]struct{}, error) {
@@ -115,7 +138,7 @@ func hasCommitsV2(ctx context.Context, conn Conn, caps *V2Capabilities, tip plum
 	}
 	args := make([]string, 0, len(commits)+2)
 	args = append(args, "wait-for-done", "want "+tip.String())
-	for _, h := range SortedUniqueHashes(commits) {
+	for _, h := range commits {
 		args = append(args, "have "+h.String())
 	}
 	body, err := EncodeCommand("fetch", caps.RequestCapabilities(), args)

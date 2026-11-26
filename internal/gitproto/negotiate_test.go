@@ -3,6 +3,8 @@ package gitproto
 import (
 	"fmt"
 	"maps"
+	"net/http/cgi"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -64,18 +66,26 @@ func TestParseCommonAcksV2(t *testing.T) {
 	}
 }
 
-// TestHasCommits_StatefulSSH runs upload-pack locally behind an ssh stand-in.
-// Stateful v0 refuses a want of a commit no ref points at, which is why
-// HasCommits offers the commits as haves instead.
-func TestHasCommits_StatefulSSH(t *testing.T) {
-	repo := t.TempDir()
-	gitIn(t, repo, "init", "-q", "-b", "main")
+// TestHasCommits_LocalGit runs upload-pack locally, statefully behind an ssh
+// stand-in and statelessly behind git http-backend. Stateful v0 refuses a
+// want of a commit no ref points at, which is why HasCommits offers the
+// commits as haves instead. old and mid are on one line of history, and
+// upload-pack acknowledges only the first of them it reads.
+func TestHasCommits_LocalGit(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git binary not available: %v", err)
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	gitIn(t, root, "init", "-q", "-b", "main", repo)
 	gitIn(t, repo, "config", "uploadpack.allowReachableSHA1InWant", "false")
 	gitIn(t, repo, "config", "uploadpack.allowAnySHA1InWant", "false")
 	for _, msg := range []string{"one", "two", "three"} {
 		gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", msg)
 	}
 	old := plumbing.NewHash(strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~2")))
+	mid := plumbing.NewHash(strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~1")))
 	missing := plumbing.NewHash(strings.Repeat("7", 40))
 
 	wrapper := filepath.Join(t.TempDir(), "ssh")
@@ -87,21 +97,44 @@ func TestHasCommits_StatefulSSH(t *testing.T) {
 	t.Cleanup(func() { SSHLookPath = orig })
 	SSHLookPath = func(string) (string, error) { return wrapper, nil }
 
-	for _, mode := range []string{"v1", "v2"} {
-		conn, err := NewSSHConn(&url.URL{Scheme: "ssh", Host: "localhost", Path: repo}, "target")
-		if err != nil {
-			t.Fatal(err)
+	srv := httptest.NewServer(&cgi.Handler{
+		Path: gitBin,
+		Args: []string{"http-backend"},
+		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1",
+			"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"},
+	})
+	t.Cleanup(srv.Close)
+	httpURL, err := url.Parse(srv.URL + "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dial := map[string]func() (Conn, error){
+		"ssh": func() (Conn, error) {
+			return NewSSHConn(&url.URL{Scheme: "ssh", Host: "localhost", Path: repo}, "target")
+		},
+		"http": func() (Conn, error) {
+			return NewHTTPConnWithClient(httpURL, "target", nil, srv.Client()), nil
+		},
+	}
+	for _, transport := range []string{"ssh", "http"} {
+		for _, mode := range []string{"v1", "v2"} {
+			name := transport + " " + mode
+			conn, err := dial[transport]()
+			if err != nil {
+				t.Fatal(err)
+			}
+			refs, service, err := ListSourceRefs(t.Context(), conn, mode, []string{"refs/heads/"})
+			if err != nil {
+				t.Fatalf("%s: list refs: %v", name, err)
+			}
+			tips := make([]plumbing.Hash, 0, len(refs))
+			for _, r := range refs {
+				tips = append(tips, r.Hash())
+			}
+			got, err := service.HasCommits(t.Context(), conn, tips, []plumbing.Hash{old, mid, missing})
+			checkAcks(t, name, got, err, map[plumbing.Hash]struct{}{old: {}, mid: {}}, "")
 		}
-		refs, service, err := ListSourceRefs(t.Context(), conn, mode, []string{"refs/heads/"})
-		if err != nil {
-			t.Fatalf("%s: list refs: %v", mode, err)
-		}
-		tips := make([]plumbing.Hash, 0, len(refs))
-		for _, r := range refs {
-			tips = append(tips, r.Hash())
-		}
-		got, err := service.HasCommits(t.Context(), conn, tips, []plumbing.Hash{old, missing})
-		checkAcks(t, mode, got, err, map[plumbing.Hash]struct{}{old: {}}, "")
 	}
 }
 
