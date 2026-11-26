@@ -1423,6 +1423,8 @@ func TestCheckTargetHas_GitHTTPBackendNotesOnlyTarget(t *testing.T) {
 	worktree := filepath.Join(root, "work")
 	runGit(t, root, "init", "--bare", targetBare)
 	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, targetBare, "config", "uploadpack.allowReachableSHA1InWant", "false")
+	runGit(t, targetBare, "config", "uploadpack.allowAnySHA1InWant", "false")
 	runGit(t, root, "init", "--bare", filepath.Join(root, "source.git"))
 	runGit(t, root, "init", "-b", testBranch, worktree)
 	runGit(t, worktree, "config", "user.name", "git-sync test")

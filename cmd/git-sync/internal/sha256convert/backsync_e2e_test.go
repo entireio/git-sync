@@ -49,6 +49,10 @@ func TestBackSync_SHA256ToReadOnlySHA1(t *testing.T) {
 
 	gitAt(t, root, "", "init", "--bare", "--object-format=sha1", "--initial-branch=main", origin)
 	gitAt(t, origin, "", "config", "http.receivepack", "true")
+	// Pin upload-pack's defaults, so a global config cannot let the target
+	// check pass by wanting commits no ref points at.
+	gitAt(t, origin, "", "config", "uploadpack.allowReachableSHA1InWant", "false")
+	gitAt(t, origin, "", "config", "uploadpack.allowAnySHA1InWant", "false")
 	gitAt(t, root, "", "init", "-b", "main", seed)
 	configIdentity(t, seed)
 	mustWrite(t, filepath.Join(seed, "README"), "hello\n")

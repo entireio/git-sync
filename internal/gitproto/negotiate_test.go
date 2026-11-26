@@ -70,6 +70,8 @@ func TestParseCommonAcksV2(t *testing.T) {
 func TestHasCommits_StatefulSSH(t *testing.T) {
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
+	gitIn(t, repo, "config", "uploadpack.allowReachableSHA1InWant", "false")
+	gitIn(t, repo, "config", "uploadpack.allowAnySHA1InWant", "false")
 	for _, msg := range []string{"one", "two", "three"} {
 		gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", msg)
 	}
