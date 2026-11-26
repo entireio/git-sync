@@ -109,6 +109,7 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 	}
 	cmd.MarkFlagsMutuallyExclusive("force-with-lease", "force-blind")
 	cmd.Flags().BoolVar(&req.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
+	cmd.Flags().BoolVar(&req.Policy.AssumeTargetMaximal, "assume-target-maximal", false, "send the entire-maximal ls-refs argument to the target even when it is not advertised, to drop redundant haves; use only against entiredb targets that accept it")
 	// Tag inclusion is now handled at the library level (AllRefs implies
 	// it in BuildDesiredRefs). Replicate keeps strict failure semantics —
 	// its contract is "target refs match source," so BestEffort is not

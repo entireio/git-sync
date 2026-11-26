@@ -23,7 +23,7 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 		Source: gitsync.Endpoint{URL: "https://source.example/repo.git", FollowInfoRefsRedirect: true},
 		Target: gitsync.Endpoint{URL: "https://target.example/repo.git", FollowInfoRefsRedirect: true},
 		Scope:  gitsync.RefScope{Branches: []string{"main"}},
-		Policy: gitsync.SyncPolicy{IncludeTags: true, ForceWithLease: true, Prune: true},
+		Policy: gitsync.SyncPolicy{IncludeTags: true, ForceWithLease: true, Prune: true, AssumeTargetMaximal: true},
 		DryRun: true,
 		Options: AdvancedOptions{
 			CollectStats:           true,
@@ -35,7 +35,7 @@ func TestBuildSyncConfigCarriesAdvancedOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSyncConfig: %v", err)
 	}
-	if !cfg.DryRun || !cfg.ShowStats || !cfg.MeasureMemory || !cfg.Verbose {
+	if !cfg.DryRun || !cfg.ShowStats || !cfg.MeasureMemory || !cfg.Verbose || !cfg.AssumeTargetMaximal {
 		t.Fatalf("advanced booleans not propagated: %+v", cfg)
 	}
 	if cfg.MaterializedMaxObjects != 123 {
