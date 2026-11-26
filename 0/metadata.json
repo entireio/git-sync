@@ -75,6 +75,37 @@
         "label": "Skill: entire:address-findings",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_014iqo3EpzzbZy12Mp5s8a7T",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "git-conformance"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c8cd8dd03d24",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 3582,
+        "end": 3583,
+        "entry_ids": [
+          "71df4746-5aa2-4359-80ec-f418e58e6e96"
+        ],
+        "tool_use_id": "toolu_014iqo3EpzzbZy12Mp5s8a7T"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014iqo3EpzzbZy12Mp5s8a7T"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: git-conformance",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
