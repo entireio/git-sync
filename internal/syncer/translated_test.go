@@ -121,6 +121,23 @@ func TestRoundTrips(t *testing.T) {
 	}
 }
 
+func TestDropConvertedTags(t *testing.T) {
+	t.Parallel()
+	desired := map[plumbing.ReferenceName]planner.DesiredRef{
+		"refs/heads/main":                {SourceRef: "refs/heads/main", TargetRef: "refs/heads/main"},
+		"refs/tags/v1":                   {SourceRef: "refs/tags/v1", TargetRef: "refs/tags/v1"},
+		"refs/tags/converted/main":       {SourceRef: "refs/tags/converted/main", TargetRef: "refs/tags/converted/main"},
+		"refs/tags/attestation":          {SourceRef: "refs/tags/converted/main", TargetRef: "refs/tags/attestation"},
+		"refs/tags/converted/from-other": {SourceRef: "refs/tags/v2", TargetRef: "refs/tags/converted/from-other"},
+	}
+	dropConvertedTags(desired)
+	got := slices.Sorted(maps.Keys(desired))
+	want := []plumbing.ReferenceName{"refs/heads/main", "refs/tags/v1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 func treeKnown(plumbing.Hash) (bool, error) { return true, nil }
 
 func TestObjectsMissingFromTarget_HeaderOnlyTag(t *testing.T) {

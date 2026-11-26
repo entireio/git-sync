@@ -330,8 +330,8 @@ version, or with `--rewrite-messages`, does not. git-sync reads
 SHA1 commit for every converted one, so keep that ref when you push the
 converted repository to its host. Those commits exist only in the original
 repository, so the target must be the repository the SHA256 one was
-converted from. Before pushing, git-sync negotiates with the target as a
-fetch would, offering the commits the new history builds on, and stops with
+converted from. Before pushing, and in a dry run or plan, git-sync
+negotiates with the target as a fetch would, offering the commits the new history builds on, and stops with
 an error naming one the target does not acknowledge. It offers them rather
 than asking for them, because over SSH upload-pack refuses to send a commit
 that no branch or tag points at.
@@ -372,7 +372,7 @@ pushes, and in any sync that does not translate SHA256 to SHA1.
 
 **Tags are immutable.** A tag the SHA1 repository already has is left alone,
 whatever it points at, so tags that existed before the cutover keep their
-original objects. New tags are translated and created. Without `--atomic`,
+original objects. Its history is not fetched either. New tags are translated and created. Without `--atomic`,
 the server can take a new tag while refusing its notes, and the next sync
 skips the tag, so its commits stay without notes. `--retranslate-tags`
 repairs that: it translates the tags the SHA1 repository already has and
@@ -399,7 +399,7 @@ What translation changes:
   SHA256 side names the reverted commit by its SHA256 hash, on both sides.
 - **Submodule gitlinks fail the sync**, as they fail conversion.
 - **`refs/tags/converted/*`** attestation tags from `--sign-mode tips` are
-  never synced.
+  never synced, including under a name `--map` gives them.
 
 Limits of the current implementation:
 

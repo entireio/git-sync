@@ -1464,3 +1464,66 @@ func TestCheckTargetHas_GitHTTPBackendNotesOnlyTarget(t *testing.T) {
 		s.finish()
 	}
 }
+
+// TestTranslatedSync_GitHTTPBackendExistingTagNotFetched has the target
+// already hold a tag whose SHA256 history alone exceeds the object limit.
+// The tag is left alone, so its history is not fetched, and main still
+// syncs.
+func TestTranslatedSync_GitHTTPBackendExistingTagNotFetched(t *testing.T) {
+	if os.Getenv(gitHTTPBackendEnv) == "" {
+		t.Skip("set GITSYNC_E2E_GIT_HTTP_BACKEND=1 to run git-http-backend integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	root := t.TempDir()
+	sourceBare := filepath.Join(root, "source.git")
+	targetBare := filepath.Join(root, "target.git")
+	worktree := filepath.Join(root, "work")
+	runGit(t, root, "init", "--bare", "--object-format=sha256", sourceBare)
+	runGit(t, root, "init", "--bare", "--object-format=sha1", targetBare)
+	runGit(t, targetBare, "config", "http.receivepack", "true")
+	runGit(t, root, "init", "--object-format=sha256", "-b", testBranch, worktree)
+	runGit(t, worktree, "config", "user.name", "git-sync test")
+	runGit(t, worktree, "config", "user.email", "git-sync@example.com")
+	runGit(t, worktree, "commit", "--allow-empty", "-m", "base")
+	runGit(t, worktree, "push", sourceBare, "HEAD:refs/heads/"+testBranch)
+	runGit(t, worktree, "checkout", "-q", "--orphan", "release")
+	for i := range 30 {
+		writeFile(t, filepath.Join(worktree, "release.txt"), fmt.Sprintf("release %d\n", i))
+		runGit(t, worktree, "add", "release.txt")
+		runGit(t, worktree, "commit", "-q", "-m", fmt.Sprintf("release %d", i))
+	}
+	runGit(t, worktree, "tag", "rel")
+	runGit(t, worktree, "push", sourceBare, "refs/tags/rel")
+	runGit(t, worktree, "checkout", "-q", testBranch)
+
+	server := newGitHTTPBackendServer(t, root)
+	defer server.Close()
+	cfg := Config{
+		Source:   Endpoint{URL: server.RepoURL("source.git")},
+		Target:   Endpoint{URL: server.RepoURL("target.git")},
+		Branches: []string{testBranch},
+	}
+	if _, err := Run(t.Context(), cfg); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	targetMain := strings.TrimSpace(runGit(t, targetBare, "rev-parse", "refs/heads/"+testBranch))
+	runGit(t, targetBare, "update-ref", "refs/tags/rel", targetMain)
+
+	runGit(t, worktree, "commit", "--allow-empty", "-m", "next")
+	runGit(t, worktree, "push", sourceBare, "HEAD:refs/heads/"+testBranch)
+	cfg.IncludeTags = true
+	cfg.MaterializedMaxObjects = 20
+	result, err := Run(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("sync with an existing tag: %v", err)
+	}
+	if result.Pushed != 1 || result.Skipped != 1 {
+		t.Fatalf("want main pushed and rel skipped, got %+v", result.Plans)
+	}
+	if got := strings.TrimSpace(runGit(t, targetBare, "rev-parse", "refs/tags/rel")); got != targetMain {
+		t.Fatalf("existing tag moved: got %s, want %s", got, targetMain)
+	}
+}

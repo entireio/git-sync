@@ -19,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/utils/ioutil"
+
+	"entire.io/entire/git-sync/internal/sanitize"
 )
 
 // DesiredRef describes a single ref we want to fetch from source.
@@ -352,7 +354,7 @@ func consumeV2FetchPack(
 		case PacketData:
 			line := string(payload)
 			if strings.HasPrefix(line, "ERR ") {
-				return errors.New("remote: " + line[4:])
+				return errors.New("remote: " + sanitize.Text(strings.TrimSuffix(line[4:], "\n")))
 			}
 			switch line {
 			case "packfile\n":
@@ -395,7 +397,7 @@ func openV2PackStream(body io.ReadCloser, verbose bool, progressOut io.Writer) (
 		case PacketData:
 			line := string(payload)
 			if strings.HasPrefix(line, "ERR ") {
-				return nil, errors.New("remote: " + line[4:])
+				return nil, errors.New("remote: " + sanitize.Text(strings.TrimSuffix(line[4:], "\n")))
 			}
 			switch line {
 			case "packfile\n":

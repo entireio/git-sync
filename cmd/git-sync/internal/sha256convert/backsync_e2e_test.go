@@ -211,6 +211,10 @@ func assertOtherSHA1RepoRefused(t *testing.T, client *gitsync.Client, req gitsyn
 		if _, err := client.Sync(context.Background(), req); err == nil || !strings.Contains(err.Error(), "does not have") {
 			t.Fatalf("%s back-sync to a SHA1 repository that is not the original: got %v, want an error naming the missing commits", protocol, err)
 		}
+		plan := gitsync.PlanRequest{Source: req.Source, Target: req.Target, Scope: req.Scope, Policy: req.Policy}
+		if _, err := client.Plan(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "does not have") {
+			t.Fatalf("%s plan against a SHA1 repository that is not the original: got %v, want the error sync gives", protocol, err)
+		}
 	}
 }
 

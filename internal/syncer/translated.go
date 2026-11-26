@@ -130,17 +130,19 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("build desired refs: %w", err)
 	}
-	for name := range desiredRefs {
-		if strings.HasPrefix(name.String(), convertedTagPrefix) {
-			delete(desiredRefs, name)
-		}
-	}
+	dropConvertedTags(desiredRefs)
 	if len(desiredRefs) == 0 {
 		return Result{}, errors.New("no source refs matched")
 	}
 
 	sourceStore := newBoundedStorer(memory.NewStorage(memory.WithObjectFormat(formatcfg.SHA256)), effectiveMaxObjects(s.cfg))
 	fetch := convert.DesiredRefs(desiredRefs)
+	// A tag the target already has is left alone, so its history is not
+	// needed unless RetranslateTags translates it.
+	maps.DeleteFunc(fetch, func(name plumbing.ReferenceName, _ gitproto.DesiredRef) bool {
+		want := desiredRefs[name]
+		return s.skipsExistingTag(want)
+	})
 	originNotes, err := s.sourceRefHash(ctx, sourceOriginNotesRef)
 	if err != nil {
 		return Result{}, err
@@ -210,7 +212,7 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		if s.cfg.DryRun || (!changesRefs(refs.plans) && len(newCommits) == 0) {
+		if !changesRefs(refs.plans) && len(newCommits) == 0 {
 			break
 		}
 		lost, err := s.checkTargetHas(ctx, refs.tr.SeedsUsed(), fromTargetNotes)
@@ -247,6 +249,16 @@ func (s *syncSession) runTranslatedSync(ctx context.Context) (Result, error) {
 	return result, nil
 }
 
+// dropConvertedTags removes the refs under refs/tags/converted/, the
+// attestation tags convert-sha256 signs, whether a mapping names one as the
+// source or the target.
+func dropConvertedTags(desired map[plumbing.ReferenceName]planner.DesiredRef) {
+	maps.DeleteFunc(desired, func(name plumbing.ReferenceName, ref planner.DesiredRef) bool {
+		return strings.HasPrefix(name.String(), convertedTagPrefix) ||
+			strings.HasPrefix(ref.SourceRef.String(), convertedTagPrefix)
+	})
+}
+
 // translatedRefs is the translation of the desired refs from one seed.
 type translatedRefs struct {
 	tr  *translate.Translator
@@ -266,7 +278,7 @@ func (s *syncSession) translateRefs(sourceStore storer.EncodedObjectStorer, desi
 	translated := make(map[plumbing.ReferenceName]plumbing.Hash, len(desiredRefs))
 	for _, name := range sortedRefNames(desiredRefs) {
 		want := desiredRefs[name]
-		if want.Kind == planner.RefKindTag && !s.target.refMap[want.TargetRef].IsZero() && !s.cfg.RetranslateTags {
+		if s.skipsExistingTag(want) {
 			continue
 		}
 		h, err := tr.Translate(want.SourceHash)
@@ -290,6 +302,12 @@ func (s *syncSession) translateRefs(sourceStore storer.EncodedObjectStorer, desi
 		plans = append(plans, planTranslatedRef(sourceStore, want, s.target.refMap[want.TargetRef], translated[name], reverse))
 	}
 	return translatedRefs{tr: tr, out: out, translated: translated, reverse: reverse, plans: plans}, nil
+}
+
+// skipsExistingTag reports whether want is a tag the target already has,
+// which is left alone without RetranslateTags.
+func (s *syncSession) skipsExistingTag(want planner.DesiredRef) bool {
+	return want.Kind == planner.RefKindTag && !s.target.refMap[want.TargetRef].IsZero() && !s.cfg.RetranslateTags
 }
 
 // changesRefs reports whether any plan would change a ref on the target.

@@ -14,6 +14,8 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage/memory"
+
+	"entire.io/entire/git-sync/internal/sanitize"
 )
 
 // HasCommits asks the server which of commits it holds. It negotiates the
@@ -116,7 +118,7 @@ func parseCommonAcksV1(r *PacketReader) (map[plumbing.Hash]struct{}, error) {
 		case line == "NAK":
 			return common, nil
 		case strings.HasPrefix(line, "ERR "):
-			return nil, errors.New("remote: " + line[4:])
+			return nil, errors.New("remote: " + sanitize.Text(strings.TrimSuffix(line[4:], "\n")))
 		case strings.HasPrefix(line, "ACK "):
 			fields := strings.Fields(line)
 			if len(fields) == 3 && fields[2] == "common" {
@@ -178,7 +180,7 @@ func parseCommonAcksV2(r *PacketReader) (map[plumbing.Hash]struct{}, error) {
 		line := strings.TrimSuffix(string(payload), "\n")
 		switch {
 		case strings.HasPrefix(line, "ERR "):
-			return nil, errors.New("remote: " + line[4:])
+			return nil, errors.New("remote: " + sanitize.Text(strings.TrimSuffix(line[4:], "\n")))
 		case !inSection && line == "acknowledgments":
 			inSection = true
 		case inSection && line == "NAK":

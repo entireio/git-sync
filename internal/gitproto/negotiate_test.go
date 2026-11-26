@@ -66,6 +66,21 @@ func TestParseCommonAcksV2(t *testing.T) {
 	}
 }
 
+func TestParseCommonAcks_SanitizesRemoteError(t *testing.T) {
+	t.Parallel()
+	resp := pkt("ERR \x1b[2Jnot \x07our ref\n")
+	parsers := map[string]func(*PacketReader) (map[plumbing.Hash]struct{}, error){
+		"v1": parseCommonAcksV1,
+		"v2": parseCommonAcksV2,
+	}
+	for name, parse := range parsers {
+		_, err := parse(NewPacketReader(strings.NewReader(resp)))
+		if err == nil || err.Error() != "remote: [2Jnot our ref" {
+			t.Errorf("%s: got %q, want the remote text without control characters", name, err)
+		}
+	}
+}
+
 // TestHasCommits_LocalGit runs upload-pack locally, statefully behind an ssh
 // stand-in and statelessly behind git http-backend. Stateful v0 refuses a
 // want of a commit no ref points at, which is why HasCommits offers the
