@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.13.5-nightly.202611250617.c5f58fc0a.0.20261125200220-e362dd9f946a",
+  "checkpoint_id": "01M8BQQ19JFEFMYN03978BN6KP",
+  "strategy": "manual-commit",
+  "branch": "hash-agility-partial-sync",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "internal/gitproto/negotiate.go",
+    "internal/gitproto/negotiate_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 62702,
+    "cache_read_tokens": 6133237,
+    "output_tokens": 32290,
+    "api_call_count": 30
+  },
+  "redaction": {
+    "replacements": 43,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 2,
+      "credentialed_uri": 0,
+      "entropy": 47,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
