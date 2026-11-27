@@ -109,6 +109,8 @@ func newSyncLikeCmd(name, short string, dryRun bool, defaultMode gitsync.Operati
 	}
 	cmd.MarkFlagsMutuallyExclusive("force-with-lease", "force-blind")
 	cmd.Flags().BoolVar(&req.Policy.Prune, "prune", false, "delete managed target refs that no longer exist on source")
+	cmd.Flags().BoolVar(&req.Policy.Atomic, "atomic", false, "sha256 to sha1 sync only: push every ref update and its origin notes in one atomic request; ignores --target-max-ref-updates and requires a target that supports atomic pushes")
+	cmd.Flags().BoolVar(&req.Policy.RetranslateTags, "retranslate-tags", false, "sha256 to sha1 sync only: translate tags the target already has and record the origin notes their commits lack; the tags are never changed")
 	// Tag inclusion is now handled at the library level (AllRefs implies
 	// it in BuildDesiredRefs). Replicate keeps strict failure semantics —
 	// its contract is "target refs match source," so BestEffort is not

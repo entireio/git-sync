@@ -264,6 +264,20 @@ func (p *Pusher) PushObjects(ctx context.Context, commands []PushCommand, store 
 	return pushObjects(ctx, p.Conn, p.Adv, commands, store, hashes, p.MaxRefUpdates, p.Verbose, p.beginPush())
 }
 
+// ErrAtomicPushUnsupported is returned by PushObjectsAtomic when the target
+// does not advertise the atomic capability.
+var ErrAtomicPushUnsupported = errors.New("target does not support atomic pushes")
+
+// PushObjectsAtomic pushes like PushObjects, but in one receive-pack request
+// that asks the target to apply every command or none of them. It ignores
+// MaxRefUpdates, since splitting the commands would break that promise.
+func (p *Pusher) PushObjectsAtomic(ctx context.Context, commands []PushCommand, store storer.Storer, hashes []plumbing.Hash) error {
+	if !p.Adv.Capabilities.Supports(capability.Atomic) {
+		return ErrAtomicPushUnsupported
+	}
+	return pushObjectsBatch(ctx, p.Conn, p.Adv, commands, store, hashes, p.Verbose, p.beginPush(), true)
+}
+
 // buildUpdateRequest builds the receive-pack update request.
 func buildUpdateRequest(
 	adv *packp.AdvRefs,
@@ -616,7 +630,7 @@ func pushObjects(
 ) error {
 	limit := effectiveMaxRefUpdates(maxRefUpdates)
 	if len(commands) <= limit {
-		return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, statuses)
+		return pushObjectsBatch(ctx, conn, adv, commands, store, hashes, verbose, statuses, false)
 	}
 
 	updates := make([]PushCommand, 0, len(commands))
@@ -631,7 +645,7 @@ func pushObjects(
 
 	if len(updates) > 0 {
 		first, rest := splitFirstBatch(updates, limit)
-		if err := pushObjectsBatch(ctx, conn, adv, first, store, hashes, verbose, statuses); err != nil {
+		if err := pushObjectsBatch(ctx, conn, adv, first, store, hashes, verbose, statuses, false); err != nil {
 			return err
 		}
 		if len(rest) > 0 {
@@ -666,10 +680,14 @@ func pushObjectsBatch(
 	hashes []plumbing.Hash,
 	verbose bool,
 	statuses *pushStatusSink,
+	atomic bool,
 ) error {
 	req, _, hasUpdates, err := buildUpdateRequest(adv, commands, verbose)
 	if err != nil {
 		return err
+	}
+	if atomic {
+		req.Capabilities.Set(capability.Atomic)
 	}
 	if !hasUpdates {
 		return sendReceivePack(ctx, conn, req, nil, verbose, statuses)

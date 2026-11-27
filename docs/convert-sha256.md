@@ -53,11 +53,18 @@ GITSYNC_SOURCE_TOKEN=ghp_xxx git-sync convert-sha256 \
    DFS:
    - **Blobs**: re-hashed under SHA256; content unchanged.
    - **Trees**: each entry's hash translated.
-   - **Commits**: `tree` and `parent` hashes translated; GPG signatures
-     and `mergetag` headers dropped; in-scope SHA1 references in the
-     message are translated first and then substituted.
-   - **Tags**: target hash translated; signatures dropped; message
-     hashes rewritten the same way.
+   - **Commits**: `tree` and `parent` hashes translated; the tag
+     embedded in a `mergetag` header converted like any tag;
+     `gpgsig` and `gpgsig-sha256` headers kept as they are.
+   - **Tags**: target hash translated; a body signature over the SHA1
+     form moves into a `gpgsig` header, where a SHA256 object keeps it.
+
+   This is the conversion git itself performs for
+   `extensions.compatObjectFormat` (`object-file-convert.c`), so every
+   converted object converts back to the original SHA1 object, byte for
+   byte, and its signatures keep verifying against that SHA1 form.
+   A commit header git does not know fails the run, since it might embed
+   a hash.
 6. Writes refs at the translated tip hashes; points HEAD at the
    source's advertised HEAD when it was converted, else `main`/`master`,
    else the first branch alphabetically (a tags-only conversion leaves
@@ -70,7 +77,7 @@ The conversion deliberately decouples SHA1 from SHA256 — two runs of
 this tool against the same source produce SHA256 hashes that share
 nothing with the originals. Three on-ramps help bridge the gap.
 
-### Inline message rewriting (default on)
+### Inline message rewriting (opt in via `--rewrite-messages`)
 
 Commit and tag messages are scanned for 7-to-40-character hex runs.
 When a run uniquely matches a commit or tag SHA1 in the reachable set,
@@ -97,8 +104,14 @@ Two properties make this robust:
 
 False positives are essentially impossible: a run is substituted only
 if its prefix uniquely matches a commit or tag in scope. Blob and tree
-hashes are excluded from the match set. Disable with
-`--no-rewrite-messages` if you prefer untouched messages.
+hashes are excluded from the match set.
+
+Rewriting is off by default because git's own conversion never touches
+messages. A rewritten commit or tag no longer converts back to its SHA1
+original, so its signatures stop verifying and a SHA1 repository kept as
+a reference cannot be followed through it without
+`refs/notes/sha1-origin`. `--no-rewrite-messages` is accepted and does
+nothing.
 
 ### Origin notes ref (default on)
 
@@ -147,13 +160,9 @@ commit's bytes, so the tip's hash transitively commits to the whole
 history. Signing the tip attests every ancestor.
 
 Important nuance: the signature is by the *converter*, not by the
-original authors (whose own signatures are necessarily lost — see
-"GPG signatures are stripped" under Sharp Edges). The attestation
-chain becomes "*X attests this is the conversion they produced*"
-rather than "*the original authors wrote this commit*". For internal
-mirrors or single-identity repos that's a strict improvement over
-unsigned-everywhere; for broad public repos it is weaker than the
-pre-conversion chain.
+original authors. Their own signatures are kept (see "Signatures sign
+the SHA1 form" under Sharp Edges), but they sign the SHA1 form of each
+object, so the attestation is what vouches for the SHA256 form directly.
 
 Signing uses the target repo's git signing config (`user.signingkey`,
 `gpg.format`) by default — same as `git commit -S` or a normal
@@ -189,7 +198,9 @@ identity is set up.
 
 --protocol                         protocol mode (auto, v1, v2)
 --write-mapping                    write SHA1 → SHA256 TSV to this path
---no-rewrite-messages              skip inline hash rewrites in messages
+--rewrite-messages                 rewrite SHA1 hashes in messages to SHA256
+                                   (breaks the round trip and signatures of
+                                   rewritten objects)
 --no-origin-notes                  skip refs/notes/sha1-origin
 --check                            verify the output (config, HEAD, refs, git fsck)
 --sign-mode                        signing mode: none (default) or tips
@@ -211,15 +222,18 @@ Environment fallbacks: `GITSYNC_SOURCE_TOKEN`, `GITSYNC_SOURCE_USERNAME`,
 
 ## Sharp Edges
 
-**GPG signatures are stripped.** A signature is bytes signed over the
-commit's pre-conversion content (including the SHA1 hashes in `tree`
-and `parent` lines). After rewriting, the bytes no longer match the
-signature, so verification would always fail; the command drops them
-and prints a count. Signed annotated tags lose their signature the
-same way. `mergetag` headers on merge commits — which embed a signed
-tag with its own signature — are removed entirely, since the embedded
-tag references original SHA1s and the signature was computed over
-those original bytes.
+**Signatures sign the SHA1 form.** A commit's `gpgsig` header and a
+tag's signature are bytes signed over the SHA1 form of the object. They
+are kept, in the places a SHA256 object keeps a SHA1 signature, and they
+verify against the SHA1 form, which converting back reproduces exactly.
+`git verify-commit` in the converted repository looks for a
+`gpgsig-sha256` signature over the SHA256 form, which only commits signed
+after the cutover carry.
+
+Earlier versions of this command stripped signatures and `mergetag`
+headers and rewrote messages by default. Repositories converted that way
+do not convert back to their SHA1 originals. `refs/notes/sha1-origin`
+still records where each commit came from.
 
 **Submodule gitlinks must resolve in-repo.** Tree entries with mode
 `160000` reference a commit in another repository, but a SHA1 hash
@@ -261,6 +275,9 @@ the Unix epoch — or to `SOURCE_DATE_EPOCH` when that environment
 variable is set — rather than `time.Now()`, so even the notes ref
 reproduces byte-for-byte.
 
+To keep the original SHA1 repository following the converted one, see
+[Keeping the SHA1 Repository as a Reference](#keeping-the-sha1-repository-as-a-reference).
+
 **Loose-object storage.** Every translated object is written as a
 loose file under `objects/<aa>/<rest>` — no pack file is produced.
 Correct, but slow on filesystems that dislike millions of small files.
@@ -276,12 +293,125 @@ scale (~16M objects), roughly 2 GB peak.
 **Discovery adds a ~1.5× decode pass.** Every reachable object is
 decoded twice: once in discovery (no encoding) and once in translation
 (decode + encode). The cost buys consistent uniqueness verdicts for
-message rewriting and submodule fail-fast.
+the opt-in message rewriting and submodule fail-fast.
 
 **Abbreviated-prefix lookup is a linear scan.** Each abbreviated SHA1
 in a message triggers an O(reachable) scan to check uniqueness. Fine
 to ~100k commits; slower past that. A sorted-prefix index would make
 it O(log N), an easy optimization if someone hits the wall.
+
+## Keeping the SHA1 Repository as a Reference
+
+After the cutover, the SHA1 repository can stay around as a read-only
+reference that follows the SHA256 one. Make the SHA256 repository the one
+people push to, protect the SHA1 repository so only the git-sync identity
+can write to it, and sync from SHA256 to SHA1 with an ordinary `sync`:
+
+```bash
+git-sync sync \
+  --branch main --tags \
+  https://git.example/new-sha256-repo.git \
+  https://github.com/source-org/source-repo.git
+```
+
+git-sync sees that the source advertises `object-format=sha256` and the
+target SHA1, and translates objects instead of relaying packs. The SHA1
+repository ends up with the commits a developer would have made there
+directly: same trees, same authors, same dates, same messages. Objects are
+converted as git converts them for `extensions.compatObjectFormat`
+(`object-file-convert.c`), so each SHA1 object is the one git itself would
+compute for the SHA256 object.
+
+**History from before the cutover keeps its original hashes.** A
+repository converted with signatures kept and messages untouched converts
+back to the original SHA1 objects on its own. One converted by an earlier
+version, or with `--rewrite-messages`, does not. git-sync reads
+`refs/notes/sha1-origin` from the SHA256 repository and uses the recorded
+SHA1 commit for every converted one, so keep that ref when you push the
+converted repository to its host. Those commits exist only in the original
+repository, so the target must be the repository the SHA256 one was
+converted from. Before pushing, and in a dry run or plan, git-sync
+negotiates with the target as a fetch would, offering the commits the new history builds on, and stops with
+an error naming one the target does not acknowledge. It offers them rather
+than asking for them, because over SSH upload-pack refuses to send a commit
+that no branch or tag points at. Protocol v2 does not acknowledge a commit
+whose child it read earlier in the same request, so git-sync offers the
+unacknowledged ones again until a request acknowledges none.
+
+Earlier versions of `convert-sha256` also re-encoded trees, which
+normalized modes such as `100011` to `100644`, so a converted tree may not
+convert back to the original. git-sync converts each pre-cutover commit the
+new history builds on back to SHA1 and compares it with the recorded one.
+Where they differ, it pushes the SHA1 translation of every tree the new
+commits share with it, as the target may lack them. Blobs convert unchanged
+and are never sent again.
+
+**git-sync records what it translates.** Each sync updates
+`refs/notes/sha256-origin` on the SHA1 repository with the SHA256 commit
+behind every commit it wrote, and reads it back on the next run, so a
+commit is never translated twice. The ref holds one commit with no parent,
+which each sync replaces, so reading it never means fetching every earlier
+version. Its update is not a fast-forward, so the SHA1 repository must not
+refuse non-fast-forward updates to `refs/notes/*`:
+
+```bash
+git log --notes=sha256-origin    # in a clone of the SHA1 repository
+```
+
+**Pass `--atomic` to land refs and notes together.** By default the
+branches, tags and notes go in ordinary pushes, so the server can take a
+branch while refusing its notes. The next sync then translates those commits
+again, gets the same hashes and writes the missing notes. The server can also
+take the notes while refusing the branch, so a note can outlive the commit it
+records once the server prunes it. The next sync then translates that commit
+again and pushes it. With `--atomic`,
+git-sync sends every update in one atomic push, as `git push --atomic` does,
+and the server applies all of them or none. That push is never split into
+batches, so it ignores `--target-max-ref-updates`: a run that updates more
+refs than the server accepts in one request fails instead of landing part
+of them. `--atomic` fails up front when the server does not support atomic
+pushes, and in any sync that does not translate SHA256 to SHA1.
+
+**Tags are immutable.** A tag the SHA1 repository already has is left alone,
+whatever it points at, so tags that existed before the cutover keep their
+original objects. Its history is not fetched either. New tags are translated and created. Without `--atomic`,
+the server can take a new tag while refusing its notes, and the next sync
+skips the tag, so its commits stay without notes. `--retranslate-tags`
+repairs that: it translates the tags the SHA1 repository already has and
+writes the notes their commits lack, leaving the tags as they are. A tag
+whose translation differs from the one the repository holds gets no notes.
+It translates the history of every tag, so use it for a repair run.
+
+**A write to the SHA1 repository blocks the sync.** If a branch on the SHA1
+repository points at a commit that is not a translation of any SHA256
+commit, or one that is not an ancestor of the new tip, the branch is blocked
+and the run fails. Force flags and best-effort runs are not supported in
+this mode.
+
+What translation changes:
+
+- **Signatures are kept.** A commit keeps its `gpgsig` and `gpgsig-sha256`
+  headers. A tag's body signature, over the SHA256 form, moves into a
+  `gpgsig-sha256` header, and a `gpgsig` header, over the SHA1 form, becomes
+  its body signature. `mergetag` headers are converted. A signature over the
+  SHA256 form verifies against that form, so `git verify-commit` on the SHA1
+  side needs a `gpgsig` signature, which git writes when the commit is made
+  in a repository with `extensions.compatObjectFormat = sha1`.
+- **Hashes in messages are copied as they are.** A `git revert` made on the
+  SHA256 side names the reverted commit by its SHA256 hash, on both sides.
+- **Submodule gitlinks fail the sync**, as they fail conversion.
+- **`refs/tags/converted/*`** attestation tags from `--sign-mode tips` are
+  never synced, including under a name `--map` gives them.
+
+Limits of the current implementation:
+
+- Only SHA256 to SHA1 is supported, in `sync` mode, for branches and tags.
+  `replicate`, `bootstrap`, `--prune`, `--all-refs` and the force flags are
+  refused.
+- Every run fetches the full history of the synced refs into memory, bounded
+  by `--materialized-max-objects`, and the full history of
+  `refs/notes/sha256-origin` from the target. The push sends only the
+  objects the SHA1 repository lacks.
 
 ## Verifying the Output
 

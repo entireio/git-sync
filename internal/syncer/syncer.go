@@ -119,6 +119,15 @@ type Config struct {
 	// git 2.53.
 	TargetAssertedEmpty bool
 
+	// Atomic pushes every ref update of a translated sync, and the notes
+	// recording their origin, in one atomic receive-pack request. That
+	// request ignores TargetMaxRefUpdates.
+	Atomic bool
+	// RetranslateTags translates the tags a translated sync would skip
+	// because the target has them, to record origin notes their commits
+	// lack. The tags are never changed.
+	RetranslateTags bool
+
 	// AllowEmptySource opts into treating a VERIFIED-empty source as an
 	// outcome rather than an error, in replicate mode only. Off by default:
 	// with it unset, an empty source fails exactly as it always has, so no
@@ -1086,6 +1095,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if err := s.checkTranslationFlags(); err != nil {
+		return Result{}, err
+	}
+	if s.translating() {
+		return s.runTranslatedSync(ctx)
+	}
 	if err := s.checkObjectFormats(); err != nil {
 		return Result{}, err
 	}
@@ -1579,6 +1594,9 @@ func Bootstrap(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, err
 	}
 	defer s.finish()
+	if s.translating() {
+		return Result{}, errTranslationMismatch(errors.New("bootstrap cannot translate objects; use sync"))
+	}
 	if err := s.checkObjectFormats(); err != nil {
 		return Result{}, err
 	}

@@ -34,6 +34,15 @@ That test uses a real `git-http-backend` source/target pair and checks that a sm
 
 `TestRun_GitHTTPBackendSyncThinPackWhereAccepted` records the pack pushed to the target: an incremental relay into git's receive-pack, which accepts thin packs, sends a thin one of a few hundred bytes for a one-line change to a large file, and the target ends fsck-clean with the source's refs.
 
+`TestBackSync_SHA256ToReadOnlySHA1` converts a SHA1 repository, makes the
+original read-only to everyone but the sync identity, and syncs new work on
+the SHA256 repository back to it. The SHA1 result must match, hash for hash,
+a SHA1 clone where the same changes were made directly:
+
+```bash
+env GOCACHE=/tmp/go-build GITSYNC_E2E_SHA256_HTTP_BACKEND=1 go test ./cmd/git-sync/internal/sha256convert -run TestBackSync -v
+```
+
 ## Docker SSH End-To-End Test
 
 Optional end-to-end sync against a real `sshd` running in Docker:

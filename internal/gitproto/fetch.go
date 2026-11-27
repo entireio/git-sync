@@ -352,7 +352,7 @@ func consumeV2FetchPack(
 		case PacketData:
 			line := string(payload)
 			if strings.HasPrefix(line, "ERR ") {
-				return errors.New("remote: " + line[4:])
+				return remoteError(line[4:])
 			}
 			switch line {
 			case "packfile\n":
@@ -395,7 +395,7 @@ func openV2PackStream(body io.ReadCloser, verbose bool, progressOut io.Writer) (
 		case PacketData:
 			line := string(payload)
 			if strings.HasPrefix(line, "ERR ") {
-				return nil, errors.New("remote: " + line[4:])
+				return nil, remoteError(line[4:])
 			}
 			switch line {
 			case "packfile\n":

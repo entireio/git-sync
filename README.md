@@ -27,7 +27,7 @@ The main commands are:
 
 `sync` automatically bootstraps an empty target, so the same command covers initial seeding and ongoing sync. To preview what would happen without pushing, run `git-sync plan` — it takes the same flags as `sync`, and `--mode replicate` previews a `replicate` run.
 
-For one-off SHA1 → SHA256 repo conversion, `git-sync convert-sha256` fetches from an HTTP source and writes a new SHA256 bare repo on disk, with optional commit-message hash rewrites, an origin-notes ref, and a sidecar mapping file. See [docs/convert-sha256.md](docs/convert-sha256.md).
+For one-off SHA1 → SHA256 repo conversion, `git-sync convert-sha256` fetches from an HTTP source and writes a new SHA256 bare repo on disk, converting objects as git does for `extensions.compatObjectFormat` (signatures kept), with an origin-notes ref, a sidecar mapping file and optional commit-message hash rewrites. `sync` from that SHA256 repository back to the original SHA1 one translates objects the same way, so the original can stay as a read-only reference. See [docs/convert-sha256.md](docs/convert-sha256.md).
 
 For command examples, JSON output, auth, protocol flags, and advanced command notes, see [docs/usage.md](docs/usage.md).
 
